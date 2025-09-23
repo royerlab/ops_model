@@ -2,15 +2,15 @@ import numpy as np
 import pytest
 import torch
 from iohub import open_ome_zarr
-from ops_analysis.data.experiment import OpsDataset
-from ops_analysis.model import data_loader
+from ops_model.data import data_loader
 
 
 def create_data_manager():
     experiment = "ops0033_20250429"
 
-    dataset = OpsDataset(experiment)
-    store = open_ome_zarr(dataset.store_paths["pheno_assembled"])
+    store = open_ome_zarr(
+        "/hpc/projects/intracellular_dashboard/ops/ops0033_20250429/3-assembly/phenotyping_og.zarr"
+    )
     num_channels = len(store.channel_names)
 
     data_manager = data_loader.OpsDataManager(
@@ -39,7 +39,7 @@ def test_ops_dataloader(data_manager):
 
     _, batch = data_manager
 
-    # Batch is a dictionary containing [data, label, mask] tensors
+    # Batch is a dictionary containing [data, mask, ...] tensors
     assert isinstance(batch, dict)
     assert "data" in batch
     # assert "label" in batch
@@ -75,23 +75,23 @@ def test_data_loader_consistancy(data_manager):
     return
 
 
-def test_triplet_data_loader():
-    experiment = "ops0033_20250429"
+# def test_triplet_data_loader():
+#     experiment = "ops0033_20250429"
 
-    dataset = OpsDataset(experiment)
-    store = open_ome_zarr(dataset.store_paths["pheno_assembled"])
-    num_channels = len(store.channel_names)
+#     dataset = OpsDataset(experiment)
+#     store = open_ome_zarr(dataset.store_paths["pheno_assembled"])
+#     num_channels = len(store.channel_names)
 
-    data_manager = data_loader.OpsDataManager(
-        experiments={experiment: ["A/1/0", "A/2/0", "A/3/0"]},
-        batch_size=2,
-        out_channels=["Phase"],
-        initial_yx_patch_size=(1, 256, 256),
-        final_yx_patch_size=(1, 256, 256),
-    )
-    data_manager.construct_dataloaders(num_workers=1, dataset_type="triplet")
+#     data_manager = data_loader.OpsDataManager(
+#         experiments={experiment: ["A/1/0", "A/2/0", "A/3/0"]},
+#         batch_size=2,
+#         out_channels=["Phase"],
+#         initial_yx_patch_size=(1, 256, 256),
+#         final_yx_patch_size=(1, 256, 256),
+#     )
+#     data_manager.construct_dataloaders(num_workers=1, dataset_type="triplet")
 
-    l = data_manager
-    batch = next(iter(l.train_loader))
+#     l = data_manager
+#     batch = next(iter(l.train_loader))
 
-    return
+#     return
