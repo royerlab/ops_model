@@ -2,6 +2,7 @@ import ast
 import random
 from typing import Callable, List, Literal, Optional
 
+import zarr
 import numpy as np
 import pandas as pd
 import torch
@@ -14,8 +15,6 @@ from monai.transforms import (
     RandRotate90d,
     SpatialPadd,
     ToTensord,
-    EnsureTyped,
-    EnsureChannelFirstd,
 )
 
 from torch.utils.data import Dataset
@@ -84,33 +83,53 @@ class BaseDataset(Dataset):
         )
         return
 
-    def _normalize_data(self, ci, channel_names, data):
-        fov_attrs = self.stores[ci.store_key][
-            ci.tile_pheno
-        ].zattrs.asdict()  # can create dict for all tiles at beginning
+    def _normalize_data(self, ci, channel_names, data, masks):
 
-        means = [
-            fov_attrs["normalization"][i]["fov_statistics"]["mean"]
-            for i in channel_names
-        ]
+        # Temporary Fix
+        # normalize per crop and squash all values between -1 and 1
+        data_shift = data - np.mean(data)
+        lo, hi = np.percentile(data_shift, [1, 99.5])
+        scale = max(abs(lo), abs(hi))  # symmetric mapping
+        data_norm = np.clip(data_shift, -scale, scale) / scale
+        if self.cell_masks:
+            data_norm = data_norm * masks
 
-        stds = [
-            fov_attrs["normalization"][i]["fov_statistics"]["std"]
-            for i in channel_names
-        ]
+        # fov_attrs = self.stores[ci.store_key][
+        #     ci.tile_pheno
+        # ].zattrs.asdict()  # can create dict for all tiles at beginning
 
-        mean_divisor = np.expand_dims(np.asarray(means), (1, 2))
-        std_subtractor = np.expand_dims(np.asarray(stds), (1, 2))
+        # # TODO: need a real measure of dataset background
+        # bg = [np.percentile(data, 1)]
 
-        data_norm = (data - mean_divisor) / std_subtractor
+        # iqrs = [
+        #     fov_attrs["normalization"][i]["fov_statistics"]["iqr"]
+        #     for i in channel_names
+        # ]
+        # means = [
+        #     fov_attrs["normalization"][i]["fov_statistics"]["mean"]
+        #     for i in channel_names
+        # ]
+
+        # data_bg_sub = np.clip(data - np.expand_dims(bg, (1, 2)), a_min=0, a_max=None)
+
+        # if self.cell_masks:
+        #     data_bg_sub = data_bg_sub * masks
+
+        # data_iqr = (data_bg_sub - np.expand_dims(means, (1, 2))) / (
+        #     np.expand_dims(iqrs, (1, 2)) + 1e-6
+        # )
+
+        # # TODO: Need to fix to work with multiple channels
+        # lo, hi = np.percentile(data_iqr, [1, 99.5])
+        # scale = max(abs(lo), abs(hi))   # symmetric mapping
+        # data_norm = np.clip(data_iqr, -scale, scale) / scale
 
         return data_norm
 
-    def _get_channels(self, ci):
+    def _get_channels(self, ci, well):
 
-        all_channel_names = self.stores[ci.store_key][
-            ci.tile_pheno
-        ].channel_names  # can cache
+        attrs = self.stores[ci.store_key][well].attrs.asdict()
+        all_channel_names = [a["label"] for a in attrs["omero"]["channels"]]
 
         if self.out_channels == "random":
             channel_names = [random.choice(all_channel_names)]
@@ -127,13 +146,19 @@ class BaseDataset(Dataset):
 
     def __getitem__(self, index):
         ci = self.labels_df.iloc[index]  # crop info
-        fov = self.stores[ci.store_key][ci.tile_pheno][0]
-        mask_fov = self.stores[ci.store_key][ci.tile_pheno]["seg"]
+
+        well = (
+            ci.tile_pheno[:4] + "0"
+        )  # temp for now, better to add well info when combining stores
+        fov = self.stores[ci.store_key][well][0]
+        mask_fov = self.stores[ci.store_key][well]["seg"][0]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
 
-        channel_names, channel_index = self._get_channels(ci)
+        channel_names, channel_index = self._get_channels(
+            ci, well
+        )  # probably doesn't have to be done per dataset
 
         data = np.asarray(
             fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
@@ -144,12 +169,8 @@ class BaseDataset(Dataset):
         ).copy()
         sc_mask = mask == ci.segmentation_id
 
-        data_norm = self._normalize_data(ci, channel_names, data)
+        data_norm = self._normalize_data(ci, channel_names, data, sc_mask)
 
-        if self.cell_masks:
-            data_norm = data_norm * sc_mask
-
-        print(data_norm.shape, sc_mask.shape)
         batch = {
             "data": data_norm.astype(np.float32),
             "mask": sc_mask,
@@ -176,14 +197,19 @@ class CellProfileDataset(BaseDataset):
         super().__init__(stores, labels_df, **kwargs)
 
     def __getitem__(self, index):
+
         ci = self.labels_df.iloc[index]  # crop info
-        fov = self.stores[ci.store_key][ci.tile_pheno][0]
-        mask_fov = self.stores[ci.store_key][ci.tile_pheno]["seg"]
+
+        well = (
+            ci.tile_pheno[:4] + "0"
+        )  # temp for now, better to add well info when combining stores
+        fov = self.stores[ci.store_key][well][0]
+        mask_fov = self.stores[ci.store_key][well]["seg"][0]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
 
-        channel_names, channel_index = self._get_channels(ci)
+        channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
             fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
@@ -283,7 +309,7 @@ class OpsDataManager:
         """ """
         stores = {}
         for exp_name, wells in self.experiments.items():
-            stores[f"{exp_name}"] = open_ome_zarr(
+            stores[f"{exp_name}"] = zarr.open_group(
                 OpsPaths(exp_name).phenotyping, mode="r"
             )
 
