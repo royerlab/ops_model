@@ -27,3 +27,5 @@ class OpsPaths:
             / "3-assembly"
             / f"cell-profiler/cellprofiler_features.csv"
         )
+
+        self.gene_library = "/hpc/projects/intracellular_dashboard/ops/configs/annotated_guide_library_123-UpdateJuly28_2025.csv"
