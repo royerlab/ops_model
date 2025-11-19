@@ -215,37 +215,99 @@ def neighbor_features(
     return results
 
 
-def batched_single_object_features(
-    # imgs: np.ndarray | torch.Tensor,
-    # masks: np.ndarray | torch.Tensor,
-    batch: dict,
-    measurements: dict = None,
-):
+def write_index_ranges_to_yaml(
+    dataset_size: int, output_path: str, chunk_size: int = None, num_chunks: int = None
+) -> dict:
     """
-    Process a batch of images and masks to extract features.
+    Create a YAML file with dictionary keys corresponding to index ranges.
 
     Args:
-        imgs: (B, C, H, W) batch of images
-        masks: (B, H, W) or (B, C, H, W) batch of masks
-        measurements: Dictionary of measurement functions from cp_measure
-        prefix: Prefix for feature names
-        original_sizes: List of (h, w) tuples indicating original size of each image before padding
+        dataset_size: Total size of the dataset
+        output_path: Path to write the YAML file
+        chunk_size: Size of each chunk (mutually exclusive with num_chunks)
+        num_chunks: Number of chunks to split into (mutually exclusive with chunk_size)
 
     Returns:
-        List of dictionaries, one per image in the batch (each dict contains all mask/channel combos)
-    """
-    # Pre-convert entire batch to numpy once (avoid redundant conversions in loops)
-    if isinstance(batch["data"], torch.Tensor):
-        data_np = batch["data"].detach().cpu().numpy()
-    else:
-        data_np = batch["data"]
+        Dictionary mapping job IDs to [start, end] index ranges
 
-    masks_np = {}
-    for mask_key in ["cell_mask", "nuc_mask", "cyto_mask"]:
-        if isinstance(batch[mask_key], torch.Tensor):
-            masks_np[mask_key] = batch[mask_key].detach().cpu().numpy()
-        else:
-            masks_np[mask_key] = batch[mask_key]
+    Example:
+        >>> write_index_ranges_to_yaml(1000, 'ranges.yaml', chunk_size=100)
+        {0: [0, 100], 1: [100, 200], ..., 9: [900, 1000]}
+    """
+    if chunk_size is None and num_chunks is None:
+        raise ValueError("Must provide either chunk_size or num_chunks")
+
+    if chunk_size is not None and num_chunks is not None:
+        raise ValueError("Cannot provide both chunk_size and num_chunks")
+
+    # Calculate chunks
+    if chunk_size is not None:
+        num_chunks = (dataset_size + chunk_size - 1) // chunk_size  # Ceiling division
+    else:
+        chunk_size = dataset_size // num_chunks
+
+    # Create index ranges
+    index_ranges = {}
+    for job_id in range(num_chunks):
+        start_idx = job_id * chunk_size
+        end_idx = min(start_idx + chunk_size, dataset_size)
+        index_ranges[job_id] = [start_idx, end_idx]
+
+    # Write to YAML file
+    with open(output_path, "w") as f:
+        yaml.dump(index_ranges, f, default_flow_style=False, sort_keys=False)
+
+    print(f"Written {num_chunks} index ranges to {output_path}")
+    print(f"Total indices: {dataset_size}, Chunk size: ~{chunk_size}")
+
+    return index_ranges
+
+
+def create_subset(
+    experiment_dict,
+    bounds: list[int],
+):
+    """
+    A helper function to subset the total dataset given specific bounds
+    Create a dataset and subset it given the bounds
+    """
+
+    from torch.utils.data import Subset
+
+    data_manager = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=1,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D", "mCherry"],
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
+    )
+
+    data_manager.construct_dataloaders(num_workers=1, dataset_type="cell_profile")
+    dataset = data_manager.train_loader.dataset
+
+    return (
+        Subset(dataset, list(range(bounds[0], bounds[1]))),
+        data_manager.train_loader.dataset.int_label_lut,
+    )
+
+
+def extract_cp_features(
+    experiment_dict: dict,
+    bounds: list[int],
+):
+    """ """
+    import torch
+    from cp_measure.bulk import get_core_measurements, get_correlation_measurements
+    from ops_model.features.cp_features import (
+        single_object_features,
+        colocalization_features,
+    )
+
+    object_measurements = get_core_measurements()
+    colocalization_measurements = get_correlation_measurements()
+
+    subset, int_label_lut = create_subset(experiment_dict, bounds)
 
     # Pre-define channel and mask metadata
     channels = [("Phase2D", 0), ("mCherry", 1)]
@@ -262,366 +324,264 @@ def batched_single_object_features(
         for j in range(i + 1, len(channels))
     ]
 
-    batch_size = data_np.shape[0]
     results_list = []
+    for batch in subset:
 
-    # Process each cell
-    for i in range(batch_size):
+        if isinstance(batch["data"], torch.Tensor):
+            data_np = batch["data"].detach().cpu().numpy()
+        else:
+            data_np = batch["data"]
+
+        masks_np = {}
+        for mask_key in ["cell_mask", "nuc_mask", "cyto_mask"]:
+            if isinstance(batch[mask_key], torch.Tensor):
+                masks_np[mask_key] = batch[mask_key].detach().cpu().numpy()
+            else:
+                masks_np[mask_key] = batch[mask_key]
+
         cell_features = {}
 
         # Process each mask type
         for mk_name, mk_key in mask_configs:
-            mask = masks_np[mk_key][i]
+            mask = masks_np[mk_key][0].astype(np.int32)
 
             # Single object features for each channel
             for ch_name, ch_idx in channels:
-                img = data_np[i, ch_idx]
+                img = data_np[ch_idx]
 
                 features = single_object_features(
                     img,
                     mask,
-                    measurements=measurements["object"],
+                    measurements=object_measurements,
                     prefix=f"single_object_{ch_name}_{mk_name}",
                 )
                 cell_features.update(features)
 
             # Colocalization features for channel pairs
             for (ch_name_1, ch_idx_1), (ch_name_2, ch_idx_2) in channel_pairs:
-                img1 = data_np[i, ch_idx_1]
-                img2 = data_np[i, ch_idx_2]
+                img1 = data_np[ch_idx_1]
+                img2 = data_np[ch_idx_2]
 
                 coloc_features = colocalization_features(
                     img1,
                     img2,
                     mask,
-                    measurements=measurements["colocalization"],
+                    measurements=colocalization_measurements,
                     prefix=f"coloc_{ch_name_1}_{ch_name_2}_{mk_name}",
                 )
                 cell_features.update(coloc_features)
 
-        # Neighborhood features (uncomment and add mask_pairs definition if needed)
-        # Pre-compute mask pairs outside the loop: mask_pairs = [(mask_configs[i], mask_configs[j]) for i in range(len(mask_configs)) for j in range(i+1, len(mask_configs))]
-        # for (mk_name_1, mk_key_1), (mk_name_2, mk_key_2) in mask_pairs:
-        #     mask1 = masks_np[mk_key_1][i]
-        #     mask2 = masks_np[mk_key_2][i]
-        #     neigh_features = neighbor_features(
-        #         mask1, mask2,
-        #         measurements=measurements['neighborhood'],
-        #         prefix=f"neigh_{mk_name_1}_{mk_name_2}"
-        #     )
-        #     cell_features.update(neigh_features)
-
-        # After processing all masks and channels, append the complete feature dict for this cell
+        cell_features["label_int"] = int(batch["gene_label"])
+        cell_features["label_str"] = int_label_lut[batch["gene_label"]]
+        cell_features["sgRNA"] = batch["crop_info"]["sgRNA"]
+        cell_features["experiment"] = batch["crop_info"]["store_key"]
+        cell_features["well"] = (
+            batch["crop_info"]["well"] + "_" + batch["crop_info"]["store_key"]
+        )
         results_list.append(cell_features)
 
-    return results_list
+    return pd.DataFrame(results_list)
 
 
-def save_cp_features(experiment_dict, features, override: bool = False):
-
-    save_path = OpsPaths(list(experiment_dict.keys())[0]).cell_profiler_out
-    if save_path.exists() and not override:
-        print(f"file exists at {save_path}, use override=True to overwrite")
-
-    if not save_path.exists():
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    features.to_csv(save_path, index=False)
-
-    return
-
-
-def _process_batch_parallel(batch, measurements, int_label_lut):
-    """
-    Process a single batch for parallel execution.
-    This function must be at module level to be picklable.
-    """
-    # Extract batch metadata
-    gene_labels = batch["gene_label"]  # (B,)
-    sgRNA_labels = [a["sgRNA"] for a in batch["crop_info"]]
-    experiment_label = [a["store_key"] for a in batch["crop_info"]]
-    well_label = [a["well"] for a in batch["crop_info"]]
-
-    # Process entire batch - extracts features for all mask/channel combinations per cell
-    features_list = batched_single_object_features(batch, measurements=measurements)
-
-    # Add gene labels to each cell's feature dictionary
-    batch_results = []
-    batch_size_actual = batch["data"].shape[0]
-    for i in range(batch_size_actual):
-        # features_list[i] already contains all features for cell i (all mask/channel combos)
-        cell_features = features_list[i].copy()
-        cell_features["label_int"] = gene_labels[i].item()
-        cell_features["label_str"] = int_label_lut[gene_labels[i].item()]
-        cell_features["sgRNA"] = sgRNA_labels[i]
-        cell_features["experiment"] = experiment_label[i]
-        cell_features["well"] = well_label[i] + "_" + experiment_label[i]
-
-        batch_results.append(cell_features)
-
-    df = pd.DataFrame(batch_results)
-
-    return df
-
-
-def cp_features(
-    experiment_dict: dict = None,
-    verbose: bool = False,
-    num_workers: int = 4,
-    num_processing_workers: int = None,
-    batch_size: int = 32,
-    profile: bool = False,
-    max_batches: int = 20000,
-    max_queue_size: int = 200,
+def cp_features_worker_fcn(
+    experiment_dict: dict,
+    bounds: list[int],
+    job_id: int,
+    output_dir: str,
 ):
     """
-    Extract CellProfiler features from a batch of images.
+    Worker function for distributed CP feature extraction using submitit.
+
+    This function:
+    1. Extracts CP features for the specified index range
+    2. Saves results to a CSV file named with the job_id
 
     Args:
-        experiment_dict: Dictionary of experiments and wells to process
-        verbose: Print progress information
-        num_workers: Number of worker processes for data loading (I/O bound)
-        num_processing_workers: Number of worker processes for feature extraction (CPU bound).
-                                If None, uses all available CPUs.
-        batch_size: Number of cells to process in each batch
-        profile: If True, print detailed timing information
-        max_batches: Maximum number of batches to process
-        max_queue_size: Maximum number of batches to queue for processing (default 200)
+        experiment_dict: Dictionary mapping experiment names to FOV lists
+        bounds: [start, end] index range to process
+        job_id: Job ID for naming the output file
+        output_dir: Directory to save the output CSV file
 
-    CAUTION: should only be run for a single experiment at a time
+    Returns:
+        str: Path to the saved CSV file
+
+    Example:
+        >>> cp_features_worker_fcn(
+        ...     experiment_dict={"ops0031_20250424": ["A/1/0", "A/2/0"]},
+        ...     bounds=[0, 100],
+        ...     job_id=0,
+        ...     output_dir='./results/'
+        ... )
+        './results/cp_features_job_0.csv'
     """
+    import os
 
+    print(f"Job {job_id}: Processing indices {bounds[0]} to {bounds[1]}")
+
+    # Extract features for this subset
+    results_df = extract_cp_features(
+        experiment_dict=experiment_dict,
+        bounds=bounds,
+    )
+
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Save to CSV
+    output_path = os.path.join(output_dir, f"cp_features_job_{job_id}.csv")
+    results_df.to_csv(output_path, index=False)
+
+    print(f"Job {job_id}: Saved {len(results_df)} rows to {output_path}")
+
+    return output_path
+
+
+def concatenate_results(output_dir: str, final_output_path: str):
+    """
+    Concatenate all CSV files from individual jobs into one final file.
+
+    Call this after all array jobs have completed.
+
+    Args:
+        output_dir: Directory containing individual job CSV files
+        final_output_path: Path to save the concatenated results
+
+    Returns:
+        pd.DataFrame: Concatenated results
+
+    Example:
+        >>> concatenate_results(
+        ...     output_dir='./results/',
+        ...     final_output_path='./results/cp_features_all.csv'
+        ... )
+    """
+    import glob
+    import os
+
+    # Find all job CSV files
+    pattern = os.path.join(output_dir, "cp_features_job_*.csv")
+    csv_files = sorted(glob.glob(pattern))
+
+    if not csv_files:
+        raise ValueError(f"No CSV files found matching {pattern}")
+
+    print(f"Found {len(csv_files)} CSV files to concatenate")
+
+    # Load and concatenate all dataframes
+    dfs = []
+    for csv_file in tqdm(csv_files, desc="Loading CSV files"):
+        df = pd.read_csv(csv_file)
+        dfs.append(df)
+
+    final_df = pd.concat(dfs, ignore_index=True)
+
+    # Save concatenated results
+    final_df.to_csv(final_output_path, index=False)
+
+    print(f"Saved {len(final_df)} total rows to {final_output_path}")
+
+    return final_df
+
+
+def cp_features_main(
+    experiment: str = None,
+    chunk_size: int = 100,
+    wait_for_completion: bool = False,
+):
+    import submitit
+
+    # Step 1: Create index ranges for your dataset
+    experiment_dict = {experiment: ["A/1/0", "A/2/0", "A/3/0"]}
+
+    output_csv = OpsPaths(experiment).cell_profiler_out
+
+    # Get total dataset size
     data_manager = data_loader.OpsDataManager(
         experiments=experiment_dict,
-        batch_size=batch_size,
+        batch_size=1,
         data_split=(1, 0, 0),
         out_channels=["Phase2D", "mCherry"],
         initial_yx_patch_size=(256, 256),
-        verbose=verbose,
+        verbose=False,
+    )
+    data_manager.construct_dataloaders(num_workers=1, dataset_type="cell_profile")
+    total_size = len(data_manager.train_loader.dataset)
+
+    # Create YAML with index ranges (e.g., 100 samples per job)
+    write_index_ranges_to_yaml(
+        dataset_size=total_size,
+        output_path=output_csv.parent / "index_ranges.yaml",
+        chunk_size=chunk_size,  # Adjust based on your needs
     )
 
-    data_manager.construct_dataloaders(
-        num_workers=num_workers, dataset_type="cell_profile"
+    # Step 2: Submit as a single SLURM array job with submitit
+    executor = submitit.AutoExecutor(folder=output_csv.parent / "submitit_logs")
+    executor.update_parameters(
+        timeout_min=60,
+        slurm_partition="cpu",  # Change to your partition name
+        slurm_array_parallelism=100,  # Max 100 concurrent jobs
+        cpus_per_task=2,
+        mem_gb=16,
     )
-    train_loader = data_manager.train_loader
 
-    object_measurements = get_core_measurements()
-    colocalization_measurements = get_correlation_measurements()
-    neighborhood_measurements = get_multimask_measurements()
-    measurements = {
-        "object": object_measurements,
-        "colocalization": colocalization_measurements,
-        "neighborhood": neighborhood_measurements,
-    }
-    # Time the entire data loading + processing loop
-    total_start = time.time()
+    # Load index ranges
+    with open(output_csv.parent / "index_ranges.yaml", "r") as f:
+        index_ranges = yaml.safe_load(f)
 
-    # Create iterator with limited batches
-    def batch_generator():
-        iterator = train_loader
-        for batch_idx, batch in enumerate(iterator):
-            if batch_idx >= max_batches:
-                break
-            yield batch
+    # Prepare arguments for array job
+    output_dir = output_csv.parent / "cp_feature_chunks"
+    num_jobs = len(index_ranges)
 
-    if verbose:
-        print(f"Processing up to {max_batches} batches in parallel...")
+    # Submit as single array job using map_array
+    array_jobs = executor.map_array(
+        cp_features_worker_fcn,
+        [experiment_dict] * num_jobs,  # Same experiment_dict for all jobs
+        list(index_ranges.values()),  # Different bounds for each job
+        list(index_ranges.keys()),  # Job IDs: 0, 1, 2, ...
+        [output_dir] * num_jobs,  # Same output directory for all jobs
+    )
 
-    # Use multiprocessing Pool to process batches in parallel
-    # imap will pull batches from the generator as workers become available
-    import multiprocessing
+    # Get the array job ID (all tasks share the same base job_id)
+    array_job_id = array_jobs[0].job_id.split("_")[
+        0
+    ]  # Remove array task suffix if present
+    print(
+        f"Submitted array job {array_job_id} with {len(array_jobs)} tasks (max 100 concurrent)"
+    )
 
-    # Determine number of processing workers
-    if num_processing_workers is None:
-        n_cpus = multiprocessing.cpu_count()
+    # Step 3: Submit concatenation job with dependency on array job completion
+    concat_executor = submitit.AutoExecutor(folder=output_csv.parent / "submitit_logs")
+    concat_executor.update_parameters(
+        timeout_min=30,
+        slurm_partition="cpu",
+        cpus_per_task=1,
+        mem_gb=32,
+        slurm_additional_parameters={"dependency": f"afterok:{array_job_id}"},
+    )
+
+    concat_job = concat_executor.submit(
+        concatenate_results,
+        output_dir=str(output_csv.parent / "cp_feature_chunks"),
+        final_output_path=str(output_csv),
+    )
+
+    print(
+        f"Submitted concatenation job {concat_job.job_id} (depends on {array_job_id})"
+    )
+
+    if wait_for_completion:
+        # Wait for concatenation job to complete
+        print("Waiting for all jobs to complete...")
+        final_df = concat_job.result()
+        print(f"All jobs completed. Final dataframe shape: {final_df.shape}")
+        return final_df
     else:
-        n_cpus = num_processing_workers
-
-    if verbose:
-        print(f"DataLoader workers: {num_workers}")
-        print(f"Feature extraction workers: {n_cpus}")
-
-    process_start = time.time()
-
-    # Manual queue management to limit in-flight batches
-    from collections import deque
-
-    with Pool(processes=n_cpus) as pool:
-        # Create partial function with required parameters
-        process_func = partial(
-            _process_batch_parallel,
-            measurements=measurements,
-            int_label_lut=data_manager.int_label_lut,
-        )
-
-        # Initialize
-        batch_gen = batch_generator()
-        pending_results = deque()
-        all_features = []
-        batches_submitted = 0
-
-        if verbose:
-            pbar = tqdm(total=max_batches, desc="Processing batches")
-
-        # Pre-fill with small initial buffer to minimize startup hang
-        # Queue will naturally fill to max_queue_size during processing
-        initial_buffer = min(10, max_queue_size, max_batches)
-        for _ in range(initial_buffer):
-            try:
-                batch = next(batch_gen)
-                async_result = pool.apply_async(process_func, (batch,))
-                pending_results.append(async_result)
-                batches_submitted += 1
-            except StopIteration:
-                break
-
-        # Process results and maintain bounded queue
-        while pending_results:
-            # Fill queue up to max_queue_size before checking results
-            while len(pending_results) < max_queue_size:
-                try:
-                    batch = next(batch_gen)
-                    new_async_result = pool.apply_async(process_func, (batch,))
-                    pending_results.append(new_async_result)
-                    batches_submitted += 1
-                except StopIteration:
-                    break
-
-            # Check for ready results (non-blocking)
-            for _ in range(len(pending_results)):
-                async_result = pending_results[0]
-                if async_result.ready():
-                    # Result is ready, collect it
-                    async_result = pending_results.popleft()
-                    df_batch = async_result.get()
-                    all_features.append(df_batch)
-
-                    if verbose:
-                        pbar.update(1)
-
-                    break  # Start over to fill queue and check from the beginning
-                else:
-                    # Not ready, rotate to check next one
-                    pending_results.rotate(-1)
-            else:
-                # No results ready, wait a bit
-                import time as time_module
-
-                time_module.sleep(0.01)
-
-        if verbose:
-            pbar.close()
-
-    process_end = time.time()
-    total_end = time.time()
-
-    all_features_df = pd.concat(all_features, ignore_index=True)
-    if verbose:
-        print(f"\n{len(all_features_df)} cells measured")
-
-    # Print profiling results
-    if profile:
-        print("\n" + "=" * 60)
-        print("PROFILING RESULTS (PARALLEL PROCESSING)")
-        print("=" * 60)
-        print(f"Total time: {total_end - total_start:.2f}s")
-        print(f"Total batch processing time: {process_end - process_start:.2f}s")
-        print(f"Total cells processed: {len(all_features_df)}")
-        print(
-            f"Cells per second: {len(all_features_df) / (total_end - total_start):.1f}"
-        )
-        print(f"\nBatch size: {batch_size}")
-        print(f"Number of batches: {len(all_features)}")
-        print(f"Number of CPUs used: {n_cpus}")
-        print(
-            f"\nAverage time per batch (wall time): {(process_end - process_start) / len(all_features):.2f}s"
-        )
-        print(f"\nNumber of features extracted: {all_features_df.shape[1]}")
-        print("=" * 60)
-
-    # TODO: need to handle nans in a smart way
-    all_features_df = all_features_df.fillna(0)
-
-    save_cp_features(experiment_dict, all_features_df, override=True)
-
-    return all_features_df
-
-
-def _build_arg_parser():
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Extract CellProfiler features from OPS experiments."
-    )
-
-    parser.add_argument(
-        "--experiment",
-        type=str,
-        required=True,
-        help="Experiment name (e.g., ops0033_20250429)",
-    )
-
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=4,
-        help="Number of worker processes for data loading (I/O bound)",
-    )
-
-    parser.add_argument(
-        "--num_processing_workers",
-        type=int,
-        default=None,
-        help="Number of worker processes for feature extraction (CPU bound). If None, uses all available CPUs.",
-    )
-
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=32,
-        help="Number of cells to process in each batch",
-    )
-
-    parser.add_argument(
-        "--profile",
-        action="store_true",
-        help="If set, print detailed timing information",
-    )
-
-    parser.add_argument(
-        "--max_batches",
-        type=int,
-        default=20000,
-        help="Maximum number of batches to process",
-    )
-
-    parser.add_argument(
-        "--max_queue_size",
-        type=int,
-        default=20,
-        help="Maximum number of batches to queue for processing (limits memory usage)",
-    )
-
-    return parser
-
-
-def main():
-    parser = _build_arg_parser()
-    args = parser.parse_args()
-
-    experiment_dict = {args.experiment: ["A/1/0", "A/2/0", "A/3/0"]}
-
-    cp_features(
-        experiment_dict=experiment_dict,
-        verbose=True,
-        num_workers=args.num_workers,
-        num_processing_workers=args.num_processing_workers,
-        batch_size=args.batch_size,
-        profile=args.profile,
-        max_batches=args.max_batches,
-        max_queue_size=args.max_queue_size,
-    )
+        print(f"Jobs submitted. Check status with 'squeue -u $USER'")
+        return array_jobs, concat_job
 
 
 if __name__ == "__main__":
-    main()
+    cp_features_main(
+        experiment="ops0031_20250424",
+        chunk_size=100,
+    )
