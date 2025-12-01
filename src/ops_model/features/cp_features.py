@@ -375,6 +375,8 @@ def extract_cp_features(
         cell_features["label_str"] = int_label_lut[batch["gene_label"]]
         cell_features["sgRNA"] = batch["crop_info"]["sgRNA"]
         cell_features["experiment"] = batch["crop_info"]["store_key"]
+        cell_features["x_position"] = batch["crop_info"]["x_pheno"]
+        cell_features["y_position"] = batch["crop_info"]["y_pheno"]
         cell_features["well"] = (
             batch["crop_info"]["well"] + "_" + batch["crop_info"]["store_key"]
         )

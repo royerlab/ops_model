@@ -13,8 +13,17 @@ from sklearn.decomposition import PCA
 
 from ops_model.data.paths import OpsPaths
 
+NONFEATURE_COLUMNS = [
+    "label_str",
+    "label_int",
+    "sgRNA",
+    "well",
+    "experiment",
+    "x_position",
+    "y_position",
+]
 
-# %%
+
 # Profiling context manager
 @contextmanager
 def timer(name: str):
@@ -23,11 +32,6 @@ def timer(name: str):
     yield
     elapsed = time.time() - start
     print(f"[TIMING] {name}: {elapsed:.2f} seconds")
-
-
-# experiment_dict = {"ops0033_20250429": ["A/1/0", "A/2/0", "A/3/0"]}
-
-# save_path = OpsPaths(list(experiment_dict.keys())[0]).cell_profiler_out
 
 
 def center_scale_fast(
@@ -151,7 +155,14 @@ def create_adata_object(save_path: str) -> ad.AnnData:
         gene_ints = np.asarray(features["label_int"].values)
         sgRNA_ids = np.asarray(features["sgRNA"].values)
         well_id = np.asarray(features["well"].values)
-        features = features.drop(columns=["label_int", "sgRNA", "well", "experiment"])
+        try:
+            x_pos = np.asarray(features["x_position"].values)
+            y_pos = np.asarray(features["y_position"].values)
+        except KeyError:
+            print("x_position/y_position columns not found, skipping.")
+            NONFEATURE_COLUMNS.remove("x_position")
+            NONFEATURE_COLUMNS.remove("y_position")
+        features = features.drop(columns=NONFEATURE_COLUMNS)
 
     with timer("Converting array strings to floats"):
         # Convert any string representations of arrays to float values
@@ -201,6 +212,11 @@ def create_adata_object(save_path: str) -> ad.AnnData:
         adata.obs["label_int"] = gene_ints
         adata.obs["sgRNA"] = sgRNA_ids
         adata.obs["well"] = well_id
+        try:
+            adata.obs["x_position"] = x_pos
+            adata.obs["y_position"] = y_pos
+        except NameError:
+            pass
         adata.var_names = features_norm.columns
 
     return adata
