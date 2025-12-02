@@ -28,6 +28,134 @@ from viscy.transforms import (
 from .paths import OpsPaths
 
 
+def collate_variable_size_cells(batch):
+    """
+    Custom collate function for batches with variable-sized cell images.
+    Pads all images and masks to the maximum size in the batch.
+
+    Args:
+        batch: List of dictionaries from dataset __getitem__
+
+    Returns:
+        Dictionary with batched tensors, all padded to max size in batch
+    """
+    # Find maximum height and width in this batch
+    max_h = max(item["data"].shape[-2] for item in batch)
+    max_w = max(item["data"].shape[-1] for item in batch)
+
+    # Initialize lists for batched data
+    data_list = []
+    mask_list = []
+    nuc_mask_list = []
+    cyto_mask_list = []
+    gene_labels = []
+    marker_labels = []
+    total_indices = []
+    original_sizes = []  # Store original sizes for downstream use
+    crop_infos = []  # Store crop info dicts
+
+    for item in batch:
+        data = item["data"]
+        mask = item["cell_mask"]
+        nuc_mask = item["nuc_mask"]
+        cyto_mask = item["cyto_mask"]
+
+        # Get original size
+        _, h, w = data.shape if data.ndim == 3 else (1, *data.shape)
+        original_sizes.append((h, w))
+
+        # Pad data and mask to max size
+        pad_h = max_h - h
+        pad_w = max_w - w
+
+        # Pad: (left, right, top, bottom) for 2D, or (c, h, w) dimensions
+        if data.ndim == 3:  # (C, H, W)
+            data_padded = torch.nn.functional.pad(
+                torch.from_numpy(data) if isinstance(data, np.ndarray) else data,
+                (0, pad_w, 0, pad_h),
+                mode="constant",
+                value=0,
+            )
+        else:  # (H, W)
+            data_padded = torch.nn.functional.pad(
+                torch.from_numpy(data) if isinstance(data, np.ndarray) else data,
+                (0, pad_w, 0, pad_h),
+                mode="constant",
+                value=0,
+            )
+
+        # Convert mask to tensor and ensure it's int32 for instance segmentation
+        mask_tensor = (
+            torch.from_numpy(mask.astype(np.int32))
+            if isinstance(mask, np.ndarray)
+            else mask.to(torch.int32)
+        )
+
+        if mask.ndim == 3:  # (C, H, W)
+            mask_padded = torch.nn.functional.pad(
+                mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+        else:  # (H, W)
+            mask_padded = torch.nn.functional.pad(
+                mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+
+        # Pad nuc_mask
+        nuc_mask_tensor = (
+            torch.from_numpy(nuc_mask.astype(np.int32))
+            if isinstance(nuc_mask, np.ndarray)
+            else nuc_mask.to(torch.int32)
+        )
+
+        if nuc_mask.ndim == 3:  # (C, H, W)
+            nuc_mask_padded = torch.nn.functional.pad(
+                nuc_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+        else:  # (H, W)
+            nuc_mask_padded = torch.nn.functional.pad(
+                nuc_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+        # Pad cyto_mask
+        cyto_mask_tensor = (
+            torch.from_numpy(cyto_mask.astype(np.int32))
+            if isinstance(cyto_mask, np.ndarray)
+            else cyto_mask.to(torch.int32)
+        )
+
+        if cyto_mask.ndim == 3:  # (C, H, W)
+            cyto_mask_padded = torch.nn.functional.pad(
+                cyto_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+        else:  # (H, W)
+            cyto_mask_padded = torch.nn.functional.pad(
+                cyto_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
+            )
+        data_list.append(data_padded)
+        mask_list.append(mask_padded)
+        nuc_mask_list.append(nuc_mask_padded)
+        cyto_mask_list.append(cyto_mask_padded)
+
+        gene_labels.append(item["gene_label"])
+        marker_labels.append(item["marker_label"])
+        total_indices.append(item["total_index"])
+        crop_infos.append(item["crop_info"])
+
+    # Stack into batch tensors
+    batched = {
+        "data": torch.stack(data_list),
+        "cell_mask": torch.stack(mask_list),
+        "nuc_mask": torch.stack(nuc_mask_list),
+        "cyto_mask": torch.stack(cyto_mask_list),
+        "gene_label": torch.tensor(gene_labels),
+        "marker_label": marker_labels,  # Keep as list since these are strings
+        "total_index": torch.tensor(total_indices),
+        "original_sizes": original_sizes,  # Keep as list of tuples
+        "crop_info": crop_infos,  # Keep as list of dicts
+    }
+
+    return batched
+
+
 class BaseDataset(Dataset):
 
     def __init__(
@@ -36,7 +164,7 @@ class BaseDataset(Dataset):
         labels_df: pd.DataFrame,
         initial_yx_patch_size: tuple = (128, 128),
         final_yx_patch_size: tuple = (128, 128),
-        out_channels: List[str] | Literal["random"] = "random",
+        out_channels: List[str] | Literal["random"] | Literal["all"] = "random",
         label_int_lut: dict = None,  # string --> int
         int_label_lut: dict = None,  # int --> string
         cell_masks: bool = True,
@@ -83,46 +211,20 @@ class BaseDataset(Dataset):
         )
         return
 
-    def _normalize_data(self, ci, channel_names, data, masks):
+    def _normalize_data(self, channel_names, data):
+        img_list = []
+        for ch in channel_names:
+            print(ch)
+            if ch == "Phase2D":
+                img_list.append(data[0])
+            else:
+                # apply log normalization
+                img = data[channel_names.index(ch)]
+                log_img = np.log1p(img)
+                img_norm = (log_img - log_img.mean()) / log_img.std()
+                img_list.append(img_norm)
 
-        # Temporary Fix
-        # normalize per crop and squash all values between -1 and 1
-        data_shift = data - np.mean(data)
-        lo, hi = np.percentile(data_shift, [1, 99.5])
-        scale = max(abs(lo), abs(hi))  # symmetric mapping
-        data_norm = np.clip(data_shift, -scale, scale) / scale
-        if self.cell_masks:
-            data_norm = data_norm * masks
-
-        # fov_attrs = self.stores[ci.store_key][
-        #     ci.tile_pheno
-        # ].zattrs.asdict()  # can create dict for all tiles at beginning
-
-        # # TODO: need a real measure of dataset background
-        # bg = [np.percentile(data, 1)]
-
-        # iqrs = [
-        #     fov_attrs["normalization"][i]["fov_statistics"]["iqr"]
-        #     for i in channel_names
-        # ]
-        # means = [
-        #     fov_attrs["normalization"][i]["fov_statistics"]["mean"]
-        #     for i in channel_names
-        # ]
-
-        # data_bg_sub = np.clip(data - np.expand_dims(bg, (1, 2)), a_min=0, a_max=None)
-
-        # if self.cell_masks:
-        #     data_bg_sub = data_bg_sub * masks
-
-        # data_iqr = (data_bg_sub - np.expand_dims(means, (1, 2))) / (
-        #     np.expand_dims(iqrs, (1, 2)) + 1e-6
-        # )
-
-        # # TODO: Need to fix to work with multiple channels
-        # lo, hi = np.percentile(data_iqr, [1, 99.5])
-        # scale = max(abs(lo), abs(hi))   # symmetric mapping
-        # data_norm = np.clip(data_iqr, -scale, scale) / scale
+        data_norm = np.stack(img_list, axis=0)
 
         return data_norm
 
@@ -147,18 +249,14 @@ class BaseDataset(Dataset):
     def __getitem__(self, index):
         ci = self.labels_df.iloc[index]  # crop info
 
-        well = (
-            ci.tile_pheno[:4] + "0"
-        )  # temp for now, better to add well info when combining stores
+        well = ci.well
         fov = self.stores[ci.store_key][well][0]
         mask_fov = self.stores[ci.store_key][well]["seg"][0]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
 
-        channel_names, channel_index = self._get_channels(
-            ci, well
-        )  # probably doesn't have to be done per dataset
+        channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
             fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
@@ -169,7 +267,10 @@ class BaseDataset(Dataset):
         ).copy()
         sc_mask = mask == ci.segmentation_id
 
-        data_norm = self._normalize_data(ci, channel_names, data, sc_mask)
+        data_norm = self._normalize_data(channel_names, data)
+
+        if self.cell_masks:
+            data_norm = data_norm * sc_mask
 
         batch = {
             "data": data_norm.astype(np.float32),
@@ -200,11 +301,10 @@ class CellProfileDataset(BaseDataset):
 
         ci = self.labels_df.iloc[index]  # crop info
 
-        well = (
-            ci.tile_pheno[:4] + "0"
-        )  # temp for now, better to add well info when combining stores
+        well = ci.well
         fov = self.stores[ci.store_key][well][0]
-        mask_fov = self.stores[ci.store_key][well]["seg"][0]
+        cell_mask_fov = self.stores[ci.store_key][well]["seg"][0]
+        nuc_mask_fov = self.stores[ci.store_key][well]["nuclear_seg"][0]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
@@ -215,20 +315,30 @@ class CellProfileDataset(BaseDataset):
             fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()
 
-        mask = np.asarray(
-            mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+        cell_mask = np.asarray(
+            cell_mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()
-        sc_mask = mask == ci.segmentation_id
+        nuc_mask = np.asarray(
+            nuc_mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+        ).copy()
+        sc_mask = cell_mask == ci.segmentation_id
 
+        # ensure that all output masks as binary
         if self.cell_masks:
             data = data * sc_mask
+            nuc_mask = (nuc_mask * sc_mask) > 0
+
+        cyto_mask = sc_mask & (nuc_mask == 0)
 
         batch = {
             "data": data,
-            "mask": sc_mask,
+            "cell_mask": sc_mask,
             "gene_label": gene_label,
+            "cyto_mask": cyto_mask,
+            "nuc_mask": nuc_mask,
             "marker_label": channel_names,
             "total_index": total_index,
+            "crop_info": ci.to_dict(),
         }
 
         return batch
@@ -286,11 +396,12 @@ class OpsDataManager:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
                 labels_tmp = pd.read_csv(OpsPaths(exp_name, well=f"{w[0]}{w[2]}").links)
                 labels_tmp["store_key"] = exp_name
+                labels_tmp["well"] = w
                 if self.verbose:
                     print(f"{exp_name} {w[0]}{w[2]}: {len(labels_tmp)} cells")
                 labels.append(labels_tmp)
         labels_df = pd.concat(labels, ignore_index=True)
-        labels_df["gene_name"] = labels_df["gene_name"].fillna("NTC")
+        labels_df["gene_name"] = labels_df["Gene name"].fillna("NTC")
         labels_df["total_index"] = np.arange(len(labels_df))  # add index column
         if self.verbose:
             print(f"Total cells: {len(labels_df)}")
@@ -319,7 +430,7 @@ class OpsDataManager:
         self,
         num_workers: int = 1,
         shuffle: bool = True,
-        dataset_type: Literal["basic", "triplet"] = "basic",
+        dataset_type: Literal["basic", "triplet", "cell_profile"] = "basic",
         triplet_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
@@ -345,11 +456,14 @@ class OpsDataManager:
         if dataset_type == "basic":
             DS = BaseDataset
             dataset_kwargs = {**common_kwargs, **(basic_kwargs if basic_kwargs else {})}
+            self.collate_fcn = None  # Use default collate
 
         elif dataset_type == "cell_profile":
             DS = CellProfileDataset
             dataset_kwargs = {**common_kwargs, **(cp_kwargs if cp_kwargs else {})}
-            self.batch_size = 1  # cell profile only supports batch size of 1 for now
+            self.collate_fcn = (
+                collate_variable_size_cells  # Use custom collate for variable sizes
+            )
 
         # elif dataset_type == "triplet":
         #     DS = TripletOpsDataset
@@ -369,6 +483,7 @@ class OpsDataManager:
                 batch_size=self.batch_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
+                collate_fn=self.collate_fcn,
             )
 
             self.train_loader = train_loader
@@ -384,6 +499,7 @@ class OpsDataManager:
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=num_workers,
+                collate_fn=self.collate_fcn,
             )
 
             self.val_loader = val_loader
@@ -399,6 +515,7 @@ class OpsDataManager:
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=num_workers,
+                collate_fn=self.collate_fcn,
             )
 
             self.test_loader = test_loader

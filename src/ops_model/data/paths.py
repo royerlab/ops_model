@@ -27,3 +27,12 @@ class OpsPaths:
             / "3-assembly"
             / f"cell-profiler/cellprofiler_features.csv"
         )
+        self.embedding_plot_dir = (
+            self.base
+            / self.experiment
+            / "3-assembly"
+            / "cell-profiler"
+            / "embedding_plots"
+        )
+
+        self.gene_library = "/hpc/projects/intracellular_dashboard/ops/configs/annotated_guide_library_123-UpdateJuly28_2025.csv"

@@ -66,4 +66,8 @@ trainer:
   limit_val_batches: 400
 
 callbacks:
+<<<<<<< HEAD
   monitor: "val/loss"
+=======
+  monitor: "val/loss"
+>>>>>>> main

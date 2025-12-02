@@ -1,97 +1,157 @@
-import numpy as np
 import pytest
 import torch
-from iohub import open_ome_zarr
 from ops_model.data import data_loader
 
 
-def create_data_manager():
-    experiment = "ops0033_20250429"
-
-    store = open_ome_zarr(
-        "/hpc/projects/intracellular_dashboard/ops/ops0033_20250429/3-assembly/phenotyping_og.zarr"
-    )
-    num_channels = len(store.channel_names)
-
-    data_manager = data_loader.OpsDataManager(
-        experiments={experiment: ["A/1/0", "A/2/0", "A/3/0"]},
+@pytest.fixture(scope="module")
+def feature_data_manager():
+    """Create data manager for testing (reused across all tests in module)."""
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
         batch_size=2,
-        out_channels=["Phase"],
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D", "mCherry"],
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
     )
-    data_manager.construct_dataloaders(num_workers=1, dataset_type="basic")
-
-    l = data_manager
-
-    batch = next(iter(l.train_loader))
-
-    return l, batch
+    dm.construct_dataloaders(num_workers=1, dataset_type="cell_profile")
+    return dm
 
 
 @pytest.fixture(scope="module")
-def data_manager():
-    return create_data_manager()
+def basic_data_manager():
+    """Create data manager for testing (reused across all tests in module)."""
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=2,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D", "mCherry"],
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
+    )
+    dm.construct_dataloaders(num_workers=1, dataset_type="basic")
+    return dm
 
 
-def test_ops_dataloader(data_manager):
+@pytest.fixture(scope="module")
+def feature_batch(feature_data_manager):
+    """Get a single batch for testing (reused across all tests in module)."""
+    train_loader = feature_data_manager.train_loader
+    return next(iter(train_loader))
 
-    # for consistancy:
-    patch_size = 128
 
-    _, batch = data_manager
+@pytest.fixture(scope="module")
+def basic_batch(basic_data_manager):
+    """Get a single batch for testing (reused across all tests in module)."""
+    train_loader = basic_data_manager.train_loader
+    return next(iter(train_loader))
 
-    # Batch is a dictionary containing [data, mask, ...] tensors
-    assert isinstance(batch, dict)
-    assert "data" in batch
-    # assert "label" in batch
-    assert "mask" in batch
 
-    # Check that data and mask are tensors
-    assert isinstance(batch["data"], torch.Tensor)
-    assert isinstance(batch["mask"], torch.Tensor)
+def test_batch_keys_cellprofiler(feature_batch):
+    expected_keys = [
+        "data",
+        "cell_mask",
+        "nuc_mask",
+        "cyto_mask",
+        "gene_label",
+        "marker_label",
+        "total_index",
+        "original_sizes",
+        "crop_info",
+    ]
 
-    # data should have 3 channels and be (128, 128)
-    assert batch["data"].shape[2:] == (patch_size, patch_size)
+    expected_keys = {
+        "data": torch.Tensor,
+        "cell_mask": torch.Tensor,
+        "nuc_mask": torch.Tensor,
+        "cyto_mask": torch.Tensor,
+        "gene_label": torch.Tensor,
+        "marker_label": list,
+        "total_index": torch.Tensor,
+        "original_sizes": list,
+        "crop_info": list,
+    }
 
-    # mask should have no channel dimension and be (1, 128, 128)
-    # Need the channel dimension for MONAI transforms
-    assert batch["mask"].shape[1:] == (1, patch_size, patch_size)
+    batch_keys = list(feature_batch.keys())
+    for k, v in expected_keys.items():
+        assert k in batch_keys
+
+        assert isinstance(feature_batch[k], v)
+    return
+
+
+# Test that the data returned is normalized
+def test_data_normalization(basic_batch):
+    data = basic_batch["data"]
+    # compute mean over all but batch and channel dimensions
+    mean = torch.mean(data, dim=(0, 2, 3))
+
+    # assert that mean is approximately 0
+    assert torch.allclose(mean, torch.zeros_like(mean), atol=1)
 
     return
 
 
-def test_data_loader_consistancy(data_manager):
-    dm, batch = data_manager
+# test that requesting different out channels works
+def test_out_channels(basic_data_manager, basic_batch):
 
-    new_data_manager, _ = create_data_manager()
+    shape = basic_batch["data"].shape
+    assert shape[1] == 2  # 2 out channels requested
 
-    batch_labels = batch["gene_label"].detach().cpu().numpy()
-    total_indxs = batch["total_index"].detach().cpu().numpy()
+    basic_data_manager.out_channels = ["Phase2D"]
+    basic_data_manager.construct_dataloaders(num_workers=1, dataset_type="basic")
+    batch = next(iter(basic_data_manager.train_loader))
+    shape_1 = batch["data"].shape
+    assert shape_1[1] == 1  # 1 out channel requested
 
-    gene_names = dm.labels_df.iloc[total_indxs].gene_name.to_list()
-    mapped_labels = np.asarray([new_data_manager.label_int_lut[a] for a in gene_names])
-
-    assert np.all(batch_labels == mapped_labels)
+    basic_data_manager.out_channels = ["mCherry"]
+    basic_data_manager.construct_dataloaders(num_workers=1, dataset_type="basic")
+    batch = next(iter(basic_data_manager.train_loader))
+    shape_2 = batch["data"].shape
+    assert shape_2[1] == 1  # 1 out channel requested
 
     return
 
 
-# def test_triplet_data_loader():
-#     experiment = "ops0033_20250429"
+# Test that turning masking on/off works
+def test_cell_masking(feature_data_manager, feature_batch):
 
-#     dataset = OpsDataset(experiment)
-#     store = open_ome_zarr(dataset.store_paths["pheno_assembled"])
-#     num_channels = len(store.channel_names)
+    data = feature_batch["data"]
+    cell_mask = feature_batch["cell_mask"]
+    # assert that where cell_mask is 0, data is also 0
+    masked_data = data * (cell_mask == 0)
+    assert torch.sum(masked_data) == 0
 
-#     data_manager = data_loader.OpsDataManager(
-#         experiments={experiment: ["A/1/0", "A/2/0", "A/3/0"]},
-#         batch_size=2,
-#         out_channels=["Phase"],
-#         initial_yx_patch_size=(1, 256, 256),
-#         final_yx_patch_size=(1, 256, 256),
-#     )
-#     data_manager.construct_dataloaders(num_workers=1, dataset_type="triplet")
+    feature_data_manager.train_loader.dataset.use_cell_mask = False
+    batch = next(iter(feature_data_manager.train_loader))
+    data_no_mask = batch["data"]
+    # assert that data_no_mask is not equal to data everywhere
+    assert not torch.equal(data, data_no_mask)
 
-#     l = data_manager
-#     batch = next(iter(l.train_loader))
+    return
 
-#     return
+
+# Test that different patch sizes work
+def test_patch_size(basic_data_manager, basic_batch):
+
+    shape = basic_batch["data"].shape
+    assert shape[2] == 128  # initial patch size
+    assert shape[3] == 128
+
+    basic_data_manager.final_yx_patch_size = (256, 256)
+    basic_data_manager.construct_dataloaders(num_workers=1, dataset_type="basic")
+    batch = next(iter(basic_data_manager.train_loader))
+    shape_1 = batch["data"].shape
+    assert shape_1[2] == 256  # changed patch size
+    assert shape_1[3] == 256
+
+    basic_data_manager.final_yx_patch_size = (64, 64)
+    basic_data_manager.construct_dataloaders(num_workers=1, dataset_type="basic")
+    batch = next(iter(basic_data_manager.train_loader))
+    shape_2 = batch["data"].shape
+    assert shape_2[2] == 64  # changed patch size again
+    assert shape_2[3] == 64
+
+    return
