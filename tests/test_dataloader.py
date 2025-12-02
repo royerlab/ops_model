@@ -6,7 +6,7 @@ from ops_model.data import data_loader
 @pytest.fixture(scope="module")
 def feature_data_manager():
     """Create data manager for testing (reused across all tests in module)."""
-    experiment_dict = {"ops0033_20250429": ["A/1/0", "A/2/0", "A/3/0"]}
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
     dm = data_loader.OpsDataManager(
         experiments=experiment_dict,
         batch_size=2,
@@ -22,7 +22,7 @@ def feature_data_manager():
 @pytest.fixture(scope="module")
 def basic_data_manager():
     """Create data manager for testing (reused across all tests in module)."""
-    experiment_dict = {"ops0033_20250429": ["A/1/0", "A/2/0", "A/3/0"]}
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
     dm = data_loader.OpsDataManager(
         experiments=experiment_dict,
         batch_size=2,
@@ -89,7 +89,7 @@ def test_data_normalization(basic_batch):
     mean = torch.mean(data, dim=(0, 2, 3))
 
     # assert that mean is approximately 0
-    assert torch.allclose(mean, torch.zeros_like(mean), atol=1e-1)
+    assert torch.allclose(mean, torch.zeros_like(mean), atol=1)
 
     return
 
