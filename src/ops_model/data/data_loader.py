@@ -211,46 +211,20 @@ class BaseDataset(Dataset):
         )
         return
 
-    def _normalize_data(self, ci, channel_names, data, masks):
+    def _normalize_data(self, channel_names, data):
+        img_list = []
+        for ch in channel_names:
+            print(ch)
+            if ch == "Phase2D":
+                img_list.append(data[0])
+            else:
+                # apply log normalization
+                img = data[channel_names.index(ch)]
+                log_img = np.log1p(img)
+                img_norm = (log_img - log_img.mean()) / log_img.std()
+                img_list.append(img_norm)
 
-        # Temporary Fix
-        # normalize per crop and squash all values between -1 and 1
-        data_shift = data - np.mean(data)
-        lo, hi = np.percentile(data_shift, [1, 99.5])
-        scale = max(abs(lo), abs(hi))  # symmetric mapping
-        data_norm = np.clip(data_shift, -scale, scale) / scale
-        if self.cell_masks:
-            data_norm = data_norm * masks
-
-        # fov_attrs = self.stores[ci.store_key][
-        #     ci.tile_pheno
-        # ].zattrs.asdict()  # can create dict for all tiles at beginning
-
-        # # TODO: need a real measure of dataset background
-        # bg = [np.percentile(data, 1)]
-
-        # iqrs = [
-        #     fov_attrs["normalization"][i]["fov_statistics"]["iqr"]
-        #     for i in channel_names
-        # ]
-        # means = [
-        #     fov_attrs["normalization"][i]["fov_statistics"]["mean"]
-        #     for i in channel_names
-        # ]
-
-        # data_bg_sub = np.clip(data - np.expand_dims(bg, (1, 2)), a_min=0, a_max=None)
-
-        # if self.cell_masks:
-        #     data_bg_sub = data_bg_sub * masks
-
-        # data_iqr = (data_bg_sub - np.expand_dims(means, (1, 2))) / (
-        #     np.expand_dims(iqrs, (1, 2)) + 1e-6
-        # )
-
-        # # TODO: Need to fix to work with multiple channels
-        # lo, hi = np.percentile(data_iqr, [1, 99.5])
-        # scale = max(abs(lo), abs(hi))   # symmetric mapping
-        # data_norm = np.clip(data_iqr, -scale, scale) / scale
+        data_norm = np.stack(img_list, axis=0)
 
         return data_norm
 
@@ -282,9 +256,7 @@ class BaseDataset(Dataset):
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
 
-        channel_names, channel_index = self._get_channels(
-            ci, well
-        )  # probably doesn't have to be done per dataset
+        channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
             fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
@@ -295,7 +267,10 @@ class BaseDataset(Dataset):
         ).copy()
         sc_mask = mask == ci.segmentation_id
 
-        data_norm = self._normalize_data(ci, channel_names, data, sc_mask)
+        data_norm = self._normalize_data(channel_names, data)
+
+        if self.cell_masks:
+            data_norm = data_norm * sc_mask
 
         batch = {
             "data": data_norm.astype(np.float32),
@@ -455,7 +430,7 @@ class OpsDataManager:
         self,
         num_workers: int = 1,
         shuffle: bool = True,
-        dataset_type: Literal["basic", "triplet"] = "basic",
+        dataset_type: Literal["basic", "triplet", "cell_profile"] = "basic",
         triplet_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
