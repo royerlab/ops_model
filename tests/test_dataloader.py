@@ -1,6 +1,11 @@
 import pytest
 import torch
+import zarr
 from ops_model.data import data_loader
+
+import warnings
+
+warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
 
 
 @pytest.fixture(scope="module")
@@ -50,18 +55,6 @@ def basic_batch(basic_data_manager):
 
 
 def test_batch_keys_cellprofiler(feature_batch):
-    expected_keys = [
-        "data",
-        "cell_mask",
-        "nuc_mask",
-        "cyto_mask",
-        "gene_label",
-        "marker_label",
-        "total_index",
-        "original_sizes",
-        "crop_info",
-    ]
-
     expected_keys = {
         "data": torch.Tensor,
         "cell_mask": torch.Tensor,
@@ -79,6 +72,23 @@ def test_batch_keys_cellprofiler(feature_batch):
         assert k in batch_keys
 
         assert isinstance(feature_batch[k], v)
+    return
+
+
+def test_batch_keys_basic(basic_batch):
+    expexted_keys = {
+        "data": torch.Tensor,
+        "mask": torch.Tensor,
+        "gene_label": torch.Tensor,
+        "marker_label": list,
+        "total_index": torch.Tensor,
+        "crop_info": list,
+    }
+    batch_keys = list(basic_batch.keys())
+    for k, v in expexted_keys.items():
+        assert k in batch_keys
+
+        assert isinstance(basic_batch[k], v)
     return
 
 
@@ -124,8 +134,19 @@ def test_cell_masking(feature_data_manager, feature_batch):
     masked_data = data * (cell_mask == 0)
     assert torch.sum(masked_data) == 0
 
-    feature_data_manager.train_loader.dataset.use_cell_mask = False
-    batch = next(iter(feature_data_manager.train_loader))
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=2,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D", "mCherry"],
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
+    )
+    dm.construct_dataloaders(
+        num_workers=1, dataset_type="cell_profile", cp_kwargs={"cell_masks": False}
+    )
+    batch = next(iter(dm.train_loader))
     data_no_mask = batch["data"]
     # assert that data_no_mask is not equal to data everywhere
     assert not torch.equal(data, data_no_mask)
@@ -153,5 +174,25 @@ def test_patch_size(basic_data_manager, basic_batch):
     shape_2 = batch["data"].shape
     assert shape_2[2] == 64  # changed patch size again
     assert shape_2[3] == 64
+
+    return
+
+
+def test_balanced_sampling(basic_data_manager):
+
+    gene_names = ["NTC", "KIF23"]
+    all_labels_df = basic_data_manager.get_labels()
+    gene_cells = all_labels_df[all_labels_df["gene_name"].isin(gene_names)]
+    basic_data_manager.construct_dataloaders(
+        labels_df=gene_cells,
+        num_workers=1,
+        dataset_type="basic",
+        balanced_sampling=True,
+    )
+    batch = next(iter(basic_data_manager.train_loader))
+    labels = batch["gene_label"]
+    unique, counts = torch.unique(labels, return_counts=True)
+    assert counts[0] == counts[1]  # balanced sampling should give equal counts
+    assert len(unique) == 2  # both classes should be present
 
     return
