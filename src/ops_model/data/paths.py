@@ -9,30 +9,54 @@ from pathlib import Path
 class OpsPaths:
     def __init__(self, experiment: str, well: str = None):
         self.experiment = experiment
+        if well is not None:
+            self.well_prefix = self.reformat_well_name(well)
+        else:
+            self.well_prefix = None
 
         self.base = Path("/hpc/projects/intracellular_dashboard/ops")
 
-        self.phenotyping = self.base / self.experiment / "3-assembly/phenotyping.zarr"
+        self.stores = {
+            "phenotyping": self.base / self.experiment / "3-assembly/phenotyping.zarr",
+            "phenotyping_v3": self.base
+            / self.experiment
+            / "3-assembly/phenotyping_v3.zarr",
+        }
 
-        # ensure that well is a valid format
-        if well is not None:
-            assert len(well) == 2 and "/" not in well
-        self.links = (
-            self.base / self.experiment / "3-assembly" / f"{well}_linked_pheno_iss.csv"
-        )
-
-        self.cell_profiler_out = (
-            self.base
+        self.embeddings = {
+            "cell_profiler": self.base
             / self.experiment
             / "3-assembly"
-            / f"cell-profiler/cellprofiler_features.csv"
-        )
-        self.embedding_plot_dir = (
-            self.base
+            / f"cell-profiler/cellprofiler_features.csv",
+        }
+
+        self.links = {
+            "original": self.base
             / self.experiment
             / "3-assembly"
-            / "cell-profiler"
-            / "embedding_plots"
-        )
+            / f"{self.well_prefix}_linked_pheno_iss.csv",
+            "training": self.base
+            / "models"
+            / "link_csvs"
+            / self.experiment
+            / f"{self.well_prefix}_linked_pheno_iss.csv",
+        }
 
-        self.gene_library = "/hpc/projects/intracellular_dashboard/ops/configs/annotated_guide_library_123-UpdateJuly28_2025.csv"
+        self.other = {
+            "gene_library": "/hpc/projects/intracellular_dashboard/ops/configs/annotated_guide_library_123-UpdateJuly28_2025.csv",
+        }
+
+    def reformat_well_name(self, well: str) -> str:
+        assert self.validate_well_name(well), f"Invalid well name format: {well}"
+        return well[0] + well[2]
+
+    def validate_well_name(self, well: str) -> bool:
+        if len(well.split("/")) != 3:
+            return False
+        elif well[0] not in "ABC":
+            return False
+        elif not well[2].isdigit():
+            return False
+        elif not well[4].isdigit():
+            return False
+        return True
