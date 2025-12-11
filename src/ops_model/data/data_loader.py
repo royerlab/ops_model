@@ -27,6 +27,10 @@ from viscy.transforms import (
 
 from .paths import OpsPaths
 
+import warnings
+
+warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
+
 
 def collate_variable_size_cells(batch):
     """
@@ -156,6 +160,46 @@ def collate_variable_size_cells(batch):
     return batched
 
 
+def collate_basic_dataset(batch):
+    """
+    Custom collate function for BasicDataset batches.
+    All images should already be the same size after transforms.
+
+    Args:
+        batch: List of dictionaries from dataset __getitem__
+
+    Returns:
+        Dictionary with batched tensors
+    """
+    # Initialize lists for batched data
+    data_list = []
+    mask_list = []
+    gene_labels = []
+    marker_labels = []
+    total_indices = []
+    crop_infos = []
+
+    for item in batch:
+        data_list.append(item["data"])
+        mask_list.append(item["mask"])
+        gene_labels.append(item["gene_label"])
+        marker_labels.append(item["marker_label"])
+        total_indices.append(item["total_index"])
+        crop_infos.append(item["crop_info"])
+
+    # Stack into batch tensors
+    batched = {
+        "data": torch.stack(data_list),
+        "mask": torch.stack(mask_list),
+        "gene_label": torch.tensor(gene_labels),
+        "marker_label": marker_labels,  # Keep as list since these are strings
+        "total_index": torch.tensor(total_indices),
+        "crop_info": crop_infos,  # Keep as list of dicts
+    }
+
+    return batched
+
+
 class BaseDataset(Dataset):
 
     def __init__(
@@ -168,6 +212,7 @@ class BaseDataset(Dataset):
         label_int_lut: dict = None,  # string --> int
         int_label_lut: dict = None,  # int --> string
         cell_masks: bool = True,
+        transform: Optional[Callable] = None,
     ):
         self.stores = stores
         self.labels_df = labels_df
@@ -178,50 +223,52 @@ class BaseDataset(Dataset):
         self.int_label_lut = int_label_lut
         self.cell_masks = cell_masks
 
-        self.transform = Compose(
-            [
-                SpatialPadd(
-                    keys=["data", "mask"],
-                    spatial_size=self.initial_yx_patch_size,
-                ),
-                CenterSpatialCropd(
-                    keys=["data", "mask"], roi_size=(self.final_yx_patch_size)
-                ),
-                RandFlipd(
-                    # Vertical Flip
-                    keys=["data", "mask"],
-                    prob=0.5,
-                    spatial_axis=-2,
-                ),
-                RandFlipd(
-                    # Horizontal Flip
-                    keys=["data", "mask"],
-                    prob=0.5,
-                    spatial_axis=-1,
-                ),
-                RandRotate90d(
-                    keys=["data", "mask"],
-                    prob=0.5,
-                    max_k=3,
-                ),
-                ToTensord(
-                    keys=["data", "mask"],
-                ),
-            ]
-        )
+        if transform is None:
+            self.transform = Compose(
+                [
+                    SpatialPadd(
+                        keys=["data", "mask"],
+                        spatial_size=self.initial_yx_patch_size,
+                    ),
+                    CenterSpatialCropd(
+                        keys=["data", "mask"], roi_size=(self.final_yx_patch_size)
+                    ),
+                    RandFlipd(
+                        # Vertical Flip
+                        keys=["data", "mask"],
+                        prob=0.5,
+                        spatial_axis=-2,
+                    ),
+                    RandFlipd(
+                        # Horizontal Flip
+                        keys=["data", "mask"],
+                        prob=0.5,
+                        spatial_axis=-1,
+                    ),
+                    RandRotate90d(
+                        keys=["data", "mask"],
+                        prob=0.5,
+                        max_k=3,
+                    ),
+                    ToTensord(
+                        keys=["data", "mask"],
+                    ),
+                ]
+            )
+        else:
+            self.transform = transform
         return
 
     def _normalize_data(self, channel_names, data):
         img_list = []
         for ch in channel_names:
-            print(ch)
             if ch == "Phase2D":
                 img_list.append(data[0])
             else:
                 # apply log normalization
                 img = data[channel_names.index(ch)]
                 log_img = np.log1p(img)
-                img_norm = (log_img - log_img.mean()) / log_img.std()
+                img_norm = (log_img - log_img.mean()) / (log_img.std() + 1e-8)
                 img_list.append(img_norm)
 
         data_norm = np.stack(img_list, axis=0)
@@ -231,7 +278,7 @@ class BaseDataset(Dataset):
     def _get_channels(self, ci, well):
 
         attrs = self.stores[ci.store_key][well].attrs.asdict()
-        all_channel_names = [a["label"] for a in attrs["omero"]["channels"]]
+        all_channel_names = [a["label"] for a in attrs["ome"]["omero"]["channels"]]
 
         if self.out_channels == "random":
             channel_names = [random.choice(all_channel_names)]
@@ -250,8 +297,8 @@ class BaseDataset(Dataset):
         ci = self.labels_df.iloc[index]  # crop info
 
         well = ci.well
-        fov = self.stores[ci.store_key][well][0]
-        mask_fov = self.stores[ci.store_key][well]["seg"][0]
+        fov = self.stores[ci.store_key][well]["0"]
+        mask_fov = self.stores[ci.store_key][well]["labels"]["seg"]["0"]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
@@ -259,12 +306,23 @@ class BaseDataset(Dataset):
         channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
-            fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+            fov[
+                0:1,
+                channel_index,
+                0:1,
+                slice(bbox[0], bbox[2]),
+                slice(bbox[1], bbox[3]),
+            ]
         ).copy()
+        data = np.squeeze(data)
+        if len(data.shape) == 2:
+            data = np.expand_dims(data, axis=0)
 
         mask = np.asarray(
-            mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+            mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()
+        mask = np.squeeze(mask)
+        mask = np.expand_dims(mask, axis=0)
         sc_mask = mask == ci.segmentation_id
 
         data_norm = self._normalize_data(channel_names, data)
@@ -278,6 +336,7 @@ class BaseDataset(Dataset):
             "gene_label": gene_label,
             "marker_label": channel_names,
             "total_index": total_index,
+            "crop_info": ci.to_dict(),
         }
 
         batch = self.transform(batch)
@@ -302,9 +361,9 @@ class CellProfileDataset(BaseDataset):
         ci = self.labels_df.iloc[index]  # crop info
 
         well = ci.well
-        fov = self.stores[ci.store_key][well][0]
-        cell_mask_fov = self.stores[ci.store_key][well]["seg"][0]
-        nuc_mask_fov = self.stores[ci.store_key][well]["nuclear_seg"][0]
+        fov = self.stores[ci.store_key][well]["0"]
+        cell_mask_fov = self.stores[ci.store_key][well]["labels"]["seg"]["0"]
+        nuc_mask_fov = self.stores[ci.store_key][well]["labels"]["nuclear_seg"]["0"]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
@@ -312,15 +371,28 @@ class CellProfileDataset(BaseDataset):
         channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
-            fov[0, channel_index, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+            fov[
+                0:1,
+                channel_index,
+                0:1,
+                slice(bbox[0], bbox[2]),
+                slice(bbox[1], bbox[3]),
+            ]
         ).copy()
+        data = np.squeeze(data)
+        if len(data.shape) == 2:
+            data = np.expand_dims(data, axis=0)
 
         cell_mask = np.asarray(
-            cell_mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+            cell_mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()
+        cell_mask = np.squeeze(cell_mask)
+        cell_mask = np.expand_dims(cell_mask, axis=0)
         nuc_mask = np.asarray(
-            nuc_mask_fov[0, :, 0, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+            nuc_mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()
+        nuc_mask = np.squeeze(nuc_mask)
+        nuc_mask = np.expand_dims(nuc_mask, axis=0)
         sc_mask = cell_mask == ci.segmentation_id
 
         # ensure that all output masks as binary
@@ -367,7 +439,6 @@ class OpsDataManager:
         self.verbose = verbose
         self.collate_fcn = None
 
-        self.store_dict = None
         self.train_loader = None
         self.val_loader = None
         self.test_loader = None
@@ -394,14 +465,23 @@ class OpsDataManager:
             for w in wells:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
-                labels_tmp = pd.read_csv(OpsPaths(exp_name, well=f"{w[0]}{w[2]}").links)
+                labels_tmp = pd.read_csv(OpsPaths(exp_name, well=w).links["training"])
+
+                # remove rows with NaN segmentation_id
+                labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
+
                 labels_tmp["store_key"] = exp_name
                 labels_tmp["well"] = w
                 if self.verbose:
                     print(f"{exp_name} {w[0]}{w[2]}: {len(labels_tmp)} cells")
                 labels.append(labels_tmp)
         labels_df = pd.concat(labels, ignore_index=True)
-        labels_df["gene_name"] = labels_df["Gene name"].fillna("NTC")
+        if "Gene name" in labels_df.columns:
+            labels_df["gene_name"] = labels_df["Gene name"].fillna("NTC")
+        elif "gene_name" in labels_df.columns:
+            labels_df["gene_name"] = labels_df["gene_name"].fillna("NTC")
+        else:
+            raise ValueError("No gene name column found in labels file")
         labels_df["total_index"] = np.arange(len(labels_df))  # add index column
         if self.verbose:
             print(f"Total cells: {len(labels_df)}")
@@ -421,26 +501,56 @@ class OpsDataManager:
         stores = {}
         for exp_name, wells in self.experiments.items():
             stores[f"{exp_name}"] = zarr.open_group(
-                OpsPaths(exp_name).phenotyping, mode="r"
+                OpsPaths(exp_name).stores["phenotyping_v3"], mode="r"
             )
 
         return stores
 
+    def balanced_sample_weights(self, df: pd.DataFrame):
+        """
+        Needs to be run on the individual train/val/test dataframes, becuase the
+        entries get shuffled during splitting.
+        """
+        class_counts = df["gene_name"].value_counts().to_dict()
+        class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
+        sample_weights = np.array(
+            [class_weights[gene_name] for gene_name in df["gene_name"]]
+        )
+
+        return sample_weights
+
+    def create_sampler(self, df: pd.DataFrame, balanced: bool):
+        if not balanced:
+            return None
+
+        sample_weights = self.balanced_sample_weights(df)
+
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),  # total samples per epoch
+            replacement=True,
+        )
+        return sampler
+
     def construct_dataloaders(
         self,
+        labels_df: pd.DataFrame = None,
         num_workers: int = 1,
-        shuffle: bool = True,
         dataset_type: Literal["basic", "triplet", "cell_profile"] = "basic",
+        balanced_sampling: bool = False,
         triplet_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
+        train_loader_kwargs: dict = None,
     ):
         """
         Returns train, val and test dataloaders
         """
-        self.store_dict = self.combine_stores()
-        labels_df = self.get_labels()
+
+        if labels_df is None:
+            labels_df = self.get_labels()
         self.labels_df = labels_df
+        self.store_dict = self.combine_stores()
         self.label_int_lut, self.int_label_lut = self.gene_label_converter()
 
         train_ind, val_ind, test_ind = self.split_data(labels_df)
@@ -456,7 +566,7 @@ class OpsDataManager:
         if dataset_type == "basic":
             DS = BaseDataset
             dataset_kwargs = {**common_kwargs, **(basic_kwargs if basic_kwargs else {})}
-            self.collate_fcn = None  # Use default collate
+            self.collate_fcn = collate_basic_dataset
 
         elif dataset_type == "cell_profile":
             DS = CellProfileDataset
@@ -473,25 +583,30 @@ class OpsDataManager:
         #     }
 
         if len(train_ind) > 0:
+            train_df = labels_df.iloc[train_ind]
+            train_sampler = self.create_sampler(train_df, balanced_sampling)
             train_dataset = DS(
                 stores=self.store_dict,
-                labels_df=labels_df.iloc[train_ind],
+                labels_df=train_df,
                 **dataset_kwargs,
             )
             train_loader = torch.utils.data.DataLoader(
                 dataset=train_dataset,
                 batch_size=self.batch_size,
-                shuffle=shuffle,
                 num_workers=num_workers,
                 collate_fn=self.collate_fcn,
+                sampler=train_sampler,
+                **(train_loader_kwargs if train_loader_kwargs else {}),
             )
 
             self.train_loader = train_loader
 
         if len(val_ind) > 0:
+            val_df = labels_df.iloc[val_ind]
+            val_sampler = self.create_sampler(val_df, balanced_sampling)
             val_dataset = DS(
                 stores=self.store_dict,
-                labels_df=labels_df.iloc[val_ind],
+                labels_df=val_df,
                 **dataset_kwargs,
             )
             val_loader = torch.utils.data.DataLoader(
@@ -500,14 +615,17 @@ class OpsDataManager:
                 shuffle=False,
                 num_workers=num_workers,
                 collate_fn=self.collate_fcn,
+                sampler=val_sampler,
             )
 
             self.val_loader = val_loader
 
         if len(test_ind) > 0:
+            test_df = labels_df.iloc[test_ind]
+            test_sampler = self.create_sampler(test_df, balanced_sampling)
             test_dataset = DS(
                 stores=self.store_dict,
-                labels_df=labels_df.iloc[test_ind],
+                labels_df=test_df,
                 **dataset_kwargs,
             )
             test_loader = torch.utils.data.DataLoader(
@@ -516,6 +634,7 @@ class OpsDataManager:
                 shuffle=False,
                 num_workers=num_workers,
                 collate_fn=self.collate_fcn,
+                sampler=test_sampler,
             )
 
             self.test_loader = test_loader
