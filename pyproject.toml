@@ -130,7 +130,8 @@ filterwarnings = [
     "error",
     "ignore:numpy.ndarray size changed:RuntimeWarning",
     "ignore:`cumproduct` is deprecated:DeprecationWarning",
-    "ignore:Conversion of an array with ndim > 0 to a scalar is deprecated:DeprecationWarning"
+    "ignore:Conversion of an array with ndim > 0 to a scalar is deprecated:DeprecationWarning",
+    "ignore:Both zarr\\.json.*Zarr format 3 will be used: zarr.errors.ZarrUserWarning"
 ]
 
 # https://mypy.readthedocs.io/en/stable/config_file.html
