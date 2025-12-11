@@ -8,14 +8,18 @@ import lightning as L
 import numpy as np
 import torch
 import zarr
+import pandas as pd
 from cytoself.components.blocks.fc_block import FCblock
 from cytoself.components.layers.vq import VectorQuantizer
 from cytoself.trainer.autoencoder.decoders.resnet2d import DecoderResnet
 from cytoself.trainer.autoencoder.encoders.efficientenc2d import efficientenc_b0
 from lightning.pytorch.callbacks import BasePredictionWriter
+
 from torch import Tensor, nn, optim
+import torchvision.utils as tvutils
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
+
 
 """
 Cytoself by default uses a split EfficientNet B0 model as two encoders.
@@ -24,28 +28,39 @@ Therefore, it needs two sets of block arguments for generating two EfficientNets
 
 
 class CytoselfPredictionWriter(BasePredictionWriter):
-    def __init__(self, output_dir: str, zarr_suffix: str, write_interval):
+    def __init__(
+        self,
+        output_dir: str,
+        write_interval,
+        int_label_lut: dict,
+    ):
         super().__init__(write_interval)
         self.output_dir = Path(output_dir)
-        self.zarr_suffix = zarr_suffix
         self.high_count = 0
         self.low_count = 0
         self.metadata = {}
+        self.int_label_lut = int_label_lut
 
     def setup(self, trainer, pl_module, stage):
         if stage == "predict":
+
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.emb_local_dir = self.output_dir / "emb_2_chunks"
+            self.emb_local_dir.mkdir(parents=True, exist_ok=True)
+
+            self.classificatioin_score_dir = self.output_dir / "classification_scores"
+            self.classificatioin_score_dir.mkdir(parents=True, exist_ok=True)
+
             self.global_emb_store = zarr.open_group(
-                self.output_dir / f"global_emb_{self.zarr_suffix}.zarr", mode="w"
+                self.output_dir / f"global_emb.zarr", mode="w"
             )
             self.global_emb_store.create_group(self.high_count)
 
-            self.local_emb_store = zarr.open_group(
-                self.output_dir / f"local_emb_{self.zarr_suffix}.zarr", mode="w"
-            )
-            self.local_emb_store.create_group(self.high_count)
+            self.emb_global_meta_dir = self.output_dir / "global_emb_metadata"
+            self.emb_global_meta_dir.mkdir(parents=True, exist_ok=True)
 
             self.recon_store = zarr.open_group(
-                self.output_dir / f"recon_{self.zarr_suffix}.zarr", mode="w"
+                self.output_dir / f"reconstructions.zarr", mode="w"
             )
         return
 
@@ -81,32 +96,61 @@ class CytoselfPredictionWriter(BasePredictionWriter):
             shape=emb_1.shape,
             chunks=(1,) + emb_1.shape[1:],
         )
-        self.local_emb_store[self.high_count].create_dataset(
-            self.low_count,
-            data=emb_2.detach().cpu().numpy(),
-            shape=emb_2.shape,
-            chunks=(1,) + emb_2.shape[1:],
+
+        metadata_df = pd.DataFrame(
+            {
+                "label_int": batch["gene_label"].cpu().numpy(),
+                "label_str": [
+                    self.int_label_lut[label]
+                    for label in batch["gene_label"].cpu().numpy()
+                ],
+                "sgRNA": [a["sgRNA"] for a in batch["crop_info"]],
+                "experiment": [a["store_key"] for a in batch["crop_info"]],
+                "x_position": [a["x_pheno"] for a in batch["crop_info"]],
+                "y_position": [a["y_pheno"] for a in batch["crop_info"]],
+                "well": [a["well"] + "_" + a["store_key"] for a in batch["crop_info"]],
+            }
         )
 
-        for i in range(recon.shape[0]):
-            total_index = batch["total_index"][i].detach().item()
-            self.metadata[total_index] = {
-                "position": f"{self.high_count}/{self.low_count}",
-                "batch_index": batch_indices[i],
-                "index": i,
-                "gene_label": batch["gene_label"][i].detach().item(),
-                "total_index": batch["total_index"][i].detach().item(),
-            }
+        # save global embedding csvs
+        emb_2_df = pd.DataFrame(
+            emb_2.detach().cpu().numpy().reshape(emb_2.shape[0], -1)
+        )
+        emb_2_df = pd.concat([emb_2_df, metadata_df], axis=1)
+        emb_2_csv_path = (
+            self.emb_local_dir
+            / f"global_emb_batch_{self.high_count}_{self.low_count}.csv"
+        )
+        emb_2_df.to_csv(emb_2_csv_path, index=False)
 
-        # TODO: only need to write on the last batch
-        self.global_emb_store.attrs.put(self.metadata)
-        self.local_emb_store.attrs.put(self.metadata)
+        # save classification score csvs
+        scores_df = pd.DataFrame(scores.detach().cpu().numpy())
+        scores_df = pd.concat([scores_df, metadata_df], axis=1)
+        scores_csv_path = (
+            self.classificatioin_score_dir
+            / f"classification_scores_batch_{self.high_count}_{self.low_count}.csv"
+        )
+        scores_df.to_csv(scores_csv_path, index=False)
+
+        # save global_emb metadata
+        global_emb_df = pd.DataFrame(
+            {
+                "batch_index": batch_indices,
+                "low_count": self.low_count,
+                "high_count": self.high_count,
+            }
+        )
+        global_emb_df = pd.concat([global_emb_df, metadata_df], axis=1)
+        global_emb_csv_path = (
+            self.emb_global_meta_dir
+            / f"global_emb_metadata_batch_{self.high_count}_{self.low_count}.csv"
+        )
+        global_emb_df.to_csv(global_emb_csv_path, index=False)
 
         self.low_count += 1
         if self.low_count % 10 == 0:
             self.high_count += 1
             self.global_emb_store.create_group(self.high_count)
-            self.local_emb_store.create_group(self.high_count)
             self.low_count = 0
 
         return
@@ -127,6 +171,8 @@ class LitCytoSelf(L.LightningModule):
         output_shape: Optional[tuple[int, int, int]] = (1, 128, 128),
         fc_input_type: str = "vqvec",
         fc_output_idx: Union[str, Sequence[int]] = [2],
+        vq_coeff: float = 1.0,
+        fc_coeff: float = 1.0,
     ):
         super().__init__()
         self.model = CytoselfFull(
@@ -142,6 +188,8 @@ class LitCytoSelf(L.LightningModule):
         self.variance = (
             1  # Should be 1 because we normalize the data to have 0 mean and std of 1
         )
+        self.vq_coeff = vq_coeff
+        self.fc_coeff = fc_coeff
 
     def forward(self, batch):
         img = batch["data"]
@@ -152,32 +200,58 @@ class LitCytoSelf(L.LightningModule):
         lab = batch["gene_label"]
 
         model_outputs = self.model(img)
-        loss = self._calc_losses(
+        loss, mse_loss, vq_loss, fc_loss = self._calc_losses(
             model_outputs=model_outputs,
             img=img,
             lab=lab,
             variance=self.variance,
-            vq_coeff=1,
-            fc_coeff=1,
+            vq_coeff=self.vq_coeff,
+            fc_coeff=self.fc_coeff,
         )
-        self.log("train_loss", loss, batch_size=img.size(0))
+        self.log_dict(
+            {
+                "train/total_loss": loss,
+                "train/mse_loss": mse_loss,
+                "train/vq_loss": vq_loss,
+                "train/fc_loss": fc_loss,
+            },
+            batch_size=img.size(0),
+        )
         return loss
 
-    def validation_step(self, batch):
+    def validation_step(self, batch, batch_idx):
         img = batch["data"]
         lab = batch["gene_label"]
 
         model_outputs = self.model(img)
-        loss = self._calc_losses(
-            model_outputs, img, lab, variance=self.variance, vq_coeff=1, fc_coeff=1
+        loss, mse_loss, vq_loss, fc_loss = self._calc_losses(
+            model_outputs,
+            img,
+            lab,
+            variance=self.variance,
+            vq_coeff=self.vq_coeff,
+            fc_coeff=self.fc_coeff,
         )
-        self.log("val_loss", loss, batch_size=img.size(0))
+        self.log_dict(
+            {
+                "val/total_loss": loss,
+                "val/mse_loss": mse_loss,
+                "val/vq_loss": vq_loss,
+                "val/fc_loss": fc_loss,
+            },
+            batch_size=img.size(0),
+        )
+
+        if batch_idx == 0:
+            self.log_images(img, model_outputs[0])
+
         return loss
 
     def predict_step(self, batch):
-        recon, prediction = self.model(batch["data"])
-        emb_1 = self.model(batch["data"], output_layer="vqvec1")
-        emb_2 = self.model(batch["data"], output_layer="vqvec2")
+        data = batch["data"].cuda()
+        recon, prediction = self.model(data)
+        emb_1 = self.model(data, output_layer="vqvec1")
+        emb_2 = self.model(data, output_layer="vqvec2")
         return recon, prediction, emb_1, emb_2
 
     def configure_optimizers(self):
@@ -213,14 +287,21 @@ class LitCytoSelf(L.LightningModule):
         fc_loss_list = list(self.model.fc_loss.values())
         vq_loss_list = [d["loss"] for d in self.model.vq_loss.values()]
         mse_loss_list = list(self.model.mse_loss.values())
-        loss = (
-            +(torch.stack(mse_loss_list).sum() if len(mse_loss_list) > 0 else 0)
-            + vq_coeff
-            * (torch.stack(vq_loss_list).sum() if len(vq_loss_list) > 0 else 0)
-            + fc_coeff
-            * (torch.stack(fc_loss_list).sum() if len(fc_loss_list) > 0 else 0)
+        mse_loss = torch.stack(mse_loss_list).sum() if len(mse_loss_list) > 0 else 0
+        vq_loss = torch.stack(vq_loss_list).sum() if len(vq_loss_list) > 0 else 0
+        fc_loss = torch.stack(fc_loss_list).sum() if len(fc_loss_list) > 0 else 0
+        loss = +mse_loss + vq_coeff * vq_loss + fc_coeff * fc_loss
+        return loss, mse_loss, vq_loss, fc_loss
+
+    def log_images(self, inputs, outputs, num_samples=8):
+        n = min(inputs.size(0), num_samples)
+        grid = tvutils.make_grid(
+            torch.cat((inputs[:n], outputs[:n])),
+            nrow=n,
+            normalize=True,
+            value_range=(-1, 1),
         )
-        return loss
+        self.logger.experiment.add_image("reconstructions", grid, self.current_epoch)
 
 
 class CytoselfFull(nn.Module):
