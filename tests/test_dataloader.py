@@ -196,3 +196,23 @@ def test_balanced_sampling(basic_data_manager):
     assert len(unique) == 2  # both classes should be present
 
     return
+
+
+def test_single_channel_data():
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=2,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D"],
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
+    )
+    dm.construct_dataloaders(num_workers=1, dataset_type="basic")
+    train_loader = dm.train_loader
+    batch = next(iter(train_loader))
+    data = batch["data"]
+    shape = data.shape
+    assert shape[1] == 1  # single channel data should have channel dimension of
+
+    return
