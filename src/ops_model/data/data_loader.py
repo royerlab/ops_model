@@ -26,6 +26,7 @@ from viscy.transforms import (
 )
 
 from .paths import OpsPaths
+from .qc.qc_labels import filter_small_bboxes
 
 import warnings
 
@@ -262,11 +263,12 @@ class BaseDataset(Dataset):
     def _normalize_data(self, channel_names, data):
         img_list = []
         for ch in channel_names:
-            if ch == "Phase2D":
-                img_list.append(data[0])
+            img = data[channel_names.index(ch)]
+            if ch == "Phase2D" or ch == "Focus3D":
+                img_norm = img / np.std(img)
+                img_list.append(img_norm)
             else:
                 # apply log normalization
-                img = data[channel_names.index(ch)]
                 log_img = np.log1p(img)
                 img_norm = (log_img - log_img.mean()) / (log_img.std() + 1e-8)
                 img_list.append(img_norm)
@@ -274,6 +276,38 @@ class BaseDataset(Dataset):
         data_norm = np.stack(img_list, axis=0)
 
         return data_norm
+
+    def _pad_bbox(self, bbox, final_shape):
+        """
+        bbox: (ymin, xmin, ymax, xmax)
+        final_shape: (height, width)
+
+        If bbox is smaller than final_shape, pad it equally on all sides to reach final_shape.
+        """
+        ymin, xmin, ymax, xmax = bbox
+        target_height, target_width = final_shape
+
+        # Calculate current bbox dimensions
+        current_height = ymax - ymin
+        current_width = xmax - xmin
+
+        # Calculate padding needed
+        height_padding = max(0, target_height - current_height)
+        width_padding = max(0, target_width - current_width)
+
+        # Distribute padding equally on both sides
+        pad_top = height_padding / 2
+        pad_bottom = height_padding / 2
+        pad_left = width_padding / 2
+        pad_right = width_padding / 2
+
+        # Apply padding
+        new_ymin = int(ymin - pad_top)
+        new_ymax = int(ymax + pad_bottom)
+        new_xmin = int(xmin - pad_left)
+        new_xmax = int(xmax + pad_right)
+
+        return (new_ymin, new_xmin, new_ymax, new_xmax)
 
     def _get_channels(self, ci, well):
 
@@ -299,9 +333,11 @@ class BaseDataset(Dataset):
         well = ci.well
         fov = self.stores[ci.store_key][well]["0"]
         mask_fov = self.stores[ci.store_key][well]["labels"]["seg"]["0"]
-        bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
+        bbox = ast.literal_eval(ci.bbox)
+        if not self.cell_masks:
+            bbox = self._pad_bbox(bbox, self.initial_yx_patch_size)
 
         channel_names, channel_index = self._get_channels(ci, well)
 
@@ -470,6 +506,12 @@ class OpsDataManager:
                 # remove rows with NaN segmentation_id
                 labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
 
+                # remove cells with suspiciously small bounding boxes
+                labels_tmp, num_rem = filter_small_bboxes(labels_tmp, threshold=5)
+                if self.verbose:
+                    print(
+                        f"Removed {num_rem} cells with small bounding boxes from {exp_name} {w[0]}{w[2]}"
+                    )
                 labels_tmp["store_key"] = exp_name
                 labels_tmp["well"] = w
                 if self.verbose:
