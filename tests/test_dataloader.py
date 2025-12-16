@@ -216,3 +216,74 @@ def test_single_channel_data():
     assert shape[1] == 1  # single channel data should have channel dimension of
 
     return
+
+
+def test_contrastive_dataset():
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=2,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D"],
+        initial_yx_patch_size=(256, 256),
+        final_yx_patch_size=(128, 128),
+        verbose=False,
+    )
+    dm.construct_dataloaders(
+        num_workers=1,
+        dataset_type="contrastive",
+        contrastive_kwargs={"positive_source": "self"},
+    )
+    train_loader = dm.train_loader
+    batch = next(iter(train_loader))
+
+    expected_keys = {
+        "anchor": torch.Tensor,
+        "positive": torch.Tensor,
+        "gene_label": list,
+        "marker_label": list,
+        "crop_info": list,
+    }
+
+    batch_keys = list(batch.keys())
+    for k, v in expected_keys.items():
+        assert k in batch_keys
+
+        assert isinstance(batch[k], v)
+
+    return
+
+
+def test_contrastive_dataset_negative():
+    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=2,
+        data_split=(1, 0, 0),
+        out_channels=["Phase2D"],
+        initial_yx_patch_size=(256, 256),
+        final_yx_patch_size=(128, 128),
+        verbose=False,
+    )
+    dm.construct_dataloaders(
+        num_workers=1,
+        dataset_type="contrastive",
+        contrastive_kwargs={
+            "positive_source": "self",
+            "use_negative": True,
+        },
+    )
+    train_loader = dm.train_loader
+    batch = next(iter(train_loader))
+
+    expected_keys = {
+        "negative": torch.Tensor,
+    }
+
+    batch_keys = list(batch.keys())
+    for k, v in expected_keys.items():
+        assert k in batch_keys
+
+        assert isinstance(batch[k], v)
+
+    return

@@ -27,178 +27,15 @@ from viscy.transforms import (
 
 from .paths import OpsPaths
 from .qc.qc_labels import filter_small_bboxes
+from .collate_utils import (
+    collate_basic_dataset,
+    collate_variable_size_cells,
+    create_contrastive_collate_fcn,
+)
 
 import warnings
 
 warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
-
-
-def collate_variable_size_cells(batch):
-    """
-    Custom collate function for batches with variable-sized cell images.
-    Pads all images and masks to the maximum size in the batch.
-
-    Args:
-        batch: List of dictionaries from dataset __getitem__
-
-    Returns:
-        Dictionary with batched tensors, all padded to max size in batch
-    """
-    # Find maximum height and width in this batch
-    max_h = max(item["data"].shape[-2] for item in batch)
-    max_w = max(item["data"].shape[-1] for item in batch)
-
-    # Initialize lists for batched data
-    data_list = []
-    mask_list = []
-    nuc_mask_list = []
-    cyto_mask_list = []
-    gene_labels = []
-    marker_labels = []
-    total_indices = []
-    original_sizes = []  # Store original sizes for downstream use
-    crop_infos = []  # Store crop info dicts
-
-    for item in batch:
-        data = item["data"]
-        mask = item["cell_mask"]
-        nuc_mask = item["nuc_mask"]
-        cyto_mask = item["cyto_mask"]
-
-        # Get original size
-        _, h, w = data.shape if data.ndim == 3 else (1, *data.shape)
-        original_sizes.append((h, w))
-
-        # Pad data and mask to max size
-        pad_h = max_h - h
-        pad_w = max_w - w
-
-        # Pad: (left, right, top, bottom) for 2D, or (c, h, w) dimensions
-        if data.ndim == 3:  # (C, H, W)
-            data_padded = torch.nn.functional.pad(
-                torch.from_numpy(data) if isinstance(data, np.ndarray) else data,
-                (0, pad_w, 0, pad_h),
-                mode="constant",
-                value=0,
-            )
-        else:  # (H, W)
-            data_padded = torch.nn.functional.pad(
-                torch.from_numpy(data) if isinstance(data, np.ndarray) else data,
-                (0, pad_w, 0, pad_h),
-                mode="constant",
-                value=0,
-            )
-
-        # Convert mask to tensor and ensure it's int32 for instance segmentation
-        mask_tensor = (
-            torch.from_numpy(mask.astype(np.int32))
-            if isinstance(mask, np.ndarray)
-            else mask.to(torch.int32)
-        )
-
-        if mask.ndim == 3:  # (C, H, W)
-            mask_padded = torch.nn.functional.pad(
-                mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-        else:  # (H, W)
-            mask_padded = torch.nn.functional.pad(
-                mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-
-        # Pad nuc_mask
-        nuc_mask_tensor = (
-            torch.from_numpy(nuc_mask.astype(np.int32))
-            if isinstance(nuc_mask, np.ndarray)
-            else nuc_mask.to(torch.int32)
-        )
-
-        if nuc_mask.ndim == 3:  # (C, H, W)
-            nuc_mask_padded = torch.nn.functional.pad(
-                nuc_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-        else:  # (H, W)
-            nuc_mask_padded = torch.nn.functional.pad(
-                nuc_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-        # Pad cyto_mask
-        cyto_mask_tensor = (
-            torch.from_numpy(cyto_mask.astype(np.int32))
-            if isinstance(cyto_mask, np.ndarray)
-            else cyto_mask.to(torch.int32)
-        )
-
-        if cyto_mask.ndim == 3:  # (C, H, W)
-            cyto_mask_padded = torch.nn.functional.pad(
-                cyto_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-        else:  # (H, W)
-            cyto_mask_padded = torch.nn.functional.pad(
-                cyto_mask_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0
-            )
-        data_list.append(data_padded)
-        mask_list.append(mask_padded)
-        nuc_mask_list.append(nuc_mask_padded)
-        cyto_mask_list.append(cyto_mask_padded)
-
-        gene_labels.append(item["gene_label"])
-        marker_labels.append(item["marker_label"])
-        total_indices.append(item["total_index"])
-        crop_infos.append(item["crop_info"])
-
-    # Stack into batch tensors
-    batched = {
-        "data": torch.stack(data_list),
-        "cell_mask": torch.stack(mask_list),
-        "nuc_mask": torch.stack(nuc_mask_list),
-        "cyto_mask": torch.stack(cyto_mask_list),
-        "gene_label": torch.tensor(gene_labels),
-        "marker_label": marker_labels,  # Keep as list since these are strings
-        "total_index": torch.tensor(total_indices),
-        "original_sizes": original_sizes,  # Keep as list of tuples
-        "crop_info": crop_infos,  # Keep as list of dicts
-    }
-
-    return batched
-
-
-def collate_basic_dataset(batch):
-    """
-    Custom collate function for BasicDataset batches.
-    All images should already be the same size after transforms.
-
-    Args:
-        batch: List of dictionaries from dataset __getitem__
-
-    Returns:
-        Dictionary with batched tensors
-    """
-    # Initialize lists for batched data
-    data_list = []
-    mask_list = []
-    gene_labels = []
-    marker_labels = []
-    total_indices = []
-    crop_infos = []
-
-    for item in batch:
-        data_list.append(item["data"])
-        mask_list.append(item["mask"])
-        gene_labels.append(item["gene_label"])
-        marker_labels.append(item["marker_label"])
-        total_indices.append(item["total_index"])
-        crop_infos.append(item["crop_info"])
-
-    # Stack into batch tensors
-    batched = {
-        "data": torch.stack(data_list),
-        "mask": torch.stack(mask_list),
-        "gene_label": torch.tensor(gene_labels),
-        "marker_label": marker_labels,  # Keep as list since these are strings
-        "total_index": torch.tensor(total_indices),
-        "crop_info": crop_infos,  # Keep as list of dicts
-    }
-
-    return batched
 
 
 class BaseDataset(Dataset):
@@ -250,6 +87,7 @@ class BaseDataset(Dataset):
                         keys=["data", "mask"],
                         prob=0.5,
                         max_k=3,
+                        spatial_axes=(-2, -1),
                     ),
                     ToTensord(
                         keys=["data", "mask"],
@@ -284,6 +122,9 @@ class BaseDataset(Dataset):
 
         If bbox is smaller than final_shape, pad it equally on all sides to reach final_shape.
         """
+        if len(final_shape) > 2:
+            final_shape = final_shape[-2:]
+
         ymin, xmin, ymax, xmax = bbox
         target_height, target_width = final_shape
 
@@ -366,6 +207,10 @@ class BaseDataset(Dataset):
         if self.cell_masks:
             data_norm = data_norm * sc_mask
 
+        if len(self.final_yx_patch_size) == 3:
+            data_norm = np.expand_dims(data_norm, axis=0)
+            sc_mask = np.expand_dims(sc_mask, axis=0)
+
         batch = {
             "data": data_norm.astype(np.float32),
             "mask": sc_mask,
@@ -380,8 +225,166 @@ class BaseDataset(Dataset):
         return batch
 
 
-class TripletDataset(BaseDataset):
-    pass
+class ContrastiveDataset(BaseDataset):
+    def __init__(
+        self,
+        transform=None,
+        positive_source: str | Literal["self"] | Literal["perturbation"] = "self",
+        use_negative: bool = False,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        self.positive_source = positive_source
+        self.use_negative = use_negative
+        if transform is None:
+            self.transform = Compose(
+                [
+                    SpatialPadd(
+                        keys=["data"],
+                        spatial_size=self.initial_yx_patch_size,
+                    ),
+                    RandFlipd(
+                        # horizontal flip
+                        keys=["data"],
+                        prob=0.5,
+                        spatial_axis=-1,
+                    ),
+                    RandFlipd(
+                        # vertical flip
+                        keys=["data"],
+                        prob=0.5,
+                        spatial_axis=-2,
+                    ),
+                    RandAffined(
+                        keys=["data"],
+                        prob=0.8,
+                        rotate_range=(3.14, 0),
+                        scale_range=(0.2, 0.2),
+                        shear_range=(0, 0),
+                        padding_mode="zeros",
+                    ),
+                    RandAdjustContrastd(
+                        keys=["data"],
+                        prob=0.5,
+                        gamma=[0.8, 1.2],
+                    ),
+                    RandScaleIntensityd(keys=["data"], prob=0.5, factors=0.5),
+                    RandGaussianNoised(keys=["data"], prob=0.5, mean=0.0, std=0.05),
+                    CenterSpatialCropd(
+                        keys=["data"],
+                        roi_size=(self.final_yx_patch_size),
+                    ),
+                    ToTensord(
+                        keys=["data"],
+                    ),
+                ]
+            )
+        else:
+            self.transform = transform
+        return
+
+    def get_crop(self, index):
+        ci = self.labels_df.iloc[index]  # crop info
+
+        well = ci.well
+        fov = self.stores[ci.store_key][well]["0"]
+        mask_fov = self.stores[ci.store_key][well]["labels"]["seg"]["0"]
+        gene_label = self.label_int_lut[ci.gene_name]
+        total_index = ci.total_index
+        bbox = ast.literal_eval(ci.bbox)
+        if not self.cell_masks:
+            bbox = self._pad_bbox(bbox, self.initial_yx_patch_size)
+
+        channel_names, channel_index = self._get_channels(ci, well)
+
+        data = np.asarray(
+            fov[
+                0:1,
+                channel_index,
+                0:1,
+                slice(bbox[0], bbox[2]),
+                slice(bbox[1], bbox[3]),
+            ]
+        ).copy()
+        data = np.squeeze(data)
+        if len(data.shape) == 2:
+            data = np.expand_dims(data, axis=0)
+
+        mask = np.asarray(
+            mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
+        ).copy()
+        mask = np.squeeze(mask)
+        mask = np.expand_dims(mask, axis=0)
+        sc_mask = mask == ci.segmentation_id
+
+        data_norm = self._normalize_data(channel_names, data)
+
+        if self.cell_masks:
+            data_norm = data_norm * sc_mask
+
+        if len(self.final_yx_patch_size) == 3:
+            data_norm = np.expand_dims(data_norm, axis=0)
+            sc_mask = np.expand_dims(sc_mask, axis=0)
+
+        return data_norm, sc_mask, gene_label, channel_names, total_index, ci
+
+    def __getitem__(self, index):
+        anchor_i = self.labels_df.iloc[index]
+        anchor_data, _, anchor_gene_label, channel_names, _, _ = self.get_crop(index)
+
+        if self.positive_source == "self":
+            positive_data = anchor_data.copy()
+            positive_gene_label = anchor_gene_label
+            positive_i = anchor_i
+
+        if self.positive_source == "perturbation":
+            positive_rows = np.flatnonzero(
+                self.labels_df["gene_name"].values == anchor_i["gene_name"]
+            )
+            positive_indx = np.random.choice(positive_rows)
+            positive_data, _, positive_gene_label, _, _, positive_i = self.get_crop(
+                positive_indx
+            )
+
+        batch = {
+            "anchor": anchor_data.astype(np.float32),
+            "positive": positive_data.astype(np.float32),
+            "gene_label": {
+                "anchor": anchor_gene_label,
+                "positive": positive_gene_label,
+            },
+            "marker_label": channel_names,
+            "crop_info": {
+                "anchor": anchor_i.to_dict(),
+                "positive": positive_i.to_dict(),
+            },
+        }
+
+        if self.use_negative:
+            negative_rows = np.flatnonzero(
+                self.labels_df["gene_name"].values != anchor_i["gene_name"]
+            )
+            negative_indx = np.random.choice(negative_rows)
+
+            negative_data, _, negative_gene_label, _, _, negative_i = self.get_crop(
+                negative_indx
+            )
+
+            batch["negative"] = negative_data.astype(np.float32)
+            batch["gene_label"]["negative"] = negative_gene_label
+            batch["crop_info"]["negative"] = negative_i.to_dict()
+
+        if self.transform is not None:
+            for k, v in batch.items():
+                if k in ["gene_label", "marker_label", "crop_info"]:
+                    continue
+                mini_batch = {"data": v}
+                mini_batch_trans = self.transform(mini_batch)
+                batch[k] = mini_batch_trans["data"]
+
+        return batch
 
 
 class RandomCropDataset(BaseDataset):
@@ -578,9 +581,9 @@ class OpsDataManager:
         self,
         labels_df: pd.DataFrame = None,
         num_workers: int = 1,
-        dataset_type: Literal["basic", "triplet", "cell_profile"] = "basic",
+        dataset_type: Literal["basic", "contrastive", "cell_profile"] = "basic",
         balanced_sampling: bool = False,
-        triplet_kwargs: dict = None,
+        contrastive_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
         train_loader_kwargs: dict = None,
@@ -616,13 +619,17 @@ class OpsDataManager:
             self.collate_fcn = (
                 collate_variable_size_cells  # Use custom collate for variable sizes
             )
-
-        # elif dataset_type == "triplet":
-        #     DS = TripletOpsDataset
-        #     dataset_kwargs = {
-        #         **common_kwargs,
-        #         **(triplet_kwargs if triplet_kwargs else {}),
-        #     }
+        elif dataset_type == "contrastive":
+            DS = ContrastiveDataset
+            dataset_kwargs = {
+                **common_kwargs,
+                **(contrastive_kwargs if contrastive_kwargs else {}),
+            }
+            self.collate_fcn = create_contrastive_collate_fcn(
+                use_negative=contrastive_kwargs.get("use_negative", False)
+            )
+        else:
+            raise ValueError(f"Unknown dataset_type: {dataset_type}")
 
         if len(train_ind) > 0:
             train_df = labels_df.iloc[train_ind]
