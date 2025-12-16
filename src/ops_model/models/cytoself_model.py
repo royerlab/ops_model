@@ -214,6 +214,26 @@ class LitCytoSelf(L.LightningModule):
                 "train/mse_loss": mse_loss,
                 "train/vq_loss": vq_loss,
                 "train/fc_loss": fc_loss,
+                "train/extra/perplexity1": self.model.perplexity["perplexity1"].item(),
+                "train/extra/perplexity2": self.model.perplexity["perplexity2"].item(),
+                "train/extra/vq1_commitment_loss": self.model.vq_loss["vq1"][
+                    "commitment_loss"
+                ].item(),
+                "train/extra/vq2_commitment_loss": self.model.vq_loss["vq2"][
+                    "commitment_loss"
+                ].item(),
+                "train_extra/vq1_quantization_loss": self.model.vq_loss["vq1"][
+                    "quantization_loss"
+                ].item(),
+                "train_extra/vq2_quantization_loss": self.model.vq_loss["vq2"][
+                    "quantization_loss"
+                ].item(),
+                "train/extra/vq1_softmax_loss": self.model.vq_loss["vq1"][
+                    "softmax_loss"
+                ].item(),
+                "train/extra/vq2_softmax_loss": self.model.vq_loss["vq2"][
+                    "softmax_loss"
+                ].item(),
             },
             batch_size=img.size(0),
         )
