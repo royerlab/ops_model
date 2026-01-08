@@ -20,83 +20,35 @@ COLORS = [
 ]
 
 
-def plot_umap_complex(
-    experiment,
-    adata: ad.AnnData,
-    data_point_type: Literal["cell", "guide"] = "cell",
-    complex_id: int = None,
-):
-    """
-    example complex IDs:
-        110: COG complex
-        18: POLR complex
-        48: CHMP complex
-        21: PSMD complex
-        547: EIF3 complex
-        71: MRPL complex
-        450: RPL / RPS complex
-
-         RP_complex = a[450]
-        RP_complex = [a for a in RP_complex if a.startswith('RP')]
-        RPL_complex = [a for a in RP_complex if a.startswith('RPL')]
-        RPS_complex = [a for a in RP_complex if a.startswith('RPS')]
-        complex = RPL_complex
-
-    """
-    a = get_gene_complexes()
-    gene_guide_dict = group_guides(experiment)
-    complex = a[complex_id]
-
-    umap = adata.obsm["X_umap"]
-    for i, g in enumerate(complex):
-        guides = gene_guide_dict.get(g, [])
-        if data_point_type == "cell":
-            subset = adata[adata.obs["label_str"] == g].obsm["X_umap"]
-            s = 1
-        else:  # guide-level
-            subset = adata[adata.obs["sgRNA"].isin(guides)].obsm["X_umap"]
-            s = 20
-
-        if i == 0:
-            plt.scatter(
-                umap[:, 0], umap[:, 1], c="lightgrey", s=s, alpha=0.9, linewidth=0
-            )
-        plt.scatter(
-            subset[:, 0],
-            subset[:, 1],
-            c=COLORS[i % len(COLORS)],
-            s=s,
-            alpha=0.9,
-            linewidth=0,
-        )
-        plt.title(f"{g}_complex")
-        plt.xticks([])
-        plt.yticks([])
-    return
-
-
 def plot_umap(
     gene: str,
     adata: ad.AnnData,
-    save_path: str,
+    save_path: Optional[str] = None,
     guides: Optional[list] = None,
-    data_point_type: Literal["cell", "guide"] = "cell",
+    data_point_type: Literal["cell", "guide", "gene"] = "cell",
 ):
 
     umap = adata.obsm["X_umap"]
     if data_point_type == "cell":
         subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
         s = 1
+        alpha = 0.5
+    elif data_point_type == "gene":
+        subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
+        s = 20
+        alpha = 0.8
     else:  # guide-level
         subset = adata[adata.obs["sgRNA"].isin(guides)].obsm["X_umap"]
         s = 20
+        alpha = 0.8
 
-    plt.scatter(umap[:, 0], umap[:, 1], c="lightgrey", s=s, alpha=0.5, linewidth=0)
-    plt.scatter(subset[:, 0], subset[:, 1], c="blue", s=s, alpha=0.5, linewidth=0)
+    plt.scatter(umap[:, 0], umap[:, 1], c="lightgrey", s=s, alpha=alpha, linewidth=0)
+    plt.scatter(subset[:, 0], subset[:, 1], c="blue", s=s, alpha=alpha, linewidth=0)
     plt.title(gene)
     plt.xticks([])
     plt.yticks([])
-    plt.savefig(save_path, dpi=300)
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
     plt.figure()
     plt.close()
 
@@ -104,41 +56,203 @@ def plot_umap(
     return
 
 
-def generate_umap_plots(
-    experiment,
+def plot_umap_multiple_genes(
+    genes: list,
+    adata: ad.AnnData,
+    save_path: Optional[str] = None,
+    title: Optional[str] = None,
 ):
-    # load anndata checkpoint & check if umap exists
-    path = OpsPaths(experiment).cell_profiler_out
-    save_dir = path.parent / "anndata_objects"
-    assert save_dir.exists(), f"Anndata objects directory does not exist: {save_dir}"
-    checkpoint_path = save_dir / "features_processed.h5ad"
-    adata = ad.read_h5ad(checkpoint_path)
-    assert "X_umap" in adata.obsm, "UMAP embeddings not found in AnnData object."
-    plots_dir = OpsPaths(experiment).embedding_plot_dir
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    umap = adata.obsm["X_umap"]
+    plt.scatter(umap[:, 0], umap[:, 1], c="lightgrey", s=20, alpha=0.8, linewidth=0)
+    for gene in genes:
+        subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
+        plt.scatter(subset[:, 0], subset[:, 1], s=20, alpha=1, linewidth=0, label=gene)
+    plt.title(title if title is not None else "")
+    plt.xticks([])
+    plt.yticks([])
+    plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
+    plt.figure()
+    plt.close()
+    return
 
-    gene_guide_dict = group_guides(experiment)
 
-    # plot UMAP with NTC cells labeled
+def report_umap_plot_2(
+    feature_dir: str,
+    adata_cells: Optional[ad.AnnData] = None,
+    adata_guides: Optional[ad.AnnData] = None,
+    adata_genes: Optional[ad.AnnData] = None,
+    output_path: Optional[str] = None,
+):
+    path = Path(feature_dir)
+    output_path = Path(output_path) if output_path is not None else None
+    if adata_cells is None:
+        adata_path_cells = path / "anndata_objects" / "features_processed.h5ad"
+        adata_cells = ad.read_h5ad(adata_path_cells)
+    if adata_guides is None:
+        adata_path_guides = path / "anndata_objects" / "guide_bulked_umap.h5ad"
+        adata_guides = ad.read_h5ad(adata_path_guides)
+    if adata_genes is None:
+        adata_path_genes = path / "anndata_objects" / "gene_bulked_umap.h5ad"
+        adata_genes = ad.read_h5ad(adata_path_genes)
+    gene_guide_dict = group_guides()
+
+    plot_umap_multiple_genes(
+        genes=[
+            "RPL18",
+            "RPL23",
+            "RPL9",
+            "RPL30",
+            "RPL35",
+            "RPL32",
+            "RPLP2",
+            "RPL27A",
+            "RPL5",
+            "RPL15",
+            "RPL41",
+            "RPL34",
+            "RPL26",
+            "RPL37A",
+        ],
+        adata=adata_genes,
+        title="RPL genes UMAP",
+        save_path=(
+            output_path / "fig_2_umap_rpl_genes.png"
+            if output_path is not None
+            else None
+        ),
+    )
+    plt.figure()
+    plot_umap_multiple_genes(
+        genes=["NUP54", "NUP98", "NUP214", "NUP37"],
+        adata=adata_genes,
+        title="NUP genes UMAP",
+        save_path=(
+            output_path / "fig_2_umap_nup_genes.png"
+            if output_path is not None
+            else None
+        ),
+    )
+    plt.figure()
+    plot_umap_multiple_genes(
+        genes=["TRAPPC11", "TRAPPC4", "TRAPPC2L"],
+        adata=adata_genes,
+        title="TRAPPC genes UMAP",
+        save_path=(
+            output_path / "fig_2_umap_trappc_genes.png"
+            if output_path is not None
+            else None
+        ),
+    )
+    plt.figure()
+    plot_umap_multiple_genes(
+        genes=["KRT18", "KRT8"],
+        adata=adata_genes,
+        title="KRT genes UMAP",
+        save_path=(
+            output_path / "fig_2_umap_krt_genes.png"
+            if output_path is not None
+            else None
+        ),
+    )
+    plt.figure()
+
+    return
+
+
+def report_umap_plot_1(
+    feature_dir: str,
+    adata_cells: Optional[ad.AnnData] = None,
+    adata_guides: Optional[ad.AnnData] = None,
+    adata_genes: Optional[ad.AnnData] = None,
+    output_path: Optional[str] = None,
+):
+    path = Path(feature_dir)
+    output_path = Path(output_path) if output_path is not None else None
+    if adata_cells is None:
+        adata_path_cells = path / "anndata_objects" / "features_processed.h5ad"
+        adata_cells = ad.read_h5ad(adata_path_cells)
+    if adata_guides is None:
+        adata_path_guides = path / "anndata_objects" / "guide_bulked_umap.h5ad"
+        adata_guides = ad.read_h5ad(adata_path_guides)
+    if adata_genes is None:
+        adata_path_genes = path / "anndata_objects" / "gene_bulked_umap.h5ad"
+        adata_genes = ad.read_h5ad(adata_path_genes)
+    gene_guide_dict = group_guides()
+
     plot_umap(
         gene="NTC",
-        adata=adata,
-        save_path=plots_dir / "umap_cell_ntc.png",
+        adata=adata_cells,
         data_point_type="cell",
+        save_path=(
+            output_path / "fig_1_umap_cell_ntc.png" if output_path is not None else None
+        ),
+    )
+    plt.figure()
+    plot_umap(
+        gene="Nontargeting",
+        adata=adata_guides,
+        guides=gene_guide_dict.get("Nontargeting", []),
+        data_point_type="guide",
+        save_path=(
+            output_path / "fig_1umap_guide_ntc.png" if output_path is not None else None
+        ),
+    )
+    plt.figure()
+    plot_umap(
+        gene="NTC",
+        adata=adata_genes,
+        data_point_type="gene",
+        save_path=(
+            output_path / "fig_1_umap_gene_ntc.png" if output_path is not None else None
+        ),
+    )
+    plt.figure()
+
+    return
+
+
+def report_umap_plots(
+    feature_dir: str,
+    output_path: Optional[str] = None,
+):
+    path = Path(feature_dir)
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+    adata_path_cells = path / "anndata_objects" / "features_processed.h5ad"
+    adata_cells = ad.read_h5ad(adata_path_cells)
+    adata_path_guides = path / "anndata_objects" / "guide_bulked_umap.h5ad"
+    adata_guides = ad.read_h5ad(adata_path_guides)
+    adata_path_genes = path / "anndata_objects" / "gene_bulked_umap.h5ad"
+    adata_genes = ad.read_h5ad(adata_path_genes)
+
+    report_umap_plot_1(
+        feature_dir=feature_dir,
+        adata_cells=adata_cells,
+        adata_guides=adata_guides,
+        adata_genes=adata_genes,
+        output_path=output_path,
     )
 
-    # Plot UMAP with NTC guides labeled
-    ntc_gene = "Nontargeting"
-    ntc_guides = gene_guide_dict.get(ntc_gene, [])
-    guide_avg_adata = ad.read_h5ad(save_dir / "guide_bulked_umap.h5ad")
-    plot_umap(
-        gene=ntc_gene,
-        adata=guide_avg_adata,
-        save_path=plots_dir / "umap_guide_ntc.png",
-        guides=ntc_guides,
-        data_point_type="guide",
+    report_umap_plot_2(
+        feature_dir=feature_dir,
+        adata_cells=adata_cells,
+        adata_guides=adata_guides,
+        adata_genes=adata_genes,
+        output_path=output_path,
     )
+
+    return
 
 
 if __name__ == "__main__":
-    pass
+    feature_dir = "/hpc/projects/intracellular_dashboard/ops/ops0031_20250424/3-assembly/dynaclr_features"
+    output_path = "/hpc/projects/intracellular_dashboard/ops/ops0031_20250424/3-assembly/dynaclr_features/report_plots"
+    report_umap_plots(
+        feature_dir=feature_dir,
+        output_path=output_path,
+    )
