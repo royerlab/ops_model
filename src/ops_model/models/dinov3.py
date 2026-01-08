@@ -1,3 +1,4 @@
+import yaml
 from tqdm import tqdm
 
 import torch
@@ -80,24 +81,27 @@ class DinoV3Model:
 
 
 def extract_dinov3_features(
-    experiment_dict: dict,
-    batch_size: int = 256,
-    output_dir: str = "./dinov3_features",
-    num_workers: int = 8,
+    config_path: str = None,
 ):
 
-    print(f"Extracting DINOv3 features for {list(experiment_dict.keys())}")
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    print(
+        f"Extracting DINOv3 features for {list(config['data_manager']['experiments'].keys())}"
+    )
     dm = data_loader.OpsDataManager(
-        experiments=experiment_dict,
-        batch_size=batch_size,
-        data_split=(0, 0, 1),
-        out_channels=["Phase2D"],
-        initial_yx_patch_size=(256, 256),
+        experiments=config["data_manager"]["experiments"],
+        batch_size=config["data_manager"]["batch_size"],
+        data_split=config["data_manager"]["data_split"],
+        out_channels=config["data_manager"]["out_channels"],
+        initial_yx_patch_size=config["data_manager"]["initial_yx_patch_size"],
+        final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
         verbose=False,
     )
     dm.construct_dataloaders(
-        num_workers=num_workers,
-        dataset_type="basic",
+        num_workers=config["data_manager"]["num_workers"],
+        dataset_type=config["dataset_type"],
         basic_kwargs={
             "cell_masks": True,
             "transform": Compose(
@@ -123,9 +127,9 @@ def extract_dinov3_features(
     print("DINOv3 model loaded")
 
     # Setup output directory
-    output_dir = Path(output_dir)
+    output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
-    chunk_subdir = output_dir / "chunks"
+    chunk_subdir = output_dir / f"chunks_{config['data_manager']['out_channels'][0]}"
     chunk_subdir.mkdir(parents=True, exist_ok=True)
 
     save_every = 100  # Save every N batches
@@ -189,7 +193,9 @@ def extract_dinov3_features(
     final_df = pd.concat(df_list, ignore_index=True)
 
     # Save the final concatenated dataframe
-    final_path = output_dir / "dinov3_features_all.csv"
+    final_path = (
+        output_dir / f"dinov3_features_{config['data_manager']['out_channels'][0]}.csv"
+    )
     final_df.to_csv(final_path, index=False)
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
@@ -197,11 +203,26 @@ def extract_dinov3_features(
     return final_df
 
 
+import argparse
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Extract DINOv3 features from OPS dataset based on config"
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to the YAML config file",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    experiment_dict = {"ops0031_20250424": ["A/1/0", "A/2/0", "A/3/0"]}
+    # config_path = '/hpc/mydata/alexander.hillsley/ops/ops_model/configs/dinov3/dinov3_20260107_ops0031_fluor.yml'
+
+    args = parse_args()
     extract_dinov3_features(
-        experiment_dict=experiment_dict,
-        batch_size=256,
-        output_dir="/hpc/projects/icd.ops/ops0031_20250424/3-assembly/dino_features",
-        num_workers=10,
+        config_path=args.config_path,
     )
