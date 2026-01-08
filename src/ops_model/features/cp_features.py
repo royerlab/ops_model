@@ -1,218 +1,19 @@
-# %%
-from joblib import Parallel, delayed
+"""
+SLURM-based distributed CellProfiler feature extraction.
 
+This module handles the orchestration of distributed CP feature extraction
+using submitit and SLURM. Core extraction functions are in cp_extraction.py.
+"""
+
+import yaml
+import argparse
+from pathlib import Path
 from tqdm import tqdm
-import numpy as np
 import pandas as pd
-from cp_measure.bulk import (
-    get_core_measurements,
-    get_correlation_measurements,
-    get_multimask_measurements,
-)
-import torch
-import time
-from collections import defaultdict
-from multiprocessing import Pool, Manager
-from functools import partial
-import warnings
+import submitit
 
 from ops_model.data import data_loader
-from ops_model.data.paths import OpsPaths
-
-torch.multiprocessing.set_sharing_strategy("file_system")
-
-
-# Cache for feature names to avoid regenerating dummy features
-_FEATURE_NAMES_CACHE = {}
-
-
-def _generate_feature_names_with_nan(
-    measurements, prefix, measurement_type="single_object"
-):
-    """
-    Generate feature names by calling measurement functions with dummy data.
-    Returns a dictionary with feature names mapped to NaN values.
-    Uses caching to avoid regenerating feature names repeatedly.
-
-    Args:
-        measurements: Dictionary of measurement functions
-        prefix: Prefix for feature names
-        measurement_type: Type of measurement ('single_object', 'colocalization', or 'neighbor')
-
-    Returns:
-        Dictionary with feature names as keys and np.nan as values
-    """
-    if not measurements:
-        return {}
-
-    # Create cache key from measurement function names and prefix
-    cache_key = (tuple(sorted(measurements.keys())), prefix, measurement_type)
-
-    # Check cache first
-    if cache_key in _FEATURE_NAMES_CACHE:
-        return _FEATURE_NAMES_CACHE[cache_key].copy()
-
-    # Generate feature names with dummy data
-    results = {}
-
-    # Create dummy data based on measurement type
-    dummy_mask = np.array(
-        [
-            [0, 0, 0, 0, 0],
-            [0, 1, 1, 1, 0],
-            [0, 1, 1, 1, 0],
-            [0, 1, 1, 1, 0],
-            [0, 0, 0, 0, 0],
-        ],
-        dtype=np.int32,
-    )
-
-    np.random.seed(42)  # For reproducibility
-    dummy_img = np.random.rand(5, 5).astype(np.float32) * 2 - 1  # Range [-1, 1]
-
-    for name, fn in measurements.items():
-        try:
-            # Call measurement function with dummy data, suppressing warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-
-                if measurement_type == "single_object":
-                    dummy_features = fn(dummy_mask, dummy_img)
-                elif measurement_type == "colocalization":
-                    dummy_img2 = np.random.rand(5, 5).astype(np.float32) * 2 - 1
-                    dummy_features = fn(dummy_img, dummy_img2, dummy_mask)
-                elif measurement_type == "neighbor":
-                    dummy_mask2 = np.array(
-                        [
-                            [0, 0, 0, 0, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 0, 0, 0, 0],
-                        ],
-                        dtype=np.uint16,
-                    )
-                    dummy_mask_uint = dummy_mask.astype(np.uint16)
-                    dummy_features = fn(dummy_mask_uint, dummy_mask2)
-                else:
-                    continue
-
-            # Map feature names to NaN
-            features_prefixed = {
-                f"{prefix}_{feat_name}": np.nan for feat_name in dummy_features.keys()
-            }
-            results.update(features_prefixed)
-        except Exception:
-            # Silently skip measurements that can't generate feature names
-            # This is expected for some edge cases with small dummy masks
-            continue
-
-    # Cache the result for future use
-    _FEATURE_NAMES_CACHE[cache_key] = results.copy()
-
-    return results
-
-
-def single_object_features(
-    img: np.ndarray,
-    mask: np.ndarray,
-    measurements: dict = None,
-    prefix: str = "",
-):
-    """
-    cp_measure requires:
-    img: H, W (either int of float between -1 and 1)
-    mask: H, W (int)
-    """
-
-    img = np.clip(np.squeeze(img), -1, 1)
-    mask = np.squeeze(mask)
-
-    results = {}
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for name, fn in measurements.items():
-                if name == "texture":
-                    img = (img - np.min(img)) / (
-                        np.max(img) - np.min(img) + 1e-8
-                    ) * 2 - 1
-                features = fn(mask, img)
-                # Fixed: use feat_name instead of name to avoid shadowing the outer loop variable
-                features_prefixed = {
-                    f"{prefix}_{feat_name}": v for feat_name, v in features.items()
-                }
-                results.update(features_prefixed)
-    except (ValueError, IndexError):
-        # Mask is empty or invalid - generate NaN features
-        return _generate_feature_names_with_nan(measurements, prefix, "single_object")
-
-    return results
-
-
-def colocalization_features(
-    img1: np.ndarray,
-    img2: np.ndarray,
-    mask: np.ndarray,
-    measurements: dict = None,
-    prefix: str = "",
-):
-    """
-    cp_measure requires:
-    img: H, W (either int of float between -1 and 1)
-    mask: H, W (int)
-    """
-
-    img1 = np.squeeze(img1)
-    img2 = np.squeeze(img2)
-    mask = np.squeeze(mask)
-
-    results = {}
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for name, fn in measurements.items():
-                features = fn(img1, img2, mask)
-                # Fixed: use feat_name instead of name to avoid shadowing the outer loop variable
-                features_prefixed = {
-                    f"{prefix}_{feat_name}": v for feat_name, v in features.items()
-                }
-                results.update(features_prefixed)
-    except (ValueError, IndexError):
-        # Mask is empty or invalid - generate NaN features
-        return _generate_feature_names_with_nan(measurements, prefix, "colocalization")
-
-    return results
-
-
-def neighbor_features(
-    mask1: np.ndarray,
-    mask2: np.ndarray,
-    measurements: dict = None,
-    prefix: str = "",
-):
-    mask1 = np.squeeze(mask1).astype(np.uint16)
-    mask2 = np.squeeze(mask2).astype(np.uint16)
-
-    results = {}
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for name, fn in measurements.items():
-                features = fn(mask1, mask2)
-                # Fixed: use feat_name instead of name to avoid shadowing the outer loop variable
-                features_prefixed = {
-                    f"{prefix}_{feat_name}": v for feat_name, v in features.items()
-                }
-                results.update(features_prefixed)
-    except (ValueError, IndexError):
-        # Mask is empty or invalid - generate NaN features
-        return _generate_feature_names_with_nan(measurements, prefix, "neighbor")
-
-    return results
+from ops_model.features.cp_extraction import extract_cp_features
 
 
 def write_index_ranges_to_yaml(
@@ -261,128 +62,6 @@ def write_index_ranges_to_yaml(
     print(f"Total indices: {dataset_size}, Chunk size: ~{chunk_size}")
 
     return index_ranges
-
-
-def create_subset(
-    experiment_dict,
-    bounds: list[int],
-):
-    """
-    A helper function to subset the total dataset given specific bounds
-    Create a dataset and subset it given the bounds
-    """
-
-    from torch.utils.data import Subset
-
-    data_manager = data_loader.OpsDataManager(
-        experiments=experiment_dict,
-        batch_size=1,
-        data_split=(1, 0, 0),
-        out_channels=["Phase2D", "mCherry"],
-        initial_yx_patch_size=(256, 256),
-        verbose=False,
-    )
-
-    data_manager.construct_dataloaders(num_workers=1, dataset_type="cell_profile")
-    dataset = data_manager.train_loader.dataset
-
-    return (
-        Subset(dataset, list(range(bounds[0], bounds[1]))),
-        data_manager.train_loader.dataset.int_label_lut,
-    )
-
-
-def extract_cp_features(
-    experiment_dict: dict,
-    bounds: list[int],
-):
-    """ """
-    import torch
-    from cp_measure.bulk import get_core_measurements, get_correlation_measurements
-    from ops_model.features.cp_features import (
-        single_object_features,
-        colocalization_features,
-    )
-
-    object_measurements = get_core_measurements()
-    colocalization_measurements = get_correlation_measurements()
-
-    subset, int_label_lut = create_subset(experiment_dict, bounds)
-
-    # Pre-define channel and mask metadata
-    channels = [("Phase2D", 0), ("mCherry", 1)]
-    mask_configs = [
-        ("cell", "cell_mask"),
-        ("nucleus", "nuc_mask"),
-        ("cytoplasm", "cyto_mask"),
-    ]
-
-    # Pre-compute channel pairs for colocalization (eliminates exclude list logic)
-    channel_pairs = [
-        (channels[i], channels[j])
-        for i in range(len(channels))
-        for j in range(i + 1, len(channels))
-    ]
-
-    results_list = []
-    for batch in subset:
-
-        if isinstance(batch["data"], torch.Tensor):
-            data_np = batch["data"].detach().cpu().numpy()
-        else:
-            data_np = batch["data"]
-
-        masks_np = {}
-        for mask_key in ["cell_mask", "nuc_mask", "cyto_mask"]:
-            if isinstance(batch[mask_key], torch.Tensor):
-                masks_np[mask_key] = batch[mask_key].detach().cpu().numpy()
-            else:
-                masks_np[mask_key] = batch[mask_key]
-
-        cell_features = {}
-
-        # Process each mask type
-        for mk_name, mk_key in mask_configs:
-            mask = masks_np[mk_key][0].astype(np.int32)
-
-            # Single object features for each channel
-            for ch_name, ch_idx in channels:
-                img = data_np[ch_idx]
-
-                features = single_object_features(
-                    img,
-                    mask,
-                    measurements=object_measurements,
-                    prefix=f"single_object_{ch_name}_{mk_name}",
-                )
-                cell_features.update(features)
-
-            # Colocalization features for channel pairs
-            for (ch_name_1, ch_idx_1), (ch_name_2, ch_idx_2) in channel_pairs:
-                img1 = data_np[ch_idx_1]
-                img2 = data_np[ch_idx_2]
-
-                coloc_features = colocalization_features(
-                    img1,
-                    img2,
-                    mask,
-                    measurements=colocalization_measurements,
-                    prefix=f"coloc_{ch_name_1}_{ch_name_2}_{mk_name}",
-                )
-                cell_features.update(coloc_features)
-
-        cell_features["label_int"] = int(batch["gene_label"])
-        cell_features["label_str"] = int_label_lut[batch["gene_label"]]
-        cell_features["sgRNA"] = batch["crop_info"]["sgRNA"]
-        cell_features["experiment"] = batch["crop_info"]["store_key"]
-        cell_features["x_position"] = batch["crop_info"]["x_pheno"]
-        cell_features["y_position"] = batch["crop_info"]["y_pheno"]
-        cell_features["well"] = (
-            batch["crop_info"]["well"] + "_" + batch["crop_info"]["store_key"]
-        )
-        results_list.append(cell_features)
-
-    return pd.DataFrame(results_list)
 
 
 def cp_features_worker_fcn(
@@ -486,61 +165,77 @@ def concatenate_results(output_dir: str, final_output_path: str):
 
 
 def cp_features_main(
-    experiment: str = None,
-    chunk_size: int = 100,
-    wait_for_completion: bool = False,
+    config_path: str,
 ):
-    import submitit
+    """
+    Main function to orchestrate distributed CellProfiler feature extraction.
 
-    # Step 1: Create index ranges for your dataset
-    experiment_dict = {experiment: ["A/1/0", "A/2/0", "A/3/0"]}
+    Args:
+        config_path: Path to YAML configuration file
 
-    output_csv = OpsPaths(experiment).cell_profiler_out
+    Returns:
+        DataFrame with results if wait_for_completion=True, else job handles
+    """
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    output_csv = Path(config["output_dir"]) / f"cp_features.csv"
+    output_dir = output_csv.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Get total dataset size
     data_manager = data_loader.OpsDataManager(
-        experiments=experiment_dict,
-        batch_size=1,
-        data_split=(1, 0, 0),
-        out_channels=["Phase2D", "mCherry"],
-        initial_yx_patch_size=(256, 256),
+        experiments=config["data_manager"]["experiments"],
+        batch_size=config["data_manager"]["batch_size"],
+        data_split=tuple(config["data_manager"]["data_split"]),
+        out_channels=config["data_manager"]["out_channels"],
+        initial_yx_patch_size=tuple(config["data_manager"]["initial_yx_patch_size"]),
         verbose=False,
     )
-    data_manager.construct_dataloaders(num_workers=1, dataset_type="cell_profile")
+    data_manager.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
     total_size = len(data_manager.train_loader.dataset)
 
     # Create YAML with index ranges (e.g., 100 samples per job)
     write_index_ranges_to_yaml(
         dataset_size=total_size,
-        output_path=output_csv.parent / "index_ranges.yaml",
-        chunk_size=chunk_size,  # Adjust based on your needs
+        output_path=output_dir / "index_ranges.yaml",
+        chunk_size=config["chunk_size"],
     )
 
     # Step 2: Submit as a single SLURM array job with submitit
-    executor = submitit.AutoExecutor(folder=output_csv.parent / "submitit_logs")
+    executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     executor.update_parameters(
         timeout_min=60,
         slurm_partition="cpu",  # Change to your partition name
         slurm_array_parallelism=100,  # Max 100 concurrent jobs
         cpus_per_task=2,
         mem_gb=16,
+        slurm_setup=[
+            "export OMP_NUM_THREADS=2",
+            "export MKL_NUM_THREADS=2",
+            "export OPENBLAS_NUM_THREADS=2",
+            "export NUMEXPR_NUM_THREADS=2",
+            "export SLURM_CPU_BIND=none",
+        ],
     )
 
     # Load index ranges
-    with open(output_csv.parent / "index_ranges.yaml", "r") as f:
+    with open(output_dir / "index_ranges.yaml", "r") as f:
         index_ranges = yaml.safe_load(f)
 
     # Prepare arguments for array job
-    output_dir = output_csv.parent / "cp_feature_chunks"
+    output_dir_chunks = output_dir / "cp_feature_chunks"
     num_jobs = len(index_ranges)
 
     # Submit as single array job using map_array
     array_jobs = executor.map_array(
         cp_features_worker_fcn,
-        [experiment_dict] * num_jobs,  # Same experiment_dict for all jobs
+        [config["data_manager"]["experiments"]]
+        * num_jobs,  # Same experiment_dict for all jobs
         list(index_ranges.values()),  # Different bounds for each job
         list(index_ranges.keys()),  # Job IDs: 0, 1, 2, ...
-        [output_dir] * num_jobs,  # Same output directory for all jobs
+        [output_dir_chunks] * num_jobs,  # Same output directory for all jobs
     )
 
     # Get the array job ID (all tasks share the same base job_id)
@@ -552,7 +247,7 @@ def cp_features_main(
     )
 
     # Step 3: Submit concatenation job with dependency on array job completion
-    concat_executor = submitit.AutoExecutor(folder=output_csv.parent / "submitit_logs")
+    concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
         timeout_min=30,
         slurm_partition="cpu",
@@ -563,7 +258,7 @@ def cp_features_main(
 
     concat_job = concat_executor.submit(
         concatenate_results,
-        output_dir=str(output_csv.parent / "cp_feature_chunks"),
+        output_dir=str(output_dir_chunks),
         final_output_path=str(output_csv),
     )
 
@@ -571,7 +266,7 @@ def cp_features_main(
         f"Submitted concatenation job {concat_job.job_id} (depends on {array_job_id})"
     )
 
-    if wait_for_completion:
+    if config["wait_for_completion"]:
         # Wait for concatenation job to complete
         print("Waiting for all jobs to complete...")
         final_df = concat_job.result()
@@ -582,8 +277,20 @@ def cp_features_main(
         return array_jobs, concat_job
 
 
-if __name__ == "__main__":
-    cp_features_main(
-        experiment="ops0031_20250424",
-        chunk_size=100,
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Extract CellProfiler features using distributed SLURM jobs"
     )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to YAML config file specifying parameters",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    config_path = args.config_path
+    cp_features_main(config_path)
