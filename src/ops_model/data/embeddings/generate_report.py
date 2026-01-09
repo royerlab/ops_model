@@ -1,18 +1,26 @@
 """
 Generate PDF report for single-cell embedding verification.
 
-Takes a directory of plots (PNG/PDF) and CSV files and compiles them
-into a single PDF report with organized sections.
+Takes a report directory (with plots/, metrics/, and report_metadata.yml)
+and compiles them into a single PDF report with organized sections.
+
+Updated to work with centralized report directory structure:
+    report_dir/
+        plots/
+        metrics/
+        report_metadata.yml
+        embedding_report.pdf  ← output
 """
 
 import argparse
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Union
 import pandas as pd
 import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 from PIL import Image
+from datetime import datetime
 
 
 # Expected plot patterns for matching files
@@ -32,68 +40,110 @@ PLOT_PATTERNS = {
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Generate embedding verification report from plots and CSVs"
+        description="Generate embedding analysis report from report directory"
     )
     parser.add_argument(
-        "--input_dir",
+        "--report_dir",
         type=str,
         required=True,
-        help="Directory containing plots and CSV files",
+        help="Report directory containing plots/, metrics/, and report_metadata.yml",
     )
     parser.add_argument(
-        "--output_path", type=str, required=True, help="Output path for PDF report"
+        "--output_filename",
+        type=str,
+        default="embedding_report.pdf",
+        help="Output filename for PDF report (saved in report_dir)",
     )
     parser.add_argument(
         "--title",
         type=str,
-        default="Embedding Verification Report",
-        help="Title for the report",
+        default=None,
+        help="Title for the report (defaults to using metadata)",
     )
     return parser.parse_args()
 
 
-def load_plots(input_dir: Path) -> Dict[str, Path]:
+def load_plots(
+    report_dir: Union[str, Path], plots_subdir: str = "plots"
+) -> Dict[str, Path]:
     """
-    Load all plot files from input directory.
+    Load all plot files from report directory.
+
+    Args:
+        report_dir: Path to report directory
+        plots_subdir: Subdirectory containing plots (default: "plots")
 
     Expected plot types:
-    - umap_all_cells.png: UMAP of all cells with NTC labels
-    - umap_guide_averaged.png: UMAP of guide-averaged embeddings
-    - umap_protein_complex.png: UMAP colored by protein complex
+    - umap_cell_ntc.png: UMAP of cells with NTC highlighted
+    - umap_guide_ntc.png: UMAP of guides with NTC
+    - umap_gene_ntc.png: UMAP of genes with NTC
+    - umap_rpl_genes.png: UMAP of ribosomal protein genes
+    - umap_nup_genes.png: UMAP of nuclear pore complex genes
+    - funk_clusters.png: Funk functional cluster analysis
     - pca_variance_ratio.png: PCA variance explained plot
 
     Returns:
         Dictionary mapping plot types to file paths
     """
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
+    report_dir = Path(report_dir)
+    plots_dir = report_dir / plots_subdir
+
+    if not plots_dir.exists():
+        print(f"Warning: Plots directory not found: {plots_dir}")
+        return {}
 
     plots = {}
 
     # Supported image formats
     image_extensions = [".png", ".pdf", ".jpg", ".jpeg"]
 
-    # Find all image files in directory
+    # Find all image files in plots directory
     all_plots = []
     for ext in image_extensions:
-        all_plots.extend(input_dir.glob(f"*{ext}"))
+        all_plots.extend(plots_dir.glob(f"*{ext}"))
 
-    # Match files to expected plot types
+    # Categorize plots
     for plot_file in all_plots:
         filename_lower = plot_file.stem.lower()
-        matched = False
 
-        # Try to match to known plot types
-        for plot_key, patterns in PLOT_PATTERNS.items():
-            if any(pattern in filename_lower for pattern in patterns):
-                plots[plot_key] = plot_file
-                matched = True
-                break
+        # Categorize by type
+        if "ntc" in filename_lower or "nontarget" in filename_lower:
+            if "cell" in filename_lower:
+                plots["umap_cell_ntc"] = plot_file
+            elif "guide" in filename_lower:
+                plots["umap_guide_ntc"] = plot_file
+            elif "gene" in filename_lower:
+                plots["umap_gene_ntc"] = plot_file
+            else:
+                plots["umap_ntc"] = plot_file
 
-        # If not matched, add as "other" with filename as key
-        if not matched:
-            other_key = f"other_{plot_file.stem}"
-            plots[other_key] = plot_file
+        elif "rpl" in filename_lower or "ribosom" in filename_lower:
+            plots["umap_rpl"] = plot_file
+
+        elif "nup" in filename_lower or "nuclear_pore" in filename_lower:
+            plots["umap_nup"] = plot_file
+
+        elif "trappc" in filename_lower:
+            plots["umap_trappc"] = plot_file
+
+        elif "krt" in filename_lower or "keratin" in filename_lower:
+            plots["umap_krt"] = plot_file
+
+        elif "funk" in filename_lower or "cluster" in filename_lower:
+            plots["funk_clusters"] = plot_file
+
+        elif "pca" in filename_lower and "variance" in filename_lower:
+            plots["pca_variance"] = plot_file
+
+        elif "spread" in filename_lower:
+            plots["embedding_spread"] = plot_file
+
+        elif "similarity" in filename_lower and "reference" in filename_lower:
+            plots["similarity_to_reference"] = plot_file
+
+        else:
+            # Add as "other" with filename as key
+            plots[f"other_{plot_file.stem}"] = plot_file
 
     # Log what was found
     print(f"Found {len(plots)} plot file(s):")
@@ -103,26 +153,35 @@ def load_plots(input_dir: Path) -> Dict[str, Path]:
     return plots
 
 
-def load_metrics(input_dir: Path) -> Dict[str, Any]:
+def load_metrics(
+    report_dir: Union[str, Path], metrics_subdir: str = "metrics"
+) -> Dict[str, Any]:
     """
-    Load metric files (YAML or CSV) from input directory.
+    Load metric files (YAML or CSV) from report directory.
+
+    Args:
+        report_dir: Path to report directory
+        metrics_subdir: Subdirectory containing metrics (default: "metrics")
 
     Expected metrics files:
-    - metrics.yaml: YAML file with embedding metrics
     - alignment_uniformity.csv: Alignment and uniformity scores
-    - similarity_stats.csv: Mean & std similarity of embeddings
+    - embedding_spread.csv: Embedding spread metrics per label
+    - similarity_to_reference.csv: Similarity to reference label (e.g., NTC)
 
     Returns:
         Dictionary mapping metric types to DataFrames or dicts
     """
-    if not input_dir.exists():
-        print(f"Warning: Input directory not found: {input_dir}")
+    report_dir = Path(report_dir)
+    metrics_dir = report_dir / metrics_subdir
+
+    if not metrics_dir.exists():
+        print(f"Warning: Metrics directory not found: {metrics_dir}")
         return {}
 
     metrics = {}
 
-    # Load YAML metrics files
-    yaml_files = list(input_dir.glob("*.yaml")) + list(input_dir.glob("*.yml"))
+    # Load YAML metrics files (legacy support)
+    yaml_files = list(metrics_dir.glob("*.yaml")) + list(metrics_dir.glob("*.yml"))
     for yaml_file in yaml_files:
         try:
             with open(yaml_file, "r") as f:
@@ -137,7 +196,7 @@ def load_metrics(input_dir: Path) -> Dict[str, Any]:
             print(f"  Warning: Could not load {yaml_file.name}: {e}")
 
     # Load CSV metrics files
-    csv_files = list(input_dir.glob("*.csv"))
+    csv_files = list(metrics_dir.glob("*.csv"))
     for csv_file in csv_files:
         try:
             df = pd.read_csv(csv_file)
@@ -150,6 +209,33 @@ def load_metrics(input_dir: Path) -> Dict[str, Any]:
     return metrics
 
 
+def load_report_metadata(report_dir: Union[str, Path]) -> Optional[Dict]:
+    """
+    Load report metadata from report_metadata.yml file.
+
+    Args:
+        report_dir: Path to report directory
+
+    Returns:
+        Dictionary with metadata, or None if file doesn't exist
+    """
+    report_dir = Path(report_dir)
+    metadata_file = report_dir / "report_metadata.yml"
+
+    if not metadata_file.exists():
+        print(f"Warning: Metadata file not found: {metadata_file}")
+        return None
+
+    try:
+        with open(metadata_file, "r") as f:
+            metadata = yaml.safe_load(f)
+        print(f"Loaded report metadata: {metadata_file}")
+        return metadata
+    except Exception as e:
+        print(f"Warning: Could not load metadata: {e}")
+        return None
+
+
 def create_title_page(pdf: PdfPages, title: str, metadata: Optional[Dict] = None):
     """
     Create title page with report metadata.
@@ -157,9 +243,154 @@ def create_title_page(pdf: PdfPages, title: str, metadata: Optional[Dict] = None
     Args:
         pdf: PdfPages object
         title: Report title
-        metadata: Optional metadata dict (date, embedding dim, num cells, etc.)
+        metadata: Optional metadata dict from report_metadata.yml
     """
-    pass
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.axis("off")
+
+    # Report title
+    ax.text(
+        0.5,
+        0.75,
+        title,
+        ha="center",
+        va="center",
+        fontsize=24,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    # Add metadata if provided
+    if metadata:
+        y_pos = 0.60
+        line_spacing = 0.04
+
+        # Report name
+        if "report_name" in metadata:
+            ax.text(
+                0.5,
+                y_pos,
+                f"Report: {metadata['report_name']}",
+                ha="center",
+                va="top",
+                fontsize=12,
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing
+
+        # Creation date
+        if "created_date" in metadata:
+            date_str = metadata["created_date"]
+            if isinstance(date_str, str):
+                try:
+                    # Try to parse ISO format
+                    dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    date_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    pass
+            ax.text(
+                0.5,
+                y_pos,
+                f"Generated: {date_str}",
+                ha="center",
+                va="top",
+                fontsize=11,
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing * 1.5
+
+        # Feature type
+        if "feature_type" in metadata:
+            ax.text(
+                0.5,
+                y_pos,
+                f"Feature Type: {metadata['feature_type'].upper()}",
+                ha="center",
+                va="top",
+                fontsize=12,
+                fontweight="bold",
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing
+
+        # Experiments
+        if "experiments" in metadata:
+            experiments = metadata["experiments"]
+            if isinstance(experiments, list):
+                exp_str = ", ".join(experiments)
+            else:
+                exp_str = str(experiments)
+            ax.text(
+                0.5,
+                y_pos,
+                f"Experiments: {exp_str}",
+                ha="center",
+                va="top",
+                fontsize=10,
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing
+
+        # Channels
+        if "channels" in metadata:
+            channels = metadata["channels"]
+            if isinstance(channels, list):
+                ch_str = ", ".join(channels)
+            else:
+                ch_str = str(channels)
+            ax.text(
+                0.5,
+                y_pos,
+                f"Channels: {ch_str}",
+                ha="center",
+                va="top",
+                fontsize=10,
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing * 2
+
+        # Processing parameters summary
+        if "processing" in metadata:
+            ax.text(
+                0.5,
+                y_pos,
+                "Processing Parameters:",
+                ha="center",
+                va="top",
+                fontsize=10,
+                fontweight="bold",
+                transform=ax.transAxes,
+            )
+            y_pos -= line_spacing
+
+            proc = metadata["processing"]
+            if isinstance(proc, dict):
+                for key, value in list(proc.items())[:5]:  # Show first 5 params
+                    ax.text(
+                        0.5,
+                        y_pos,
+                        f"  {key}: {value}",
+                        ha="center",
+                        va="top",
+                        fontsize=9,
+                        transform=ax.transAxes,
+                    )
+                    y_pos -= line_spacing * 0.8
+
+    # Footer
+    ax.text(
+        0.5,
+        0.05,
+        "Generated with ops_model embedding analysis pipeline",
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        style="italic",
+        transform=ax.transAxes,
+    )
+
+    pdf.savefig(fig, bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def add_section_header(pdf: PdfPages, section_title: str, description: str = ""):
@@ -171,7 +402,36 @@ def add_section_header(pdf: PdfPages, section_title: str, description: str = "")
         section_title: Title of the section
         description: Optional description text
     """
-    pass
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.axis("off")
+
+    # Section title
+    ax.text(
+        0.5,
+        0.5,
+        section_title,
+        ha="center",
+        va="center",
+        fontsize=20,
+        fontweight="bold",
+        transform=ax.transAxes,
+    )
+
+    # Description
+    if description:
+        ax.text(
+            0.5,
+            0.42,
+            description,
+            ha="center",
+            va="center",
+            fontsize=12,
+            transform=ax.transAxes,
+            wrap=True,
+        )
+
+    pdf.savefig(fig, bbox_inches="tight", dpi=300)
+    plt.close(fig)
 
 
 def add_plot_page(pdf: PdfPages, plot_path: Path, title: str, caption: str = ""):
@@ -221,7 +481,7 @@ def add_plot_page(pdf: PdfPages, plot_path: Path, title: str, caption: str = "")
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
 
         # Save to PDF
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig, bbox_inches="tight", dpi=300)
         plt.close(fig)
 
     except Exception as e:
@@ -293,7 +553,7 @@ def add_metrics_table(pdf: PdfPages, df: pd.DataFrame, title: str):
                 cell.set_facecolor("white")
 
     plt.tight_layout(rect=[0, 0, 1, 0.93])
-    pdf.savefig(fig, bbox_inches="tight")
+    pdf.savefig(fig, bbox_inches="tight", dpi=300)
     plt.close(fig)
 
 
@@ -301,22 +561,31 @@ def generate_umap_section(pdf: PdfPages, plots: Dict[str, Path]):
     """
     Generate UMAP visualization section.
 
-    Includes:
-    - All cells with NTC labels
-    - Guide-averaged embeddings
-    - Protein complex colored
+    Includes only NTC (non-targeting control) UMAP plots:
+    - Cell-level NTC
+    - Guide-level NTC
+    - Gene-level NTC
     """
-    # Collect available UMAP plots
+    # Collect available NTC UMAP plots
     umap_plots = []
 
-    if "umap_cells" in plots and plots["umap_cells"].exists():
-        umap_plots.append(("UMAP: All Cells", plots["umap_cells"]))
+    # Define order for NTC plots
+    ntc_plot_order = [
+        ("umap_cell_ntc", "UMAP: Cell-level (NTC highlighted)"),
+        ("umap_guide_ntc", "UMAP: Guide-level (NTC highlighted)"),
+        ("umap_gene_ntc", "UMAP: Gene-level (NTC highlighted)"),
+        ("umap_ntc", "UMAP: NTC Control"),  # Generic NTC plot
+    ]
 
-    if "umap_guide_bulked" in plots and plots["umap_guide_bulked"].exists():
-        umap_plots.append(("UMAP: Guide-Averaged", plots["umap_guide_bulked"]))
+    # Collect plots in order if they exist
+    for key, title in ntc_plot_order:
+        if key in plots and plots[key].exists():
+            umap_plots.append((title, plots[key]))
 
-    if "umap_protein_complex" in plots and plots["umap_protein_complex"].exists():
-        umap_plots.append(("UMAP: Protein Complex", plots["umap_protein_complex"]))
+    # If no plots found, return early
+    if not umap_plots:
+        print("Warning: No NTC UMAP plots found to add to report")
+        return
 
     # Add plots 2 per page
     for i in range(0, len(umap_plots), 2):
@@ -340,7 +609,7 @@ def generate_umap_section(pdf: PdfPages, plots: Dict[str, Path]):
                 axes[j].axis("off")
 
         plt.tight_layout()
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig, bbox_inches="tight", dpi=300)
         plt.close(fig)
 
 
@@ -368,7 +637,7 @@ def generate_pca_section(
             ax.axis("off")
 
         plt.tight_layout()
-        pdf.savefig(fig, bbox_inches="tight")
+        pdf.savefig(fig, bbox_inches="tight", dpi=300)
         plt.close(fig)
 
 
@@ -384,59 +653,102 @@ def generate_characterization_section(pdf: PdfPages, metrics: Dict[str, pd.DataF
     pass
 
 
-def generate_report(input_dir: str, output_path: str, title: str):
+def generate_report(
+    report_dir: Union[str, Path],
+    output_filename: str = "embedding_report.pdf",
+    title: Optional[str] = None,
+):
     """
-    Main function to generate the complete PDF report.
+    Main function to generate the complete PDF report from a report directory.
 
     Args:
-        input_dir: Directory containing plots and CSVs
-        output_path: Output path for PDF report
-        title: Report title
+        report_dir: Path to report directory containing plots/, metrics/, and report_metadata.yml
+        output_filename: Filename for the PDF report (saved in report_dir)
+        title: Optional report title (defaults to using metadata)
     """
-    input_path = Path(input_dir)
+    report_dir = Path(report_dir)
+
+    if not report_dir.exists():
+        raise FileNotFoundError(f"Report directory not found: {report_dir}")
 
     # Load all data
-    plots = load_plots(input_path)
-    metrics = load_metrics(input_path)
+    print(f"\nGenerating report from: {report_dir}")
+    metadata = load_report_metadata(report_dir)
+    plots = load_plots(report_dir)
+    metrics = load_metrics(report_dir)
+
+    # Determine title
+    if title is None:
+        if metadata and "feature_type" in metadata:
+            feature_type = metadata["feature_type"].upper()
+            title = f"{feature_type} Embedding Analysis Report"
+        else:
+            title = "Embedding Analysis Report"
+
+    # Output path
+    output_path = report_dir / output_filename
+
+    print(f"\nGenerating PDF report: {output_path}")
 
     # Generate PDF report
     with PdfPages(output_path) as pdf:
-        # Title page
-        create_title_page(pdf, title)
+        # Title page with metadata
+        create_title_page(pdf, title, metadata)
 
         # Section 1: UMAP Visualizations
-        add_section_header(
-            pdf, "UMAP Visualizations", "2D projections of embedding space"
-        )
-        generate_umap_section(pdf, plots)
+        if plots:
+            add_section_header(
+                pdf, "UMAP Visualizations", "2D projections of embedding space"
+            )
+            generate_umap_section(pdf, plots)
 
-        # Section 2: PCA Analysis
-        add_section_header(
-            pdf, "PCA Analysis", "Principal component analysis and variance explained"
-        )
-        generate_pca_section(pdf, plots, metrics)
+        # Section 2: Functional Cluster Analysis
+        if "funk_clusters" in plots:
+            add_section_header(
+                pdf, "Functional Cluster Analysis", "Funk functional clusters on UMAP"
+            )
+            add_plot_page(
+                pdf,
+                plots["funk_clusters"],
+                "Funk Functional Clusters",
+                "28 functional clusters colored on UMAP space",
+            )
 
-        # Section 3: Embedding Characterization
-        add_section_header(
-            pdf,
-            "Embedding Characterization",
-            "Quality metrics: alignment, uniformity, and similarity",
-        )
-        generate_characterization_section(pdf, metrics)
+        # Section 3: PCA Analysis
+        if "pca_variance" in plots or any("pca" in k for k in metrics.keys()):
+            add_section_header(
+                pdf,
+                "PCA Analysis",
+                "Principal component analysis and variance explained",
+            )
+            generate_pca_section(pdf, plots, metrics)
 
-        add_section_header(pdf, "Metrics")
-        # Add all metrics tables
-        for metric_name, df in metrics.items():
-            add_metrics_table(pdf, df, metric_name.replace("_", " ").title())
+        # Section 4: Embedding Quality Metrics
+        if metrics:
+            add_section_header(
+                pdf,
+                "Embedding Quality Metrics",
+                "Alignment, uniformity, and similarity analysis",
+            )
+            generate_characterization_section(pdf, metrics)
+
+            # Add all metrics tables
+            for metric_name, df in metrics.items():
+                add_metrics_table(pdf, df, metric_name.replace("_", " ").title())
+
+    print(f"✓ Report generated successfully: {output_path}")
+    return output_path
 
 
 def main():
-    """Main entry point."""
+    """Main entry point for command-line usage."""
     args = parse_args()
-    generate_report(
-        input_dir=args.input_dir, output_path=args.output_path, title=args.title
+    output_path = generate_report(
+        report_dir=args.report_dir,
+        output_filename=args.output_filename,
+        title=args.title,
     )
-    print(f"Report generated: {args.output_path}")
+    print(f"\n✓ PDF report available at: {output_path}")
 
 
 if __name__ == "__main__":
