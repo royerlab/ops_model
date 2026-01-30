@@ -52,28 +52,5 @@ def pca_90_percent_variance(adata: ad.AnnData) -> int:
         return num_components, f"First {num_components} PCs explain 90% variance"
 
 
-def generate_pca_section(
-    experiment: str,
-):
-    path = OpsPaths(experiment).cell_profiler_out
-    save_dir = path.parent / "anndata_objects"
-    assert save_dir.exists(), f"Anndata objects directory does not exist: {save_dir}"
-    checkpoint_path = save_dir / "features_processed.h5ad"
-    adata = ad.read_h5ad(checkpoint_path)
-    assert "X_pca" in adata.obsm, "PCA embeddings not found in AnnData object."
-    plots_dir = OpsPaths(experiment).embedding_plot_dir
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    cum_var, descr = pca_90_percent_variance(adata)
-
-    plot_pca(
-        adata=adata,
-        save_path=plots_dir / "pca_variance_ratio.png",
-        description=descr,
-    )
-
-    return
-
-
 if __name__ == "__main__":
     pass
