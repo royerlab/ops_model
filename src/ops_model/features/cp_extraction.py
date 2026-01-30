@@ -19,6 +19,32 @@ from ops_model.data import data_loader
 _FEATURE_NAMES_CACHE = {}
 
 
+def safe_item_conversion(v, feature_name, crop_info=None):
+    """
+    Safely convert a feature value to a scalar.
+
+    If the value is an array with multiple elements (indicating multiple
+    objects were detected), log a warning and return NaN.
+
+    Args:
+        v: Feature value (scalar or array)
+        feature_name: Name of the feature for logging
+        crop_info: Optional crop info dict for logging
+
+    Returns:
+        Scalar value or np.nan
+    """
+    arr = np.asarray(v)
+    if arr.size == 1:
+        return arr.item()
+    else:
+        # Multiple objects detected in mask
+        print(f"WARNING: Feature '{feature_name}' has {arr.size} values (expected 1)")
+        if crop_info:
+            print(f"  Crop info: {crop_info}")
+        return np.nan
+
+
 def _generate_feature_names_with_nan(
     measurements, prefix, measurement_type="single_object"
 ):
@@ -90,9 +116,10 @@ def _generate_feature_names_with_nan(
                 else:
                     continue
 
-            # Map feature names to NaN
+            # Map feature names to NaN (as arrays for consistency)
             features_prefixed = {
-                f"{prefix}_{feat_name}": np.nan for feat_name in dummy_features.keys()
+                f"{prefix}_{feat_name}": np.array([np.nan])
+                for feat_name in dummy_features.keys()
             }
             results.update(features_prefixed)
         except Exception:
@@ -129,7 +156,7 @@ def single_object_features(
         Dictionary of features with prefixed names
     """
 
-    img = np.clip(np.squeeze(img), -1, 1)
+    # img = np.clip(np.squeeze(img), -1, 1) TODO: figure out why this was here, does not makes sense
     mask = np.squeeze(mask)
 
     results = {}
@@ -243,6 +270,7 @@ def neighbor_features(
 def create_subset(
     experiment_dict,
     bounds: list[int],
+    out_channels: list[str] = None,
 ):
     """
     Create a dataset subset for the specified index range.
@@ -250,16 +278,19 @@ def create_subset(
     Args:
         experiment_dict: Dictionary mapping experiment names to FOV lists
         bounds: [start, end] index range
+        out_channels: List of channel names (default: ["Phase2D", "mCherry"])
 
     Returns:
         Tuple of (Subset dataset, label lookup table)
     """
+    if out_channels is None:
+        out_channels = ["Phase2D", "mCherry"]
 
     data_manager = data_loader.OpsDataManager(
         experiments=experiment_dict,
         batch_size=1,
         data_split=(1, 0, 0),
-        out_channels=["Phase2D", "mCherry"],
+        out_channels=out_channels,
         initial_yx_patch_size=(256, 256),
         verbose=False,
     )
@@ -276,6 +307,7 @@ def create_subset(
 def extract_cp_features(
     experiment_dict: dict,
     bounds: list[int],
+    out_channels: list[str] = None,
 ):
     """
     Extract CellProfiler features for a subset of the dataset.
@@ -283,18 +315,23 @@ def extract_cp_features(
     Args:
         experiment_dict: Dictionary mapping experiment names to FOV lists
         bounds: [start, end] index range to process
+        out_channels: List of channel names (default: ["Phase2D", "mCherry"])
 
     Returns:
         pd.DataFrame: DataFrame with extracted features and metadata
     """
+    if out_channels is None:
+        out_channels = ["Phase2D", "mCherry"]
 
     object_measurements = get_core_measurements()
+    shape_features_fcn = object_measurements.pop("sizeshape")
     colocalization_measurements = get_correlation_measurements()
 
-    subset, int_label_lut = create_subset(experiment_dict, bounds)
+    subset, int_label_lut = create_subset(experiment_dict, bounds, out_channels)
 
     # Pre-define channel and mask metadata
-    channels = [("Phase2D", 0), ("mCherry", 1)]
+    # Create indexed channel list: [(channel_name, index), ...]
+    channels = [(ch, i) for i, ch in enumerate(out_channels)]
     mask_configs = [
         ("cell", "cell_mask"),
         ("nucleus", "nuc_mask"),
@@ -329,6 +366,17 @@ def extract_cp_features(
         for mk_name, mk_key in mask_configs:
             mask = masks_np[mk_key][0].astype(np.int32)
 
+            shape_features = shape_features_fcn(mask, np.zeros_like(mask))
+            shape_features_prefixed = {
+                f"{mk_name}_{feat_name}": v for feat_name, v in shape_features.items()
+            }
+            cell_features.update(
+                {
+                    k: safe_item_conversion(v, k, batch.get("crop_info"))
+                    for k, v in shape_features_prefixed.items()
+                }
+            )
+
             # Single object features for each channel
             for ch_name, ch_idx in channels:
                 img = data_np[ch_idx]
@@ -339,7 +387,12 @@ def extract_cp_features(
                     measurements=object_measurements,
                     prefix=f"single_object_{ch_name}_{mk_name}",
                 )
-                cell_features.update(features)
+                cell_features.update(
+                    {
+                        k: safe_item_conversion(v, k, batch.get("crop_info"))
+                        for k, v in features.items()
+                    }
+                )
 
             # Colocalization features for channel pairs
             for (ch_name_1, ch_idx_1), (ch_name_2, ch_idx_2) in channel_pairs:
@@ -353,7 +406,12 @@ def extract_cp_features(
                     measurements=colocalization_measurements,
                     prefix=f"coloc_{ch_name_1}_{ch_name_2}_{mk_name}",
                 )
-                cell_features.update(coloc_features)
+                cell_features.update(
+                    {
+                        k: safe_item_conversion(v, k, batch.get("crop_info"))
+                        for k, v in coloc_features.items()
+                    }
+                )
 
         cell_features["label_int"] = int(batch["gene_label"])
         cell_features["label_str"] = int_label_lut[batch["gene_label"]]
