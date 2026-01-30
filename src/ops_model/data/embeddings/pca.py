@@ -1,4 +1,5 @@
 from typing import Optional
+from pathlib import Path
 
 import scanpy as sc
 import anndata as ad
@@ -9,13 +10,31 @@ from ops_model.data.paths import OpsPaths
 
 def plot_pca(
     adata: ad.AnnData,
-    save_path: str,
+    save_path: Optional[str] = None,
     description: Optional[str] = None,
+    report_dir: Optional[str] = None,
+    filename: str = "pca_variance_ratio.png",
 ):
+    """
+    Plot PCA variance ratio.
+
+    Args:
+        adata: AnnData object with PCA results
+        save_path: Legacy parameter - direct path to save file
+        description: Plot title/description
+        report_dir: Path to report directory (preferred over save_path)
+        filename: Filename to use when saving to report_dir
+    """
     sc.pl.pca_variance_ratio(adata, n_pcs=100, log=False, save=False, show=False)
     if description:
         plt.title(description)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    # Determine save path
+    if report_dir is not None:
+        save_path = Path(report_dir) / "plots" / filename
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
 
     return

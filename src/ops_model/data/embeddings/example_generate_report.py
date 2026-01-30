@@ -32,9 +32,9 @@ from ops_model.data.embeddings.funk_clusters import funk_clusters as FUNK_CLUSTE
 
 def generate_full_report_example(
     feature_dir: str,
-    anndata_subdir: str = "anndata_objects",
     feature_type: str = "dinov3",
     experiment_name: str = None,
+    channel: str = "Phase2D",
     channels: list = None,
 ):
     """
@@ -45,7 +45,8 @@ def generate_full_report_example(
                      e.g., /path/to/ops0031/3-assembly/dino_features
         feature_type: Type of features (dinov3, cellprofiler, etc.)
         experiment_name: Optional experiment name
-        channels: Optional list of imaging channels
+        channel: Channel to load (e.g., "Phase2D", "GFP", "mCherry")
+        channels: Optional list of imaging channels for metadata
     """
     feature_dir = Path(feature_dir)
 
@@ -63,6 +64,7 @@ def generate_full_report_example(
     print(f"\nFeature directory: {feature_dir}")
     print(f"Feature type: {feature_type}")
     print(f"Experiment: {experiment_name}")
+    print(f"Channel: {channel}")
 
     # ===========================================================================
     # STEP 1: Create Report Directory
@@ -82,15 +84,15 @@ def generate_full_report_example(
     # STEP 2: Load AnnData Objects
     # ===========================================================================
     print("\n" + "-" * 80)
-    print(f"STEP 2: Loading AnnData objects from subdirectory: {anndata_subdir}")
+    print(f"STEP 2: Loading AnnData objects")
     print("-" * 80)
 
-    anndata_dir = feature_dir / anndata_subdir
+    anndata_dir = feature_dir / "anndata_objects"
     if not anndata_dir.exists():
         raise FileNotFoundError(f"AnnData directory not found: {anndata_dir}")
 
-    # Load cell-level data
-    cell_path = anndata_dir / "features_processed.h5ad"
+    # Load cell-level data (channel-specific)
+    cell_path = anndata_dir / f"features_processed_{channel}.h5ad"
     if cell_path.exists():
         print(f"Loading cell-level data: {cell_path}")
         adata_cells = ad.read_h5ad(cell_path)
@@ -101,8 +103,8 @@ def generate_full_report_example(
         print(f"⚠ Cell-level data not found: {cell_path}")
         adata_cells = None
 
-    # Load guide-level data
-    guide_path = anndata_dir / "guide_bulked_umap.h5ad"
+    # Load guide-level data (channel-specific)
+    guide_path = anndata_dir / f"guide_bulked_umap_{channel}.h5ad"
     if guide_path.exists():
         print(f"Loading guide-level data: {guide_path}")
         adata_guides = ad.read_h5ad(guide_path)
@@ -111,8 +113,8 @@ def generate_full_report_example(
         print(f"⚠ Guide-level data not found: {guide_path}")
         adata_guides = None
 
-    # Load gene-level data
-    gene_path = anndata_dir / "gene_bulked_umap.h5ad"
+    # Load gene-level data (channel-specific)
+    gene_path = anndata_dir / f"gene_bulked_umap_{channel}.h5ad"
     if gene_path.exists():
         print(f"Loading gene-level data: {gene_path}")
         adata_genes = ad.read_h5ad(gene_path)
@@ -344,12 +346,6 @@ def main():
         help="Path to feature directory containing anndata_objects/ subdirectory",
     )
     parser.add_argument(
-        "--anndata_subdir",
-        type=str,
-        default="anndata_objects",
-        help="Subdirectory name for AnnData objects (default: anndata_objects)",
-    )
-    parser.add_argument(
         "--feature_type",
         type=str,
         choices=["dinov3", "cellprofiler", "cytoself", "dynaclr"],
@@ -363,10 +359,16 @@ def main():
         help="Experiment name (default: auto-detect from path)",
     )
     parser.add_argument(
+        "--channel",
+        type=str,
+        default="Phase2D",
+        help="Channel to load (default: Phase2D)",
+    )
+    parser.add_argument(
         "--channels",
         nargs="+",
         default=None,
-        help="Imaging channels (e.g., Phase2D GFP mCherry)",
+        help="Imaging channels for metadata (e.g., Phase2D GFP mCherry)",
     )
 
     args = parser.parse_args()
@@ -374,9 +376,9 @@ def main():
     try:
         report_dir = generate_full_report_example(
             feature_dir=args.feature_dir,
-            anndata_subdir=args.anndata_subdir,
             feature_type=args.feature_type,
             experiment_name=args.experiment,
+            channel=args.channel,
             channels=args.channels,
         )
         print(f"\n✓ Success! Report available at: {report_dir}")
