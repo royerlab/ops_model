@@ -1,8 +1,41 @@
 """
-SLURM-based distributed CellProfiler feature extraction.
+SLURM-based distributed CellProfiler feature extraction and processing pipeline.
 
-This module handles the orchestration of distributed CP feature extraction
-using submitit and SLURM. Core extraction functions are in cp_extraction.py.
+This module orchestrates a complete 3-stage SLURM pipeline:
+1. Array jobs: Extract raw CP features in parallel chunks
+2. Concatenation job: Merge chunks into single CSV
+3. AnnData conversion job: Process CSV into AnnData objects with PCA/UMAP
+
+Pipeline Flow:
+--------------
+cp_features_main(config_path) submits 3 dependent jobs:
+
+    Array Job (max 100 concurrent)
+    ├─ Job 0: extract features [0:100] → cp_features_job_0.csv
+    ├─ Job 1: extract features [100:200] → cp_features_job_1.csv
+    └─ Job N: extract features [N*100:(N+1)*100] → cp_features_job_N.csv
+            ↓ (dependency: afterany)
+    Concatenation Job (1 CPU, 128GB)
+    └─ Merge all chunks → cp_features.csv
+            ↓ (dependency: afterok)
+    AnnData Conversion Job (8 CPUs, 128GB)
+    └─ Process CSV → 3 .h5ad files (cell, guide, gene level)
+
+Configuration:
+--------------
+YAML config should contain:
+- data_manager: Experiment specs for extraction (experiments, channels, etc.)
+- chunk_size: Number of cells per array job
+- output_dir: Where to save results
+- wait_for_completion: Whether to block until all jobs finish
+- processing: (optional) Parameters for AnnData conversion
+    - normalize_features: bool (default True)
+    - cell-profiler: bool (default False)
+    - max_nan_features_per_cell: int (default 0)
+    - use_reporter_names: bool (default False)
+
+Core extraction functions are in cp_extraction.py.
+AnnData processing functions are in evaluate_cp.py.
 """
 
 import yaml
@@ -69,6 +102,7 @@ def cp_features_worker_fcn(
     bounds: list[int],
     job_id: int,
     output_dir: str,
+    out_channels: list[str] = None,
 ):
     """
     Worker function for distributed CP feature extraction using submitit.
@@ -82,6 +116,7 @@ def cp_features_worker_fcn(
         bounds: [start, end] index range to process
         job_id: Job ID for naming the output file
         output_dir: Directory to save the output CSV file
+        out_channels: List of channel names (default: ["Phase2D", "mCherry"])
 
     Returns:
         str: Path to the saved CSV file
@@ -91,7 +126,8 @@ def cp_features_worker_fcn(
         ...     experiment_dict={"ops0031_20250424": ["A/1/0", "A/2/0"]},
         ...     bounds=[0, 100],
         ...     job_id=0,
-        ...     output_dir='./results/'
+        ...     output_dir='./results/',
+        ...     out_channels=["Phase2D", "mCherry"]
         ... )
         './results/cp_features_job_0.csv'
     """
@@ -103,6 +139,7 @@ def cp_features_worker_fcn(
     results_df = extract_cp_features(
         experiment_dict=experiment_dict,
         bounds=bounds,
+        out_channels=out_channels,
     )
 
     # Create output directory if it doesn't exist
@@ -164,17 +201,62 @@ def concatenate_results(output_dir: str, final_output_path: str):
     return final_df
 
 
+def anndata_conversion_worker(csv_path: str, config_path: str = None):
+    """
+    Worker function to convert concatenated CSV to AnnData objects.
+
+    This function:
+    1. Loads the concatenated CellProfiler features CSV
+    2. Processes features (normalization, filtering, etc.)
+    3. Creates cell-level, guide-level, and gene-level AnnData objects
+    4. Saves 3 .h5ad files to {csv_parent}/anndata_objects/
+
+    Args:
+        csv_path: Path to the concatenated cp_features.csv file
+        config_path: Optional path to YAML config with processing parameters
+
+    Returns:
+        str: Path to the anndata_objects directory
+
+    Example:
+        >>> anndata_conversion_worker(
+        ...     csv_path='/path/to/cp_features.csv',
+        ...     config_path='/path/to/config.yml'
+        ... )
+        '/path/to/anndata_objects'
+    """
+    from ops_model.features.evaluate_cp import process
+
+    print(f"Starting AnnData conversion for {csv_path}")
+    print(f"Using config: {config_path if config_path else 'default settings'}")
+
+    # Process the CSV (creates 3 .h5ad files)
+    process(save_path=csv_path, config_path=config_path)
+
+    # Return the output directory
+    output_dir = Path(csv_path).parent / "anndata_objects"
+    print(f"AnnData conversion complete. Files saved to {output_dir}")
+
+    return str(output_dir)
+
+
 def cp_features_main(
     config_path: str,
 ):
     """
-    Main function to orchestrate distributed CellProfiler feature extraction.
+    Main function to orchestrate distributed CellProfiler feature extraction and processing.
+
+    Submits 3 dependent SLURM jobs:
+    1. Array jobs: Extract raw CP features in parallel chunks
+    2. Concatenation job: Merge all chunks into single CSV
+    3. AnnData conversion job: Process CSV into 3 AnnData objects with PCA/UMAP
 
     Args:
         config_path: Path to YAML configuration file
 
     Returns:
-        DataFrame with results if wait_for_completion=True, else job handles
+        If wait_for_completion=True: DataFrame with concatenated results
+        If wait_for_completion=False: Tuple of (array_jobs, concat_job, anndata_job)
     """
 
     with open(config_path, "r") as f:
@@ -206,11 +288,11 @@ def cp_features_main(
     # Step 2: Submit as a single SLURM array job with submitit
     executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     executor.update_parameters(
-        timeout_min=60,
+        timeout_min=30,
         slurm_partition="cpu",  # Change to your partition name
         slurm_array_parallelism=100,  # Max 100 concurrent jobs
         cpus_per_task=2,
-        mem_gb=16,
+        mem_gb=8,
         slurm_setup=[
             "export OMP_NUM_THREADS=2",
             "export MKL_NUM_THREADS=2",
@@ -228,6 +310,9 @@ def cp_features_main(
     output_dir_chunks = output_dir / "cp_feature_chunks"
     num_jobs = len(index_ranges)
 
+    # Extract channel names from config
+    out_channels = config["data_manager"]["out_channels"]
+
     # Submit as single array job using map_array
     array_jobs = executor.map_array(
         cp_features_worker_fcn,
@@ -236,6 +321,7 @@ def cp_features_main(
         list(index_ranges.values()),  # Different bounds for each job
         list(index_ranges.keys()),  # Job IDs: 0, 1, 2, ...
         [output_dir_chunks] * num_jobs,  # Same output directory for all jobs
+        [out_channels] * num_jobs,  # Same channels for all jobs
     )
 
     # Get the array job ID (all tasks share the same base job_id)
@@ -249,11 +335,18 @@ def cp_features_main(
     # Step 3: Submit concatenation job with dependency on array job completion
     concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
-        timeout_min=30,
+        timeout_min=120,
         slurm_partition="cpu",
         cpus_per_task=1,
-        mem_gb=32,
-        slurm_additional_parameters={"dependency": f"afterok:{array_job_id}"},
+        mem_gb=128,
+        slurm_additional_parameters={"dependency": f"afterany:{array_job_id}"},
+        slurm_setup=[
+            "export OMP_NUM_THREADS=2",
+            "export MKL_NUM_THREADS=2",
+            "export OPENBLAS_NUM_THREADS=2",
+            "export NUMEXPR_NUM_THREADS=2",
+            "export SLURM_CPU_BIND=none",
+        ],
     )
 
     concat_job = concat_executor.submit(
@@ -266,15 +359,58 @@ def cp_features_main(
         f"Submitted concatenation job {concat_job.job_id} (depends on {array_job_id})"
     )
 
+    # Step 4: Submit AnnData conversion job with dependency on concatenation success
+    anndata_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
+    anndata_executor.update_parameters(
+        timeout_min=120,  # 2 hours for processing
+        slurm_partition="cpu",
+        cpus_per_task=8,
+        mem_gb=128,
+        slurm_additional_parameters={"dependency": f"afterok:{concat_job.job_id}"},
+        slurm_setup=[
+            "export OMP_NUM_THREADS=8",
+            "export MKL_NUM_THREADS=8",
+            "export OPENBLAS_NUM_THREADS=8",
+            "export NUMEXPR_NUM_THREADS=8",
+            "export SLURM_CPU_BIND=none",
+        ],
+    )
+
+    # Pass the config_path if processing section exists in config
+    config_path_for_processing = config_path if "processing" in config else None
+
+    anndata_job = anndata_executor.submit(
+        anndata_conversion_worker,
+        csv_path=str(output_csv),
+        config_path=config_path_for_processing,
+    )
+
+    print(
+        f"Submitted AnnData conversion job {anndata_job.job_id} (depends on {concat_job.job_id})"
+    )
+
     if config["wait_for_completion"]:
-        # Wait for concatenation job to complete
+        # Wait for all jobs to complete
         print("Waiting for all jobs to complete...")
         final_df = concat_job.result()
-        print(f"All jobs completed. Final dataframe shape: {final_df.shape}")
+        print(f"Concatenation completed. Final dataframe shape: {final_df.shape}")
+
+        anndata_dir = anndata_job.result()
+        print(f"AnnData conversion completed. Files saved to {anndata_dir}")
+        print(
+            f"\nPipeline complete! Generated files:\n"
+            f"  - {output_csv}\n"
+            f"  - {anndata_dir}/features_processed.h5ad\n"
+            f"  - {anndata_dir}/guide_bulked_umap.h5ad\n"
+            f"  - {anndata_dir}/gene_bulked_umap.h5ad"
+        )
         return final_df
     else:
-        print(f"Jobs submitted. Check status with 'squeue -u $USER'")
-        return array_jobs, concat_job
+        print(f"\nAll jobs submitted. Check status with 'squeue -u $USER'")
+        print(
+            f"Job chain: {array_job_id} -> {concat_job.job_id} -> {anndata_job.job_id}"
+        )
+        return array_jobs, concat_job, anndata_job
 
 
 def parse_args():

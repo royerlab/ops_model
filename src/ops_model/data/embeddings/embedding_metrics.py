@@ -1,8 +1,10 @@
 from tqdm import tqdm
+from pathlib import Path
 import yaml
 
 import torch
 import numpy as np
+import pandas as pd
 import anndata as ad
 import torch.nn.functional as F
 
@@ -141,3 +143,52 @@ def compute_embedding_metrics(experiment):
         yaml.dump(results, f)
 
     return
+
+
+def save_alignment_uniformity_metrics(
+    adata: ad.AnnData,
+    report_dir: str,
+    n_uniformity_samples: int = 1_000_000,
+    batch_size: int = 10000,
+    filename: str = "alignment_uniformity.csv",
+) -> pd.DataFrame:
+    """
+    Compute alignment and uniformity metrics and save to report directory.
+
+    Args:
+        adata: AnnData object with embeddings
+        report_dir: Path to report directory
+        n_uniformity_samples: Number of samples for uniformity computation
+        batch_size: Batch size for processing
+        filename: Output filename for metrics CSV
+
+    Returns:
+        DataFrame with computed metrics
+    """
+    print("Computing alignment and uniformity metrics...")
+    alignment, uniformity = alignment_and_uniformity(
+        adata, n_uniformity_samples=n_uniformity_samples, batch_size=batch_size
+    )
+
+    mean_sim, std_sim = mean_similarity(adata, n_samples=10_000, batch_size=batch_size)
+
+    # Create metrics dataframe
+    metrics_df = pd.DataFrame(
+        {
+            "metric": [
+                "alignment",
+                "uniformity",
+                "mean_pairwise_similarity",
+                "std_pairwise_similarity",
+            ],
+            "value": [alignment, uniformity, mean_sim, std_sim],
+        }
+    )
+
+    # Save to CSV
+    report_dir = Path(report_dir)
+    metrics_path = report_dir / "metrics" / filename
+    metrics_df.to_csv(metrics_path, index=False)
+    print(f"Saved metrics to: {metrics_path}")
+
+    return metrics_df

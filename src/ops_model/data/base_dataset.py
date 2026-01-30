@@ -235,7 +235,7 @@ class BaseDataset(Dataset):
             np.ndarray: Binary mask of shape (1, height, width) where True indicates pixels
                 belonging to the target cell (segmentation_id) and False elsewhere.
         """
-        mask_fov = self.stores[ci.store_key][ci.well]["labels"]["seg"]["0"]
+        mask_fov = self.stores[ci.store_key][ci.well]["labels"]["cell_seg"]["0"]
         mask = np.asarray(
             mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
         ).copy()

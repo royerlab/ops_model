@@ -26,8 +26,21 @@ def plot_umap(
     save_path: Optional[str] = None,
     guides: Optional[list] = None,
     data_point_type: Literal["cell", "guide", "gene"] = "cell",
+    report_dir: Optional[str] = None,
+    filename: Optional[str] = None,
 ):
+    """
+    Plot UMAP highlighting a specific gene or guide.
 
+    Args:
+        gene: Gene symbol to highlight
+        adata: AnnData object with UMAP coordinates
+        save_path: Legacy parameter - direct path to save file
+        guides: List of guide IDs (for guide-level plotting)
+        data_point_type: Type of data points ("cell", "guide", or "gene")
+        report_dir: Path to report directory (preferred over save_path)
+        filename: Filename to use when saving to report_dir
+    """
     umap = adata.obsm["X_umap"]
     if data_point_type == "cell":
         subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
@@ -47,6 +60,13 @@ def plot_umap(
     plt.title(gene)
     plt.xticks([])
     plt.yticks([])
+
+    # Determine save path
+    if report_dir is not None:
+        if filename is None:
+            filename = f"umap_{data_point_type}_{gene}.png"
+        save_path = Path(report_dir) / "plots" / filename
+
     if save_path is not None:
         plt.savefig(save_path, dpi=300)
     plt.figure()
@@ -61,7 +81,20 @@ def plot_umap_multiple_genes(
     adata: ad.AnnData,
     save_path: Optional[str] = None,
     title: Optional[str] = None,
+    report_dir: Optional[str] = None,
+    filename: Optional[str] = None,
 ):
+    """
+    Plot UMAP highlighting multiple genes with different colors.
+
+    Args:
+        genes: List of gene symbols to highlight
+        adata: AnnData object with UMAP coordinates
+        save_path: Legacy parameter - direct path to save file
+        title: Plot title
+        report_dir: Path to report directory (preferred over save_path)
+        filename: Filename to use when saving to report_dir
+    """
     umap = adata.obsm["X_umap"]
     plt.scatter(umap[:, 0], umap[:, 1], c="lightgrey", s=20, alpha=0.8, linewidth=0)
     for gene in genes:
@@ -72,6 +105,17 @@ def plot_umap_multiple_genes(
     plt.yticks([])
     plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
     plt.tight_layout()
+
+    # Determine save path
+    if report_dir is not None:
+        if filename is None:
+            # Generate filename from title or genes
+            if title:
+                filename = f"umap_{title.replace(' ', '_').lower()}.png"
+            else:
+                filename = f"umap_multiple_genes.png"
+        save_path = Path(report_dir) / "plots" / filename
+
     if save_path is not None:
         plt.savefig(save_path, dpi=300)
     plt.figure()
@@ -85,7 +129,19 @@ def report_umap_plot_2(
     adata_guides: Optional[ad.AnnData] = None,
     adata_genes: Optional[ad.AnnData] = None,
     output_path: Optional[str] = None,
+    report_dir: Optional[str] = None,
 ):
+    """
+    Generate UMAP plots for protein complex genes (RPL, NUP, TRAPPC, KRT).
+
+    Args:
+        feature_dir: Path to feature directory (for loading AnnData if not provided)
+        adata_cells: Cell-level AnnData (optional)
+        adata_guides: Guide-level AnnData (optional)
+        adata_genes: Gene-level AnnData (optional)
+        output_path: Legacy parameter - directory for output
+        report_dir: Path to report directory (preferred over output_path)
+    """
     path = Path(feature_dir)
     output_path = Path(output_path) if output_path is not None else None
     if adata_cells is None:
@@ -123,6 +179,8 @@ def report_umap_plot_2(
             if output_path is not None
             else None
         ),
+        report_dir=report_dir,
+        filename="umap_rpl_genes.png",
     )
     plt.figure()
     plot_umap_multiple_genes(
@@ -134,6 +192,8 @@ def report_umap_plot_2(
             if output_path is not None
             else None
         ),
+        report_dir=report_dir,
+        filename="umap_nup_genes.png",
     )
     plt.figure()
     plot_umap_multiple_genes(
@@ -145,6 +205,8 @@ def report_umap_plot_2(
             if output_path is not None
             else None
         ),
+        report_dir=report_dir,
+        filename="umap_trappc_genes.png",
     )
     plt.figure()
     plot_umap_multiple_genes(
@@ -156,6 +218,8 @@ def report_umap_plot_2(
             if output_path is not None
             else None
         ),
+        report_dir=report_dir,
+        filename="umap_krt_genes.png",
     )
     plt.figure()
 
@@ -168,7 +232,19 @@ def report_umap_plot_1(
     adata_guides: Optional[ad.AnnData] = None,
     adata_genes: Optional[ad.AnnData] = None,
     output_path: Optional[str] = None,
+    report_dir: Optional[str] = None,
 ):
+    """
+    Generate UMAP plots for NTC (non-targeting control) at cell, guide, and gene levels.
+
+    Args:
+        feature_dir: Path to feature directory (for loading AnnData if not provided)
+        adata_cells: Cell-level AnnData (optional)
+        adata_guides: Guide-level AnnData (optional)
+        adata_genes: Gene-level AnnData (optional)
+        output_path: Legacy parameter - directory for output
+        report_dir: Path to report directory (preferred over output_path)
+    """
     path = Path(feature_dir)
     output_path = Path(output_path) if output_path is not None else None
     if adata_cells is None:
@@ -189,6 +265,8 @@ def report_umap_plot_1(
         save_path=(
             output_path / "fig_1_umap_cell_ntc.png" if output_path is not None else None
         ),
+        report_dir=report_dir,
+        filename="umap_cell_ntc.png",
     )
     plt.figure()
     plot_umap(
@@ -199,6 +277,8 @@ def report_umap_plot_1(
         save_path=(
             output_path / "fig_1umap_guide_ntc.png" if output_path is not None else None
         ),
+        report_dir=report_dir,
+        filename="umap_guide_ntc.png",
     )
     plt.figure()
     plot_umap(
@@ -208,6 +288,8 @@ def report_umap_plot_1(
         save_path=(
             output_path / "fig_1_umap_gene_ntc.png" if output_path is not None else None
         ),
+        report_dir=report_dir,
+        filename="umap_gene_ntc.png",
     )
     plt.figure()
 
@@ -217,7 +299,20 @@ def report_umap_plot_1(
 def report_umap_plots(
     feature_dir: str,
     output_path: Optional[str] = None,
+    report_dir: Optional[str] = None,
 ):
+    """
+    Generate all standard UMAP report plots.
+
+    Wrapper function that generates:
+    - NTC control plots (cell, guide, gene levels)
+    - Protein complex plots (RPL, NUP, TRAPPC, KRT)
+
+    Args:
+        feature_dir: Path to feature directory containing anndata_objects/
+        output_path: Legacy parameter - directory for output
+        report_dir: Path to report directory (preferred over output_path)
+    """
     path = Path(feature_dir)
     if output_path is not None:
         output_path = Path(output_path)
@@ -236,6 +331,7 @@ def report_umap_plots(
         adata_guides=adata_guides,
         adata_genes=adata_genes,
         output_path=output_path,
+        report_dir=report_dir,
     )
 
     report_umap_plot_2(
@@ -244,6 +340,7 @@ def report_umap_plots(
         adata_guides=adata_guides,
         adata_genes=adata_genes,
         output_path=output_path,
+        report_dir=report_dir,
     )
 
     return
