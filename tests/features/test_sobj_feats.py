@@ -4,7 +4,7 @@ from cp_measure.bulk import get_core_measurements
 
 from ops_model.data import data_loader
 from ops_model.data.paths import OpsPaths
-from ops_model.features.cp_features import single_object_features
+from ops_model.features.cp_extraction import single_object_features
 
 core_fcns = get_core_measurements()
 
@@ -211,9 +211,11 @@ def test_empty_mask(batch, core_measurements):
     assert isinstance(out, dict)
     print(len(out))
 
-    # assert that all are nan
+    # assert that all are nan (returned as arrays for consistency)
     for k, v in out.items():
         assert v is not None
-        assert isinstance(v, float) and np.isnan(v)
+        assert isinstance(v, np.ndarray)
+        assert len(v) == 1
+        assert np.isnan(v[0])
 
     return
