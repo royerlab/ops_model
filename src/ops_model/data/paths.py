@@ -18,7 +18,7 @@ class OpsPaths:
 
         self.stores = {
             "phenotyping": self.base / self.experiment / "3-assembly/phenotyping.zarr",
-            "phenotyping_v3": self.base
+            "phenotyping_v3": Path("/hpc/projects/icd.fast.ops")
             / self.experiment
             / "3-assembly/phenotyping_v3.zarr",
         }
