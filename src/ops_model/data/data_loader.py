@@ -155,12 +155,7 @@ class BaseDataset(Dataset):
         attrs = self.stores[ci.store_key][well].attrs.asdict()
         all_channel_names = [a["label"] for a in attrs["ome"]["omero"]["channels"]]
 
-        if self.out_channels == "random":
-            channel_names = [random.choice(all_channel_names)]
-        if self.out_channels == "all":
-            channel_names = all_channel_names
-        else:
-            channel_names = self.out_channels
+        channel_names = [ci.channel]
         channel_index = [all_channel_names.index(c) for c in channel_names]
 
         return channel_names, channel_index
@@ -551,24 +546,26 @@ class OpsDataManager:
 
         return stores
 
-    def balanced_sample_weights(self, df: pd.DataFrame):
+    def balanced_sample_weights(self, df: pd.DataFrame, balance_col: str = "gene_name"):
         """
         Needs to be run on the individual train/val/test dataframes, becuase the
         entries get shuffled during splitting.
         """
-        class_counts = df["gene_name"].value_counts().to_dict()
+        class_counts = df[balance_col].value_counts().to_dict()
         class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
         sample_weights = np.array(
-            [class_weights[gene_name] for gene_name in df["gene_name"]]
+            [class_weights[gene_name] for gene_name in df[balance_col]]
         )
 
         return sample_weights
 
-    def create_sampler(self, df: pd.DataFrame, balanced: bool):
+    def create_sampler(
+        self, df: pd.DataFrame, balanced: bool, balance_col: str = "gene_name"
+    ):
         if not balanced:
             return None
 
-        sample_weights = self.balanced_sample_weights(df)
+        sample_weights = self.balanced_sample_weights(df, balance_col=balance_col)
 
         sampler = torch.utils.data.WeightedRandomSampler(
             weights=sample_weights,
@@ -583,6 +580,7 @@ class OpsDataManager:
         num_workers: int = 1,
         dataset_type: Literal["basic", "contrastive", "cell_profile"] = "basic",
         balanced_sampling: bool = False,
+        balance_col: str = "gene_name",
         contrastive_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
@@ -633,7 +631,9 @@ class OpsDataManager:
 
         if len(train_ind) > 0:
             train_df = labels_df.iloc[train_ind]
-            train_sampler = self.create_sampler(train_df, balanced_sampling)
+            train_sampler = self.create_sampler(
+                train_df, balanced_sampling, balance_col=balance_col
+            )
             train_dataset = DS(
                 stores=self.store_dict,
                 labels_df=train_df,
@@ -652,7 +652,9 @@ class OpsDataManager:
 
         if len(val_ind) > 0:
             val_df = labels_df.iloc[val_ind]
-            val_sampler = self.create_sampler(val_df, balanced_sampling)
+            val_sampler = self.create_sampler(
+                val_df, balanced_sampling, balance_col=balance_col
+            )
             val_dataset = DS(
                 stores=self.store_dict,
                 labels_df=val_df,
@@ -671,7 +673,9 @@ class OpsDataManager:
 
         if len(test_ind) > 0:
             test_df = labels_df.iloc[test_ind]
-            test_sampler = self.create_sampler(test_df, balanced_sampling)
+            test_sampler = self.create_sampler(
+                test_df, balanced_sampling, balance_col=balance_col
+            )
             test_dataset = DS(
                 stores=self.store_dict,
                 labels_df=test_df,

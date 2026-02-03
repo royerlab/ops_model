@@ -1,0 +1,57 @@
+model_type: dynaclr
+run_name: '20250202'
+dataset_type: contrastive
+
+data_manager:
+  batch_size: 10
+  data_split: 
+    - 0.90
+    - 0.05
+    - 0.05
+  initial_yx_patch_size:
+    - 1
+    - 256
+    - 256
+  final_yx_patch_size:
+    - 1
+    - 128
+    - 128
+  num_workers: 20
+  balanced_sampling: True
+  contrastive_kwargs:
+    positive_source: "self"
+    use_negative: False
+    cell_masks: False
+  labels_df_path: /hpc/mydata/alexander.hillsley/ops/ops_model/experiments/models/dynaclr/labels_testset.csv
+    
+
+model:
+  lr: 0.0002
+  schedule: Constant
+  log_batches_per_epoch: 8
+  log_samples_per_batch: 1
+  log_embeddings: False
+  encoder:
+    backbone: "convnext_tiny"
+    in_channels: 1
+    in_stack_depth: 1
+    stem_kernel_size: [1, 4, 4]
+    stem_stride: [1, 4, 4]
+    embedding_dim: 768
+    projection_dim: 128
+    drop_path_rate: 0.0
+
+trainer:
+  max_epochs: 100
+  limit_train_batches: 5000
+  limit_val_batches: 500
+
+callbacks:
+  monitor: "loss/val"
+
+evaluation:
+  model_checkpoint: /hpc/projects/intracellular_dashboard/ops/models/model_checkpoints/dynaclr
+  data_split: 
+    - 0.5
+    - 0.0
+    - 0.5
