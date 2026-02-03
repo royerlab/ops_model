@@ -104,12 +104,18 @@ class BaseDataset(Dataset):
         for ch in channel_names:
             img = data[channel_names.index(ch)]
             if ch == "Phase2D" or ch == "Focus3D":
-                img_norm = img / np.std(img)
+                std = np.std(img)
+                img_norm = img / std if std > 1e-8 else np.zeros_like(img)
                 img_list.append(img_norm)
             else:
-                # apply log normalization
-                log_img = np.log1p(img)
-                img_norm = (log_img - log_img.mean()) / (log_img.std() + 1e-8)
+                # apply log normalization, clip negative values to avoid NaN
+                img_clipped = np.clip(img, 0, None)
+                log_img = np.log1p(img_clipped)
+                std = log_img.std()
+                if std > 1e-8:
+                    img_norm = (log_img - log_img.mean()) / std
+                else:
+                    img_norm = np.zeros_like(log_img)
                 img_list.append(img_norm)
 
         data_norm = np.stack(img_list, axis=0)
