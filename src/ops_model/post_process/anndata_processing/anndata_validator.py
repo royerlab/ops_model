@@ -554,32 +554,37 @@ class AnndataSpec:
         return {
             "required_fields": [
                 FieldSpec(
-                    name="label_str",
+                    name="perturbation",
                     dtype=str,
                     required=True,
                     description="Gene label string",
-                    suggestion='Add label_str column with gene names (e.g., "GENE_A", "NTC")',
+                    suggestion='Add perturbation column with gene names (e.g., "GENE_A", "NTC")',
                 ),
                 FieldSpec(
-                    name="well",
+                    name="reporter",
                     dtype=str,
-                    required=False,
-                    pattern=r"[A-Za-z][\d/]+",
-                    description="Well identifier (formats: A1, B12, or A/1/0)",
-                    suggestion="Add well column (format: A1 or A/1/0)",
+                    required=True,
+                    description="Biological signal measured",
+                    suggestion='Add reporter column with biological signal names (e.g., "SEC61B", "Phase")',
                 ),
             ],
-            "optional_fields": [
-                FieldSpec(
-                    name="experiment",
-                    dtype=str,
-                    required=False,
-                    pattern=r"ops\d{4}(_\d{8})?",
-                    description="Experiment identifier",
-                    suggestion="Add experiment column (format: ops####)",
-                ),
-            ],
-            "uns_requirements": {},
+            "optional_fields": [],
+            "uns_requirements": {
+                "cell_type": {
+                    "type": str,
+                    "required": True,
+                    "description": "Cell type used in the experiment (e.g., 'A549', 'HeLa', 'RPE1')",
+                    "pattern": None,  # Optional: add pattern like r"^[A-Za-z0-9-]+$" for validation
+                    "examples": ["A549", "HeLa", "iPSC", "HEK293T"],
+                },
+                "embedding_type": {
+                    "type": str,
+                    "required": True,
+                    "description": "Method used to extract embeddings (e.g., 'dinov3', 'cellprofiler')",
+                    "pattern": None,  # Optional: add pattern like r"^[A-Za-z0-9-]+$" for validation
+                    "examples": ["dinov3", "cellprofiler"],
+                },
+            },
         }
 
     def _define_cell_schema(self) -> Dict[str, Any]:
@@ -602,6 +607,14 @@ class AnndataSpec:
                     suggestion="Add sgRNA column with guide identifiers",
                 ),
                 FieldSpec(
+                    name="well",
+                    dtype=str,
+                    required=True,
+                    pattern=r"[A-Za-z][\d/]+",
+                    description="Well identifier (formats: A1, B12, or A/1/0)",
+                    suggestion="Add well column (format: A1 or A/1/0)",
+                ),
+                FieldSpec(
                     name="x_position",
                     dtype=[float, np.float32, np.float64],
                     required=True,
@@ -614,6 +627,14 @@ class AnndataSpec:
                     required=True,
                     description="Cell y-coordinate in image",
                     suggestion="Add y_position column with cell y-coordinates",
+                ),
+                FieldSpec(
+                    name="experiment",
+                    dtype=str,
+                    required=True,
+                    pattern=r"ops\d{4}(_\d{8})?",
+                    description="Experiment identifier",
+                    suggestion="Add experiment column (format: ops####)",
                 ),
             ],
             "optional_fields": base["optional_fields"],
@@ -640,9 +661,6 @@ class AnndataSpec:
                     description="Guide RNA identifier (must be unique)",
                     suggestion="Add sgRNA column with unique guide identifiers",
                 ),
-            ],
-            "optional_fields": base["optional_fields"]
-            + [
                 FieldSpec(
                     name="n_cells",
                     dtype=[int, np.int32, np.int64],
@@ -652,7 +670,16 @@ class AnndataSpec:
                     suggestion="Add n_cells column with positive integer counts",
                 ),
             ],
-            "uns_requirements": {},
+            "optional_fields": base["optional_fields"] + [],
+            "uns_requirements": {
+                "aggregation_method": {
+                    "type": str,
+                    "required": True,
+                    "description": "Method used to aggregate embeddings (e.g., 'mean', 'median')",
+                    "pattern": None,  # Optional: add pattern like r"^[A-Za-z0-9-]+$" for validation
+                    "examples": ["mean", "median"],
+                },
+            },
         }
 
     def _define_gene_schema(self) -> Dict[str, Any]:
@@ -665,13 +692,12 @@ class AnndataSpec:
         """
         base = self._define_base_schema()
         return {
-            "required_fields": base["required_fields"],
-            "optional_fields": base["optional_fields"]
+            "required_fields": base["required_fields"]
             + [
                 FieldSpec(
                     name="n_experiments",
                     dtype=[int, np.int32, np.int64],
-                    required=False,
+                    required=True,
                     min_value=1,
                     description="Number of experiments data is pooled from",
                     suggestion="Add n_experiments for cross-experiment pooled data",
@@ -684,8 +710,24 @@ class AnndataSpec:
                     description="Number of cells aggregated per gene",
                     suggestion="Add n_cells column with positive integer counts",
                 ),
+                FieldSpec(
+                    name="guides",
+                    dtype=object,
+                    required=True,
+                    description="List of guide RNAs aggregated for this gene",
+                    suggestion="Add guides column with list of sgRNA identifiers per gene",
+                ),
             ],
-            "uns_requirements": {},
+            "uns_requirements": {
+                "aggregation_method": {
+                    "type": str,
+                    "required": True,
+                    "description": "Method used to aggregate embeddings (e.g., 'mean', 'median')",
+                    "pattern": None,  # Optional: add pattern like r"^[A-Za-z0-9-]+$" for validation
+                    "examples": ["mean", "median"],
+                },
+            },
+            "optional_fields": base["optional_fields"],
         }
 
     def _define_multi_experiment_schema(self) -> Dict[str, Any]:
@@ -1067,6 +1109,132 @@ class AnndataValidator:
             level = level.value
 
         uns_reqs = self.spec.get_uns_requirements(level)
+
+        # Check for base-level .uns requirements (applies to all schemas)
+        base_uns_reqs = self.spec.get_uns_requirements("base")
+
+        # Validate all base-level .uns requirements (generic loop)
+        for field_name, field_spec in base_uns_reqs.items():
+            if field_spec.get("required", False):
+                if field_name not in adata.uns:
+                    examples = field_spec.get("examples", [])
+                    example_str = (
+                        f" (e.g., adata.uns['{field_name}'] = '{examples[0]}')"
+                        if examples
+                        else ""
+                    )
+                    issues.append(
+                        ValidationIssue(
+                            level=IssueLevel.ERROR,
+                            component=".uns",
+                            field=field_name,
+                            message=f"Missing required {field_name} in .uns",
+                            expected=field_spec["description"],
+                            found="Key not present",
+                            suggestion=f"Add {field_name} to .uns{example_str}",
+                            context={"examples": examples},
+                        )
+                    )
+                else:
+                    # Validate type
+                    field_value = adata.uns[field_name]
+                    expected_type = field_spec.get("type", str)
+
+                    if not isinstance(field_value, expected_type):
+                        issues.append(
+                            ValidationIssue(
+                                level=IssueLevel.ERROR,
+                                component=".uns",
+                                field=field_name,
+                                message=f"{field_name} must be a {expected_type.__name__}",
+                                expected=expected_type.__name__,
+                                found=str(type(field_value)),
+                                suggestion=f"Convert {field_name} to {expected_type.__name__}",
+                            )
+                        )
+
+                    # Validate pattern if specified (only for strings)
+                    if field_spec.get("pattern") is not None and isinstance(
+                        field_value, str
+                    ):
+                        import re
+
+                        pattern = field_spec["pattern"]
+                        if not re.match(pattern, field_value):
+                            issues.append(
+                                ValidationIssue(
+                                    level=IssueLevel.WARNING,
+                                    component=".uns",
+                                    field=field_name,
+                                    message=f"{field_name} '{field_value}' does not match expected pattern",
+                                    expected=f"Pattern: {pattern}",
+                                    found=f"Value: {field_value}",
+                                )
+                            )
+
+        # Validate schema-specific .uns requirements (if any)
+        if uns_reqs:
+            for field_name, field_spec in uns_reqs.items():
+                # Skip if already validated as base requirement
+                if field_name in base_uns_reqs:
+                    continue
+
+                if field_spec.get("required", False):
+                    if field_name not in adata.uns:
+                        examples = field_spec.get("examples", [])
+                        example_str = (
+                            f" (e.g., adata.uns['{field_name}'] = '{examples[0]}')"
+                            if examples
+                            else ""
+                        )
+                        issues.append(
+                            ValidationIssue(
+                                level=IssueLevel.ERROR,
+                                component=".uns",
+                                field=field_name,
+                                message=f"Missing required {field_name} in .uns for {level}-level schema",
+                                expected=field_spec["description"],
+                                found="Key not present",
+                                suggestion=f"Add {field_name} to .uns{example_str}",
+                                context={"examples": examples},
+                            )
+                        )
+                    else:
+                        # Validate type
+                        field_value = adata.uns[field_name]
+                        expected_type = field_spec.get("type", str)
+
+                        if not isinstance(field_value, expected_type):
+                            issues.append(
+                                ValidationIssue(
+                                    level=IssueLevel.ERROR,
+                                    component=".uns",
+                                    field=field_name,
+                                    message=f"{field_name} must be a {expected_type.__name__}",
+                                    expected=expected_type.__name__,
+                                    found=str(type(field_value)),
+                                    suggestion=f"Convert {field_name} to {expected_type.__name__}",
+                                )
+                            )
+
+                        # Validate pattern if specified (only for strings)
+                        if field_spec.get("pattern") is not None and isinstance(
+                            field_value, str
+                        ):
+                            import re
+
+                            pattern = field_spec["pattern"]
+                            if not re.match(pattern, field_value):
+                                issues.append(
+                                    ValidationIssue(
+                                        level=IssueLevel.WARNING,
+                                        component=".uns",
+                                        field=field_name,
+                                        message=f"{field_name} '{field_value}' does not match expected pattern",
+                                        expected=f"Pattern: {pattern}",
+                                        found=f"Value: {field_value}",
+                                    )
+                                )
 
         # Check for required metadata (mainly for multi-channel)
         if level == "multi_channel":

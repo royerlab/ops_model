@@ -278,10 +278,11 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
     Split AnnData object by reporter/biological signal, return by reporter name.
 
     Extracts channel_mapping from adata.uns and creates separate AnnData
-    objects for each reporter. Features are assigned by string matching:
-    - Features containing reporter name → assigned to that reporter
-    - Cell-level features (starting with 'cell_') → duplicated across all reporters
-    - Colocalization features (containing multiple reporters) → duplicated in each
+    objects for each reporter. Features are assigned by pattern matching:
+    - Features containing _{reporter}_ pattern → assigned to that reporter
+    - Compartment features (cell_, nucleus_, cytoplasm_) → duplicated across all reporters
+      (these are channel-agnostic morphology features)
+    - Colocalization features (containing multiple reporters with _ delimiters) → duplicated in each
 
     Returns dictionary keyed by REPORTER NAME (e.g., 'SEC61B', '5xUPRE', 'ChromaLive561emission').
     Files will be saved with reporter names to ensure feature name consistency during
@@ -319,20 +320,29 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
 
     var_names = adata.var_names.tolist()
 
-    # Identify cell-level features (shared across all channels)
+    # Identify compartment-level features (shared across all reporters)
+    # These are channel-agnostic morphology features measured once per cell
     cell_features = [f for f in var_names if f.startswith("cell_")]
+    nucleus_features = [f for f in var_names if f.startswith("nucleus_")]
+    cytoplasm_features = [f for f in var_names if f.startswith("cytoplasm_")]
+    shared_features = cell_features + nucleus_features + cytoplasm_features
 
-    if verbose and cell_features:
-        print(f"Cell-level features (duplicated across all): {len(cell_features)}")
+    if verbose and shared_features:
+        print(f"Shared compartment features (duplicated across all reporters):")
+        print(f"  Cell: {len(cell_features)}")
+        print(f"  Nucleus: {len(nucleus_features)}")
+        print(f"  Cytoplasm: {len(cytoplasm_features)}")
+        print(f"  Total shared: {len(shared_features)}")
 
     reporter_adatas = {}  # Key by reporter name for file naming consistency
 
     for reporter in reporters:
         # Find features containing this reporter name
-        reporter_features = [f for f in var_names if reporter in f]
+        # Use _{reporter}_ pattern to avoid false matches (e.g., "Phase" in "ZernikePhase")
+        reporter_features = [f for f in var_names if f"_{reporter}_" in f]
 
-        # Combine with cell-level features
-        all_features = sorted(set(reporter_features + cell_features))
+        # Combine reporter-specific features with shared compartment features
+        all_features = sorted(set(reporter_features + shared_features))
 
         if len(all_features) == 0:
             print(f"  WARNING: No features found for reporter '{reporter}', skipping")
@@ -352,9 +362,11 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
         reporter_adatas[reporter] = adata_subset
 
         if verbose:
-            coloc_count = sum(1 for f in all_features if f.startswith("coloc_"))
+            reporter_only = len(reporter_features)
+            shared_count = len([f for f in all_features if f in shared_features])
             print(
-                f"  {reporter} (channel: {channel_name}): {len(all_features)} features ({coloc_count} colocalization)"
+                f"  {reporter} (channel: {channel_name}): {len(all_features)} features "
+                f"({reporter_only} reporter-specific, {shared_count} shared compartment)"
             )
 
     return reporter_adatas

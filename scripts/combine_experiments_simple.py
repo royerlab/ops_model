@@ -31,6 +31,104 @@ from ops_model.features.anndata_utils import (
 )
 
 
+def normalize_feature_type(feature_type: str) -> str:
+    """
+    Normalize feature type names to canonical form.
+
+    Args:
+        feature_type: Raw feature type string
+
+    Returns:
+        Canonical feature type name
+
+    Note:
+        'dino' and 'dinov3' are treated as the same and normalized to 'dinov3'
+    """
+    feature_type = feature_type.lower().strip()
+
+    # Map aliases to canonical names
+    aliases = {
+        "dino": "dinov3",
+        "dinov3": "dinov3",
+        "cellprofiler": "cellprofiler",
+        "cell-profiler": "cellprofiler",
+    }
+
+    canonical = aliases.get(feature_type)
+    if canonical is None:
+        # Unknown feature type - return as-is but warn
+        print(f"⚠ Warning: Unknown feature_type '{feature_type}' - using as-is")
+        return feature_type
+
+    return canonical
+
+
+def parse_config_for_metadata(config_path: str) -> tuple:
+    """
+    Parse a feature extraction config to extract experiment metadata.
+
+    Args:
+        config_path: Path to feature extraction config (dinov3, cellprofiler, etc.)
+
+    Returns:
+        Tuple of (experiment_name, feature_type, channels_list)
+        Returns None if config should be skipped (e.g., random/all channels)
+
+    Raises:
+        ValueError: If config is missing required fields
+    """
+    config_path = Path(config_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    # Extract experiment name from data_manager.experiments (first key)
+    if "data_manager" not in config or "experiments" not in config["data_manager"]:
+        raise ValueError(
+            f"Config {config_path} missing 'data_manager.experiments' field"
+        )
+
+    experiments_dict = config["data_manager"]["experiments"]
+    if not experiments_dict:
+        raise ValueError(f"Config {config_path} has empty experiments dict")
+
+    experiment_name = list(experiments_dict.keys())[0]
+
+    # Extract feature type from model_type
+    if "model_type" not in config:
+        raise ValueError(f"Config {config_path} missing 'model_type' field")
+
+    feature_type = normalize_feature_type(config["model_type"])
+
+    # Extract channels from out_channels in data_manager
+    if "out_channels" not in config["data_manager"]:
+        raise ValueError(
+            f"Config {config_path} missing 'data_manager.out_channels' field"
+        )
+
+    out_channels = config["data_manager"]["out_channels"]
+
+    # Handle special channel values
+    if isinstance(out_channels, str):
+        if out_channels.lower() in ["random", "all"]:
+            print(
+                f"⚠ Skipping {config_path.name}: out_channels='{out_channels}' (not supported for auto-detection)"
+            )
+            return None
+        # If single string, make it a list
+        channels = [out_channels]
+    elif isinstance(out_channels, list):
+        channels = out_channels
+    else:
+        raise ValueError(
+            f"Config {config_path} has invalid out_channels type: {type(out_channels)}"
+        )
+
+    return experiment_name, feature_type, channels
+
+
 def load_config(config_path: str) -> dict:
     """
     Load configuration from YAML file.
@@ -47,6 +145,117 @@ def load_config(config_path: str) -> dict:
 
     with open(config_path) as f:
         config = yaml.safe_load(f)
+
+    # Check for auto-detection mode using feature_extraction_configs
+    if "feature_extraction_configs" in config:
+        print("\n" + "=" * 80)
+        print("AUTO-DETECTION MODE: Using feature_extraction_configs")
+        print("=" * 80)
+
+        # Get list of config paths
+        extraction_configs = config["feature_extraction_configs"]
+        if not isinstance(extraction_configs, list) or len(extraction_configs) == 0:
+            raise ValueError("feature_extraction_configs must be a non-empty list")
+
+        # Check if feature_type is specified (used for filtering)
+        specified_feature_type = config.get("feature_type", None)
+        if specified_feature_type:
+            # Normalize the specified feature type
+            specified_feature_type = normalize_feature_type(specified_feature_type)
+            print(f"\nFiltering for feature_type: {specified_feature_type}")
+            print(f"(Configs with different feature types will be skipped)\n")
+        else:
+            print(f"\nNo feature_type specified - will auto-detect")
+            print(f"(All configs must have the same feature_type)\n")
+
+        # Parse configs and auto-detect
+        feature_types = set()
+        experiments_channels = []
+        skipped = []
+        skipped_feature_type = []
+
+        print(f"Parsing {len(extraction_configs)} feature extraction configs...\n")
+
+        for i, extraction_config_path in enumerate(extraction_configs, 1):
+            print(f"[{i}/{len(extraction_configs)}] Parsing: {extraction_config_path}")
+
+            try:
+                result = parse_config_for_metadata(extraction_config_path)
+
+                if result is None:
+                    # Config was skipped (random/all channels)
+                    skipped.append(extraction_config_path)
+                    continue
+
+                experiment_name, feature_type, channels = result
+
+                # If feature_type is specified in config, filter by it
+                if specified_feature_type:
+                    if feature_type != specified_feature_type:
+                        print(
+                            f"  ⊘ Skipping: feature_type '{feature_type}' does not match specified '{specified_feature_type}'"
+                        )
+                        skipped_feature_type.append(
+                            (extraction_config_path, feature_type)
+                        )
+                        continue
+                else:
+                    # No filter - collect all feature types for validation
+                    feature_types.add(feature_type)
+
+                # Add each channel as a separate entry
+                for channel in channels:
+                    experiments_channels.append((experiment_name, channel))
+                    print(
+                        f"  ✓ Detected: {experiment_name}/{channel} (feature_type={feature_type})"
+                    )
+
+            except Exception as e:
+                raise ValueError(f"Error parsing {extraction_config_path}: {e}")
+
+        # Validate results
+        if len(experiments_channels) == 0:
+            raise ValueError("No valid configs found (all were skipped)")
+
+        # If feature_type was not specified, validate all have same type
+        if not specified_feature_type:
+            if len(feature_types) > 1:
+                raise ValueError(
+                    f"Configs have different feature types: {feature_types}. "
+                    f"Either specify 'feature_type' in config to filter, or ensure all configs use the same feature_type."
+                )
+            detected_feature_type = list(feature_types)[0]
+            config["feature_type"] = detected_feature_type
+        else:
+            detected_feature_type = specified_feature_type
+
+        # Convert to experiments_channels format
+        config["experiments_channels"] = [
+            {"experiment": exp, "channel": ch} for exp, ch in experiments_channels
+        ]
+
+        # Force comprehensive mode if not specified
+        if "concatenation_method" not in config:
+            config["concatenation_method"] = "comprehensive"
+
+        # Summary
+        print(f"\n{'='*80}")
+        print(f"AUTO-DETECTION SUMMARY")
+        print(f"{'='*80}")
+        print(f"Feature type: {detected_feature_type}")
+        print(f"Total experiment/channel pairs: {len(experiments_channels)}")
+        if skipped:
+            print(f"Skipped configs (random/all channels): {len(skipped)}")
+        if skipped_feature_type:
+            print(
+                f"Skipped configs (feature type mismatch): {len(skipped_feature_type)}"
+            )
+            for path, ftype in skipped_feature_type:
+                print(f"  - {path} (feature_type={ftype})")
+        print(f"\nDetected combinations:")
+        for exp, ch in experiments_channels:
+            print(f"  • {exp}/{ch}")
+        print(f"{'='*80}\n")
 
     # Set default concatenation method
     if "concatenation_method" not in config:
@@ -88,6 +297,15 @@ def load_config(config_path: str) -> dict:
             for subkey, subvalue in value.items():
                 if subkey not in config[key]:
                     config[key][subkey] = subvalue
+
+    # Set default feature_dir based on feature_type if not specified
+    if "feature_dir" not in config:
+        feature_type = config.get("feature_type", "dinov3")
+        if feature_type == "cellprofiler":
+            config["feature_dir"] = "cell-profiler"
+        else:
+            # For dinov3 and other feature types
+            config["feature_dir"] = f"{feature_type}_features"
 
     # Generate output path if not specified
     if "output_path" not in config or config["output_path"] is None:
@@ -137,10 +355,14 @@ def validate_config(config: dict) -> bool:
     if "feature_type" not in config:
         raise ValueError("Missing required field: feature_type")
 
-    valid_feature_types = ["dino", "dinov3", "cellprofiler"]
+    # Normalize feature_type
+    config["feature_type"] = normalize_feature_type(config["feature_type"])
+
+    # Valid canonical feature types
+    valid_feature_types = ["dinov3", "cellprofiler"]
     if config["feature_type"] not in valid_feature_types:
         raise ValueError(
-            f"feature_type must be one of {valid_feature_types}, "
+            f"feature_type must be one of {valid_feature_types} (or aliases: dino, cell-profiler), "
             f"got: {config['feature_type']}"
         )
 
@@ -156,8 +378,8 @@ def validate_config(config: dict) -> bool:
         ):
             raise ValueError("experiments must be a non-empty list")
 
-        if config["feature_type"] in ["dino", "dinov3"] and "channel" not in config:
-            raise ValueError("channel is required for dino/dinov3 feature_type")
+        if config["feature_type"] == "dinov3" and "channel" not in config:
+            raise ValueError("channel is required for dinov3 feature_type")
 
         # Validate concatenation settings
         valid_joins = ["inner", "outer"]
@@ -260,6 +482,7 @@ def validate_experiment_files(config: dict) -> tuple:
     """
     base_dir = Path(config["base_dir"])
     feature_type = config["feature_type"]
+    feature_dir = config["feature_dir"]
     method = config.get("concatenation_method", "vertical")
 
     file_paths = []
@@ -286,15 +509,15 @@ def validate_experiment_files(config: dict) -> tuple:
                     file_path = (
                         exp_dir
                         / "3-assembly"
-                        / "cell-profiler"
+                        / feature_dir
                         / "anndata_objects"
                         / "features_processed.h5ad"
                     )
-                else:  # dino/dinov3
+                else:  # dino/dinov3 and others
                     file_path = (
                         exp_dir
                         / "3-assembly"
-                        / f"{feature_type}_features"
+                        / feature_dir
                         / "anndata_objects"
                         / f"features_processed_{channel}.h5ad"
                     )
@@ -304,15 +527,15 @@ def validate_experiment_files(config: dict) -> tuple:
                     file_path = (
                         exp_dir
                         / "3-assembly"
-                        / "cell-profiler"
+                        / feature_dir
                         / "anndata_objects"
                         / f"{file_prefix}.h5ad"
                     )
-                else:  # dino/dinov3
+                else:  # dino/dinov3 and others
                     file_path = (
                         exp_dir
                         / "3-assembly"
-                        / f"{feature_type}_features"
+                        / feature_dir
                         / "anndata_objects"
                         / f"{file_prefix}_{channel}.h5ad"
                     )
@@ -345,22 +568,13 @@ def validate_experiment_files(config: dict) -> tuple:
             exp_dir = exp_dirs[0]
 
             # Build file path
-            if feature_type == "cellprofiler":
-                file_path = (
-                    exp_dir
-                    / "3-assembly"
-                    / "cell-profiler"
-                    / "anndata_objects"
-                    / f"{file_prefix}_{channel}.h5ad"
-                )
-            else:  # dino/dinov3
-                file_path = (
-                    exp_dir
-                    / "3-assembly"
-                    / f"{feature_type}_features"
-                    / "anndata_objects"
-                    / f"{file_prefix}_{channel}.h5ad"
-                )
+            file_path = (
+                exp_dir
+                / "3-assembly"
+                / feature_dir
+                / "anndata_objects"
+                / f"{file_prefix}_{channel}.h5ad"
+            )
 
             file_paths.append(str(file_path))
 
@@ -387,22 +601,13 @@ def validate_experiment_files(config: dict) -> tuple:
             exp_dir = exp_dirs[0]
 
             # Build file path to cell-level data
-            if feature_type == "cellprofiler":
-                file_path = (
-                    exp_dir
-                    / "3-assembly"
-                    / "cell-profiler"
-                    / "anndata_objects"
-                    / f"features_processed_{channel}.h5ad"
-                )
-            else:  # dino/dinov3
-                file_path = (
-                    exp_dir
-                    / "3-assembly"
-                    / f"{feature_type}_features"
-                    / "anndata_objects"
-                    / f"features_processed_{channel}.h5ad"
-                )
+            file_path = (
+                exp_dir
+                / "3-assembly"
+                / feature_dir
+                / "anndata_objects"
+                / f"features_processed_{channel}.h5ad"
+            )
 
             file_paths.append(str(file_path))
 
@@ -558,6 +763,7 @@ def combine_experiments_horizontal(config: dict) -> None:
         feature_type=feature_type,
         aggregation_level=aggregation_level,
         base_dir=config["base_dir"],
+        feature_dir=config["feature_dir"],
         recompute_embeddings=True,
         n_pca_components=n_pca,
         n_umap_neighbors=n_neighbors,
@@ -610,6 +816,7 @@ def combine_experiments_comprehensive(config: dict) -> None:
         experiments_channels=experiments_channels,
         feature_type=feature_type,
         base_dir=config["base_dir"],
+        feature_dir=config["feature_dir"],
         recompute_embeddings=True,
         n_pca_components=n_pca,
         n_umap_neighbors=n_neighbors,
@@ -666,8 +873,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Using config file
+  # Using config file with manual experiment/channel list
   python scripts/combine_experiments_simple.py --config configs/combine_experiments/phase2d_all.yml
+
+  # Using config file with auto-detection from feature extraction configs
+  python scripts/combine_experiments_simple.py --config configs/combine_experiments/auto_detect.yml
 
   # Override output path
   python scripts/combine_experiments_simple.py --config configs/combine_experiments/phase2d_all.yml --output-path /custom/path.h5ad
@@ -692,7 +902,7 @@ Examples:
     args = parser.parse_args()
 
     try:
-        # Load config
+        # Load config file
         print(f"Loading config: {args.config}")
         config = load_config(args.config)
 

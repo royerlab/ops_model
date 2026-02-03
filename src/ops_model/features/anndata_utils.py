@@ -902,6 +902,7 @@ def load_multiple_experiments(
     base_dir: Union[str, Path],
     experiments: List[str],
     feature_type: str = "features_processed",
+    feature_dir: str = "dino_features",
     require_all: bool = True,
 ) -> List[Path]:
     """
@@ -912,6 +913,7 @@ def load_multiple_experiments(
         experiments: List of experiment names (e.g., ["ops0089_20251119", "ops0084_20250101"])
         feature_type: Which h5ad file to load
                       Options: "features_processed", "guide_bulked_umap", "gene_bulked_umap"
+        feature_dir: Directory name within 3-assembly for features (default: "dino_features")
         require_all: If True, raise error if any file missing
                      If False, skip missing files with warning
 
@@ -932,7 +934,7 @@ def load_multiple_experiments(
             base_dir
             / exp
             / "3-assembly"
-            / "dino_features"
+            / feature_dir
             / "anndata_objects"
             / f"{feature_type}.h5ad"
         )
@@ -1034,6 +1036,7 @@ def concatenate_features_by_channel(
     feature_type: str = "dinov3",
     aggregation_level: Literal["guide", "gene"] = "gene",
     base_dir: Union[str, Path] = "/hpc/projects/intracellular_dashboard/ops",
+    feature_dir: Optional[str] = None,
     recompute_embeddings: bool = True,
     n_pca_components: int = 128,
     n_umap_neighbors: int = 15,
@@ -1065,6 +1068,8 @@ def concatenate_features_by_channel(
                           Options: "guide" (guide_bulked_umap), "gene" (gene_bulked_umap)
                           Note: Cell-level concatenation not supported (no stable IDs)
         base_dir: Base directory containing experiment folders
+        feature_dir: Directory name within 3-assembly for features (e.g., "dinov3_features_20260101").
+                    If None, defaults to "cell-profiler" for cellprofiler or "{feature_type}_features" for others.
         recompute_embeddings: Whether to compute PCA/UMAP on combined features
         n_pca_components: Number of PCA components for combined features
         n_umap_neighbors: Number of neighbors for UMAP
@@ -1141,6 +1146,13 @@ def concatenate_features_by_channel(
     # Store reference to recompute_embeddings function to avoid shadowing by parameter
     _recompute_fn = globals()["recompute_embeddings"]
 
+    # Set default feature_dir if not provided
+    if feature_dir is None:
+        if feature_type == "cellprofiler":
+            feature_dir = "cell-profiler"
+        else:
+            feature_dir = f"{feature_type}_features"
+
     # Initialize metadata manager
     meta = FeatureMetadata()
 
@@ -1181,8 +1193,9 @@ def concatenate_features_by_channel(
             )
         exp_dir = exp_dirs[0]  # Take first match
 
+        anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
+
         if feature_type == "cellprofiler":
-            anndata_dir = exp_dir / "3-assembly" / "cell-profiler" / "anndata_objects"
             # For CellProfiler, files are named by reporter, not channel
             # Check if 'channel' is already a reporter or needs mapping
             from ops_model.data.feature_metadata import FeatureMetadata
@@ -1199,9 +1212,6 @@ def concatenate_features_by_channel(
 
             file_path = anndata_dir / f"{file_prefix}_{reporter}.h5ad"
         else:
-            anndata_dir = (
-                exp_dir / "3-assembly" / f"{feature_type}_features" / "anndata_objects"
-            )
             file_path = anndata_dir / f"{file_prefix}_{channel}.h5ad"
 
         if not file_path.exists():
@@ -1223,6 +1233,49 @@ def concatenate_features_by_channel(
         # Get biological information
         bio_signal = meta.get_biological_signal(exp_short, channel)
         print(f"  {exp_short}/{channel}: {adata.shape} - {bio_signal}")
+
+    # Deduplicate shared compartment features across sources
+    # These features (cell_, nucleus_, cytoplasm_) are identical across all channels
+    # Keep them only in the first source to avoid duplication in horizontal concatenation
+    print(f"\nDeduplicating shared compartment features...")
+    shared_patterns = ["cell_", "nucleus_", "cytoplasm_"]
+
+    deduplicated_adatas = {}
+    first_source = True
+
+    for source_key, adata in adata_by_source.items():
+        if first_source:
+            # Keep all features in first source (including shared features)
+            deduplicated_adatas[source_key] = adata
+            shared_count = sum(
+                1
+                for f in adata.var_names
+                if any(f.startswith(p) for p in shared_patterns)
+            )
+            print(
+                f"  Keeping {shared_count} shared features from first source: {source_key}"
+            )
+            first_source = False
+        else:
+            # Remove shared features from subsequent sources (already in first source)
+            shared_features = [
+                f
+                for f in adata.var_names
+                if any(f.startswith(pattern) for pattern in shared_patterns)
+            ]
+
+            if shared_features:
+                keep_features = [f for f in adata.var_names if f not in shared_features]
+                deduplicated_adatas[source_key] = adata[:, keep_features].copy()
+                print(
+                    f"  Removed {len(shared_features)} shared features from {source_key}"
+                )
+            else:
+                deduplicated_adatas[source_key] = adata
+                print(f"  No shared features to remove from {source_key}")
+
+    # Use deduplicated adatas for rest of function
+    adata_by_source = deduplicated_adatas
 
     # Find common genes/guides across all sources
     print(f"\nFinding common {aggregation_level}s across sources...")
@@ -1545,6 +1598,7 @@ def _process_vertical_group(
     exp_channel_pairs: List[Tuple[str, str]],
     feature_type: str,
     base_dir: Path,
+    feature_dir: str,
     target_level: Literal["guide", "gene"],
     join: str,
     verbose: bool = True,
@@ -1575,6 +1629,8 @@ def _process_vertical_group(
         Feature type to load
     base_dir : Path
         Base OPS directory
+    feature_dir : str
+        Directory name within 3-assembly for features
     target_level : Literal["guide", "gene"]
         Target aggregation level
     join : str
@@ -1620,8 +1676,9 @@ def _process_vertical_group(
         exp_dir = exp_dirs[0]
 
         # Load cell-level file
+        anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
+
         if feature_type == "cellprofiler":
-            anndata_dir = exp_dir / "3-assembly" / "cell-profiler" / "anndata_objects"
             # For CellProfiler, files are named by reporter
             # In comprehensive mode, 'channel' parameter is already the reporter (biological signal)
             # Check if this is a reporter name or needs mapping from channel
@@ -1641,9 +1698,6 @@ def _process_vertical_group(
 
             cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
         else:
-            anndata_dir = (
-                exp_dir / "3-assembly" / f"{feature_type}_features" / "anndata_objects"
-            )
             cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
         if not cell_file.exists():
@@ -1715,6 +1769,7 @@ def _process_horizontal_group(
     channel: str,
     feature_type: str,
     base_dir: Path,
+    feature_dir: str,
     target_level: Literal["guide", "gene"],
     verbose: bool = True,
     subsample_controls: bool = False,
@@ -1740,6 +1795,8 @@ def _process_horizontal_group(
         Feature type
     base_dir : Path
         Base OPS directory
+    feature_dir : str
+        Directory name within 3-assembly for features
     target_level : Literal["guide", "gene"]
         Target aggregation level
     verbose : bool
@@ -1776,8 +1833,9 @@ def _process_horizontal_group(
     exp_dir = exp_dirs[0]
 
     # Load cell-level file
+    anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
+
     if feature_type == "cellprofiler":
-        anndata_dir = exp_dir / "3-assembly" / "cell-profiler" / "anndata_objects"
         # For CellProfiler, files are named by reporter
         # In comprehensive mode, 'channel' parameter is already the reporter (biological signal)
         # Check if this is a reporter name or needs mapping from channel
@@ -1797,9 +1855,6 @@ def _process_horizontal_group(
 
         cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
     else:
-        anndata_dir = (
-            exp_dir / "3-assembly" / f"{feature_type}_features" / "anndata_objects"
-        )
         cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
     if not cell_file.exists():
@@ -2189,6 +2244,7 @@ def concatenate_experiments_comprehensive(
     experiments_channels: List[Tuple[str, str]],
     feature_type: str = "dinov3",
     base_dir: Union[str, Path] = "/hpc/projects/intracellular_dashboard/ops",
+    feature_dir: Optional[str] = None,
     recompute_embeddings: bool = True,
     n_pca_components: int = 128,
     n_umap_neighbors: int = 15,
@@ -2226,6 +2282,10 @@ def concatenate_experiments_comprehensive(
 
     base_dir : Union[str, Path]
         Base directory for OPS data
+
+    feature_dir : Optional[str], default=None
+        Directory name within 3-assembly for features (e.g., "dinov3_features_20260101").
+        If None, defaults to "cell-profiler" for cellprofiler or "{feature_type}_features" for others.
 
     recompute_embeddings : bool, default=True
         Whether to compute PCA/UMAP on combined feature space
@@ -2324,6 +2384,13 @@ def concatenate_experiments_comprehensive(
 
     base_dir = Path(base_dir)
 
+    # Set default feature_dir if not provided
+    if feature_dir is None:
+        if feature_type == "cellprofiler":
+            feature_dir = "cell-profiler"
+        else:
+            feature_dir = f"{feature_type}_features"
+
     if verbose:
         print("=" * 80)
         print("COMPREHENSIVE MULTI-EXPERIMENT COMBINATION")
@@ -2361,6 +2428,7 @@ def concatenate_experiments_comprehensive(
             pairs,
             feature_type,
             base_dir,
+            feature_dir,
             "guide",
             join,
             verbose,
@@ -2449,6 +2517,7 @@ def concatenate_experiments_comprehensive(
                 channel,
                 feature_type,
                 base_dir,
+                feature_dir,
                 "guide",
                 verbose,
                 False,
@@ -2461,13 +2530,59 @@ def concatenate_experiments_comprehensive(
 
             group_adatas_guide[bio_signal] = adata_guide
 
-        # Align and concatenate at guide level
+        # Deduplicate shared compartment features across biological groups
+        # Each group contains its own copy of cell_, nucleus_, cytoplasm_ features
+        # Keep them only in the first group to avoid duplication
+        if verbose:
+            print(
+                f"\nDeduplicating shared compartment features across biological groups..."
+            )
+
+        shared_patterns = ["cell_", "nucleus_", "cytoplasm_"]
+        deduplicated_groups_guide = {}
+        first_group = True
+
+        for bio_signal, adata in group_adatas_guide.items():
+            if first_group:
+                deduplicated_groups_guide[bio_signal] = adata
+                if verbose:
+                    shared_count = sum(
+                        1
+                        for f in adata.var_names
+                        if any(f.startswith(p) for p in shared_patterns)
+                    )
+                    print(
+                        f"  Keeping {shared_count} shared features from first group: {bio_signal}"
+                    )
+                first_group = False
+            else:
+                shared_features = [
+                    f
+                    for f in adata.var_names
+                    if any(f.startswith(pattern) for pattern in shared_patterns)
+                ]
+
+                if shared_features:
+                    keep_features = [
+                        f for f in adata.var_names if f not in shared_features
+                    ]
+                    deduplicated_groups_guide[bio_signal] = adata[
+                        :, keep_features
+                    ].copy()
+                    if verbose:
+                        print(
+                            f"  Removed {len(shared_features)} shared features from {bio_signal}"
+                        )
+                else:
+                    deduplicated_groups_guide[bio_signal] = adata
+
+        # Align and concatenate at guide level using deduplicated groups
         common_guides = _align_biological_groups(
-            group_adatas_guide, "guide", join, verbose
+            deduplicated_groups_guide, "guide", join, verbose
         )
 
         adata_guide = _concatenate_horizontal(
-            group_adatas_guide,
+            deduplicated_groups_guide,
             common_guides,
             biological_signals,
             meta,
@@ -2548,6 +2663,7 @@ def concatenate_experiments_comprehensive(
                 exp_channel_pairs,
                 feature_type,
                 base_dir,
+                feature_dir,
                 "guide",
                 join,
                 verbose,
@@ -2569,6 +2685,7 @@ def concatenate_experiments_comprehensive(
                 channel,
                 feature_type,
                 base_dir,
+                feature_dir,
                 "guide",
                 verbose,
                 False,
@@ -2585,12 +2702,56 @@ def concatenate_experiments_comprehensive(
     # Phase 3: Align observations and concatenate horizontally
     # ========================================================================
 
-    # Align at guide level
-    common_guides = _align_biological_groups(group_adatas_guide, "guide", join, verbose)
+    # Deduplicate shared compartment features across biological groups
+    # Each group contains its own copy of cell_, nucleus_, cytoplasm_ features
+    # Keep them only in the first group to avoid duplication
+    if verbose:
+        print(
+            f"\nDeduplicating shared compartment features across biological groups..."
+        )
+
+    shared_patterns = ["cell_", "nucleus_", "cytoplasm_"]
+    deduplicated_groups_guide = {}
+    first_group = True
+
+    for bio_signal, adata in group_adatas_guide.items():
+        if first_group:
+            deduplicated_groups_guide[bio_signal] = adata
+            if verbose:
+                shared_count = sum(
+                    1
+                    for f in adata.var_names
+                    if any(f.startswith(p) for p in shared_patterns)
+                )
+                print(
+                    f"  Keeping {shared_count} shared features from first group: {bio_signal}"
+                )
+            first_group = False
+        else:
+            shared_features = [
+                f
+                for f in adata.var_names
+                if any(f.startswith(pattern) for pattern in shared_patterns)
+            ]
+
+            if shared_features:
+                keep_features = [f for f in adata.var_names if f not in shared_features]
+                deduplicated_groups_guide[bio_signal] = adata[:, keep_features].copy()
+                if verbose:
+                    print(
+                        f"  Removed {len(shared_features)} shared features from {bio_signal}"
+                    )
+            else:
+                deduplicated_groups_guide[bio_signal] = adata
+
+    # Align at guide level using deduplicated groups
+    common_guides = _align_biological_groups(
+        deduplicated_groups_guide, "guide", join, verbose
+    )
 
     # Concatenate horizontally at guide level
     adata_guide = _concatenate_horizontal(
-        group_adatas_guide,
+        deduplicated_groups_guide,
         common_guides,
         biological_signals,
         meta,
@@ -2609,7 +2770,7 @@ def concatenate_experiments_comprehensive(
     # Add comprehensive metadata to guide level
     adata_guide.uns["comprehensive_metadata"] = _create_comprehensive_metadata(
         biological_signals=biological_signals,
-        group_adatas=group_adatas_guide,
+        group_adatas=deduplicated_groups_guide,
         meta=meta,
         feature_type=feature_type,
         feature_slices=adata_guide.uns["feature_slices"],
@@ -2682,7 +2843,7 @@ def concatenate_experiments_comprehensive(
 
     adata_gene.uns["comprehensive_metadata"] = _create_comprehensive_metadata(
         biological_signals=biological_signals,
-        group_adatas=group_adatas_guide,  # Use guide-level groups for cell counts
+        group_adatas=deduplicated_groups_guide,  # Use guide-level groups for cell counts
         meta=meta,
         feature_type=feature_type,
         feature_slices=adata_gene.uns["feature_slices"],
