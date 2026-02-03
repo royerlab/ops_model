@@ -35,7 +35,8 @@ from .collate_utils import (
 
 import warnings
 
-warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
+# Filter zarr-related warnings (ZarrUserWarning was removed in zarr v2.18+)
+warnings.filterwarnings("ignore", module="zarr")
 
 
 class BaseDataset(Dataset):
