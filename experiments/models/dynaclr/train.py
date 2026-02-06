@@ -64,27 +64,32 @@ def train(config_path):
     encoder_config = model_config.pop("encoder")
     temperature = model_config.pop("temperature")
 
-    # Check for checkpoint to load
+    # Initialize model
+    lit_model = dynaclr.LitDynaClr(
+        loss_function=NTXentLoss(temperature=temperature),
+        example_input_array_shape=(1, 1)
+        + tuple(config["data_manager"]["final_yx_patch_size"]),
+        **model_config,
+        **encoder_config,
+    )
+
+    # Handle checkpoint loading
     ckpt_path = config.get("ckpt_path", None)
+    resume_training = config.get("resume_training", False)
+    fit_ckpt_path = None  # For passing to trainer.fit()
 
     if ckpt_path is not None:
-        print(f"Loading model from checkpoint: {ckpt_path}")
-        lit_model = dynaclr.LitDynaClr.load_from_checkpoint(
-            ckpt_path,
-            loss_function=NTXentLoss(temperature=temperature),
-            example_input_array_shape=(1, 1)
-            + tuple(config["data_manager"]["final_yx_patch_size"]),
-            **model_config,
-            **encoder_config,
-        )
-    else:
-        lit_model = dynaclr.LitDynaClr(
-            loss_function=NTXentLoss(temperature=temperature),
-            example_input_array_shape=(1, 1)
-            + tuple(config["data_manager"]["final_yx_patch_size"]),
-            **model_config,
-            **encoder_config,
-        )
+        if resume_training:
+            # Resume training: load full checkpoint via trainer.fit()
+            print(f"Resuming training from checkpoint: {ckpt_path}")
+            print("✓ Will restore full training state (model, optimizer, epoch)")
+            fit_ckpt_path = ckpt_path  # Pass to trainer.fit() to restore everything
+        else:
+            # Transfer learning: load only weights, reset training state
+            print(f"Loading pretrained weights from: {ckpt_path}")
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            lit_model.load_state_dict(checkpoint["state_dict"], strict=False)
+            print("✓ Weights loaded. Starting fresh training (epoch 0).")
     # Prepare trainer config
     trainer_config = config["trainer"].copy()
 
@@ -130,6 +135,7 @@ def train(config_path):
     from pathlib import Path
 
     log_dir = Path(logger.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
     config_backup_path = log_dir / "config.yml"
     shutil.copy2(config_path, config_backup_path)
     print(f"Config saved to: {config_backup_path}")
@@ -138,7 +144,7 @@ def train(config_path):
         model=lit_model,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
-        ckpt_path=ckpt_path,  # Resume training from checkpoint if provided
+        ckpt_path=fit_ckpt_path,  # Only pass if resuming full training state
     )
 
     return

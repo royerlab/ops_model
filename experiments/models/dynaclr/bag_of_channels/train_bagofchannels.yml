@@ -124,4 +124,5 @@ model:
     projection_dim: 256
     drop_path_rate: 0.0
 
+resume_training: false
 ckpt_path: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/dynaclr_ops_bagofchannels_self_256proj_v1/last.ckpt

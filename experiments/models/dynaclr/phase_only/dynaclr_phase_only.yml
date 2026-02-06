@@ -9,7 +9,7 @@ trainer:
   # limit_val_batches: 500
   precision: "bf16-mixed"
   accelerator: "gpu"
-  strategy: "auto"
+  strategy: "ddp"
   devices: 2
   num_nodes: 1
   log_every_n_steps: 5
@@ -24,12 +24,12 @@ trainer:
         filename: "epoch={epoch:03d}-loss={loss/val_epoch:.3f}"
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
-        logging_interval: "step"1
+        logging_interval: "step"
   logger:
       class_path: lightning.pytorch.loggers.TensorBoardLogger
       init_args:
         save_dir: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr
-        name: *run_name1
+        name: *run_name
 
 data_manager:
   batch_size: 256
@@ -121,4 +121,5 @@ model:
     projection_dim: 256
     drop_path_rate: 0.0
 
+resume_training: false
 ckpt_path: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/dynaclr_ops_phase_only_self_256proj_v1/last.ckpt
