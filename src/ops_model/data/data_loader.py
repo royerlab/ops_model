@@ -18,6 +18,7 @@ from monai.transforms import (
 )
 
 from torch.utils.data import Dataset
+import random
 from viscy.transforms import (
     RandAdjustContrastd,
     RandAffined,
@@ -40,7 +41,6 @@ warnings.filterwarnings("ignore", module="zarr")
 
 
 class BaseDataset(Dataset):
-
     def __init__(
         self,
         stores: dict,
@@ -86,10 +86,17 @@ class BaseDataset(Dataset):
                     ),
                     RandRotate90d(
                         keys=["data", "mask"],
-                        prob=0.5,
+                        prob=0.75,
                         max_k=3,
                         spatial_axes=(-2, -1),
                     ),
+                    RandAdjustContrastd(
+                        keys=["data"],
+                        prob=0.5,
+                        gamma=[0.8, 1.2],
+                    ),
+                    RandScaleIntensityd(keys=["data"], prob=0.5, factors=0.5),
+                    RandGaussianNoised(keys=["data"], prob=0.5, mean=0.0, std=0.05),
                     ToTensord(
                         keys=["data", "mask"],
                     ),
@@ -104,16 +111,18 @@ class BaseDataset(Dataset):
         for ch in channel_names:
             img = data[channel_names.index(ch)]
             if ch == "Phase2D" or ch == "Focus3D":
-                std = np.std(img)
+                # Use nanstd to ignore NaN values during std calculation
+                std = np.nanstd(img)
                 img_norm = img / std if std > 1e-8 else np.zeros_like(img)
                 img_list.append(img_norm)
             else:
                 # apply log normalization, clip negative values to avoid NaN
                 img_clipped = np.clip(img, 0, None)
                 log_img = np.log1p(img_clipped)
-                std = log_img.std()
+                # Use nanstd and nanmean to ignore NaN values
+                std = np.nanstd(log_img)
                 if std > 1e-8:
-                    img_norm = (log_img - log_img.mean()) / std
+                    img_norm = (log_img - np.nanmean(log_img)) / std
                 else:
                     img_norm = np.zeros_like(log_img)
                 img_list.append(img_norm)
@@ -121,6 +130,58 @@ class BaseDataset(Dataset):
         data_norm = np.stack(img_list, axis=0)
 
         return data_norm
+
+    def _clip_bbox_to_fov(self, bbox, fov_shape):
+        """
+        Adjust bbox to stay within FOV boundaries while preserving size.
+        If bbox extends outside FOV, shift it inward. If it's still too large,
+        then clip it.
+
+        Parameters
+        ----------
+        bbox : tuple
+            (ymin, xmin, ymax, xmax)
+        fov_shape : tuple
+            FOV shape (T, C, Z, Y, X)
+
+        Returns
+        -------
+        tuple
+            Adjusted (ymin, xmin, ymax, xmax)
+        """
+        ymin, xmin, ymax, xmax = bbox
+        fov_height = fov_shape[-2]
+        fov_width = fov_shape[-1]
+
+        bbox_height = ymax - ymin
+        bbox_width = xmax - xmin
+
+        # Shift bbox if it extends beyond boundaries
+        if ymin < 0:
+            # Shift down
+            ymax = ymax - ymin  # ymax + |ymin|
+            ymin = 0
+        if xmin < 0:
+            # Shift right
+            xmax = xmax - xmin  # xmax + |xmin|
+            xmin = 0
+
+        if ymax > fov_height:
+            # Shift up
+            ymin = ymin - (ymax - fov_height)
+            ymax = fov_height
+        if xmax > fov_width:
+            # Shift left
+            xmin = xmin - (xmax - fov_width)
+            xmax = fov_width
+
+        # Final clip in case bbox is larger than FOV
+        ymin_clipped = max(0, ymin)
+        xmin_clipped = max(0, xmin)
+        ymax_clipped = min(fov_height, ymax)
+        xmax_clipped = min(fov_width, xmax)
+
+        return (ymin_clipped, xmin_clipped, ymax_clipped, xmax_clipped)
 
     def _pad_bbox(self, bbox, final_shape):
         """
@@ -182,6 +243,9 @@ class BaseDataset(Dataset):
         if not self.cell_masks:
             bbox = self._pad_bbox(bbox, self.initial_yx_patch_size)
 
+        # Clip bbox to FOV boundaries to prevent NaN from out-of-bounds access
+        bbox = self._clip_bbox_to_fov(bbox, fov.shape)
+
         channel_names, channel_index = self._get_channels(ci, well)
 
         data = np.asarray(
@@ -231,6 +295,7 @@ class ContrastiveDataset(BaseDataset):
     def __init__(
         self,
         transform=None,
+        transforms: list = None,
         positive_source: str | Literal["self"] | Literal["perturbation"] = "self",
         use_negative: bool = False,
         *args,
@@ -240,7 +305,16 @@ class ContrastiveDataset(BaseDataset):
 
         self.positive_source = positive_source
         self.use_negative = use_negative
-        if transform is None:
+
+        # Priority: explicit transform object > transforms config list > default
+        if transform is not None:
+            # Explicit Compose object passed (for programmatic use)
+            self.transform = transform
+        elif transforms is not None:
+            # List of transform configs from YAML (for config-based use)
+            self.transform = self._build_transform_from_config(transforms)
+        else:
+            # Use default transforms
             self.transform = Compose(
                 [
                     SpatialPadd(
@@ -283,9 +357,31 @@ class ContrastiveDataset(BaseDataset):
                     ),
                 ]
             )
-        else:
-            self.transform = transform
         return
+
+    @staticmethod
+    def _build_transform_from_config(transform_config: list):
+        """Build MONAI Compose transform from YAML config.
+
+        Parameters
+        ----------
+        transform_config : list
+            List of dicts with 'class_path' and 'init_args'
+
+        Returns
+        -------
+        Compose
+            MONAI Compose transform
+        """
+        from lightning.pytorch.cli import instantiate_class
+
+        transforms = []
+        for t_config in transform_config:
+            # Use Lightning's instantiate_class to handle class_path/init_args
+            transform_obj = instantiate_class(tuple(), t_config)
+            transforms.append(transform_obj)
+
+        return Compose(transforms)
 
     def get_crop(self, index):
         ci = self.labels_df.iloc[index]  # crop info
@@ -298,6 +394,9 @@ class ContrastiveDataset(BaseDataset):
         bbox = ast.literal_eval(ci.bbox)
         if not self.cell_masks:
             bbox = self._pad_bbox(bbox, self.initial_yx_patch_size)
+
+        # Clip bbox to FOV boundaries to prevent NaN from out-of-bounds access
+        bbox = self._clip_bbox_to_fov(bbox, fov.shape)
 
         channel_names, channel_index = self._get_channels(ci, well)
 
@@ -382,6 +481,13 @@ class ContrastiveDataset(BaseDataset):
             for k, v in batch.items():
                 if k in ["gene_label", "marker_label", "crop_info"]:
                     continue
+
+                # Force fresh randomization for MONAI transforms
+                # Without this, validation samples get identical augmentations each epoch
+                for t in self.transform.transforms:
+                    if hasattr(t, "set_random_state"):
+                        t.set_random_state(seed=None)
+
                 mini_batch = {"data": v}
                 mini_batch_trans = self.transform(mini_batch)
                 batch[k] = mini_batch_trans["data"]
@@ -502,7 +608,6 @@ class OpsDataManager:
 
         labels = []
         for exp_name, wells in self.experiments.items():
-
             for w in wells:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
@@ -581,12 +686,34 @@ class OpsDataManager:
         )
         return sampler
 
+    @staticmethod
+    def worker_init_fn(worker_id):
+        """Initialize each dataloader worker with a unique random seed.
+
+        This ensures that with seed_everything(), each worker produces
+        different random augmentations instead of identical transforms.
+        """
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+        # Also set MONAI's internal random state
+        # MONAI transforms use their own RandomState instance
+        import monai
+
+        if hasattr(monai.transforms, "set_determinism"):
+            # Don't set determinism - we want randomness
+            pass
+
     def construct_dataloaders(
         self,
         labels_df: pd.DataFrame = None,
         num_workers: int = 1,
+        pin_memory: bool = True,
+        prefetch_factor: int = 2,
         dataset_type: Literal["basic", "contrastive", "cell_profile"] = "basic",
         balanced_sampling: bool = False,
+        balanced_sampling_val: bool = False,
         balance_col: str = "gene_name",
         contrastive_kwargs: dict = None,
         basic_kwargs: dict = None,
@@ -650,6 +777,9 @@ class OpsDataManager:
                 dataset=train_dataset,
                 batch_size=self.batch_size,
                 num_workers=num_workers,
+                pin_memory=pin_memory,
+                prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
                 collate_fn=self.collate_fcn,
                 sampler=train_sampler,
                 **(train_loader_kwargs if train_loader_kwargs else {}),
@@ -660,7 +790,7 @@ class OpsDataManager:
         if len(val_ind) > 0:
             val_df = labels_df.iloc[val_ind]
             val_sampler = self.create_sampler(
-                val_df, balanced_sampling, balance_col=balance_col
+                val_df, balanced_sampling_val, balance_col=balance_col
             )
             val_dataset = DS(
                 stores=self.store_dict,
@@ -672,6 +802,9 @@ class OpsDataManager:
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=num_workers,
+                pin_memory=pin_memory,
+                prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
                 collate_fn=self.collate_fcn,
                 sampler=val_sampler,
             )
@@ -693,6 +826,9 @@ class OpsDataManager:
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=num_workers,
+                pin_memory=pin_memory,
+                prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
                 collate_fn=self.collate_fcn,
                 sampler=test_sampler,
             )
