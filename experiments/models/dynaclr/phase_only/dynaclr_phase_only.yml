@@ -1,0 +1,124 @@
+model_type: dynaclr
+run_name: &run_name 'ops_phase_only_self_256proj_v1'
+dataset_type: contrastive
+
+trainer:
+  max_epochs: 300
+  fast_dev_run: false
+  # limit_train_batches: 5000
+  # limit_val_batches: 500
+  precision: "bf16-mixed"
+  accelerator: "gpu"
+  strategy: "auto"
+  devices: 2
+  num_nodes: 1
+  log_every_n_steps: 5
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: loss/val_epoch
+        every_n_epochs: 1
+        save_top_k: 4
+        save_last: true
+        auto_insert_metric_name: false
+        filename: "epoch={epoch:03d}-loss={loss/val_epoch:.3f}"
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: "step"1
+  logger:
+      class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr
+        name: *run_name1
+
+data_manager:
+  batch_size: 256
+  data_split: 
+    - 0.90
+    - 0.05
+    - 0.05
+  initial_yx_patch_size:
+    - 1
+    - 192
+    - 192
+  final_yx_patch_size:
+    - 1
+    - 128
+    - 128
+  num_workers: 32
+  pin_memory: True
+  prefetch_factor: 4
+  balanced_sampling: True
+  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_filtered.csv
+  contrastive_kwargs:
+    positive_source: "self"
+    use_negative: False
+    cell_masks: False
+    transforms:
+      - class_path: monai.transforms.RandAffined
+        init_args:
+          keys: ["data"]
+          prob: 0.8
+          rotate_range: [3.14, 0.0,0.0]  # Full rotation on first axis, none on second
+          scale_range: [0.0, 0.2, 0.2] 
+          shear_range: [0.0, 0.0, 0.0]
+          padding_mode: "zeros"
+      - class_path: monai.transforms.CenterSpatialCropd
+        init_args:
+          keys: ["data"]
+          roi_size: [1, 128, 128]  # Must match final_yx_patch_size
+      - class_path: monai.transforms.RandFlipd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          spatial_axis: -1  # Horizontal flip
+      - class_path: monai.transforms.RandFlipd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          spatial_axis: -2  # Vertical flip
+      - class_path: viscy.transforms.RandAdjustContrastd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          gamma: [0.8, 1.2]
+      - class_path: viscy.transforms.RandScaleIntensityd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          factors: 0.3
+      - class_path: monai.transforms.RandGaussianSmoothd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          sigma_x: [0.2, 0.5]
+          sigma_y: [0.2, 0.5]
+          sigma_z: [0, 0]
+      - class_path: viscy.transforms.RandGaussianNoised
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          mean: 0.0
+          std: 0.08
+      - class_path: monai.transforms.ToTensord
+        init_args:
+          keys: ["data"]
+
+model:
+  lr: 0.0002
+  schedule: Constant
+  log_batches_per_epoch: 8
+  log_samples_per_batch: 1
+  log_embeddings: True
+  temperature: 0.3
+  encoder:
+    backbone: "convnext_tiny"
+    in_channels: 1
+    in_stack_depth: 1
+    stem_kernel_size: [1, 4, 4]
+    stem_stride: [1, 4, 4]
+    embedding_dim: 768
+    projection_dim: 256
+    drop_path_rate: 0.0
+
+ckpt_path: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/dynaclr_ops_phase_only_self_256proj_v1/last.ckpt
