@@ -236,7 +236,6 @@ class BaseDataset(Dataset):
 
         well = ci.well
         fov = self.stores[ci.store_key][well]["0"]
-        mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
         bbox = ast.literal_eval(ci.bbox)
@@ -261,17 +260,21 @@ class BaseDataset(Dataset):
         if len(data.shape) == 2:
             data = np.expand_dims(data, axis=0)
 
-        mask = np.asarray(
-            mask_fov[0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])]
-        ).copy()
-        mask = np.squeeze(mask)
-        mask = np.expand_dims(mask, axis=0)
-        sc_mask = mask == ci.segmentation_id
-
-        data_norm = self._normalize_data(channel_names, data)
-
         if self.cell_masks:
+            mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
+            mask = np.asarray(
+                mask_fov[
+                    0:1, :, 0:1, slice(bbox[0], bbox[2]), slice(bbox[1], bbox[3])
+                ]
+            ).copy()
+            mask = np.squeeze(mask)
+            mask = np.expand_dims(mask, axis=0)
+            sc_mask = mask == ci.segmentation_id
+            data_norm = self._normalize_data(channel_names, data)
             data_norm = data_norm * sc_mask
+        else:
+            sc_mask = np.ones_like(data[:1], dtype=bool)
+            data_norm = self._normalize_data(channel_names, data)
 
         if len(self.final_yx_patch_size) == 3:
             data_norm = np.expand_dims(data_norm, axis=0)
