@@ -1,15 +1,14 @@
 #!/bin/bash
 
-#SBATCH --job-name=dynaclr_ops
+#SBATCH --job-name=dynaclr_ops_predict
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
-#SBATCH --cpus-per-task=32
-#SBATCH --mem-per-cpu=12G
-#SBATCH --time=0-22:00:00
-#SBATCH --constraint="a100_80|h100|h200"
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=15G
 
+#SBATCH --time=0-3:00:00
 #SBATCH --output=./slurm_logs/dynaclr_ops_%j.log
 
 # debugging flags (optional)
@@ -20,8 +19,8 @@ export PYTHONFAULTHANDLER=1
 module load anaconda/latest
 conda activate ops-model
 
-python_file="/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/train.py"
-config_file="/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/phase_only/dynaclr_phase_only.yml"
+python_file="/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/predict.py"
+config_file="/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/phase_only/predict/predict.yml"
 
 cat $config_file
 echo "--------------------------------"

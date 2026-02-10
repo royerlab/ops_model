@@ -1,5 +1,5 @@
 model_type: dynaclr
-run_name: &run_name 'ops_bagofchannels_self_256proj_v1'
+run_name: &run_name 'ops_bagofchannels_perturbation_256proj_v1'
 dataset_type: contrastive
 
 trainer:
@@ -53,7 +53,7 @@ data_manager:
   balance_col: reporter
   labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_filtered.csv
   contrastive_kwargs:
-    positive_source: "self"
+    positive_source: "perturbation"
     use_negative: False
     cell_masks: False
     transforms:
@@ -113,7 +113,7 @@ model:
   log_batches_per_epoch: 8
   log_samples_per_batch: 1
   log_embeddings: True
-  temperature: 0.5
+  temperature: 1.0
   encoder:
     backbone: "convnext_tiny"
     in_channels: 1
