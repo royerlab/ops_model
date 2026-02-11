@@ -2,8 +2,9 @@
 # This config runs inference on a trained model and outputs AnnData directly
 
 model_type: dynaclr
-run_name: ops_phase_only_self_256proj_v5_ckpt109
+run_name: ops_phase_only_self_256proj_v5_ckpt109_2
 dataset_type: basic  # Use basic dataset (no positive pairs needed for prediction)
+cell_type: A549
 
 # Model checkpoint to load
 ckpt_path: '/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_phase_only_self_256proj_v1/version_5/checkpoints/epoch=109-loss=2.991.ckpt'
