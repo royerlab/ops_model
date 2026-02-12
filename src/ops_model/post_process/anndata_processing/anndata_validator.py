@@ -560,15 +560,16 @@ class AnndataSpec:
                     description="Gene label string",
                     suggestion='Add perturbation column with gene names (e.g., "GENE_A", "NTC")',
                 ),
+            ],
+            "optional_fields": [
                 FieldSpec(
                     name="reporter",
                     dtype=str,
-                    required=True,
+                    required=False,
                     description="Biological signal measured",
                     suggestion='Add reporter column with biological signal names (e.g., "SEC61B", "Phase")',
                 ),
             ],
-            "optional_fields": [],
             "uns_requirements": {
                 "cell_type": {
                     "type": str,
@@ -661,6 +662,9 @@ class AnndataSpec:
                     description="Guide RNA identifier (must be unique)",
                     suggestion="Add sgRNA column with unique guide identifiers",
                 ),
+            ],
+            "optional_fields": base["optional_fields"]
+            + [
                 FieldSpec(
                     name="n_cells",
                     dtype=[int, np.int32, np.int64],
@@ -670,7 +674,6 @@ class AnndataSpec:
                     suggestion="Add n_cells column with positive integer counts",
                 ),
             ],
-            "optional_fields": base["optional_fields"] + [],
             "uns_requirements": {
                 "aggregation_method": {
                     "type": str,
@@ -739,34 +742,34 @@ class AnndataSpec:
             Multi-experiment schema specification
         """
         base = self._define_base_schema()
-        # For multi-experiment, experiment becomes required
+        # For multi-experiment, experiment should NOT be present (removed from optional)
         base_required = [f for f in base["required_fields"]]
         base_optional = [f for f in base["optional_fields"] if f.name != "experiment"]
 
         return {
-            "required_fields": base_required
-            + [
+            "required_fields": [
                 FieldSpec(
-                    name="batch",
+                    name="perturbation",
                     dtype=str,
                     required=True,
-                    description="Batch identifier for tracking source",
-                    suggestion="Add batch column to track data source",
-                ),
-                FieldSpec(
-                    name="experiment",
-                    dtype=str,
-                    required=True,
-                    pattern=r"ops\d{4}(_\d{8})?",
-                    description="Experiment identifier",
-                    suggestion="Add experiment column (format: ops####)",
+                    description="Gene label string",
+                    suggestion='Add perturbation column with gene names (e.g., "GENE_A", "NTC")',
                 ),
             ],
             "optional_fields": base_optional,
-            "uns_requirements": {},
+            "uns_requirements": {
+                "cell_type": {
+                    "description": "Type of biological unit (e.g., 'cell', 'guide', 'gene')",
+                    "required": True,
+                },
+                "embedding_type": {
+                    "description": "Type of embeddings/features (e.g., 'dinov3', 'cellprofiler')",
+                    "required": True,
+                },
+            },
             "special_validations": {
-                "min_unique_batches": 2,
-                "min_unique_experiments": 2,
+                # Multi-experiment status is determined by schema level, not by counting experiments
+                # min_unique_batches validation is performed in validate() method (line ~920)
             },
         }
 
@@ -941,20 +944,8 @@ class AnndataValidator:
                         )
                     )
 
-            if "experiment" in adata.obs.columns:
-                n_exp = adata.obs["experiment"].nunique()
-                min_exp = special.get("min_unique_experiments", 2)
-                if n_exp < min_exp:
-                    report.add_issue(
-                        ValidationIssue(
-                            level=IssueLevel.ERROR,
-                            component=".obs",
-                            field="experiment",
-                            message=f"Multi-experiment data must have at least {min_exp} unique experiments",
-                            expected=f"{min_exp}+ unique values",
-                            found=f"{n_exp} unique values",
-                        )
-                    )
+            # Note: experiment column should NOT exist in multi-experiment objects
+            # Multi-experiment distinction is based on schema level, not by counting experiments
 
         logger.info(
             f"Validation complete: {len(report.errors)} errors, {len(report.warnings)} warnings"
