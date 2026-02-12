@@ -336,13 +336,13 @@ class ExperimentValidator:
         # Construct filenames based on suffix
         if filename_suffix:
             cell_filename = f"features_processed_{filename_suffix}.h5ad"
-            guide_filename = f"guide_bulked_umap_{filename_suffix}.h5ad"
-            gene_filename = f"gene_bulked_umap_{filename_suffix}.h5ad"
+            guide_filename = f"guide_bulked_{filename_suffix}.h5ad"
+            gene_filename = f"gene_bulked_{filename_suffix}.h5ad"
         else:
             # Legacy CellProfiler naming (no suffix)
             cell_filename = "features_processed.h5ad"
-            guide_filename = "guide_bulked_umap.h5ad"
-            gene_filename = "gene_bulked_umap.h5ad"
+            guide_filename = "guide_bulked.h5ad"
+            gene_filename = "gene_bulked.h5ad"
 
         # Validate cell-level
         print(f"Cell-level ({cell_filename}):")
@@ -525,8 +525,8 @@ def process_experiment(
     if feature_type == "dinov3":
         output_files = [
             anndata_dir / f"features_processed_{channel}.h5ad",
-            anndata_dir / f"guide_bulked_umap_{channel}.h5ad",
-            anndata_dir / f"gene_bulked_umap_{channel}.h5ad",
+            anndata_dir / f"guide_bulked_{channel}.h5ad",
+            anndata_dir / f"gene_bulked_{channel}.h5ad",
         ]
     else:  # cellprofiler
         # Check if using reporter names
@@ -542,15 +542,15 @@ def process_experiment(
             reporter = meta.get_biological_signal(exp_short, channel)
             output_files = [
                 anndata_dir / f"features_processed_{reporter}.h5ad",
-                anndata_dir / f"guide_bulked_umap_{reporter}.h5ad",
-                anndata_dir / f"gene_bulked_umap_{reporter}.h5ad",
+                anndata_dir / f"guide_bulked_{reporter}.h5ad",
+                anndata_dir / f"gene_bulked_{reporter}.h5ad",
             ]
         else:
             # Legacy naming
             output_files = [
                 anndata_dir / "features_processed.h5ad",
-                anndata_dir / "guide_bulked_umap.h5ad",
-                anndata_dir / "gene_bulked_umap.h5ad",
+                anndata_dir / "guide_bulked.h5ad",
+                anndata_dir / "gene_bulked.h5ad",
             ]
 
     already_processed = all(f.exists() for f in output_files)

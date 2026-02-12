@@ -159,7 +159,7 @@ def plot_funk_clusters(
         umap = adata.obsm["X_umap"]
         plt.scatter(umap[:, 0], umap[:, 1], c="lightgrey", s=20, alpha=0.8, linewidth=0)
         for gene in genes:
-            subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
+            subset = adata[adata.obs["perturbation"] == gene].obsm["X_umap"]
             plt.scatter(
                 subset[:, 0], subset[:, 1], s=40, alpha=1, linewidth=0, label=gene
             )
@@ -241,7 +241,9 @@ def check_cluster_genes(cluster_list_path: str, gene_list_path: str):
     return
 
 
-def plot_clusters(adata, cluster_list_path: str, save_path: str = None):
+def plot_clusters(
+    adata, cluster_list_path: str, save_path: str = None, obsm_key: str = "X_umap"
+):
     """
     Plot UMAP colored by gene clusters from YAML configuration.
 
@@ -255,7 +257,7 @@ def plot_clusters(adata, cluster_list_path: str, save_path: str = None):
         save_path: Path where the plot PNG will be saved
 
     Raises:
-        ValueError: If any gene in the clusters is not found in adata.obs['label_str']
+        ValueError: If any gene in the clusters is not found in adata.obs['perturbation']
     """
     # Load cluster definitions from YAML
     with open(cluster_list_path, "r") as f:
@@ -276,10 +278,10 @@ def plot_clusters(adata, cluster_list_path: str, save_path: str = None):
         axs = axs.flatten()
 
     # Get all available genes in adata
-    available_genes = set(adata.obs["label_str"].unique())
+    available_genes = set(adata.obs["perturbation"].unique())
 
     # Plot each cluster
-    umap = adata.obsm["X_umap"]
+    umap = adata.obsm[obsm_key]
     for i, (cluster_id, cluster_data) in enumerate(clusters.items()):
         cluster_name = cluster_data["name"]
         genes = cluster_data["genes"]
@@ -300,7 +302,7 @@ def plot_clusters(adata, cluster_list_path: str, save_path: str = None):
 
         # Highlight genes in this cluster
         for gene in genes:
-            subset = adata[adata.obs["label_str"] == gene].obsm["X_umap"]
+            subset = adata[adata.obs["perturbation"] == gene].obsm[obsm_key]
             plt.scatter(
                 subset[:, 0], subset[:, 1], s=40, alpha=1, linewidth=0, label=gene
             )

@@ -48,9 +48,9 @@ def load_adata(path):
     path = Path(path)
     adata_path_cells = path / "anndata_objects" / "features_processed.h5ad"
     adata_cells = ad.read_h5ad(adata_path_cells)
-    adata_path_guides = path / "anndata_objects" / "guide_bulked_umap.h5ad"
+    adata_path_guides = path / "anndata_objects" / "guide_bulked.h5ad"
     adata_guides = ad.read_h5ad(adata_path_guides)
-    adata_path_genes = path / "anndata_objects" / "gene_bulked_umap.h5ad"
+    adata_path_genes = path / "anndata_objects" / "gene_bulked.h5ad"
     adata_genes = ad.read_h5ad(adata_path_genes)
 
     return adata_cells, adata_guides, adata_genes

@@ -93,7 +93,12 @@ def _convert_array_strings_to_float(value):
     return value
 
 
-def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
+def create_adata_object(
+    save_path: str,
+    config: dict = None,
+    cell_type: str = None,
+    embedding_type: str = "cellprofiler",
+) -> ad.AnnData:
     """
     Create AnnData object from CellProfiler features CSV
 
@@ -102,7 +107,10 @@ def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
         config: Configuration dictionary
                 - 'cell-profiler': bool
                 - 'normalize_features': bool
-                - 'use_reporter_names': bool - Replace channel names with reporter names
+                - 'cell_type': str - Cell type used in experiment (required for validator)
+                - 'embedding_type': str - Embedding type (default: 'cellprofiler')
+        cell_type: Cell type used in experiment (e.g., 'A549', 'HeLa')
+        embedding_type: Embedding type (default: 'cellprofiler')
     """
     with timer("Reading CSV"):
         # Read CSV - let pandas infer dtypes initially
@@ -110,72 +118,100 @@ def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
 
     print(f"Dataset shape: {features.shape}")
 
-    # Extract config settings
-    use_reporter_names = (
-        config["processing"].get("use_reporter_names", False) if config else False
-    )
+    # Extract required validator fields from config
+    if config:
+        cell_type = config.get("cell_type", cell_type)
+        embedding_type = config.get("embedding_type", embedding_type)
 
-    # Replace channel names with reporter names if requested
-    if use_reporter_names:
-        with timer("Replacing channel names with reporter names"):
-            from ops_model.data.feature_metadata import FeatureMetadata
+    # Validate required fields
+    if not cell_type:
+        raise ValueError(
+            "cell_type must be specified in config or as parameter. "
+            "Add to config: cell_type: 'A549'  # or your cell line"
+        )
 
-            # Check which experiments are in the dataset
-            unique_experiments = features["experiment"].unique()
+    # Always map channel names to reporter names using FeatureMetadata
+    with timer("Mapping channel names to reporter names"):
+        from ops_model.data.feature_metadata import FeatureMetadata
 
-            if len(unique_experiments) != 1:
-                raise ValueError(
-                    f"Multi-experiment datasets not yet supported for reporter name replacement. "
-                    f"Found experiments: {unique_experiments}"
-                )
+        # Check which experiments are in the dataset
+        unique_experiments = features["experiment"].unique()
 
-            experiment = unique_experiments[0]
-            feature_meta = FeatureMetadata()
+        if len(unique_experiments) != 1:
+            raise ValueError(
+                f"Multi-experiment datasets not yet supported for reporter name mapping. "
+                f"Found experiments: {unique_experiments}"
+            )
 
-            # Rename feature columns (excluding metadata columns)
-            feature_cols = [
-                col for col in features.columns if col not in NONFEATURE_COLUMNS
-            ]
+        experiment = unique_experiments[0]
+        feature_meta = FeatureMetadata()
 
-            renamed_cols = {}
-            channel_mapping = {}
-            for col in feature_cols:
-                new_name = feature_meta.replace_channel_in_feature_name(col, experiment)
-                if new_name != col:  # Only track if actually changed
-                    renamed_cols[col] = new_name
+        # Identify channels from feature columns
+        # CellProfiler features follow pattern: single_object_{channel}_{feature}
+        feature_cols = [
+            col for col in features.columns if col not in NONFEATURE_COLUMNS
+        ]
 
-                    # Extract channel names for metadata tracking
-                    # Parse out channels from old column name for mapping
-                    if col.startswith("single_object_"):
-                        parts = col.split("_", 3)
-                        if len(parts) >= 3:
-                            old_channel = parts[2]
-                            # Get reporter from new name
-                            new_parts = new_name.split("_", 3)
-                            if len(new_parts) >= 3:
-                                reporter = new_parts[2]
-                                if old_channel not in channel_mapping:
-                                    channel_mapping[old_channel] = reporter
+        # Extract unique channels from feature column names
+        channels_in_data = set()
+        for col in feature_cols:
+            if col.startswith("single_object_"):
+                parts = col.split("_", 3)
+                if len(parts) >= 3:
+                    channel = parts[2]
+                    channels_in_data.add(channel)
 
+        print(f"Detected channels: {sorted(channels_in_data)}")
+
+        # Create channel-to-reporter mapping
+        channel_mapping = {}
+        for channel in channels_in_data:
+            reporter = feature_meta.get_biological_signal(experiment, channel)
+            channel_mapping[channel] = reporter
+            print(f"  {channel} -> {reporter}")
+
+        # Rename feature columns with reporter names
+        renamed_cols = {}
+        for col in feature_cols:
+            new_name = feature_meta.replace_channel_in_feature_name(col, experiment)
+            if new_name != col:
+                renamed_cols[col] = new_name
+
+        if renamed_cols:
             features = features.rename(columns=renamed_cols)
             print(f"Renamed {len(renamed_cols)} feature columns with reporter names")
-            if renamed_cols:
-                example = list(renamed_cols.items())[0]
-                print(f"Example: '{example[0]}' -> '{example[1]}'")
+            example = list(renamed_cols.items())[0]
+            print(f"Example: '{example[0]}' -> '{example[1]}'")
 
-    with timer("Extracting labels"):
+    with timer("Extracting labels and metadata"):
         gene_strs = np.asarray(features["label_str"].values)
         gene_ints = np.asarray(features["label_int"].values)
         sgRNA_ids = np.asarray(features["sgRNA"].values)
         well_id = np.asarray(features["well"].values)
+
+        # Extract experiment field (required by validator)
+        if "experiment" in features.columns:
+            experiment_ids = np.asarray(features["experiment"].values)
+        else:
+            print("WARNING: 'experiment' column not found, using 'unknown'")
+            experiment_ids = np.full(len(features), "unknown")
+
+        # Handle position fields (required by validator, but may be missing)
+        has_positions = True
         try:
             x_pos = np.asarray(features["x_position"].values)
             y_pos = np.asarray(features["y_position"].values)
         except KeyError:
-            print("x_position/y_position columns not found, skipping.")
-            NONFEATURE_COLUMNS.remove("x_position")
-            NONFEATURE_COLUMNS.remove("y_position")
-        features = features.drop(columns=NONFEATURE_COLUMNS)
+            print(
+                "WARNING: x_position/y_position not found. Setting to NaN (validator requires these fields)"
+            )
+            x_pos = np.full(len(features), np.nan)
+            y_pos = np.full(len(features), np.nan)
+            has_positions = False
+
+        # Drop non-feature columns
+        cols_to_drop = [col for col in NONFEATURE_COLUMNS if col in features.columns]
+        features = features.drop(columns=cols_to_drop)
 
     with timer("Converting array strings to floats"):
         pass
@@ -202,14 +238,24 @@ def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
         if config is not None and config["processing"].get("cell-profiler", False):
             features = features.dropna(subset=["cell_Area"])
 
+        # if more than 5% of cells have NaN for a feature, drop that feature
+        threshold = (
+            int(
+                config["processing"].get("max_nan_fraction_per_feature", 0.05)
+                * features.shape[0]
+            )
+            if config
+            else int(0.05 * features.shape[0])
+        )
+        cols_to_drop = features.columns[features.isna().sum(axis=0) > threshold]
+        features = features.drop(columns=cols_to_drop)
+        print(
+            f"Dropped {len(cols_to_drop)} columns with >{threshold/features.shape[0]:.2%} cells NaN values"
+        )
+
         # Filter rows with too many NaNs and track which rows are kept
         num_nan_features_per_row = features.isna().sum(axis=1)
-        good_rows_mask = (
-            num_nan_features_per_row
-            <= config["processing"].get("max_nan_features_per_cell", 0)
-            if config
-            else 0
-        )
+        good_rows_mask = num_nan_features_per_row <= 0 if config else 0
         features = features[good_rows_mask]
 
         # Update metadata arrays to match filtered rows
@@ -217,18 +263,11 @@ def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
         gene_ints = gene_ints[good_rows_mask]
         sgRNA_ids = sgRNA_ids[good_rows_mask]
         well_id = well_id[good_rows_mask]
-        try:
-            x_pos = x_pos[good_rows_mask]
-            y_pos = y_pos[good_rows_mask]
-        except NameError:
-            pass  # x_pos/y_pos not defined if columns weren't in CSV
+        experiment_ids = experiment_ids[good_rows_mask]
+        x_pos = x_pos[good_rows_mask]
+        y_pos = y_pos[good_rows_mask]
 
         print(f"Kept {features.shape[0]} rows after filtering NaN rows")
-
-        # Drop columns with any NaN values
-        cols_with_nans = features.columns[features.isna().any()]
-        features = features.drop(columns=cols_with_nans)
-        print(f"Dropped {len(cols_with_nans)} columns with NaN values")
 
         # Check for and handle infinity values (from division by zero in ratio features)
         # Replace inf with NaN, then drop columns containing them
@@ -250,25 +289,58 @@ def create_adata_object(save_path: str, config: dict = None) -> ad.AnnData:
         print("Features kept in original units (no normalization)")
 
     with timer("Creating AnnData object"):
+        # Remove label_str from features if present
         if "label_str" in features_norm.columns:
             features_norm = features_norm.drop(columns=["label_str"])
+
+        # Create AnnData
         adata = ad.AnnData(features_norm)
-        adata.obs["label_str"] = gene_strs
-        adata.obs["label_int"] = gene_ints
+
+        # Add required .obs fields (base schema)
+        adata.obs["perturbation"] = (
+            gene_strs  # Validator requires 'perturbation', not 'label_str'
+        )
+        adata.obs["label_int"] = gene_ints  # Keep for backwards compatibility
+
+        # Map first channel to reporter for base reporter field
+        # (In split_by_reporter, each subset will have its specific reporter)
+        if channel_mapping:
+            # Use the first channel's reporter as the primary reporter
+            # (will be overridden in split_adata_by_reporter for each subset)
+            primary_channel = sorted(channels_in_data)[0]
+            primary_reporter = channel_mapping[primary_channel]
+            adata.obs["reporter"] = primary_reporter
+            print(
+                f"Set primary reporter to '{primary_reporter}' (from channel '{primary_channel}')"
+            )
+        else:
+            print("WARNING: No channel mapping available, using 'unknown' as reporter")
+            adata.obs["reporter"] = "unknown"
+
+        # Add required .obs fields (cell schema)
         adata.obs["sgRNA"] = sgRNA_ids
         adata.obs["well"] = well_id
-        try:
-            adata.obs["x_position"] = x_pos
-            adata.obs["y_position"] = y_pos
-        except NameError:
-            pass
+        adata.obs["experiment"] = experiment_ids
+        adata.obs["x_position"] = x_pos  # Always add (may be NaN)
+        adata.obs["y_position"] = y_pos  # Always add (may be NaN)
+
+        if not has_positions:
+            print("WARNING: Position data is NaN - validator may flag this")
+
         adata.var_names = features_norm.columns
 
-        # Store channel mapping metadata if reporter names were used
-        if use_reporter_names:
-            adata.uns["channel_mapping"] = channel_mapping
-            adata.uns["experiment"] = experiment
-            print(f"Stored channel mapping in adata.uns: {channel_mapping}")
+        # Add required .uns fields (base schema)
+        adata.uns["cell_type"] = cell_type
+        adata.uns["embedding_type"] = embedding_type
+
+        # Add optional .uns fields (useful metadata)
+        adata.uns["channel_mapping"] = channel_mapping  # Always add
+        # NOTE: Do NOT add experiment to .uns (only in .obs per validator spec)
+
+        print(f"Added .uns metadata:")
+        print(f"  cell_type: {cell_type}")
+        print(f"  embedding_type: {embedding_type}")
+        print(f"  channel_mapping: {channel_mapping}")
 
     return adata
 
@@ -278,10 +350,11 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
     Split AnnData object by reporter/biological signal, return by reporter name.
 
     Extracts channel_mapping from adata.uns and creates separate AnnData
-    objects for each reporter. Features are assigned by string matching:
-    - Features containing reporter name → assigned to that reporter
-    - Cell-level features (starting with 'cell_') → duplicated across all reporters
-    - Colocalization features (containing multiple reporters) → duplicated in each
+    objects for each reporter. Features are assigned by pattern matching:
+    - Features containing _{reporter}_ pattern → assigned to that reporter
+    - Compartment features (cell_, nucleus_, cytoplasm_) → duplicated across all reporters
+      (these are channel-agnostic morphology features)
+    - Colocalization features (containing multiple reporters with _ delimiters) → duplicated in each
 
     Returns dictionary keyed by REPORTER NAME (e.g., 'SEC61B', '5xUPRE', 'ChromaLive561emission').
     Files will be saved with reporter names to ensure feature name consistency during
@@ -319,20 +392,29 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
 
     var_names = adata.var_names.tolist()
 
-    # Identify cell-level features (shared across all channels)
+    # Identify compartment-level features (shared across all reporters)
+    # These are channel-agnostic morphology features measured once per cell
     cell_features = [f for f in var_names if f.startswith("cell_")]
+    nucleus_features = [f for f in var_names if f.startswith("nucleus_")]
+    cytoplasm_features = [f for f in var_names if f.startswith("cytoplasm_")]
+    shared_features = cell_features + nucleus_features + cytoplasm_features
 
-    if verbose and cell_features:
-        print(f"Cell-level features (duplicated across all): {len(cell_features)}")
+    if verbose and shared_features:
+        print(f"Shared compartment features (duplicated across all reporters):")
+        print(f"  Cell: {len(cell_features)}")
+        print(f"  Nucleus: {len(nucleus_features)}")
+        print(f"  Cytoplasm: {len(cytoplasm_features)}")
+        print(f"  Total shared: {len(shared_features)}")
 
     reporter_adatas = {}  # Key by reporter name for file naming consistency
 
     for reporter in reporters:
         # Find features containing this reporter name
-        reporter_features = [f for f in var_names if reporter in f]
+        # Use _{reporter}_ pattern to avoid false matches (e.g., "Phase" in "ZernikePhase")
+        reporter_features = [f for f in var_names if f"_{reporter}_" in f]
 
-        # Combine with cell-level features
-        all_features = sorted(set(reporter_features + cell_features))
+        # Combine reporter-specific features with shared compartment features
+        all_features = sorted(set(reporter_features + shared_features))
 
         if len(all_features) == 0:
             print(f"  WARNING: No features found for reporter '{reporter}', skipping")
@@ -344,17 +426,22 @@ def split_adata_by_reporter(adata: ad.AnnData, verbose: bool = True) -> dict:
 
         # Store metadata - reporter is primary, channel kept for reference
         channel_name = reporter_to_channel[reporter]
-        adata_subset.uns["reporter"] = reporter  # Primary: reporter/marker name
-        adata_subset.uns["channel"] = channel_name  # Reference: original channel name
+        # Update .obs reporter field to match this subset's reporter
+        adata_subset.obs["reporter"] = reporter  # All cells get this reporter
+        # Store channel reference in .uns (optional metadata)
+        adata_subset.uns["channel"] = channel_name
+        # Keep the full channel_mapping for reference
         adata_subset.uns["channel_mapping"] = channel_mapping
 
         # Key by reporter name (ensures consistent feature names during pooling)
         reporter_adatas[reporter] = adata_subset
 
         if verbose:
-            coloc_count = sum(1 for f in all_features if f.startswith("coloc_"))
+            reporter_only = len(reporter_features)
+            shared_count = len([f for f in all_features if f in shared_features])
             print(
-                f"  {reporter} (channel: {channel_name}): {len(all_features)} features ({coloc_count} colocalization)"
+                f"  {reporter} (channel: {channel_name}): {len(all_features)} features "
+                f"({reporter_only} reporter-specific, {shared_count} shared compartment)"
             )
 
     return reporter_adatas
@@ -364,17 +451,17 @@ def process(save_path: str, config_path: str = None):
     """
     Process CellProfiler features through the full pipeline
 
-    If reporter names are used (use_reporter_names=True in config), this will:
+    Reporter names are always derived from FeatureMetadata. If multiple channels are present:
     1. Create combined AnnData object
     2. Split by reporter/biological signal
     3. Save separate files for each reporter (keyed by reporter name for feature consistency):
        - features_processed_{reporter}.h5ad (cell-level)
-       - guide_bulked_umap_{reporter}.h5ad
-       - gene_bulked_umap_{reporter}.h5ad
+       - guide_bulked_{reporter}.h5ad
+       - gene_bulked_{reporter}.h5ad
 
     Args:
         save_path: Path to features CSV
-        config_path: Path to configuration YAML file
+        config_path: Path to configuration YAML file (must include 'cell_type' field)
     """
     print("\n" + "=" * 60)
     print("Starting feature processing pipeline")
@@ -400,14 +487,40 @@ def process(save_path: str, config_path: str = None):
     # Define single checkpoint path
     checkpoint_path = save_dir / "features_processed.h5ad"
 
+    # Extract cell_type and embedding_type from config
+    cell_type = config.get("cell_type", None) if config else None
+    embedding_type = (
+        config.get("embedding_type", "cellprofiler") if config else "cellprofiler"
+    )
+
+    if not cell_type:
+        raise ValueError(
+            "cell_type must be specified in config. "
+            "Add to config YAML:\n"
+            "  cell_type: 'A549'  # or your cell line (e.g., 'HeLa', 'RPE1')"
+        )
+
     # Create anndata object with all features combined
     with timer("TOTAL: Create AnnData object"):
-        features_adata = create_adata_object(save_path, config=config)
+        features_adata = create_adata_object(
+            save_path,
+            config=config,
+            cell_type=cell_type,
+            embedding_type=embedding_type,
+        )
 
-    # Check if reporter names were used (enables splitting)
-    use_reporter_names = "channel_mapping" in features_adata.uns
+    # Check if we have multiple channels/reporters to split by
+    has_multiple_channels = (
+        "channel_mapping" in features_adata.uns
+        and len(features_adata.uns["channel_mapping"]) > 1
+    )
 
-    if use_reporter_names:
+    # Read aggregation configuration (same as DinoV3)
+    agg_config = config.get("aggregation", {})
+    guide_config = agg_config.get("guide_level", {})
+    gene_config = agg_config.get("gene_level", {})
+
+    if has_multiple_channels:
         # Split by reporter and save separate files for each reporter
         print("\n" + "=" * 60)
         print("SPLITTING BY REPORTER (SAVING BY REPORTER NAME)")
@@ -429,29 +542,115 @@ def process(save_path: str, config_path: str = None):
                 adata_cell.write_h5ad(cell_path)
                 print(f"  Saved: {cell_path}")
 
-            # Guide-level aggregation
-            with timer(f"Guide-level aggregation for {reporter}"):
-                adata_guide = create_aggregated_embeddings(
-                    adata_cell,
-                    level="guide",
-                    n_pca_components=128,
-                    n_neighbors=15,
-                )
-                guide_path = save_dir / f"guide_bulked_umap_{reporter}.h5ad"
-                adata_guide.write_h5ad(guide_path)
-                print(f"  Saved: {guide_path}")
+            # Guide-level aggregation (configurable)
+            if guide_config.get(
+                "enabled", True
+            ):  # Default True for backwards compatibility
+                with timer(f"Guide-level aggregation for {reporter}"):
+                    # Get embedding settings from config
+                    guide_embeddings = guide_config.get("embeddings", {})
+                    compute_embeddings = guide_config.get("compute_embeddings", True)
 
-            # Gene-level aggregation
-            with timer(f"Gene-level aggregation for {reporter}"):
-                adata_gene = create_aggregated_embeddings(
-                    adata_cell,
-                    level="gene",
-                    n_pca_components=128,
-                    n_neighbors=15,
-                )
-                gene_path = save_dir / f"gene_bulked_umap_{reporter}.h5ad"
-                adata_gene.write_h5ad(gene_path)
-                print(f"  Saved: {gene_path}")
+                    # Get embedding parameters
+                    n_pca = guide_embeddings.get("n_pca_components", 128)
+                    n_neighbors = guide_embeddings.get("n_neighbors", 15)
+                    compute_pca = (
+                        guide_embeddings.get("pca", True)
+                        if compute_embeddings
+                        else False
+                    )
+                    compute_umap = (
+                        guide_embeddings.get("umap", True)
+                        if compute_embeddings
+                        else False
+                    )
+                    compute_phate = (
+                        guide_embeddings.get("phate", True)
+                        if compute_embeddings
+                        else False
+                    )
+
+                    # Validate: UMAP requires PCA
+                    if compute_umap and not compute_pca:
+                        print(
+                            f"  WARNING: UMAP requires PCA. Enabling PCA for {reporter}."
+                        )
+                        compute_pca = True
+
+                    adata_guide = create_aggregated_embeddings(
+                        adata_cell,
+                        level="guide",
+                        n_pca_components=n_pca,
+                        n_neighbors=n_neighbors,
+                        compute_pca=compute_pca,
+                        compute_umap=compute_umap,
+                        compute_phate=compute_phate,
+                    )
+
+                    # Save output if enabled
+                    if guide_config.get("save_output", True):
+                        guide_path = save_dir / f"guide_bulked_{reporter}.h5ad"
+                        adata_guide.write_h5ad(guide_path)
+                        print(f"  Saved: {guide_path}")
+                    else:
+                        print(f"  Skipped saving guide-level (save_output=False)")
+            else:
+                print(f"  Skipped guide-level aggregation (enabled=False)")
+
+            # Gene-level aggregation (configurable)
+            if gene_config.get(
+                "enabled", True
+            ):  # Default True for backwards compatibility
+                with timer(f"Gene-level aggregation for {reporter}"):
+                    # Get embedding settings from config
+                    gene_embeddings = gene_config.get("embeddings", {})
+                    compute_embeddings = gene_config.get("compute_embeddings", True)
+
+                    # Get embedding parameters
+                    n_pca = gene_embeddings.get("n_pca_components", 128)
+                    n_neighbors = gene_embeddings.get("n_neighbors", 15)
+                    compute_pca = (
+                        gene_embeddings.get("pca", True)
+                        if compute_embeddings
+                        else False
+                    )
+                    compute_umap = (
+                        gene_embeddings.get("umap", True)
+                        if compute_embeddings
+                        else False
+                    )
+                    compute_phate = (
+                        gene_embeddings.get("phate", True)
+                        if compute_embeddings
+                        else False
+                    )
+
+                    # Validate: UMAP requires PCA
+                    if compute_umap and not compute_pca:
+                        print(
+                            f"  WARNING: UMAP requires PCA. Enabling PCA for {reporter}."
+                        )
+                        compute_pca = True
+
+                    adata_gene = create_aggregated_embeddings(
+                        adata_cell,
+                        level="gene",
+                        n_pca_components=n_pca,
+                        n_neighbors=n_neighbors,
+                        compute_pca=compute_pca,
+                        compute_umap=compute_umap,
+                        compute_phate=compute_phate,
+                    )
+
+                    # Save output if enabled
+                    if gene_config.get("save_output", True):
+                        gene_path = save_dir / f"gene_bulked_{reporter}.h5ad"
+                        adata_gene.write_h5ad(gene_path)
+                        print(f"  Saved: {gene_path}")
+                    else:
+                        print(f"  Skipped saving gene-level (save_output=False)")
+            else:
+                print(f"  Skipped gene-level aggregation (enabled=False)")
 
         total_time = time.time() - total_start
         print("\n" + "=" * 60)
@@ -463,8 +662,8 @@ def process(save_path: str, config_path: str = None):
             channel_name = adata.uns["channel"]
             print(f"  - {reporter} (channel: {channel_name})")
             print(f"      Cell:  {save_dir}/features_processed_{reporter}.h5ad")
-            print(f"      Guide: {save_dir}/guide_bulked_umap_{reporter}.h5ad")
-            print(f"      Gene:  {save_dir}/gene_bulked_umap_{reporter}.h5ad")
+            print(f"      Guide: {save_dir}/guide_bulked_{reporter}.h5ad")
+            print(f"      Gene:  {save_dir}/gene_bulked_{reporter}.h5ad")
         print("=" * 60 + "\n")
 
     else:
@@ -475,29 +674,127 @@ def process(save_path: str, config_path: str = None):
         features_adata.write_h5ad(checkpoint_path)
         print(f"Saved initial AnnData object to {checkpoint_path}")
 
-        # Guide-level averaged analysis
-        with timer("TOTAL: Guide-averaged UMAP analysis"):
-            embeddings_guide_bulk_ad = create_aggregated_embeddings(
-                features_adata,
-                level="guide",
-                n_pca_components=128,
-                n_neighbors=15,
-            )
-            guide_avg_path = save_dir / "guide_bulked_umap.h5ad"
-            embeddings_guide_bulk_ad.write_h5ad(guide_avg_path)
-            print(f"Saved guide-bulked UMAP analysis to {guide_avg_path}")
+        # Guide-level averaged analysis (configurable)
+        if guide_config.get(
+            "enabled", True
+        ):  # Default True for backwards compatibility
+            with timer("TOTAL: Guide-level processing"):
+                # Get embedding settings from config
+                guide_embeddings = guide_config.get("embeddings", {})
+                compute_embeddings = guide_config.get("compute_embeddings", True)
 
-        # Gene-level averaged analysis
-        with timer("TOTAL: Gene-averaged UMAP analysis"):
-            embeddings_gene_avg_ad = create_aggregated_embeddings(
-                features_adata,
-                level="gene",
-                n_pca_components=128,
-                n_neighbors=15,
-            )
-            gene_avg_path = save_dir / "gene_bulked_umap.h5ad"
-            embeddings_gene_avg_ad.write_h5ad(gene_avg_path)
-            print(f"Saved gene-bulked UMAP analysis to {gene_avg_path}")
+                # Get embedding parameters
+                n_pca = guide_embeddings.get("n_pca_components", 128)
+                n_neighbors = guide_embeddings.get("n_neighbors", 15)
+                compute_pca = (
+                    guide_embeddings.get("pca", True) if compute_embeddings else False
+                )
+                compute_umap = (
+                    guide_embeddings.get("umap", True) if compute_embeddings else False
+                )
+                compute_phate = (
+                    guide_embeddings.get("phate", True) if compute_embeddings else False
+                )
+
+                # Validate: UMAP requires PCA
+                if compute_umap and not compute_pca:
+                    print("WARNING: UMAP requires PCA. Enabling PCA.")
+                    compute_pca = True
+
+                embeddings_guide_bulk_ad = create_aggregated_embeddings(
+                    features_adata,
+                    level="guide",
+                    n_pca_components=n_pca,
+                    n_neighbors=n_neighbors,
+                    compute_pca=compute_pca,
+                    compute_umap=compute_umap,
+                    compute_phate=compute_phate,
+                )
+
+                # Save output if enabled
+                if guide_config.get("save_output", True):
+                    guide_avg_path = save_dir / "guide_bulked.h5ad"
+                    embeddings_guide_bulk_ad.write_h5ad(guide_avg_path)
+
+                    # Build embedding info for display
+                    embeddings_computed = []
+                    if compute_pca:
+                        embeddings_computed.append("PCA")
+                    if compute_umap:
+                        embeddings_computed.append("UMAP")
+                    if compute_phate:
+                        embeddings_computed.append("PHATE")
+                    embeddings_str = (
+                        "+".join(embeddings_computed) if embeddings_computed else "none"
+                    )
+
+                    print(
+                        f"Saved guide-bulked analysis to {guide_avg_path} (embeddings: {embeddings_str})"
+                    )
+                else:
+                    print("Skipped saving guide-level (save_output=False)")
+        else:
+            print("Skipped guide-level aggregation (enabled=False)")
+
+        # Gene-level averaged analysis (configurable)
+        if gene_config.get("enabled", True):  # Default True for backwards compatibility
+            with timer("TOTAL: Gene-level processing"):
+                # Get embedding settings from config
+                gene_embeddings = gene_config.get("embeddings", {})
+                compute_embeddings = gene_config.get("compute_embeddings", True)
+
+                # Get embedding parameters
+                n_pca = gene_embeddings.get("n_pca_components", 128)
+                n_neighbors = gene_embeddings.get("n_neighbors", 15)
+                compute_pca = (
+                    gene_embeddings.get("pca", True) if compute_embeddings else False
+                )
+                compute_umap = (
+                    gene_embeddings.get("umap", True) if compute_embeddings else False
+                )
+                compute_phate = (
+                    gene_embeddings.get("phate", True) if compute_embeddings else False
+                )
+
+                # Validate: UMAP requires PCA
+                if compute_umap and not compute_pca:
+                    print("WARNING: UMAP requires PCA. Enabling PCA.")
+                    compute_pca = True
+
+                embeddings_gene_avg_ad = create_aggregated_embeddings(
+                    features_adata,
+                    level="gene",
+                    n_pca_components=n_pca,
+                    n_neighbors=n_neighbors,
+                    compute_pca=compute_pca,
+                    compute_umap=compute_umap,
+                    compute_phate=compute_phate,
+                )
+
+                # Save output if enabled
+                if gene_config.get("save_output", True):
+                    gene_avg_path = save_dir / "gene_bulked.h5ad"
+                    embeddings_gene_avg_ad.write_h5ad(gene_avg_path)
+
+                    # Build embedding info for display
+                    embeddings_computed = []
+                    if compute_pca:
+                        embeddings_computed.append("PCA")
+                    if compute_umap:
+                        embeddings_computed.append("UMAP")
+                    if compute_phate:
+                        embeddings_computed.append("PHATE")
+                    embeddings_str = (
+                        "+".join(embeddings_computed) if embeddings_computed else "none"
+                    )
+
+                    print(
+                        f"Saved gene-bulked analysis to {gene_avg_path} (embeddings: {embeddings_str})"
+                    )
+                else:
+                    print("Skipped saving gene-level (save_output=False)")
+        else:
+            print("Skipped gene-level aggregation (enabled=False)")
 
         total_time = time.time() - total_start
         print("\n" + "=" * 60)
@@ -505,12 +802,13 @@ def process(save_path: str, config_path: str = None):
             f"Pipeline completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes)"
         )
         print(f"Cell-level output: {checkpoint_path} (contains raw features)")
-        print(
-            f"Guide-bulked output: {guide_avg_path} (averaged full features with PCA/UMAP)"
-        )
-        print(
-            f"Gene-bulked output: {gene_avg_path} (averaged full features with PCA/UMAP)"
-        )
+
+        # Show guide/gene outputs only if they were created
+        if guide_config.get("enabled", True) and guide_config.get("save_output", True):
+            print(f"Guide-bulked output: {save_dir / 'guide_bulked.h5ad'}")
+        if gene_config.get("enabled", True) and gene_config.get("save_output", True):
+            print(f"Gene-bulked output: {save_dir / 'gene_bulked.h5ad'}")
+
         print("=" * 60 + "\n")
 
     return features_adata
