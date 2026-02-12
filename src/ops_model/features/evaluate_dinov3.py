@@ -33,13 +33,89 @@ from ops_model.features.evaluate_cp import (
     NONFEATURE_COLUMNS,
 )
 from ops_model.features.anndata_utils import create_aggregated_embeddings, pca_embed
+from ops_model.post_process.anndata_processing.anndata_validator import (
+    AnndataValidator,
+    IssueLevel,
+)
 
 # DinoV3-specific feature count
 DINOV3_FEATURE_DIM = 1024
 
 
+def validate_and_save(
+    adata: ad.AnnData,
+    path: Path,
+    level: str,
+) -> None:
+    """
+    Validate AnnData object and save to h5ad file.
+
+    Validation is always enforced with hard constraints - errors will raise exceptions.
+
+    Args:
+        adata: AnnData object to validate and save
+        path: Path to save h5ad file
+        level: Schema level ("cell", "guide", "gene")
+
+    Raises:
+        ValueError: If validation fails
+    """
+    print(f"\nValidating {level}-level AnnData before saving...")
+
+    # Initialize validator
+    validator = AnndataValidator()
+
+    # Run validation (returns ValidationReport object)
+    report = validator.validate(adata, level=level)
+
+    # Access errors and warnings from report
+    errors = report.errors
+    warnings = report.warnings
+
+    # Report results
+    if report.is_valid:
+        print(f"✓ Validation passed: {level}-level AnnData is compliant")
+    else:
+        print(f"Validation found {len(errors)} errors, {len(warnings)} warnings")
+
+        # Show errors
+        if errors:
+            print("\nERROR-level issues:")
+            for issue in errors[:10]:  # Show first 10
+                print(f"  - {issue.field}: {issue.message}")
+            if len(errors) > 10:
+                print(f"  ... and {len(errors) - 10} more errors")
+
+        # Show warnings
+        if warnings:
+            print("\nWARNING-level issues:")
+            for issue in warnings[:5]:  # Show first 5
+                print(f"  - {issue.field}: {issue.message}")
+            if len(warnings) > 5:
+                print(f"  ... and {len(warnings) - 5} more warnings")
+
+    # Fail fast if errors found (always enforced)
+    if errors:
+        error_summary = (
+            f"{len(errors)} validation error(s) found in {level}-level AnnData"
+        )
+        print(f"\n✗ Validation FAILED: {error_summary}")
+        print(f"Fix these issues before saving. First error: {errors[0].message}")
+        raise ValueError(error_summary)
+
+    # Save file
+    print(f"Saving {level}-level AnnData to {path}")
+    adata.write_h5ad(path)
+    print(f"✓ Saved successfully: {path}")
+
+
 def create_adata_object_dinov3(
-    save_path: str, config: dict = None, channel: str = None, experiment: str = None
+    save_path: str,
+    config: dict = None,
+    channel: str = None,
+    experiment: str = None,
+    cell_type: str = None,
+    embedding_type: str = "dinov3",
 ) -> ad.AnnData:
     """
     Create AnnData object from DinoV3 features CSV.
@@ -52,6 +128,8 @@ def create_adata_object_dinov3(
         config: Configuration dictionary (optional)
         channel: Channel name (e.g., "Phase2D", "GFP")
         experiment: Experiment name (e.g., "ops0089")
+        cell_type: Cell type used in experiment (e.g., "A549", "HeLa") - required for validator
+        embedding_type: Method used to extract embeddings (default: "dinov3")
 
     Returns:
         AnnData object with normalized embeddings and metadata
@@ -85,8 +163,11 @@ def create_adata_object_dinov3(
             y_pos = np.asarray(features["y_position"].values)
             has_positions = True
         except KeyError:
-            print("x_position/y_position columns not found, skipping.")
-            has_positions = False
+            # Position fields are required by validator
+            print("WARNING: x_position/y_position not found. Setting to NaN.")
+            x_pos = np.full(len(features), np.nan, dtype=np.float32)
+            y_pos = np.full(len(features), np.nan, dtype=np.float32)
+            has_positions = False  # Track for warnings
 
         # Drop metadata columns to get only features
         metadata_cols = ["label_str", "label_int", "sgRNA", "well", "experiment"]
@@ -166,44 +247,65 @@ def create_adata_object_dinov3(
         adata = ad.AnnData(features_norm)
 
         # Add metadata to .obs
-        adata.obs["label_str"] = gene_strs
+        # Use perturbation instead of label_str (validator requirement)
+        adata.obs["perturbation"] = gene_strs
         adata.obs["label_int"] = gene_ints
         adata.obs["sgRNA"] = sgRNA_ids
         adata.obs["well"] = well_id
 
-        if has_positions:
-            adata.obs["x_position"] = x_pos
-            adata.obs["y_position"] = y_pos
+        # Position fields are required by validator (always add)
+        adata.obs["x_position"] = x_pos
+        adata.obs["y_position"] = y_pos
+        if not has_positions:
+            print("WARNING: Position data missing - validator may flag this")
+
+        # Add experiment field (required by validator)
+        adata.obs["experiment"] = experiment if experiment else "unknown"
+
+        # Add reporter field to .obs (required by validator)
+        # Always use FeatureMetadata to convert channel names to reporter names
+        if channel and experiment:
+            from ops_model.data.feature_metadata import FeatureMetadata
+
+            meta = FeatureMetadata()
+            exp_short = experiment.split("_")[0]
+            reporter = meta.get_biological_signal(exp_short, channel)
+            adata.obs["reporter"] = reporter
+            print(f"Mapped channel '{channel}' to reporter '{reporter}'")
+
+            # Store channel_mapping for .uns (will be added in next step)
+            channel_mapping = {channel: reporter}
+        else:
+            # Fallback if channel not provided
+            print(
+                "WARNING: channel or experiment not provided, using 'unknown' as reporter"
+            )
+            adata.obs["reporter"] = "unknown"
+            channel_mapping = None
 
         adata.var_names = features_norm.columns
 
-        # Store channel/reporter metadata if provided
-        if channel and experiment:
-            use_reporter_names = False
-            if config and "processing" in config:
-                use_reporter_names = config["processing"].get(
-                    "use_reporter_names", False
-                )
+        # Add required validator .uns fields
+        if cell_type:
+            adata.uns["cell_type"] = cell_type
+        else:
+            raise ValueError(
+                "cell_type must be provided for validator compliance. "
+                "Add cell_type to your config file."
+            )
 
-            if use_reporter_names:
-                from ops_model.data.feature_metadata import FeatureMetadata
+        adata.uns["embedding_type"] = embedding_type
 
-                meta = FeatureMetadata()
+        # Add channel metadata (optional but useful)
+        if channel:
+            adata.uns["channel"] = channel
 
-                # Get short experiment name for metadata lookup
-                exp_short = experiment.split("_")[0]
-                reporter = meta.get_short_label(exp_short, channel)
+        # Add channel_mapping dict (always, if we have mapping)
+        if channel_mapping is not None:
+            adata.uns["channel_mapping"] = channel_mapping
 
-                # Store metadata
-                adata.uns["channel"] = channel
-                adata.uns["reporter"] = reporter
-                adata.uns["channel_mapping"] = {channel: reporter}
-                adata.uns["experiment"] = experiment
-                print(f"Stored metadata: channel={channel}, reporter={reporter}")
-            else:
-                # Store channel only (legacy mode)
-                adata.uns["channel"] = channel
-                adata.uns["experiment"] = experiment
+        # Note: experiment is in .obs, no need to duplicate in .uns
+        # Note: reporter is in .obs, no need to duplicate in .uns
 
     return adata
 
@@ -238,6 +340,17 @@ def process_dinov3(
             config = yaml.safe_load(f)
         print(f"Loaded configuration from {config_path}")
 
+    # Extract required config parameters for validator compliance
+    cell_type = config.get("cell_type", None)
+    embedding_type = config.get("embedding_type", "dinov3")  # Default to dinov3
+
+    if not cell_type:
+        raise ValueError(
+            "cell_type must be specified in config for validator compliance.\n"
+            "Add to your config file:\n"
+            "  cell_type: 'A549'  # or your cell type"
+        )
+
     print("\n" + "=" * 60)
     print("Starting DinoV3 feature processing pipeline")
     print("=" * 60 + "\n")
@@ -269,18 +382,14 @@ def process_dinov3(
             experiment = None
             print("Warning: experiment column not found in CSV")
 
-    # Determine if using reporter names
-    use_reporter_names = False
+    # Always use FeatureMetadata to get reporter names for file naming
     filename_suffix = channel  # Default to channel
-    if config and "processing" in config:
-        use_reporter_names = config["processing"].get("use_reporter_names", False)
-
-    if use_reporter_names and experiment:
+    if channel and experiment:
         from ops_model.data.feature_metadata import FeatureMetadata
 
         meta = FeatureMetadata()
         exp_short = experiment.split("_")[0]
-        reporter = meta.get_short_label(exp_short, channel)
+        reporter = meta.get_biological_signal(exp_short, channel)
         filename_suffix = reporter
         print(f"Using reporter name for files: {reporter} (channel: {channel})")
     else:
@@ -288,86 +397,151 @@ def process_dinov3(
 
     # Define checkpoint paths with appropriate suffix
     checkpoint_path = save_dir / f"features_processed_{filename_suffix}.h5ad"
-    guide_avg_path = save_dir / f"guide_bulked_umap_{filename_suffix}.h5ad"
-    gene_avg_path = save_dir / f"gene_bulked_umap_{filename_suffix}.h5ad"
+    guide_avg_path = save_dir / f"guide_bulked_{filename_suffix}.h5ad"
+    gene_avg_path = save_dir / f"gene_bulked_{filename_suffix}.h5ad"
 
     # Create AnnData object from DinoV3 embeddings
     with timer("TOTAL: Create AnnData object"):
         features_adata = create_adata_object_dinov3(
-            str(save_path), config=config, channel=channel, experiment=experiment
+            str(save_path),
+            config=config,
+            channel=channel,
+            experiment=experiment,
+            cell_type=cell_type,
+            embedding_type=embedding_type,
         )
 
     print(
         f"Created AnnData with {features_adata.shape[0]} cells and {features_adata.shape[1]} features"
     )
 
-    # Save cell-level data WITHOUT PCA/UMAP
-    features_adata.write_h5ad(checkpoint_path)
-    print(f"Saved cell-level AnnData (no PCA/UMAP) to {checkpoint_path}")
+    # Validate and save cell-level data
+    validate_and_save(
+        features_adata,
+        checkpoint_path,
+        level="cell",
+    )
 
-    # Guide-level aggregation and analysis
-    with timer("TOTAL: Guide-level aggregation and UMAP"):
-        embeddings_guide_bulk_ad = create_aggregated_embeddings(
-            features_adata,
-            level="guide",
-            n_pca_components=128,
-            n_neighbors=15,
+    # Read aggregation configuration
+    agg_config = config.get("aggregation", {})
+    guide_config = agg_config.get("guide_level", {})
+    gene_config = agg_config.get("gene_level", {})
+
+    # Guide-level aggregation and analysis (configurable)
+    if guide_config.get("enabled", True):  # Default True for backwards compatibility
+        print("\n" + "=" * 60)
+        print("Guide-level aggregation")
+        print("=" * 60)
+
+        # Get embedding settings
+        guide_embeddings = guide_config.get("embeddings", {})
+        compute_embeddings = guide_config.get("compute_embeddings", True)
+
+        # Get embedding parameters
+        n_pca = guide_embeddings.get("n_pca_components", 128)
+        n_neighbors = guide_embeddings.get("n_neighbors", 15)
+        compute_pca = guide_embeddings.get("pca", True) if compute_embeddings else False
+        compute_umap = (
+            guide_embeddings.get("umap", True) if compute_embeddings else False
         )
-        # Propagate metadata to aggregated objects
-        if "channel" in features_adata.uns:
-            embeddings_guide_bulk_ad.uns["channel"] = features_adata.uns["channel"]
-        if "reporter" in features_adata.uns:
-            embeddings_guide_bulk_ad.uns["reporter"] = features_adata.uns["reporter"]
-        if "channel_mapping" in features_adata.uns:
-            embeddings_guide_bulk_ad.uns["channel_mapping"] = features_adata.uns[
-                "channel_mapping"
-            ]
-        if "experiment" in features_adata.uns:
-            embeddings_guide_bulk_ad.uns["experiment"] = features_adata.uns[
-                "experiment"
-            ]
-
-        embeddings_guide_bulk_ad.write_h5ad(guide_avg_path)
-        print(f"Saved guide-bulked analysis to {guide_avg_path}")
-
-        # Optional plotting
-        if (
-            config.get("plot_guide_umap", False)
-            and "X_umap" in embeddings_guide_bulk_ad.obsm.keys()
-        ):
-            plot_path = save_dir / "guide_umap.png"
-            sc.pl.umap(embeddings_guide_bulk_ad, color="sgRNA", save=str(plot_path))
-
-    # Gene-level aggregation and analysis
-    with timer("TOTAL: Gene-level aggregation and UMAP"):
-        embeddings_gene_avg_ad = create_aggregated_embeddings(
-            features_adata,
-            level="gene",
-            n_pca_components=128,
-            n_neighbors=15,
+        compute_phate = (
+            guide_embeddings.get("phate", True) if compute_embeddings else False
         )
-        # Propagate metadata to aggregated objects
-        if "channel" in features_adata.uns:
-            embeddings_gene_avg_ad.uns["channel"] = features_adata.uns["channel"]
-        if "reporter" in features_adata.uns:
-            embeddings_gene_avg_ad.uns["reporter"] = features_adata.uns["reporter"]
-        if "channel_mapping" in features_adata.uns:
-            embeddings_gene_avg_ad.uns["channel_mapping"] = features_adata.uns[
-                "channel_mapping"
-            ]
-        if "experiment" in features_adata.uns:
-            embeddings_gene_avg_ad.uns["experiment"] = features_adata.uns["experiment"]
 
-        embeddings_gene_avg_ad.write_h5ad(gene_avg_path)
-        print(f"Saved gene-bulked analysis to {gene_avg_path}")
+        # Validate: UMAP requires PCA
+        if compute_umap and not compute_pca:
+            print("WARNING: UMAP requires PCA. Enabling PCA.")
+            compute_pca = True
 
-        # Optional plotting
-        if (
-            config.get("plot_gene_umap", False)
-            and "X_umap" in embeddings_gene_avg_ad.obsm.keys()
-        ):
-            plot_path = save_dir / "gene_umap.png"
-            sc.pl.umap(embeddings_gene_avg_ad, color="label_str", save=str(plot_path))
+        with timer("TOTAL: Guide-level processing"):
+            embeddings_guide_bulk_ad = create_aggregated_embeddings(
+                features_adata,
+                level="guide",
+                n_pca_components=n_pca,
+                n_neighbors=n_neighbors,
+                compute_pca=compute_pca,
+                compute_umap=compute_umap,
+                compute_phate=compute_phate,
+            )
+
+            # Validate and save guide-level output
+            if guide_config.get("save_output", True):
+                validate_and_save(
+                    embeddings_guide_bulk_ad,
+                    guide_avg_path,
+                    level="guide",
+                )
+
+            # Optional plotting
+            if (
+                guide_config.get("plot_umap", False)
+                and "X_umap" in embeddings_guide_bulk_ad.obsm.keys()
+            ):
+                plot_path = save_dir / "guide_umap.png"
+                sc.pl.umap(embeddings_guide_bulk_ad, color="sgRNA", save=str(plot_path))
+                print(f"Saved guide UMAP plot to {plot_path}")
+    else:
+        print("\nSkipping guide-level aggregation (disabled in config)")
+        embeddings_guide_bulk_ad = None
+
+    # Gene-level aggregation and analysis (configurable)
+    if gene_config.get("enabled", True):  # Default True for backwards compatibility
+        print("\n" + "=" * 60)
+        print("Gene-level aggregation")
+        print("=" * 60)
+
+        # Get embedding settings
+        gene_embeddings = gene_config.get("embeddings", {})
+        compute_embeddings = gene_config.get("compute_embeddings", True)
+
+        # Get embedding parameters
+        n_pca = gene_embeddings.get("n_pca_components", 128)
+        n_neighbors = gene_embeddings.get("n_neighbors", 15)
+        compute_pca = gene_embeddings.get("pca", True) if compute_embeddings else False
+        compute_umap = (
+            gene_embeddings.get("umap", True) if compute_embeddings else False
+        )
+        compute_phate = (
+            gene_embeddings.get("phate", True) if compute_embeddings else False
+        )
+
+        # Validate: UMAP requires PCA
+        if compute_umap and not compute_pca:
+            print("WARNING: UMAP requires PCA. Enabling PCA.")
+            compute_pca = True
+
+        with timer("TOTAL: Gene-level processing"):
+            embeddings_gene_avg_ad = create_aggregated_embeddings(
+                features_adata,
+                level="gene",
+                n_pca_components=n_pca,
+                n_neighbors=n_neighbors,
+                compute_pca=compute_pca,
+                compute_umap=compute_umap,
+                compute_phate=compute_phate,
+            )
+
+            # Validate and save gene-level output
+            if gene_config.get("save_output", True):
+                validate_and_save(
+                    embeddings_gene_avg_ad,
+                    gene_avg_path,
+                    level="gene",
+                )
+
+            # Optional plotting
+            if (
+                gene_config.get("plot_umap", False)
+                and "X_umap" in embeddings_gene_avg_ad.obsm.keys()
+            ):
+                plot_path = save_dir / "gene_umap.png"
+                sc.pl.umap(
+                    embeddings_gene_avg_ad, color="perturbation", save=str(plot_path)
+                )
+                print(f"Saved gene UMAP plot to {plot_path}")
+    else:
+        print("\nSkipping gene-level aggregation (disabled in config)")
+        embeddings_gene_avg_ad = None
 
     total_time = time.time() - total_start
     print("\n" + "=" * 60)
@@ -375,10 +549,42 @@ def process_dinov3(
         f"Pipeline completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes)"
     )
     print(f"Cell-level output: {checkpoint_path} (raw embeddings, no PCA/UMAP)")
-    print(f"Guide-bulked output: {guide_avg_path} (with PCA/UMAP)")
-    print(f"Gene-bulked output: {gene_avg_path} (with PCA/UMAP)")
-    if use_reporter_names:
-        print(f"Files saved with reporter suffix: {filename_suffix}")
+
+    # Report guide-level output
+    if guide_config.get("enabled", True) and guide_config.get("save_output", True):
+        guide_embeddings = guide_config.get("embeddings", {})
+        compute_guide_embeddings = guide_config.get("compute_embeddings", True)
+        if compute_guide_embeddings:
+            embeddings_list = []
+            if guide_embeddings.get("pca", True):
+                embeddings_list.append("PCA")
+            if guide_embeddings.get("umap", True):
+                embeddings_list.append("UMAP")
+            if guide_embeddings.get("phate", True):
+                embeddings_list.append("PHATE")
+            embeddings_str = ", ".join(embeddings_list) if embeddings_list else "none"
+            print(f"Guide-bulked output: {guide_avg_path} (with {embeddings_str})")
+        else:
+            print(f"Guide-bulked output: {guide_avg_path} (aggregated, no embeddings)")
+
+    # Report gene-level output
+    if gene_config.get("enabled", True) and gene_config.get("save_output", True):
+        gene_embeddings = gene_config.get("embeddings", {})
+        compute_gene_embeddings = gene_config.get("compute_embeddings", True)
+        if compute_gene_embeddings:
+            embeddings_list = []
+            if gene_embeddings.get("pca", True):
+                embeddings_list.append("PCA")
+            if gene_embeddings.get("umap", True):
+                embeddings_list.append("UMAP")
+            if gene_embeddings.get("phate", True):
+                embeddings_list.append("PHATE")
+            embeddings_str = ", ".join(embeddings_list) if embeddings_list else "none"
+            print(f"Gene-bulked output: {gene_avg_path} (with {embeddings_str})")
+        else:
+            print(f"Gene-bulked output: {gene_avg_path} (aggregated, no embeddings)")
+
+    print(f"Files saved with reporter suffix: {filename_suffix}")
     print("=" * 60 + "\n")
 
     return features_adata
