@@ -1,0 +1,52 @@
+# DynaCLR Prediction Configuration
+# This config runs inference on a trained model and outputs AnnData directly
+
+model_type: dynaclr
+run_name: ops_phase_only_self_256proj_v5_ckpt109_2
+dataset_type: basic  # Use basic dataset (no positive pairs needed for prediction)
+cell_type: A549
+
+# Model checkpoint to load
+ckpt_path: '/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_phase_only_self_256proj_v1/version_5/checkpoints/epoch=109-loss=2.991.ckpt'
+
+# Data configuration
+data_manager:
+  batch_size: 256
+  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/phase_only/labels_testset_filtered_phase2d.csv
+  initial_yx_patch_size: [1, 192, 192]
+  final_yx_patch_size: [1, 128, 128]
+  num_workers: 14
+  pin_memory: true
+  prefetch_factor: 4
+  data_split: [0.0, 0.0, 1.0]  # All data goes to test set for prediction
+  cell_masks: false
+
+# Model architecture (must match training config)
+model:
+  lr: 0.0002  # Not used in prediction but needed for load_from_checkpoint
+  schedule: Constant
+  log_batches_per_epoch: 8
+  log_samples_per_batch: 1
+  log_embeddings: false
+  temperature: 1.0
+  encoder:
+    backbone: "convnext_tiny"
+    in_channels: 1
+    in_stack_depth: 1
+    stem_kernel_size: [1, 4, 4]
+    stem_stride: [1, 4, 4]
+    embedding_dim: 768
+    projection_dim: 256
+    drop_path_rate: 0.0
+
+# Trainer configuration
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  precision: "32-true"
+
+# Prediction output configuration
+prediction:
+  output_dir: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_phase_only_self_256proj_v1/version_5/predict
+  save_features: true  # Save backbone features (768-dim for ConvNeXt Tiny)
+  save_projections: false  # Don't save projection head outputs (256-dim)
