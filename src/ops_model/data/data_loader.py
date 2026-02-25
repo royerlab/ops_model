@@ -614,7 +614,11 @@ class OpsDataManager:
             for w in wells:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
-                labels_tmp = pd.read_csv(OpsPaths(exp_name, well=w).links["training"])
+                labels_path = OpsPaths(exp_name, well=w).links["training"]
+                if labels_path.endswith(".parquet"):
+                    labels_tmp = pd.read_parquet(labels_path)
+                else:
+                    labels_tmp = pd.read_csv(labels_path, low_memory=False)
 
                 # remove rows with NaN segmentation_id
                 labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])

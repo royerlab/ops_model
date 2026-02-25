@@ -17,19 +17,16 @@ import zarr
 from ops_model.data.paths import OpsPaths
 
 # %%
-INPUT_CSV = (
-    "/hpc/mydata/alexander.hillsley/ops/"
-    "ops_model/experiments/models/dynaclr/labels_testset_v2.csv"
-)
-OUTPUT_CSV = (
-    "/hpc/mydata/eduardo.hirata/repos/"
-    "ops_model/experiments/models/dynaclr/labels_testset_v2_validated.csv"
-)
+INPUT_PATH = "/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_10complex_n_NTC_v2.csv"
+OUTPUT_PATH = "/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_10complex_n_NTC_v2_filtered.parquet"
 
 # %%
-df = pd.read_csv(INPUT_CSV, low_memory=False)
+if INPUT_PATH.endswith(".parquet"):
+    df = pd.read_parquet(INPUT_PATH)
+else:
+    df = pd.read_csv(INPUT_PATH, low_memory=False)
 print("## Input\n")
-print(f"- **CSV:** `{INPUT_CSV}`")
+print(f"- **File:** `{INPUT_PATH}`")
 print(f"- **Rows:** {len(df):,}")
 print(f"- **Unique store_keys:** {df['store_key'].nunique()}")
 print(f"- **Unique channels in CSV:** {sorted(df['channel'].unique())}")
@@ -92,8 +89,9 @@ else:
 # %%
 # Filter invalid rows
 valid_mask = df.apply(
-    lambda row: row["channel"]
-    in channel_cache.get((row["store_key"], row["well"]), set()),
+    lambda row: (
+        row["channel"] in channel_cache.get((row["store_key"], row["well"]), set())
+    ),
     axis=1,
 )
 
@@ -112,6 +110,11 @@ if n_removed > 0:
 df_clean = df[valid_mask].reset_index(drop=True)
 print("\n## Output\n")
 print(f"- **Rows:** {len(df_clean):,}")
-print(f"- **Saved to:** `{OUTPUT_CSV}`")
+print(f"- **Saved to:** `{OUTPUT_PATH}`")
 
-df_clean.to_csv(OUTPUT_CSV, index=False)
+if OUTPUT_PATH.endswith(".parquet"):
+    df_clean.to_parquet(OUTPUT_PATH, index=False)
+else:
+    df_clean.to_csv(OUTPUT_PATH, index=False)
+
+# %%
