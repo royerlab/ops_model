@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 name = "ops_model"
 description = "DL model for analysis of OPS data at CZB SF"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12,<3.13"
 license = { text = "BSD 3-Clause License" }
 authors = [
     { email = "avhillsley1@gmail.com", name = "Alex Hillsley" },
@@ -34,7 +34,7 @@ dependencies = [
     "cytoself @ git+https://github.com/royerlab/cytoself.git@version_1.5",
     "pytorch-metric-learning",
     "cp-measure",
-    "iohub",
+    "iohub==0.3.0a6",
     "viscy",
     "monai",
     "diffusers[torch]",
