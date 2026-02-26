@@ -22,7 +22,11 @@ def train(config_path):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    labels_df = pd.read_csv(config["data_manager"]["labels_df_path"])
+    labels_path = config["data_manager"]["labels_df_path"]
+    if labels_path.endswith(".parquet"):
+        labels_df = pd.read_parquet(labels_path)
+    else:
+        labels_df = pd.read_csv(labels_path, low_memory=False)
     # labels_df["total_index"] = np.arange(len(labels_df))
     sample_weights = labels_df.pop("sample_weight").to_numpy()
     experiments = labels_df["store_key"].unique().tolist()
@@ -130,22 +134,23 @@ def train(config_path):
         callbacks=callbacks if callbacks else None,
     )
 
-    # Save a copy of the config file to the log directory for reproducibility
-    import shutil
-    from pathlib import Path
-
-    log_dir = Path(logger.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
-    config_backup_path = log_dir / "config.yml"
-    shutil.copy2(config_path, config_backup_path)
-    print(f"Config saved to: {config_backup_path}")
-
     trainer.fit(
         model=lit_model,
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
         ckpt_path=fit_ckpt_path,  # Only pass if resuming full training state
     )
+
+    # Save config after fit() — accessing trainer.log_dir requires all ranks
+    # to participate in broadcast(), so it must not be inside a rank-0-only block.
+    import shutil
+    from pathlib import Path
+
+    log_dir = Path(trainer.log_dir)
+    if trainer.is_global_zero:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(config_path, log_dir / "config.yml")
+        print(f"Config saved to: {log_dir / 'config.yml'}")
 
     return
 
