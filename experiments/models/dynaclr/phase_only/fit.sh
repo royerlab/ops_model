@@ -16,6 +16,8 @@
 # https://lightning.ai/docs/pytorch/stable/clouds/cluster_advanced.html
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
+export PYTHONNOUSERSITE=1
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=900
 
 module load anaconda/latest
 conda activate ops-model

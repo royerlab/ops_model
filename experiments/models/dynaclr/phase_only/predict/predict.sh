@@ -5,8 +5,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
-#SBATCH --cpus-per-task=16
-#SBATCH --mem-per-cpu=15G
+#SBATCH --cpus-per-task=128
+#SBATCH --mem-per-cpu=4G
 
 #SBATCH --time=0-3:00:00
 #SBATCH --output=./slurm_logs/dynaclr_ops_%j.log

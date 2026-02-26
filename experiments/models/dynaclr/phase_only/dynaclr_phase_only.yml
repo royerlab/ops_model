@@ -1,10 +1,11 @@
 model_type: dynaclr
-run_name: &run_name 'ops_phase_only_perturbation_256proj_v1'
+run_name: &run_name 'ops_phase_only_self_256proj_10cplx_n_NTC_parquet'
 dataset_type: contrastive
 
 trainer:
   max_epochs: 300
-  fast_dev_run: false
+  # enable_model_summary: false
+  # fast_dev_run: false
   # limit_train_batches: 5000
   # limit_val_batches: 500
   precision: "bf16-mixed"
@@ -39,19 +40,19 @@ data_manager:
     - 0.05
   initial_yx_patch_size:
     - 1
-    - 192
-    - 192
+    - 224
+    - 224
   final_yx_patch_size:
     - 1
     - 128
     - 128
-  num_workers: 32
+  num_workers: 30
   pin_memory: True
   prefetch_factor: 4
   balanced_sampling: True
-  labels_df_path: '/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/phase_only/labels_testset_filtered_phase2d.csv'
+  labels_df_path: '/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_10complex_n_NTC_v2_filtered_phase2d.parquet'
   contrastive_kwargs:
-    positive_source: "perturbation"
+    positive_source: "self"
     use_negative: False
     cell_masks: False
     transforms:
@@ -60,7 +61,7 @@ data_manager:
           keys: ["data"]
           prob: 0.8
           rotate_range: [3.14, 0.0,0.0]  # Full rotation on first axis, none on second
-          scale_range: [0.0, 0.2, 0.2] 
+          scale_range: [0.0, 0.1, 0.1] 
           shear_range: [0.0, 0.0, 0.0]
           padding_mode: "zeros"
       - class_path: monai.transforms.CenterSpatialCropd
@@ -105,7 +106,7 @@ data_manager:
           keys: ["data"]
 
 model:
-  lr: 0.0002
+  lr: 0.00005
   schedule: Constant
   log_batches_per_epoch: 8
   log_samples_per_batch: 1
@@ -122,4 +123,4 @@ model:
     drop_path_rate: 0.0
 
 resume_training: false
-ckpt_path: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/dynaclr_ops_phase_only_self_256proj_v1/last.ckpt
+ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_phase_only_self_256proj_10k_n_NTC/version_1/checkpoints/epoch=004-loss=5.255.ckpt"

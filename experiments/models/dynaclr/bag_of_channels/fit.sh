@@ -7,7 +7,7 @@
 #SBATCH --partition=gpu
 #SBATCH --cpus-per-task=32
 #SBATCH --mem-per-cpu=12G
-#SBATCH --constraint="a100_80|h100|h200"
+#SBATCH --constraint="h100|h200"
 
 #SBATCH --time=0-22:00:00
 #SBATCH --output=./slurm_logs/dynaclr_ops_%j.log
@@ -16,6 +16,9 @@
 # https://lightning.ai/docs/pytorch/stable/clouds/cluster_advanced.html
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
+export PYTHONNOUSERSITE=1
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=900
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
 module load anaconda/latest
 conda activate ops-model
