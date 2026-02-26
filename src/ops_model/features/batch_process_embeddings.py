@@ -1,23 +1,23 @@
 """
-Batch processing and validation script for DinoV3 and CellProfiler features.
+Batch processing and validation script for embedding and CellProfiler features.
 
-This script orchestrates the processing of both DinoV3 embeddings and CellProfiler
-features for multiple experiments, checking for CSV existence, processing them into
-AnnData objects, and validating the output against specifications.
+This script orchestrates the processing of neural-network embeddings (DinoV3,
+Cell-DINO, etc.) and CellProfiler features for multiple experiments, checking
+for CSV existence, processing them into AnnData objects, and validating outputs.
 
 Usage:
     # Process from config list (recommended - reads experiments/channels from configs)
-    python batch_process_dinov3.py --config_list configs/dinov3/dino_configs_all.txt
+    python batch_process_embeddings.py --config_list configs/dinov3/dino_configs_all.txt
 
     # Process single config file
-    python batch_process_dinov3.py --config_list configs/dinov3/ops0031_dino.yml
+    python batch_process_embeddings.py --config_list configs/dinov3/ops0031_dino.yml
 
-    # DinoV3 features (legacy)
-    python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 ops0084_20250101
-    python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 --channels Phase2D GFP
+    # Embedding features (legacy)
+    python batch_process_embeddings.py --feature_type dinov3 --experiments ops0089_20251119 ops0084_20250101
+    python batch_process_embeddings.py --feature_type cell_dino --experiments ops0089_20251119 --channels Phase2D GFP
 
     # CellProfiler features (legacy)
-    python batch_process_dinov3.py --feature_type cellprofiler --experiments ops0089_20251119 ops0084_20250101
+    python batch_process_embeddings.py --feature_type cellprofiler --experiments ops0089_20251119 ops0084_20250101
 """
 
 import argparse
@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import anndata as ad
 
-from ops_model.features.evaluate_dinov3 import process_dinov3
+from ops_model.features.evaluate_embeddings import process_embedding_csv
 from ops_model.features.evaluate_cp import process
 
 
@@ -41,7 +41,7 @@ BASE_DIR = Path("/hpc/projects/intracellular_dashboard/ops")
 
 
 class ExperimentValidator:
-    """Validates DinoV3 and CellProfiler AnnData objects against specifications."""
+    """Validates embedding and CellProfiler AnnData objects against specifications."""
 
     def __init__(self, feature_type: str = "dinov3", verbose: bool = True):
         self.feature_type = feature_type
@@ -82,7 +82,6 @@ class ExperimentValidator:
         Args:
             adata: AnnData object to validate
             expected_n_features: Expected number of features (if None, skip check)
-                                 Default: 1024 for DinoV3, None for CellProfiler
 
         Returns:
             True if all checks pass, False otherwise
@@ -300,49 +299,18 @@ class ExperimentValidator:
         filename_suffix = None
         expected_n_features = None
 
-        if self.feature_type == "cellprofiler":
-            # Check if using reporter names
-            use_reporter_names = False
-            if config and "processing" in config:
-                use_reporter_names = config["processing"].get(
-                    "use_reporter_names", False
-                )
+        from ops_model.data.feature_metadata import FeatureMetadata
 
-            if use_reporter_names and channel:
-                # Import FeatureMetadata to get reporter name
-                from ops_model.data.feature_metadata import FeatureMetadata
+        meta = FeatureMetadata()
+        exp_short = experiment.split("_")[0]
+        reporter = meta.get_biological_signal(exp_short, channel)
+        filename_suffix = reporter
+        expected_n_features = None
+        print(f"  Using reporter name: {reporter} (channel: {channel})")
 
-                meta = FeatureMetadata()
-
-                # Extract short experiment name (e.g., "ops0089_20251119" -> "ops0089")
-                exp_short = experiment.split("_")[0]
-
-                # Get reporter name
-                reporter = meta.get_biological_signal(exp_short, channel)
-                filename_suffix = reporter
-                print(f"  Using reporter name: {reporter} (channel: {channel})")
-            else:
-                # Legacy CellProfiler: no suffix
-                filename_suffix = None
-                print(f"  Using legacy naming (no suffix)")
-
-            # CellProfiler has variable feature count
-            expected_n_features = None
-        else:
-            # DinoV3: always use channel name
-            filename_suffix = channel
-            expected_n_features = 1024
-
-        # Construct filenames based on suffix
-        if filename_suffix:
-            cell_filename = f"features_processed_{filename_suffix}.h5ad"
-            guide_filename = f"guide_bulked_{filename_suffix}.h5ad"
-            gene_filename = f"gene_bulked_{filename_suffix}.h5ad"
-        else:
-            # Legacy CellProfiler naming (no suffix)
-            cell_filename = "features_processed.h5ad"
-            guide_filename = "guide_bulked.h5ad"
-            gene_filename = "gene_bulked.h5ad"
+        cell_filename = f"features_processed_{filename_suffix}.h5ad"
+        guide_filename = f"guide_bulked_{filename_suffix}.h5ad"
+        gene_filename = f"gene_bulked_{filename_suffix}.h5ad"
 
         # Validate cell-level
         print(f"Cell-level ({cell_filename}):")
@@ -418,8 +386,8 @@ def check_csv_exists(
 
     Args:
         experiment: Experiment name (e.g., "ops0089_20251119")
-        feature_type: "dinov3" or "cellprofiler"
-        channel: Channel name (e.g., "Phase2D", "GFP") - required for dinov3, ignored for cellprofiler
+        feature_type: "cellprofiler" or any embedding type (e.g., "dinov3", "cell_dino")
+        channel: Channel name (e.g., "Phase2D", "GFP") - required for embeddings, ignored for cellprofiler
         base_dir: Base directory for experiments (used if config not provided)
         config: Optional config dict with output_dir specified
 
@@ -430,40 +398,16 @@ def check_csv_exists(
     if config and "output_dir" in config:
         output_dir = Path(config["output_dir"])
 
-        if feature_type == "dinov3":
-            if channel is None:
-                raise ValueError("channel is required for dinov3 feature type")
-            csv_path = output_dir / f"dinov3_features_{channel}.csv"
-        elif feature_type == "cellprofiler":
+        if feature_type == "cellprofiler":
             csv_path = output_dir / "cp_features.csv"
         else:
-            raise ValueError(
-                f"Invalid feature_type: {feature_type}. Must be 'dinov3' or 'cellprofiler'"
-            )
-    else:
-        # Fallback to hardcoded paths (backwards compatibility)
-        if feature_type == "dinov3":
             if channel is None:
-                raise ValueError("channel is required for dinov3 feature type")
-            csv_path = (
-                base_dir
-                / experiment
-                / "3-assembly"
-                / "dino_features"
-                / f"dinov3_features_{channel}.csv"
-            )
-        elif feature_type == "cellprofiler":
-            csv_path = (
-                base_dir
-                / experiment
-                / "3-assembly"
-                / "cell-profiler"
-                / "cp_features.csv"
-            )
-        else:
-            raise ValueError(
-                f"Invalid feature_type: {feature_type}. Must be 'dinov3' or 'cellprofiler'"
-            )
+                raise ValueError(
+                    f"channel is required for feature_type '{feature_type}'"
+                )
+            csv_path = output_dir / f"{feature_type}_features_{channel}.csv"
+    else:
+        raise ValueError("Config with output_dir is required to determine CSV path")
 
     return csv_path.exists(), csv_path if csv_path.exists() else None
 
@@ -481,8 +425,8 @@ def process_experiment(
 
     Args:
         experiment: Experiment name
-        feature_type: "dinov3" or "cellprofiler"
-        channel: Channel name (required for dinov3, ignored for cellprofiler)
+        feature_type: "cellprofiler" or any embedding type (e.g., "dinov3", "cell_dino")
+        channel: Channel name (required for embeddings, ignored for cellprofiler)
         force_reprocess: If True, reprocess even if outputs exist
         validate_only: If True, only validate without processing
         config_path: Optional path to configuration YAML file
@@ -509,10 +453,7 @@ def process_experiment(
         experiment, feature_type, channel, config=config
     )
     if not csv_exists:
-        if feature_type == "dinov3":
-            print(f"✗ CSV not found: dinov3_features_{channel}.csv")
-        else:
-            print(f"✗ CSV not found: cp_features.csv")
+        print(f"✗ CSV not found for {experiment}" + (f"/{channel}" if channel else ""))
         return False
 
     print(f"✓ Found CSV: {csv_path}")
@@ -521,37 +462,17 @@ def process_experiment(
     feature_dir = csv_path.parent
     anndata_dir = feature_dir / "anndata_objects"
 
-    # Determine output filenames based on feature type and config
-    if feature_type == "dinov3":
-        output_files = [
-            anndata_dir / f"features_processed_{channel}.h5ad",
-            anndata_dir / f"guide_bulked_{channel}.h5ad",
-            anndata_dir / f"gene_bulked_{channel}.h5ad",
-        ]
-    else:  # cellprofiler
-        # Check if using reporter names
-        use_reporter_names = False
-        if config and "processing" in config:
-            use_reporter_names = config["processing"].get("use_reporter_names", False)
+    # Determine output filenames: always use reporter name as suffix
+    from ops_model.data.feature_metadata import FeatureMetadata
 
-        if use_reporter_names and channel:
-            from ops_model.data.feature_metadata import FeatureMetadata
-
-            meta = FeatureMetadata()
-            exp_short = experiment.split("_")[0]
-            reporter = meta.get_biological_signal(exp_short, channel)
-            output_files = [
-                anndata_dir / f"features_processed_{reporter}.h5ad",
-                anndata_dir / f"guide_bulked_{reporter}.h5ad",
-                anndata_dir / f"gene_bulked_{reporter}.h5ad",
-            ]
-        else:
-            # Legacy naming
-            output_files = [
-                anndata_dir / "features_processed.h5ad",
-                anndata_dir / "guide_bulked.h5ad",
-                anndata_dir / "gene_bulked.h5ad",
-            ]
+    meta = FeatureMetadata()
+    exp_short = experiment.split("_")[0]
+    reporter = meta.get_biological_signal(exp_short, channel)
+    output_files = [
+        anndata_dir / f"features_processed_{reporter}.h5ad",
+        anndata_dir / f"guide_bulked_{reporter}.h5ad",
+        anndata_dir / f"gene_bulked_{reporter}.h5ad",
+    ]
 
     already_processed = all(f.exists() for f in output_files)
 
@@ -563,12 +484,10 @@ def process_experiment(
         # Process
         print(f"\nProcessing {feature_type} features...")
         try:
-            if feature_type == "dinov3":
-                adata = process_dinov3(str(csv_path), config_path=config_path)
-            else:  # cellprofiler
-                # Extract processing config and merge with cell-profiler flag
-
+            if feature_type == "cellprofiler":
                 adata = process(str(csv_path), config_path=config_path)
+            else:
+                adata = process_embedding_csv(str(csv_path), config_path=config_path)
             print(f"✓ Processing complete")
         except Exception as e:
             print(f"✗ Processing failed: {e}")
@@ -600,8 +519,8 @@ def batch_process(
 
     Args:
         experiments: List of experiment names
-        feature_type: "dinov3" or "cellprofiler"
-        channels: List of channel names to process (only for dinov3)
+        feature_type: "cellprofiler" or any embedding type (e.g., "dinov3", "cell_dino")
+        channels: List of channel names to process (ignored for cellprofiler)
         force_reprocess: Reprocess even if outputs exist
         validate_only: Only validate, don't process
         continue_on_error: Continue processing other experiments if one fails
@@ -611,19 +530,19 @@ def batch_process(
         Dictionary mapping (experiment, channel) -> success status
     """
     # Handle channel defaults
-    if feature_type == "dinov3":
-        if channels is None:
-            channels = ["Phase2D"]
-    else:  # cellprofiler
+    if feature_type == "cellprofiler":
         if channels is not None and len(channels) > 0:
             print("⚠ WARNING: --channels is ignored for cellprofiler feature type")
         channels = [None]  # Single pass, no channel
+    else:
+        if channels is None:
+            channels = ["Phase2D"]
 
     print(f"\n{'=' * 80}")
     print(f"BATCH PROCESSING {feature_type.upper()} FEATURES")
     print(f"{'=' * 80}")
     print(f"Experiments: {len(experiments)}")
-    if feature_type == "dinov3":
+    if feature_type != "cellprofiler":
         print(f"Channels: {channels}")
     print(f"Force reprocess: {force_reprocess}")
     print(f"Validate only: {validate_only}")
@@ -682,7 +601,7 @@ def batch_process(
             "timestamp": datetime.now().isoformat(),
             "feature_type": feature_type,
             "experiments": experiments,
-            "channels": channels if feature_type == "dinov3" else None,
+            "channels": channels if feature_type != "cellprofiler" else None,
             "force_reprocess": force_reprocess,
             "validate_only": validate_only,
             "results": results,
@@ -709,7 +628,7 @@ def parse_config_file(config_path: str) -> Tuple[str, List[str], List[str], Dict
 
     Returns:
         Tuple of (feature_type, experiments, channels, processing_options)
-        - feature_type: "dinov3" or "cellprofiler"
+        - feature_type: "cellprofiler" or any embedding type (e.g., "dinov3", "cell_dino")
         - experiments: List of experiment names (e.g., ["ops0031_20250424"])
         - channels: List of channels (e.g., ["Phase2D", "GFP"])
         - processing_options: Dict with force_reprocess, validate_only, etc.
@@ -719,10 +638,8 @@ def parse_config_file(config_path: str) -> Tuple[str, List[str], List[str], Dict
 
     # Extract feature type
     feature_type = config.get("model_type")
-    if feature_type not in ["dinov3", "cellprofiler"]:
-        raise ValueError(
-            f"Invalid model_type in {config_path}: {feature_type}. Must be 'dinov3' or 'cellprofiler'"
-        )
+    if not feature_type:
+        raise ValueError(f"Config missing model_type: {config_path}")
 
     # Extract experiments (keys from data_manager.experiments)
     if "data_manager" not in config or "experiments" not in config["data_manager"]:
@@ -872,36 +789,34 @@ def process_from_config_list(config_list_path: str) -> Dict[str, bool]:
 def _build_arg_parser():
     """Build argument parser."""
     parser = argparse.ArgumentParser(
-        description="Batch process and validate DinoV3 or CellProfiler features for multiple experiments.",
+        description="Batch process and validate embedding or CellProfiler features for multiple experiments.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Process from config list (recommended - reads experiments/channels from configs)
-  python batch_process_dinov3.py --config_list configs/dinov3/dino_configs_all.txt
+  python batch_process_embeddings.py --config_list configs/dinov3/dino_configs_all.txt
 
   # Process single config file
-  python batch_process_dinov3.py --config_list configs/dinov3/ops0031_dino.yml
+  python batch_process_embeddings.py --config_list configs/dinov3/ops0031_dino.yml
 
-  # DinoV3: Process two experiments with Phase2D channel
-  python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 ops0084_20250101
-
-  # DinoV3: Process multiple channels
-  python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 --channels Phase2D GFP
+  # Embedding features: process two experiments with Phase2D channel
+  python batch_process_embeddings.py --feature_type dinov3 --experiments ops0089_20251119 ops0084_20250101
+  python batch_process_embeddings.py --feature_type cell_dino --experiments ops0089_20251119 --channels Phase2D GFP
 
   # CellProfiler: Process experiments (channels ignored)
-  python batch_process_dinov3.py --feature_type cellprofiler --experiments ops0089_20251119 ops0084_20250101
+  python batch_process_embeddings.py --feature_type cellprofiler --experiments ops0089_20251119 ops0084_20250101
 
   # Validate only (don't reprocess)
-  python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 --validate_only
+  python batch_process_embeddings.py --feature_type dinov3 --experiments ops0089_20251119 --validate_only
 
   # Force reprocessing
-  python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 --force
+  python batch_process_embeddings.py --feature_type cell_dino --experiments ops0089_20251119 --force
 
   # Load experiments from file
-  python batch_process_dinov3.py --feature_type cellprofiler --experiments_file experiments.txt
+  python batch_process_embeddings.py --feature_type cellprofiler --experiments_file experiments.txt
 
   # Save validation report
-  python batch_process_dinov3.py --feature_type dinov3 --experiments ops0089_20251119 --output_report report.json
+  python batch_process_embeddings.py --feature_type dinov3 --experiments ops0089_20251119 --output_report report.json
         """,
     )
 
@@ -910,8 +825,7 @@ Examples:
         "--feature_type",
         type=str,
         required=False,
-        choices=["dinov3", "cellprofiler"],
-        help="Type of features to process: 'dinov3' or 'cellprofiler' (not needed with --config_list)",
+        help="Type of features to process: 'cellprofiler' or any embedding type (e.g. 'dinov3', 'cell_dino'). Not needed with --config_list.",
     )
 
     # Experiment selection
@@ -935,7 +849,7 @@ Examples:
         "--channels",
         nargs="+",
         default=None,
-        help="Channels to process (default: Phase2D for dinov3, ignored for cellprofiler)",
+        help="Channels to process (default: Phase2D for embedding types, ignored for cellprofiler)",
     )
 
     # Processing options
@@ -1009,9 +923,9 @@ def main():
         print("Error: No experiments specified")
         sys.exit(1)
 
-    # Set default channels for dinov3 if not specified
+    # Set default channels for embedding types if not specified
     channels = args.channels
-    if args.feature_type == "dinov3" and channels is None:
+    if args.feature_type != "cellprofiler" and channels is None:
         channels = ["Phase2D"]
 
     # Process

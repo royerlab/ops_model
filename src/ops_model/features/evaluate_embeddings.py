@@ -1,18 +1,18 @@
 """
-DinoV3 Feature Evaluation Pipeline
+Embedding Feature Evaluation Pipeline
 
-This module processes DinoV3 embeddings (1024-dimensional features from ViT-L/16)
+This module processes neural-network embeddings (e.g. DinoV3, Cell-DINO)
 into AnnData objects for downstream analysis. Unlike CellProfiler features,
-DinoV3 embeddings are pre-computed and require minimal preprocessing.
+these embeddings are pre-computed and require minimal preprocessing.
 
 Key differences from CellProfiler pipeline:
 - No array string conversion (features already numeric)
 - Minimal QC (embeddings are clean)
 - No cell-level PCA/UMAP (only at guide/gene aggregation level)
-- Works directly with 1024-dim embeddings
+- Works directly with high-dimensional embeddings
 
 Usage:
-    python evaluate_dinov3.py --save_path /path/to/dinov3_features_Phase2D.csv
+    python evaluate_embeddings.py --save_path /path/to/features_Phase2D.csv
 """
 
 from tqdm import tqdm
@@ -37,9 +37,6 @@ from ops_model.post_process.anndata_processing.anndata_validator import (
     AnndataValidator,
     IssueLevel,
 )
-
-# DinoV3-specific feature count
-DINOV3_FEATURE_DIM = 1024
 
 
 def validate_and_save(
@@ -109,7 +106,7 @@ def validate_and_save(
     print(f"✓ Saved successfully: {path}")
 
 
-def create_adata_object_dinov3(
+def create_adata_object_embedding(
     save_path: str,
     config: dict = None,
     channel: str = None,
@@ -118,24 +115,24 @@ def create_adata_object_dinov3(
     embedding_type: str = "dinov3",
 ) -> ad.AnnData:
     """
-    Create AnnData object from DinoV3 features CSV.
+    Create AnnData object from an embeddings CSV.
 
-    This is a simplified version of create_adata_object() tailored for
-    DinoV3 embeddings which require minimal preprocessing.
+    Tailored for neural-network embeddings (DinoV3, Cell-DINO, etc.)
+    which are pre-computed numeric features requiring minimal preprocessing.
 
     Args:
-        save_path: Path to DinoV3 features CSV file
+        save_path: Path to embeddings CSV file
         config: Configuration dictionary (optional)
         channel: Channel name (e.g., "Phase2D", "GFP")
         experiment: Experiment name (e.g., "ops0089")
         cell_type: Cell type used in experiment (e.g., "A549", "HeLa") - required for validator
-        embedding_type: Method used to extract embeddings (default: "dinov3")
+        embedding_type: Method used to extract embeddings (e.g., "dinov3", "cell_dino")
 
     Returns:
-        AnnData object with normalized embeddings and metadata
+        AnnData object with embeddings and metadata
     """
     with timer("Reading CSV"):
-        # Read CSV - DinoV3 features are already numeric
+        # Read CSV - embedding features are already numeric
         features = pd.read_csv(save_path, low_memory=False)
 
     print(f"Dataset shape: {features.shape}")
@@ -176,8 +173,8 @@ def create_adata_object_dinov3(
 
         features = features.drop(columns=metadata_cols, errors="ignore")
 
-    # DinoV3 features are already numeric - no array string conversion needed
-    print(f"DinoV3 features: {features.shape[1]} dimensions")
+    # Embeddings are already numeric - no array string conversion needed
+    print(f"{embedding_type} features: {features.shape[1]} dimensions")
 
     with timer("Converting to float32"):
         # Convert to float32 for memory efficiency
@@ -185,7 +182,7 @@ def create_adata_object_dinov3(
         print(f"Converted {len(features.columns)} feature columns to float32")
 
     with timer("QC filtering"):
-        # Minimal QC for DinoV3 embeddings
+        # Minimal QC for neural-network embeddings
 
         # Check for NaN values (shouldn't be any in embeddings)
         n_nans = features.isna().sum().sum()
@@ -310,12 +307,12 @@ def create_adata_object_dinov3(
     return adata
 
 
-def process_dinov3(
+def process_embedding_csv(
     save_path: str,
     config_path: str = None,
 ):
     """
-    Process DinoV3 features through the full pipeline.
+    Process neural-network embedding features through the full pipeline.
 
     Unlike CellProfiler pipeline, this does NOT compute cell-level PCA/UMAP.
     PCA and UMAP are only computed at guide/gene aggregation level.
@@ -325,7 +322,8 @@ def process_dinov3(
     channel names (e.g., features_processed_GFP.h5ad).
 
     Args:
-        save_path: Path to DinoV3 features CSV
+        save_path: Path to embeddings CSV (e.g. dinov3_features_Phase2D.csv or
+                   cell_dino_features_Phase2D.csv)
         config_path: Path to configuration YAML file
 
     Returns:
@@ -342,7 +340,7 @@ def process_dinov3(
 
     # Extract required config parameters for validator compliance
     cell_type = config.get("cell_type", None)
-    embedding_type = config.get("embedding_type", "dinov3")  # Default to dinov3
+    embedding_type = config.get("embedding_type", "dinov3")
 
     if not cell_type:
         raise ValueError(
@@ -352,7 +350,7 @@ def process_dinov3(
         )
 
     print("\n" + "=" * 60)
-    print("Starting DinoV3 feature processing pipeline")
+    print(f"Starting {embedding_type} feature processing pipeline")
     print("=" * 60 + "\n")
 
     total_start = time.time()
@@ -400,9 +398,9 @@ def process_dinov3(
     guide_avg_path = save_dir / f"guide_bulked_{filename_suffix}.h5ad"
     gene_avg_path = save_dir / f"gene_bulked_{filename_suffix}.h5ad"
 
-    # Create AnnData object from DinoV3 embeddings
+    # Create AnnData object from embeddings
     with timer("TOTAL: Create AnnData object"):
-        features_adata = create_adata_object_dinov3(
+        features_adata = create_adata_object_embedding(
             str(save_path),
             config=config,
             channel=channel,
@@ -594,13 +592,13 @@ def _build_arg_parser():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Process DinoV3 features into AnnData objects."
+        description="Process neural-network embedding features into AnnData objects."
     )
     parser.add_argument(
         "--save_path",
         type=str,
         required=True,
-        help="Path to the CSV file containing DinoV3 features.",
+        help="Path to the CSV file containing embedding features.",
     )
     parser.add_argument(
         "--config_path",
@@ -615,7 +613,7 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    process_dinov3(
+    process_embedding_csv(
         args.save_path,
         config_path=args.config_path,
     )
