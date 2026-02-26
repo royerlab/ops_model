@@ -101,8 +101,8 @@ class ExperimentValidator:
         else:
             self.log_success(f"Feature dimension: {adata.shape[1]}")
 
-        # Check 2: Required metadata columns
-        required_obs = ["label_str", "label_int", "sgRNA", "well"]
+        # Check 2: Required metadata columns (perturbation replaces legacy label_str)
+        required_obs = ["perturbation", "label_int", "sgRNA", "well"]
         missing_cols = [col for col in required_obs if col not in adata.obs.columns]
         if missing_cols:
             self.log_error(f"Missing required .obs columns: {missing_cols}")
@@ -142,12 +142,12 @@ class ExperimentValidator:
             self.log_warning(f"Unusual value range: [{x_min:.2f}, {x_max:.2f}]")
 
         # Check 7: Label distribution
-        n_genes = adata.obs["label_str"].nunique()
+        n_genes = adata.obs["perturbation"].nunique()
         n_guides = adata.obs["sgRNA"].nunique()
         self.log_success(f"{n_genes} unique genes, {n_guides} unique guides")
 
         # Check for NTC
-        if "NTC" not in adata.obs["label_str"].values:
+        if "NTC" not in adata.obs["perturbation"].values:
             self.log_warning("No NTC control cells found")
 
         return is_valid
@@ -190,14 +190,13 @@ class ExperimentValidator:
                 self.log_error("Missing sgRNA column in guide-level data")
                 is_valid = False
         elif level == "gene":
-            if "label_str" not in adata.obs.columns:
-                self.log_error("Missing label_str column in gene-level data")
+            if "perturbation" not in adata.obs.columns and "label_str" not in adata.obs.columns:
+                self.log_error("Missing perturbation/label_str column in gene-level data")
                 is_valid = False
 
-        # Check 3: PCA present
+        # Check 3: PCA present (warning only — may be disabled via compute_embeddings: false)
         if "X_pca" not in adata.obsm.keys():
-            self.log_error(f"{level}-level should have X_pca")
-            is_valid = False
+            self.log_warning(f"{level}-level missing X_pca (ok if compute_embeddings: false)")
         else:
             pca_shape = adata.obsm["X_pca"].shape
             max_components = min(128, adata.shape[0] - 1)
@@ -215,10 +214,9 @@ class ExperimentValidator:
             else:
                 self.log_warning("PCA explained variance not found in .uns")
 
-        # Check 4: UMAP present
+        # Check 4: UMAP present (warning only)
         if "X_umap" not in adata.obsm.keys():
-            self.log_error(f"{level}-level should have X_umap")
-            is_valid = False
+            self.log_warning(f"{level}-level missing X_umap (ok if compute_embeddings: false)")
         else:
             umap_shape = adata.obsm["X_umap"].shape
             if umap_shape[1] != 2:
@@ -232,10 +230,9 @@ class ExperimentValidator:
                 self.log_error("UMAP contains non-finite values")
                 is_valid = False
 
-        # Check 5: PHATE present
+        # Check 5: PHATE present (warning only)
         if "X_phate" not in adata.obsm.keys():
-            self.log_error(f"{level}-level should have X_phate")
-            is_valid = False
+            self.log_warning(f"{level}-level missing X_phate (ok if compute_embeddings: false)")
         else:
             phate_shape = adata.obsm["X_phate"].shape
             if phate_shape[1] != 2:
@@ -258,7 +255,8 @@ class ExperimentValidator:
                 )
                 is_valid = False
         elif level == "gene":
-            n_unique = adata.obs["label_str"].nunique()
+            gene_col = "perturbation" if "perturbation" in adata.obs.columns else "label_str"
+            n_unique = adata.obs[gene_col].nunique()
             if n_unique != adata.shape[0]:
                 self.log_error(
                     f"Duplicate genes: {adata.shape[0]} rows, {n_unique} unique"
@@ -700,6 +698,101 @@ def batch_process(
     return results
 
 
+def batch_process_slurm(
+    experiments: List[str],
+    feature_type: str,
+    channels: Optional[List[str]] = None,
+    config_path: Optional[str] = None,
+    force_reprocess: bool = False,
+    slurm_config: Optional[Dict] = None,
+) -> Dict[str, bool]:
+    """
+    Submit per-channel batch processing as parallel SLURM jobs.
+
+    Each (experiment, channel) pair becomes a separate SLURM job submitted
+    via submitit using ops_utils.hpc.slurm_batch_utils.submit_parallel_jobs.
+
+    Args:
+        experiments: List of experiment names
+        feature_type: "dinov3" or "cellprofiler"
+        channels: List of channel names to process
+        config_path: Path to YAML config file
+        force_reprocess: Reprocess even if outputs exist
+        slurm_config: SLURM parameters dict (partition, mem, cpus, time, etc.)
+    """
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+    if feature_type == "dinov3":
+        if channels is None:
+            channels = ["Phase2D"]
+    else:
+        channels = [None]
+
+    # Build job list: one job per (experiment, channel) pair
+    jobs_to_submit = []
+    for experiment in experiments:
+        for channel in channels:
+            name = f"{experiment}/{channel}" if channel else experiment
+            jobs_to_submit.append({
+                "name": name,
+                "func": process_experiment,
+                "kwargs": {
+                    "experiment": experiment,
+                    "feature_type": feature_type,
+                    "channel": channel,
+                    "force_reprocess": force_reprocess,
+                    "validate_only": False,
+                    "config_path": config_path,
+                },
+                "metadata": {
+                    "experiment": experiment,
+                    "channel": channel or "all",
+                },
+            })
+
+    if not jobs_to_submit:
+        print("No jobs to submit!")
+        return {}
+
+    # SLURM defaults for aggregation (CPU-only, moderate memory for anndata)
+    defaults = {
+        "timeout_min": 30,
+        "slurm_partition": "cpu",
+        "cpus_per_task": 4,
+        "mem": "32G",
+    }
+    if slurm_config:
+        defaults.update(slurm_config)
+
+    # Convert mem to mem_gb for submitit
+    mem_str = defaults.pop("mem", "32G")
+    if isinstance(mem_str, str):
+        defaults["mem_gb"] = int(mem_str.rstrip("GgBb"))
+    else:
+        defaults["mem_gb"] = int(mem_str)
+    # Keep "slurm_mem" for display (slurm_batch_utils checks both "mem" and "slurm_mem")
+    defaults["slurm_mem"] = mem_str
+
+    experiment_label = experiments[0] if len(experiments) == 1 else f"{len(experiments)}_experiments"
+
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs_to_submit,
+        experiment=experiment_label,
+        slurm_params=defaults,
+        log_dir=f"slurm_dino_combine/{experiment_label}",
+        manifest_prefix="dino_combine",
+        wait_for_completion=True,
+        verbose=True,
+    )
+
+    if result.get("all_completed"):
+        print("\nAll channels processed successfully!")
+    elif result.get("failed"):
+        print(f"\n{len(result['failed'])} channel(s) failed. Check logs.")
+
+    return result
+
+
 def parse_config_file(config_path: str) -> Tuple[str, List[str], List[str], Dict]:
     """
     Parse a config file to extract experiment names, channels, and processing options.
@@ -958,6 +1051,13 @@ Examples:
         help="Path to configuration YAML file for processing options",
     )
 
+    # SLURM parallel mode
+    parser.add_argument(
+        "--slurm",
+        action="store_true",
+        help="Submit each channel as a parallel SLURM job instead of processing sequentially",
+    )
+
     # Output options
     parser.add_argument(
         "--output_report",
@@ -1014,21 +1114,50 @@ def main():
     if args.feature_type == "dinov3" and channels is None:
         channels = ["Phase2D"]
 
-    # Process
-    results = batch_process(
-        experiments=experiments,
-        feature_type=args.feature_type,
-        channels=channels,
-        config_path=args.config_path,
-        force_reprocess=args.force,
-        validate_only=args.validate_only,
-        continue_on_error=not args.stop_on_error,
-        output_report=args.output_report,
-    )
+    # Process — parallel SLURM or sequential
+    if args.slurm:
+        # Read SLURM config from the config file if available
+        slurm_config = None
+        if args.config_path:
+            with open(args.config_path, "r") as f:
+                cfg = yaml.safe_load(f)
+            slurm_cfg = cfg.get("slurm_combine", cfg.get("slurm", {}))
+            if slurm_cfg:
+                slurm_config = {}
+                if "partition" in slurm_cfg:
+                    slurm_config["slurm_partition"] = slurm_cfg["partition"]
+                if "mem" in slurm_cfg:
+                    slurm_config["mem"] = slurm_cfg["mem"]
+                if "cpus_per_task" in slurm_cfg:
+                    slurm_config["cpus_per_task"] = slurm_cfg["cpus_per_task"]
+                if "time" in slurm_cfg:
+                    from ops_utils.hpc.slurm_utils import parse_time_to_seconds
+                    slurm_config["timeout_min"] = int(parse_time_to_seconds(slurm_cfg["time"]) // 60)
 
-    # Exit code
-    all_success = all(results.values())
-    sys.exit(0 if all_success else 1)
+        result = batch_process_slurm(
+            experiments=experiments,
+            feature_type=args.feature_type,
+            channels=channels,
+            config_path=args.config_path,
+            force_reprocess=args.force,
+            slurm_config=slurm_config,
+        )
+        sys.exit(0 if result.get("all_completed") else 1)
+    else:
+        results = batch_process(
+            experiments=experiments,
+            feature_type=args.feature_type,
+            channels=channels,
+            config_path=args.config_path,
+            force_reprocess=args.force,
+            validate_only=args.validate_only,
+            continue_on_error=not args.stop_on_error,
+            output_report=args.output_report,
+        )
+
+        # Exit code
+        all_success = all(results.values())
+        sys.exit(0 if all_success else 1)
 
 
 if __name__ == "__main__":
