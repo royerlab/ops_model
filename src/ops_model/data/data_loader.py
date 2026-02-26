@@ -111,9 +111,12 @@ class BaseDataset(Dataset):
         for ch in channel_names:
             img = data[channel_names.index(ch)]
             if ch == "Phase2D" or ch == "Focus3D":
-                # Use nanstd to ignore NaN values during std calculation
+                # Use nanstd/nanmean to ignore NaN values
                 std = np.nanstd(img)
-                img_norm = img / std if std > 1e-8 else np.zeros_like(img)
+                if std > 1e-8:
+                    img_norm = (img - np.nanmean(img)) / std
+                else:
+                    img_norm = np.zeros_like(img)
                 img_list.append(img_norm)
             else:
                 # apply log normalization, clip negative values to avoid NaN
