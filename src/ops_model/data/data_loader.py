@@ -173,7 +173,8 @@ class BaseDataset(Dataset):
 
         well = ci.well
         fov = self.stores[ci.store_key][well]["0"]
-        mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
+        mask_label = getattr(ci, "mask_label", "cell_seg")
+        mask_fov = self.stores[ci.store_key][well]["labels"][mask_label]["0"]
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
         bbox = ast.literal_eval(ci.bbox)
@@ -290,7 +291,8 @@ class ContrastiveDataset(BaseDataset):
 
         well = ci.well
         fov = self.stores[ci.store_key][well]["0"]
-        mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
+        mask_label = getattr(ci, "mask_label", "cell_seg")
+        mask_fov = self.stores[ci.store_key][well]["labels"][mask_label]["0"]
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
         bbox = ast.literal_eval(ci.bbox)
@@ -401,7 +403,8 @@ class CellProfileDataset(BaseDataset):
 
         well = ci.well
         fov = self.stores[ci.store_key][well]["0"]
-        cell_mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
+        mask_label = getattr(ci, "mask_label", "cell_seg")
+        cell_mask_fov = self.stores[ci.store_key][well]["labels"][mask_label]["0"]
         nuc_mask_fov = self.stores[ci.store_key][well]["labels"]["nuclear_seg"]["0"]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]

@@ -64,14 +64,16 @@ def load_cell_painting_labels(
 
             # Swap bbox columns based on channel type
             if use_cp_bbox:
-                # Cell painting channels: use CP bbox and segmentation
+                # Cell painting channels: use CP bbox, segmentation, and mask
                 df["bbox"] = df["cp_bbox"]
                 df["segmentation_id"] = df["cp_cell_seg_id"]
+                df["mask_label"] = "cp_cell_seg"
                 # Store CP centroids as x_pheno/y_pheno for feature output compatibility
                 df["x_pheno"] = df["x_cp1"]
                 df["y_pheno"] = df["y_cp1"]
             else:
                 # Live cell channels: keep original bbox/segmentation_id
+                df["mask_label"] = "cell_seg"
                 # Use pheno centroids
                 df["x_pheno"] = df["x_pheno_centroid"]
                 df["y_pheno"] = df["y_pheno_centroid"]
