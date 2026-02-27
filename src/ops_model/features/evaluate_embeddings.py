@@ -166,12 +166,23 @@ def create_adata_object_embedding(
             y_pos = np.full(len(features), np.nan, dtype=np.float32)
             has_positions = False  # Track for warnings
 
-        # Drop metadata columns to get only features
-        metadata_cols = ["label_str", "label_int", "sgRNA", "well", "experiment"]
-        if has_positions:
-            metadata_cols.extend(["x_position", "y_position"])
+        # Drop all non-numeric columns (catches known string metadata + any unexpected label columns)
+        non_numeric_cols = features.select_dtypes(exclude="number").columns.tolist()
+        known_str_metadata = {"label_str", "sgRNA", "well", "experiment"}
+        unexpected = [c for c in non_numeric_cols if c not in known_str_metadata]
+        if unexpected:
+            print(
+                f"WARNING: Dropping {len(unexpected)} unexpected non-numeric column(s): {unexpected}"
+            )
+        features = features.drop(columns=non_numeric_cols)
 
-        features = features.drop(columns=metadata_cols, errors="ignore")
+        # Drop known numeric metadata columns
+        numeric_metadata = [
+            c
+            for c in ["label_int", "x_position", "y_position"]
+            if c in features.columns
+        ]
+        features = features.drop(columns=numeric_metadata)
 
     # Embeddings are already numeric - no array string conversion needed
     print(f"{embedding_type} features: {features.shape[1]} dimensions")
