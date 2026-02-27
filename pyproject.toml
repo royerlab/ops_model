@@ -39,6 +39,7 @@ dependencies = [
     "monai",
     "diffusers[torch]",
     "phate>=1.0.7",
+    "termcolor",
 ]
 
 # extras
