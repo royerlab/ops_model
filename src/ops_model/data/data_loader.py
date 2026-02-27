@@ -107,6 +107,7 @@ class BaseDataset(Dataset):
                 img_list.append(img_norm)
             else:
                 # apply log normalization
+                img = np.clip(img, a_min=1e-8, a_max=None)
                 log_img = np.log1p(img)
                 img_norm = (log_img - log_img.mean()) / (log_img.std() + 1e-8)
                 img_list.append(img_norm)
