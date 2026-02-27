@@ -308,7 +308,7 @@ class ExperimentValidator:
 
             if use_reporter_names and channel:
                 # Import FeatureMetadata to get reporter name
-                from ops_model.data.feature_metadata import FeatureMetadata
+                from ops_utils.data.feature_metadata import FeatureMetadata
 
                 meta = FeatureMetadata()
 
@@ -533,7 +533,7 @@ def process_experiment(
             use_reporter_names = config["processing"].get("use_reporter_names", False)
 
         if use_reporter_names and channel:
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta = FeatureMetadata()
             exp_short = experiment.split("_")[0]

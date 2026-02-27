@@ -265,7 +265,7 @@ def create_adata_object_dinov3(
         # Add reporter field to .obs (required by validator)
         # Always use FeatureMetadata to convert channel names to reporter names
         if channel and experiment:
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta = FeatureMetadata()
             exp_short = experiment.split("_")[0]

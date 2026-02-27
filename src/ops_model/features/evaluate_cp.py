@@ -132,7 +132,7 @@ def create_adata_object(
 
     # Always map channel names to reporter names using FeatureMetadata
     with timer("Mapping channel names to reporter names"):
-        from ops_model.data.feature_metadata import FeatureMetadata
+        from ops_utils.data.feature_metadata import FeatureMetadata
 
         # Check which experiments are in the dataset
         unique_experiments = features["experiment"].unique()

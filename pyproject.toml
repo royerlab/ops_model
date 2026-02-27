@@ -26,6 +26,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "ops_utils",
     "torch==2.7.1",
     "lightning",
     "byol-pytorch",

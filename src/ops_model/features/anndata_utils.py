@@ -25,7 +25,7 @@ import scanpy as sc
 import scanpy.external as sce
 import matplotlib.pyplot as plt
 
-from ops_model.data.feature_metadata import FeatureMetadata
+from ops_utils.data.feature_metadata import FeatureMetadata
 
 
 def _extract_and_verify_uns_metadata(
@@ -1456,7 +1456,7 @@ def concatenate_features_by_channel(
         if feature_type == "cellprofiler":
             # For CellProfiler, files are named by reporter, not channel
             # Check if 'channel' is already a reporter or needs mapping
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta_temp = FeatureMetadata()
             test_reporter = meta_temp.get_short_label(exp_short, channel)
@@ -1471,7 +1471,7 @@ def concatenate_features_by_channel(
             file_path = anndata_dir / f"{file_prefix}_{reporter}.h5ad"
         else:
             # For DinoV3 and others, convert channel to reporter name
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta_temp = FeatureMetadata()
             reporter = meta_temp.get_biological_signal(exp_short, channel)
@@ -1981,7 +1981,7 @@ def _process_vertical_group(
 
         # Convert channel to reporter name using FeatureMetadata
         # Works for both CellProfiler and DinoV3 - channel names are mapped to reporter names
-        from ops_model.data.feature_metadata import FeatureMetadata
+        from ops_utils.data.feature_metadata import FeatureMetadata
 
         meta = FeatureMetadata()
         reporter = meta.get_biological_signal(exp_short, channel)
@@ -2216,7 +2216,7 @@ def _process_horizontal_group(
 
     # Convert channel to reporter name using FeatureMetadata
     # Works for both CellProfiler and DinoV3 - channel names are mapped to reporter names
-    from ops_model.data.feature_metadata import FeatureMetadata
+    from ops_utils.data.feature_metadata import FeatureMetadata
 
     meta = FeatureMetadata()
     reporter = meta.get_biological_signal(exp_short, channel)
