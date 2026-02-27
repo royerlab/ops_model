@@ -15,6 +15,7 @@ from monai.transforms import (
 )
 
 from ops_model.data import data_loader
+from ops_model.data.cell_painting_labels import load_cell_painting_labels
 
 
 class DinoV3Model:
@@ -87,6 +88,17 @@ def extract_dinov3_features(
     print(
         f"Extracting DINOv3 features for {list(config['data_manager']['experiments'].keys())}"
     )
+
+    # Build labels_df from cell painting CSVs if configured
+    csv_source = config.get("csv_source", "standard")
+    labels_df = None
+    if csv_source == "cell_painting":
+        labels_df = load_cell_painting_labels(
+            experiments=config["data_manager"]["experiments"],
+            out_channels=config["data_manager"]["out_channels"],
+            cell_painting_channels=config.get("cell_painting_channels"),
+        )
+
     dm = data_loader.OpsDataManager(
         experiments=config["data_manager"]["experiments"],
         batch_size=config["data_manager"]["batch_size"],
@@ -97,6 +109,7 @@ def extract_dinov3_features(
         verbose=False,
     )
     dm.construct_dataloaders(
+        labels_df=labels_df,
         num_workers=config["data_manager"]["num_workers"],
         dataset_type=config["dataset_type"],
         basic_kwargs={
@@ -262,10 +275,8 @@ def dinov3_main(config_path: str):
     print(f"Channels: {out_channels}")
     print(f"Output directory: {output_dir}")
 
-    # Setup submitit executor
-    log_dir = Path(
-        "/hpc/projects/intracellular_dashboard/ops/models/logs/dinov3/slurm_logs"
-    )
+    # Setup submitit executor — local slurm_logs/slurm_dino_inference/{experiment} directory
+    log_dir = Path("slurm_logs") / "slurm_dino_inference" / experiments[0]
     log_dir.mkdir(parents=True, exist_ok=True)
 
     executor = submitit.AutoExecutor(folder=log_dir)
