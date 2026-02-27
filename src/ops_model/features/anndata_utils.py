@@ -1986,6 +1986,8 @@ def _process_vertical_group(
         meta = FeatureMetadata()
         reporter = meta.get_biological_signal(exp_short, channel)
         cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
+        if not cell_file.exists():
+            cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
         if not cell_file.exists():
             raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
@@ -2221,6 +2223,8 @@ def _process_horizontal_group(
     meta = FeatureMetadata()
     reporter = meta.get_biological_signal(exp_short, channel)
     cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
+    if not cell_file.exists():
+        cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
     if not cell_file.exists():
         raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
