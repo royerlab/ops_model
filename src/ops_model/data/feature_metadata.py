@@ -154,9 +154,11 @@ class FeatureMetadata:
         # Normalize channel name (e.g., Phase2D -> BF)
         normalized_channel = self._normalize_channel_name(channel)
 
-        # Find channel in list
+        # Find channel in list (skip entries without channel_name, e.g. cell_painting config)
         channels = self.metadata[exp_short]
         for ch in channels:
+            if not isinstance(ch, dict) or "channel_name" not in ch:
+                continue
             if ch["channel_name"] == normalized_channel:
                 parsed = self._parse_label(ch["label"])
                 return {
@@ -164,6 +166,17 @@ class FeatureMetadata:
                     "label": ch["label"],
                     "organelle": parsed["organelle"],
                     "marker": parsed["marker"],
+                }
+
+        # Cell painting channels: derive metadata from name (e.g. CP1_mitochondria_TOMM20)
+        if channel.startswith(("CP1_", "CP2_")):
+            parts = channel.split("_", 2)  # ["CP1", "mitochondria", "TOMM20"]
+            if len(parts) == 3:
+                return {
+                    "channel_name": channel,
+                    "label": f"{parts[1]}, {parts[2]}",
+                    "organelle": parts[1],
+                    "marker": parts[2],
                 }
 
         print(
