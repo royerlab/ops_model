@@ -1,17 +1,17 @@
 model_type: dynaclr
-run_name: &run_name 'ops_bagofchannels_self_256proj_3cplx_convnext_tiny_temp0p5_512bs'
+run_name: &run_name 'ops_bagofchannels_self_256proj_10cplx_n_NTC'
 dataset_type: contrastive
 
 trainer:
   max_epochs: 300
-  fast_dev_run: false
+  fast_dev_run: true
   # enable_model_summary: false
   # limit_train_batches: 5000
   # limit_val_batches: 500
   precision: "bf16-mixed"
   accelerator: "gpu"
   strategy: "auto"
-  devices: 4
+  devices: 1
   num_nodes: 1
   log_every_n_steps: 5
   callbacks:
@@ -33,28 +33,28 @@ trainer:
         name: *run_name
 
 data_manager:
-  batch_size: 512
+  batch_size: 256
   data_split: 
-    - 0.80
-    - 0.20
-    - 0.00
+    - 0.90
+    - 0.05
+    - 0.05
   initial_yx_patch_size:
     - 1
-    - 224
-    - 224
+    - 192
+    - 192
   final_yx_patch_size:
     - 1
     - 128
     - 128
-  num_workers: 16
+  num_workers: 12
   pin_memory: True
-  prefetch_factor: 2
+  prefetch_factor: 4
   balanced_sampling: True
   balanced_sampling_val: False
   balance_col: reporter
-  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_10complex_n_NTC_v2_filtered.parquet
+  labels_df_path: /hpc/projects/organelle_phenotyping/models/ops/DynaCLR-2D-ops-10cplx-NTC/labels_testset_10complex_n_NTC_v2_filtered.parquet
   contrastive_kwargs:
-    positive_source: "perturbation_n_reporter"
+    positive_source: "self"
     use_negative: False
     cell_masks: False
     transforms:
@@ -89,7 +89,7 @@ data_manager:
         init_args:
           keys: ["data"]
           prob: 0.5
-          factors: 0.5
+          factors: 0.3
       - class_path: monai.transforms.RandGaussianSmoothd
         init_args:
           keys: ["data"]
@@ -109,12 +109,12 @@ data_manager:
     
 
 model:
-  lr: 0.0002
+  lr: 0.00005
   schedule: Constant
   log_batches_per_epoch: 8
   log_samples_per_batch: 1
   log_embeddings: True
-  temperature: 0.5
+  temperature: 1.0
   encoder:
     backbone: "convnext_tiny"
     in_channels: 1
@@ -126,4 +126,4 @@ model:
     drop_path_rate: 0.0
 
 resume_training: false
-# ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_10k_n_NTC/version_0/checkpoints/epoch=010-loss=5.254.ckpt"
+ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_10k_n_NTC/version_0/checkpoints/epoch=010-loss=5.254.ckpt"

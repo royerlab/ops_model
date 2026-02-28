@@ -14,7 +14,7 @@ from ops_model.data import data_loader
 
 # %%
 CONFIG_PATH = Path(
-    "/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/phase_only/dynaclr_phase_only.yml"
+    "/home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/bag_of_channels/train_bagofchannels.yml"
 )
 BATCH_SIZE = 64
 SPLIT = "train"
@@ -122,16 +122,21 @@ for i in range(min(5, len(gene_labels))):
     positive_idx = crop_info[i]["positive"]["total_index"]
     anchor_sgrna = crop_info[i]["anchor"]["sgRNA"]
     positive_sgrna = crop_info[i]["positive"]["sgRNA"]
+    anchor_reporter = crop_info[i]["anchor"]["reporter"]
+    positive_reporter = crop_info[i]["positive"]["reporter"]
     same_cell = anchor_idx == positive_idx
     same_sgrna = anchor_sgrna == positive_sgrna
+    same_reporter = anchor_reporter == positive_reporter
 
     print(
-        f"  Sample {i}: anchor={anchor_gene} (idx={anchor_idx}, sgRNA={anchor_sgrna[:10]}...)"
+        f"  Sample {i}: anchor={anchor_gene} (idx={anchor_idx}, reporter={anchor_reporter}, sgRNA={anchor_sgrna[:10]}...)"
     )
     print(
-        f"            positive={positive_gene} (idx={positive_idx}, sgRNA={positive_sgrna[:10]}...)"
+        f"            positive={positive_gene} (idx={positive_idx}, reporter={positive_reporter}, sgRNA={positive_sgrna[:10]}...)"
     )
-    print(f"            same_cell={same_cell}, same_sgRNA={same_sgrna}")
+    print(
+        f"            same_cell={same_cell}, same_sgRNA={same_sgrna}, same_reporter={same_reporter}"
+    )
     print()
 
 print(f"\nNormalization check for first sample:")

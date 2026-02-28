@@ -1,5 +1,5 @@
 model_type: dynaclr
-run_name: &run_name 'ops_phase_only_self_256proj_10cplx_n_NTC_parquet'
+run_name: &run_name 'ops_phase_only_self_256proj_10cplx_n_NTC_parquet_temp0p3'
 dataset_type: contrastive
 
 trainer:
@@ -111,7 +111,7 @@ model:
   log_batches_per_epoch: 8
   log_samples_per_batch: 1
   log_embeddings: True
-  temperature: 1.0
+  temperature: 0.3
   encoder:
     backbone: "convnext_tiny"
     in_channels: 1

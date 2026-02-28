@@ -1,4 +1,5 @@
 import ast
+import os
 import random
 from typing import Callable, List, Literal, Optional
 
@@ -35,9 +36,83 @@ from .collate_utils import (
 )
 
 import warnings
+from torch.utils.data import BatchSampler
 
 # Filter zarr-related warnings (ZarrUserWarning was removed in zarr v2.18+)
 warnings.filterwarnings("ignore", module="zarr")
+
+
+class GroupedBatchSampler(BatchSampler):
+    """Batch sampler that yields batches where all samples share the same group.
+
+    Each batch picks a random group (e.g., reporter), then samples batch_size
+    indices from that group, balanced by a secondary column (e.g., gene_name).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataframe backing the dataset.
+    group_col : str
+        Column defining the group (all samples in a batch share this value).
+    balance_col : str
+        Column to balance within each group.
+    batch_size : int
+        Number of samples per batch.
+    num_batches : int
+        Total batches per epoch.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        group_col: str,
+        balance_col: str,
+        batch_size: int,
+        num_batches: int,
+        rank: int = 0,
+        world_size: int = 1,
+    ):
+        self.batch_size = batch_size
+        self.num_batches = num_batches // world_size
+        self.rank = rank
+        self.world_size = world_size
+
+        self.group_indices = {}
+        self.group_weights_per_group = {}
+
+        for group_val, group_df in df.groupby(group_col):
+            indices = group_df.index.to_numpy()
+            positional = np.array(
+                [df.index.get_loc(idx) for idx in indices]
+            )
+            self.group_indices[group_val] = positional
+
+            class_counts = group_df[balance_col].value_counts().to_dict()
+            weights = np.array(
+                [1.0 / class_counts[v] for v in group_df[balance_col]]
+            )
+            weights = weights / weights.sum()
+            self.group_weights_per_group[group_val] = weights
+
+        self.groups = list(self.group_indices.keys())
+        group_sizes = np.array(
+            [len(self.group_indices[g]) for g in self.groups]
+        )
+        self.group_probs = group_sizes / group_sizes.sum()
+
+    def __iter__(self):
+        rng = np.random.RandomState()
+        for _ in range(self.num_batches):
+            group = rng.choice(self.groups, p=self.group_probs)
+            indices = self.group_indices[group]
+            weights = self.group_weights_per_group[group]
+            chosen = rng.choice(
+                indices, size=self.batch_size, replace=True, p=weights
+            )
+            yield chosen.tolist()
+
+    def __len__(self):
+        return self.num_batches
 
 
 class BaseDataset(Dataset):
@@ -312,6 +387,52 @@ class ContrastiveDataset(BaseDataset):
         self.positive_source = positive_source
         self.use_negative = use_negative
 
+        # Pre-build positive lookup indices for O(1) access in __getitem__
+        # Map label-based index to positional (iloc) index for fast lookup
+        _label_to_pos = {
+            label: pos for pos, label in enumerate(self.labels_df.index)
+        }
+
+        if self.positive_source == "perturbation_n_reporter":
+            self._positive_index = {}
+            for (gene, rep), group_df in self.labels_df.groupby(
+                ["gene_name", "reporter"]
+            ):
+                self._positive_index[(gene, rep)] = np.array(
+                    [_label_to_pos[i] for i in group_df.index]
+                )
+
+        if (
+            self.positive_source in ("perturbation", "perturbation_n_reporter")
+            or self.use_negative
+        ):
+            self._gene_index = {}
+            for gene, group_df in self.labels_df.groupby("gene_name"):
+                self._gene_index[gene] = np.array(
+                    [_label_to_pos[i] for i in group_df.index]
+                )
+
+        # Pre-parse all bbox strings once (avoid ast.literal_eval per sample)
+        self._bboxes = np.array(
+            [ast.literal_eval(b) for b in self.labels_df["bbox"].values]
+        )
+
+        # Pre-extract hot-path columns as numpy arrays for fast iloc-free access
+        self._gene_names = self.labels_df["gene_name"].values
+        self._reporters = (
+            self.labels_df["reporter"].values
+            if "reporter" in self.labels_df.columns
+            else None
+        )
+        self._wells = self.labels_df["well"].values
+        self._store_keys = self.labels_df["store_key"].values
+        self._channels = self.labels_df["channel"].values
+        self._gene_labels = np.array(
+            [self.label_int_lut[g] for g in self._gene_names]
+        )
+        self._total_indices = self.labels_df["total_index"].values
+        self._segmentation_ids = self.labels_df["segmentation_id"].values
+
         # Priority: explicit transform object > transforms config list > default
         if transform is not None:
             # Explicit Compose object passed (for programmatic use)
@@ -390,21 +511,24 @@ class ContrastiveDataset(BaseDataset):
         return Compose(transforms)
 
     def get_crop(self, index):
-        ci = self.labels_df.iloc[index]  # crop info
-
-        well = ci.well
-        fov = self.stores[ci.store_key][well]["0"]
-        mask_fov = self.stores[ci.store_key][well]["labels"]["cell_seg"]["0"]
-        gene_label = self.label_int_lut[ci.gene_name]
-        total_index = ci.total_index
-        bbox = ast.literal_eval(ci.bbox)
+        well = self._wells[index]
+        store_key = self._store_keys[index]
+        fov = self.stores[store_key][well]["0"]
+        mask_fov = self.stores[store_key][well]["labels"]["cell_seg"]["0"]
+        gene_label = self._gene_labels[index]
+        total_index = self._total_indices[index]
+        bbox = tuple(self._bboxes[index])
         if not self.cell_masks:
             bbox = self._pad_bbox(bbox, self.initial_yx_patch_size)
 
         # Clip bbox to FOV boundaries to prevent NaN from out-of-bounds access
         bbox = self._clip_bbox_to_fov(bbox, fov.shape)
 
-        channel_names, channel_index = self._get_channels(ci, well)
+        channel_name = self._channels[index]
+        attrs = self.stores[store_key][well].attrs.asdict()
+        all_channel_names = [a["label"] for a in attrs["ome"]["omero"]["channels"]]
+        channel_names = [channel_name]
+        channel_index = [all_channel_names.index(channel_name)]
 
         data = np.asarray(
             fov[
@@ -424,7 +548,7 @@ class ContrastiveDataset(BaseDataset):
         ).copy()
         mask = np.squeeze(mask)
         mask = np.expand_dims(mask, axis=0)
-        sc_mask = mask == ci.segmentation_id
+        sc_mask = mask == self._segmentation_ids[index]
 
         data_norm = self._normalize_data(channel_names, data)
 
@@ -435,23 +559,29 @@ class ContrastiveDataset(BaseDataset):
             data_norm = np.expand_dims(data_norm, axis=0)
             sc_mask = np.expand_dims(sc_mask, axis=0)
 
-        return data_norm, sc_mask, gene_label, channel_names, total_index, ci
+        return data_norm, sc_mask, gene_label, channel_names, total_index
 
     def __getitem__(self, index):
-        anchor_i = self.labels_df.iloc[index]
-        anchor_data, _, anchor_gene_label, channel_names, _, _ = self.get_crop(index)
+        anchor_data, _, anchor_gene_label, channel_names, _ = self.get_crop(index)
+        anchor_gene = self._gene_names[index]
+        positive_indx = index  # default for "self" source
 
         if self.positive_source == "self":
             positive_data = anchor_data.copy()
             positive_gene_label = anchor_gene_label
-            positive_i = anchor_i
 
         if self.positive_source == "perturbation":
-            positive_rows = np.flatnonzero(
-                self.labels_df["gene_name"].values == anchor_i["gene_name"]
-            )
+            positive_rows = self._gene_index[anchor_gene]
             positive_indx = np.random.choice(positive_rows)
-            positive_data, _, positive_gene_label, _, _, positive_i = self.get_crop(
+            positive_data, _, positive_gene_label, _, _ = self.get_crop(
+                positive_indx
+            )
+
+        if self.positive_source == "perturbation_n_reporter":
+            anchor_reporter = self._reporters[index]
+            positive_rows = self._positive_index[(anchor_gene, anchor_reporter)]
+            positive_indx = np.random.choice(positive_rows)
+            positive_data, _, positive_gene_label, _, _ = self.get_crop(
                 positive_indx
             )
 
@@ -464,35 +594,31 @@ class ContrastiveDataset(BaseDataset):
             },
             "marker_label": channel_names,
             "crop_info": {
-                "anchor": anchor_i.to_dict(),
-                "positive": positive_i.to_dict(),
+                "anchor": self.labels_df.iloc[index].to_dict(),
+                "positive": self.labels_df.iloc[positive_indx].to_dict(),
             },
         }
 
         if self.use_negative:
-            negative_rows = np.flatnonzero(
-                self.labels_df["gene_name"].values != anchor_i["gene_name"]
-            )
+            neg_genes = [g for g in self._gene_index if g != anchor_gene]
+            neg_gene = neg_genes[np.random.randint(len(neg_genes))]
+            negative_rows = self._gene_index[neg_gene]
             negative_indx = np.random.choice(negative_rows)
 
-            negative_data, _, negative_gene_label, _, _, negative_i = self.get_crop(
+            negative_data, _, negative_gene_label, _, _ = self.get_crop(
                 negative_indx
             )
 
             batch["negative"] = negative_data.astype(np.float32)
             batch["gene_label"]["negative"] = negative_gene_label
-            batch["crop_info"]["negative"] = negative_i.to_dict()
+            batch["crop_info"]["negative"] = self.labels_df.iloc[
+                negative_indx
+            ].to_dict()
 
         if self.transform is not None:
             for k, v in batch.items():
                 if k in ["gene_label", "marker_label", "crop_info"]:
                     continue
-
-                # Force fresh randomization for MONAI transforms
-                # Without this, validation samples get identical augmentations each epoch
-                for t in self.transform.transforms:
-                    if hasattr(t, "set_random_state"):
-                        t.set_random_state(seed=None)
 
                 mini_batch = {"data": v}
                 mini_batch_trans = self.transform(mini_batch)
@@ -725,6 +851,9 @@ class OpsDataManager:
         balanced_sampling: bool = False,
         balanced_sampling_val: bool = False,
         balance_col: str = "gene_name",
+        grouped_sampling: bool = False,
+        grouped_sampling_val: bool = False,
+        group_col: str = "reporter",
         contrastive_kwargs: dict = None,
         basic_kwargs: dict = None,
         cp_kwargs: dict = None,
@@ -775,49 +904,102 @@ class OpsDataManager:
 
         if len(train_ind) > 0:
             train_df = labels_df.iloc[train_ind]
-            train_sampler = self.create_sampler(
-                train_df, balanced_sampling, balance_col=balance_col
-            )
             train_dataset = DS(
                 stores=self.store_dict,
                 labels_df=train_df,
                 **dataset_kwargs,
             )
-            train_loader = torch.utils.data.DataLoader(
-                dataset=train_dataset,
-                batch_size=self.batch_size,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor if num_workers > 0 else None,
-                worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
-                collate_fn=self.collate_fcn,
-                sampler=train_sampler,
-                **(train_loader_kwargs if train_loader_kwargs else {}),
-            )
+
+            if grouped_sampling:
+                rank = int(os.environ.get("LOCAL_RANK", 0))
+                world_size = int(os.environ.get("WORLD_SIZE", 1))
+                num_batches = len(train_df) // self.batch_size
+                train_batch_sampler = GroupedBatchSampler(
+                    df=train_df,
+                    group_col=group_col,
+                    balance_col=balance_col,
+                    batch_size=self.batch_size,
+                    num_batches=num_batches,
+                    rank=rank,
+                    world_size=world_size,
+                )
+                train_loader = torch.utils.data.DataLoader(
+                    dataset=train_dataset,
+                    batch_sampler=train_batch_sampler,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                    persistent_workers=num_workers > 0,
+                    worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
+                    collate_fn=self.collate_fcn,
+                    **(train_loader_kwargs if train_loader_kwargs else {}),
+                )
+            else:
+                train_sampler = self.create_sampler(
+                    train_df, balanced_sampling, balance_col=balance_col
+                )
+                train_loader = torch.utils.data.DataLoader(
+                    dataset=train_dataset,
+                    batch_size=self.batch_size,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                    persistent_workers=num_workers > 0,
+                    worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
+                    collate_fn=self.collate_fcn,
+                    sampler=train_sampler,
+                    **(train_loader_kwargs if train_loader_kwargs else {}),
+                )
 
             self.train_loader = train_loader
 
         if len(val_ind) > 0:
             val_df = labels_df.iloc[val_ind]
-            val_sampler = self.create_sampler(
-                val_df, balanced_sampling_val, balance_col=balance_col
-            )
             val_dataset = DS(
                 stores=self.store_dict,
                 labels_df=val_df,
                 **dataset_kwargs,
             )
-            val_loader = torch.utils.data.DataLoader(
-                dataset=val_dataset,
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                prefetch_factor=prefetch_factor if num_workers > 0 else None,
-                worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
-                collate_fn=self.collate_fcn,
-                sampler=val_sampler,
-            )
+
+            if grouped_sampling_val:
+                rank = int(os.environ.get("LOCAL_RANK", 0))
+                world_size = int(os.environ.get("WORLD_SIZE", 1))
+                num_val_batches = len(val_df) // self.batch_size
+                val_batch_sampler = GroupedBatchSampler(
+                    df=val_df,
+                    group_col=group_col,
+                    balance_col=balance_col,
+                    batch_size=self.batch_size,
+                    num_batches=num_val_batches,
+                    rank=rank,
+                    world_size=world_size,
+                )
+                val_loader = torch.utils.data.DataLoader(
+                    dataset=val_dataset,
+                    batch_sampler=val_batch_sampler,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                    persistent_workers=num_workers > 0,
+                    worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
+                    collate_fn=self.collate_fcn,
+                )
+            else:
+                val_sampler = self.create_sampler(
+                    val_df, balanced_sampling_val, balance_col=balance_col
+                )
+                val_loader = torch.utils.data.DataLoader(
+                    dataset=val_dataset,
+                    batch_size=self.batch_size,
+                    shuffle=False,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                    persistent_workers=num_workers > 0,
+                    worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
+                    collate_fn=self.collate_fcn,
+                    sampler=val_sampler,
+                )
 
             self.val_loader = val_loader
 
@@ -838,6 +1020,7 @@ class OpsDataManager:
                 num_workers=num_workers,
                 pin_memory=pin_memory,
                 prefetch_factor=prefetch_factor if num_workers > 0 else None,
+                persistent_workers=num_workers > 0,
                 worker_init_fn=self.worker_init_fn if num_workers > 0 else None,
                 collate_fn=self.collate_fcn,
                 sampler=test_sampler,
