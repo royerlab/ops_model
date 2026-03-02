@@ -6,17 +6,20 @@ Cell-DINO, etc.) and CellProfiler features for multiple experiments, checking
 for CSV existence, processing them into AnnData objects, and validating outputs.
 
 Usage:
-    # Process from config list (recommended - reads experiments/channels from configs)
+    # Process from config list — submits all configs as a single SLURM batch
     python batch_process_embeddings.py --config_list configs/dinov3/dino_configs_all.txt
 
-    # Process single config file
-    python batch_process_embeddings.py --config_list configs/dinov3/ops0031_dino.yml
+    # Config list, sequential (no SLURM)
+    python batch_process_embeddings.py --config_list configs/dinov3/dino_configs_all.txt --no-slurm
 
-    # Embedding features (legacy)
+    # Config list, force reprocess across all configs
+    python batch_process_embeddings.py --config_list configs/dinov3/dino_configs_all.txt --force
+
+    # Legacy: embedding features via SLURM
     python batch_process_embeddings.py --feature_type dinov3 --experiments ops0089_20251119 ops0084_20250101
     python batch_process_embeddings.py --feature_type cell_dino --experiments ops0089_20251119 --channels Phase2D GFP
 
-    # CellProfiler features (legacy)
+    # Legacy: CellProfiler features via SLURM
     python batch_process_embeddings.py --feature_type cellprofiler --experiments ops0089_20251119 ops0084_20250101
 """
 
@@ -278,10 +281,11 @@ def batch_process(
 
 
 def batch_process_slurm(
-    experiments: List[str],
-    feature_type: str,
+    experiments: Optional[List[str]] = None,
+    feature_type: Optional[str] = None,
     channels: Optional[List[str]] = None,
     config_path: Optional[str] = None,
+    config_list_path: Optional[str] = None,
     force_reprocess: bool = False,
     slurm_config: Optional[Dict] = None,
 ) -> Dict[str, bool]:
@@ -291,43 +295,120 @@ def batch_process_slurm(
     Each (experiment, channel) pair becomes a separate SLURM job submitted
     via submitit using ops_utils.hpc.slurm_batch_utils.submit_parallel_jobs.
 
+    Can be driven in two ways:
+
+    1. **config_list_path** (recommended): path to a text file with one config
+       path per line. Each config is parsed for experiments, channels, feature
+       type, and SLURM settings. All configs are flattened into a single job
+       list and submitted in one SLURM batch. Mixed feature types across
+       configs are supported — each job carries its own feature_type.
+
+    2. **experiments + feature_type** (legacy): explicit list of experiment
+       names and a single feature type, optionally with channels.
+
     Args:
-        experiments: List of experiment names
-        feature_type: "cellprofiler" or any embedding type (e.g., "dinov3", "cell_dino")
-        channels: List of channel names to process
-        config_path: Path to YAML config file
+        experiments: List of experiment names (legacy mode)
+        feature_type: "cellprofiler" or any embedding type (legacy mode)
+        channels: List of channel names to process (legacy mode)
+        config_path: Path to YAML config file (legacy mode)
+        config_list_path: Path to text file with config paths (one per line).
+            Extracts experiments/channels/feature_type from each config.
         force_reprocess: Reprocess even if outputs exist
-        slurm_config: SLURM parameters dict (partition, mem, cpus, time, etc.)
+        slurm_config: SLURM parameters dict (partition, mem, cpus, time, etc.).
+            Caller-supplied values override values read from config files.
     """
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-    if feature_type != "cellprofiler":
-        if channels is None:
-            channels = ["Phase2D"]
-    else:
-        channels = [None]
+    if config_list_path:
+        # --- Parse all configs ---
+        config_list = Path(config_list_path)
+        with open(config_list) as f:
+            config_paths = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
 
-    # Build job list: one job per (experiment, channel) pair
-    jobs_to_submit = []
-    for experiment in experiments:
-        for channel in channels:
-            name = f"{experiment}/{channel}" if channel else experiment
-            jobs_to_submit.append({
-                "name": name,
-                "func": process_experiment,
-                "kwargs": {
-                    "experiment": experiment,
-                    "feature_type": feature_type,
-                    "channel": channel,
-                    "force_reprocess": force_reprocess,
-                    "validate_only": False,
-                    "config_path": config_path,
-                },
-                "metadata": {
-                    "experiment": experiment,
-                    "channel": channel or "all",
-                },
-            })
+        parsed = []
+        for cp in config_paths:
+            cp_obj = Path(cp)
+            if not cp_obj.is_absolute():
+                relative = config_list.parent / cp
+                cp_obj = relative if relative.exists() else cp_obj
+            feat_type, exps, chans, opts = parse_config_file(str(cp_obj))
+            parsed.append((str(cp_obj), feat_type, exps, chans, opts))
+
+        # --- Extract SLURM config from first config that has a slurm_combine/slurm section ---
+        resolved_slurm: Dict = {}
+        for cp, *_ in parsed:
+            with open(cp) as f:
+                cfg = yaml.safe_load(f)
+            slurm_cfg = cfg.get("slurm_combine", cfg.get("slurm", {}))
+            if slurm_cfg:
+                if "partition" in slurm_cfg:
+                    resolved_slurm["slurm_partition"] = slurm_cfg["partition"]
+                if "mem" in slurm_cfg:
+                    resolved_slurm["mem"] = slurm_cfg["mem"]
+                if "cpus_per_task" in slurm_cfg:
+                    resolved_slurm["cpus_per_task"] = slurm_cfg["cpus_per_task"]
+                if "time" in slurm_cfg:
+                    from ops_utils.hpc.slurm_utils import parse_time_to_seconds
+                    resolved_slurm["timeout_min"] = int(parse_time_to_seconds(slurm_cfg["time"]) // 60)
+                break
+        if slurm_config:
+            resolved_slurm.update(slurm_config)  # caller-supplied values win
+        slurm_config = resolved_slurm or slurm_config
+
+        # --- Build flat job list across all configs ---
+        jobs_to_submit = []
+        for cp, feat_type, exps, chans, opts in parsed:
+            force = force_reprocess or opts["force_reprocess"]
+            channel_list = [None] if feat_type == "cellprofiler" else (chans or ["Phase2D"])
+            for experiment in exps:
+                for channel in channel_list:
+                    name = f"{experiment}/{channel}" if channel else experiment
+                    jobs_to_submit.append({
+                        "name": name,
+                        "func": process_experiment,
+                        "kwargs": {
+                            "experiment": experiment,
+                            "feature_type": feat_type,
+                            "channel": channel,
+                            "force_reprocess": force,
+                            "validate_only": False,
+                            "config_path": cp,
+                        },
+                        "metadata": {"experiment": experiment, "channel": channel or "all"},
+                    })
+
+        experiment_label = f"{len(parsed)}_configs"
+
+    else:
+        # --- Existing logic: build jobs from experiments/feature_type/channels ---
+        if feature_type != "cellprofiler":
+            if channels is None:
+                channels = ["Phase2D"]
+        else:
+            channels = [None]
+
+        jobs_to_submit = []
+        for experiment in experiments:
+            for channel in channels:
+                name = f"{experiment}/{channel}" if channel else experiment
+                jobs_to_submit.append({
+                    "name": name,
+                    "func": process_experiment,
+                    "kwargs": {
+                        "experiment": experiment,
+                        "feature_type": feature_type,
+                        "channel": channel,
+                        "force_reprocess": force_reprocess,
+                        "validate_only": False,
+                        "config_path": config_path,
+                    },
+                    "metadata": {
+                        "experiment": experiment,
+                        "channel": channel or "all",
+                    },
+                })
+
+        experiment_label = experiments[0] if len(experiments) == 1 else f"{len(experiments)}_experiments"
 
     if not jobs_to_submit:
         print("No jobs to submit!")
@@ -350,8 +431,6 @@ def batch_process_slurm(
     else:
         defaults["mem_gb"] = int(mem_str)
     defaults["slurm_mem"] = mem_str
-
-    experiment_label = experiments[0] if len(experiments) == 1 else f"{len(experiments)}_experiments"
 
     result = submit_parallel_jobs(
         jobs_to_submit=jobs_to_submit,
@@ -412,130 +491,6 @@ def parse_config_file(config_path: str) -> Tuple[str, List[str], List[str], Dict
     }
 
     return feature_type, experiments, channels, processing_options
-
-
-def process_from_config_list(config_list_path: str) -> Dict[str, bool]:
-    """
-    Process experiments from a list of config files.
-
-    Each config file is processed separately with its own batch_process() call.
-    All configs must have the same feature_type.
-
-    Args:
-        config_list_path: Path to text file with config paths (one per line)
-
-    Returns:
-        Dictionary mapping (experiment, channel) -> success status
-    """
-    config_list_path = Path(config_list_path)
-
-    if not config_list_path.exists():
-        raise FileNotFoundError(f"Config list file not found: {config_list_path}")
-
-    # Read config paths (skip comments and blank lines)
-    with open(config_list_path, "r") as f:
-        config_paths = [
-            line.strip()
-            for line in f
-            if line.strip() and not line.strip().startswith("#")
-        ]
-
-    if not config_paths:
-        raise ValueError(f"No config files found in {config_list_path}")
-
-    print(f"\n{'=' * 80}")
-    print(f"PROCESSING FROM CONFIG LIST: {config_list_path}")
-    print(f"{'=' * 80}")
-    print(f"Found {len(config_paths)} config files")
-    print(f"{'=' * 80}\n")
-
-    # Parse all configs and validate they have the same feature type
-    parsed_configs = []
-    for config_path in config_paths:
-        # Handle relative paths (relative to config_list directory or repo root)
-        config_path_obj = Path(config_path)
-        if not config_path_obj.is_absolute():
-            # Try relative to config list location first
-            relative_to_list = config_list_path.parent / config_path
-            if relative_to_list.exists():
-                config_path_obj = relative_to_list
-            else:
-                # Try relative to current directory
-                if not config_path_obj.exists():
-                    raise FileNotFoundError(f"Config file not found: {config_path}")
-
-        try:
-            feature_type, experiments, channels, options = parse_config_file(
-                str(config_path_obj)
-            )
-            parsed_configs.append(
-                (str(config_path_obj), feature_type, experiments, channels, options)
-            )
-        except Exception as e:
-            print(f"✗ Error parsing {config_path}: {e}")
-            raise
-
-    # Validate all configs have same feature type
-    feature_types = set(config[1] for config in parsed_configs)
-    if len(feature_types) > 1:
-        raise ValueError(
-            f"All configs must have the same feature_type. Found: {feature_types}\n"
-            f"Please separate configs by feature type into different list files."
-        )
-
-    feature_type = list(feature_types)[0]
-    print(f"Feature type: {feature_type}")
-    print(f"Processing {len(parsed_configs)} config(s)...\n")
-
-    # Process each config separately
-    all_results = {}
-    for i, (config_path, feat_type, experiments, channels, options) in enumerate(
-        parsed_configs, 1
-    ):
-        print(f"\n{'─' * 80}")
-        print(f"CONFIG {i}/{len(parsed_configs)}: {Path(config_path).name}")
-        print(f"{'─' * 80}")
-        print(f"Experiments: {experiments}")
-        print(f"Channels: {channels if channels else 'N/A'}")
-        print(f"Options: {options}")
-        print(f"{'─' * 80}\n")
-
-        # Call batch_process for this config
-        results = batch_process(
-            experiments=experiments,
-            feature_type=feat_type,
-            channels=channels if channels else None,
-            config_path=config_path,
-            force_reprocess=options["force_reprocess"],
-            validate_only=options["validate_only"],
-            continue_on_error=not options["stop_on_error"],
-            output_report=options["output_report"],
-        )
-
-        # Merge results
-        all_results.update(results)
-
-    # Overall summary
-    print(f"\n{'=' * 80}")
-    print("OVERALL SUMMARY")
-    print(f"{'=' * 80}")
-    n_total = len(all_results)
-    n_success = sum(1 for v in all_results.values() if v)
-    n_failed = n_total - n_success
-
-    print(f"Total: {n_total}")
-    print(f"✓ Success: {n_success}")
-    print(f"✗ Failed: {n_failed}")
-
-    if n_failed > 0:
-        print(f"\nFailed:")
-        for key, success in all_results.items():
-            if not success:
-                print(f"  - {key}")
-
-    print(f"{'=' * 80}\n")
-
-    return all_results
 
 
 def _build_arg_parser():
@@ -645,20 +600,36 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    # Handle config list (new pathway)
+    # Handle config list
     if args.config_list:
-        try:
-            results = process_from_config_list(args.config_list)
-        except Exception as e:
-            print(f"\n✗ Error processing config list: {e}")
-            import traceback
-
-            traceback.print_exc()
-            sys.exit(1)
-
-        # Exit code
-        all_success = all(results.values())
-        sys.exit(0 if all_success else 1)
+        if not args.no_slurm:
+            result = batch_process_slurm(
+                config_list_path=args.config_list,
+                force_reprocess=args.force,
+                slurm_config=None,  # read from config files inside batch_process_slurm
+            )
+            sys.exit(0 if result.get("all_completed") else 1)
+        else:
+            # --no-slurm: parse configs and call batch_process() per config (inline)
+            cl = Path(args.config_list)
+            with open(cl) as f:
+                cps = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+            all_results = {}
+            for cp in cps:
+                cp_obj = Path(cp) if Path(cp).is_absolute() else (cl.parent / cp)
+                feat_type, exps, chans, opts = parse_config_file(str(cp_obj))
+                results = batch_process(
+                    experiments=exps,
+                    feature_type=feat_type,
+                    channels=chans or None,
+                    config_path=str(cp_obj),
+                    force_reprocess=args.force or opts["force_reprocess"],
+                    validate_only=args.validate_only,
+                    continue_on_error=not opts["stop_on_error"],
+                    output_report=opts["output_report"],
+                )
+                all_results.update(results)
+            sys.exit(0 if all(all_results.values()) else 1)
 
     # Original pathway: load experiments from args
     # Validate that feature_type is provided when not using config_list
