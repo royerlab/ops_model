@@ -17,7 +17,7 @@ import pandas as pd
 import anndata as ad
 from pathlib import Path
 
-from ops_model.data.feature_metadata import FeatureMetadata
+from ops_utils.data.feature_metadata import FeatureMetadata
 from ops_model.features.anndata_utils import (
     _group_by_biological_signal,
     _combine_duplicate_observations,

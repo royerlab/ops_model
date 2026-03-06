@@ -273,7 +273,7 @@ def create_adata_object_embedding(
         # Add reporter field to .obs (required by validator)
         # Always use FeatureMetadata to convert channel names to reporter names
         if channel and experiment:
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta = FeatureMetadata()
             exp_short = experiment.split("_")[0]
@@ -370,11 +370,13 @@ def process_embedding_csv(
     save_dir = save_path.parent / "anndata_objects"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract channel from CSV filename (e.g., dinov3_features_Phase2D.csv -> Phase2D)
-    csv_stem = save_path.stem  # e.g., "dinov3_features_Phase2D"
-    if "_" in csv_stem:
-        # Split on underscore and take the last part as the channel
-        channel = csv_stem.split("_")[-1]
+    # Extract channel from CSV filename (e.g., dinov3_features_CP1_nuclei_Hoechst.csv -> CP1_nuclei_Hoechst)
+    csv_stem = save_path.stem  # e.g., "dinov3_features_CP1_nuclei_Hoechst"
+    prefix = "dinov3_features_"
+    if csv_stem.startswith(prefix):
+        channel = csv_stem[len(prefix):]
+    elif "_" in csv_stem:
+        channel = csv_stem.split("_", 2)[-1]  # fallback: drop first two parts
     else:
         # Fallback if no underscore found (shouldn't happen with standard naming)
         channel = "unknown"
@@ -391,18 +393,9 @@ def process_embedding_csv(
             experiment = None
             print("Warning: experiment column not found in CSV")
 
-    # Always use FeatureMetadata to get reporter names for file naming
-    filename_suffix = channel  # Default to channel
-    if channel and experiment:
-        from ops_model.data.feature_metadata import FeatureMetadata
-
-        meta = FeatureMetadata()
-        exp_short = experiment.split("_")[0]
-        reporter = meta.get_biological_signal(exp_short, channel)
-        filename_suffix = reporter
-        print(f"Using reporter name for files: {reporter} (channel: {channel})")
-    else:
-        print(f"Using channel name for files: {channel}")
+    # Use channel name as filename suffix (unique, avoids collisions like CP1/CP2 both having Hoechst)
+    filename_suffix = channel
+    print(f"Using channel name for files: {channel}")
 
     # Define checkpoint paths with appropriate suffix
     checkpoint_path = save_dir / f"features_processed_{filename_suffix}.h5ad"
