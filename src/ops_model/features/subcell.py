@@ -185,109 +185,126 @@ def extract_subcell_features(config: dict = None):
     return final_df
 
 
-def subcell_main(config_path: str):
+def subcell_main(config_paths: list[str]):
     """Orchestrate SubCell feature extraction via SLURM.
 
-    Reads out_channels from config. Channel 0 is the DNA/DAPI channel; each
-    remaining channel is a protein channel. Spawns one SLURM job per protein
-    channel, pairing it with the DNA channel.
+    For each config, reads out_channels and spawns one SLURM job per protein
+    channel (paired with the DNA channel), using submit_parallel_jobs.
 
     Args:
-        config_path: Path to YAML configuration file.
+        config_paths: List of paths to YAML configuration files.
 
     Returns:
-        List of submitit Job objects.
+        Result dict from submit_parallel_jobs.
     """
-    import submitit
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    def _parse_time(t: str) -> int:
+        parts = t.split(":")
+        return int(parts[0]) * 60 + int(parts[1])  # HH:MM[:SS] → minutes
 
-    dna_channel = config["data_manager"]["dna_channel"]
-    protein_channels = config["data_manager"]["out_channels"]
-    experiments = list(config["data_manager"]["experiments"].keys())
-    output_dir = Path(config["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
+    jobs_to_submit = []
+    slurm_params = None
 
-    slurm_config = config.get("slurm", {})
-    partition = slurm_config.get("partition", "gpu")
-    gres = slurm_config.get("gres", "gpu:1")
-    cpus_per_task = slurm_config.get("cpus_per_task", 10)
-    mem = slurm_config.get("mem", "64G")
-    time_limit = slurm_config.get("time", "4:00:00")
-    constraint = slurm_config.get("constraint", "h100|h200|a100|a40")
+    for config_path in config_paths:
+        config_stem = Path(config_path).stem
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
 
-    if isinstance(mem, str):
-        mem_gb = int(mem.rstrip("G"))
-    else:
-        mem_gb = int(mem)
+        dna_channel = config["data_manager"]["dna_channel"]
+        protein_channels = config["data_manager"]["out_channels"]
+        experiments = list(config["data_manager"]["experiments"].keys())
 
-    if isinstance(time_limit, int):
-        timeout_min = time_limit
-    elif isinstance(time_limit, str):
-        time_parts = time_limit.split(":")
-        if len(time_parts) == 3:
-            timeout_min = int(time_parts[0]) * 60 + int(time_parts[1])
-        elif len(time_parts) == 2:
-            timeout_min = int(time_parts[0])
-        else:
-            timeout_min = 240
-    else:
-        timeout_min = 240
-
-    print(
-        f"Spawning {len(protein_channels)} SubCell jobs for experiment(s): {experiments}"
-    )
-    print(f"DNA channel: {dna_channel}, Imaging channels: {protein_channels}")
-    print(f"Output directory: {output_dir}")
-
-    log_dir = Path(
-        "/hpc/projects/intracellular_dashboard/ops/models/logs/subcell/slurm_logs"
-    )
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    executor = submitit.AutoExecutor(folder=log_dir)
-
-    jobs = []
-    for protein_channel in protein_channels:
-        channel_config = copy.deepcopy(config)
-        channel_config["data_manager"]["out_channels"] = [dna_channel, protein_channel]
-
-        executor.update_parameters(
-            timeout_min=timeout_min,
-            slurm_partition=partition,
-            slurm_gres=gres,
-            cpus_per_task=cpus_per_task,
-            mem_gb=mem_gb,
-            slurm_constraint=constraint,
-            slurm_job_name=f"subcell_{experiments[0].split('_')[0]}_{protein_channel}",
-        )
-
-        job = executor.submit(extract_subcell_features, config=channel_config)
-        jobs.append(job)
         print(
-            f"Submitted job {job.job_id} for channel pair [{dna_channel}, {protein_channel}]"
+            f"Config {config_stem}: {len(protein_channels)} channel(s) for experiment(s) {experiments}"
         )
+        print(f"  DNA channel: {dna_channel}, Imaging channels: {protein_channels}")
 
-    print(f"\nAll {len(jobs)} jobs submitted. Check status with 'squeue -u $USER'")
-    print(f"Job IDs: {[job.job_id for job in jobs]}")
+        # Extract slurm params from the first config encountered
+        if slurm_params is None:
+            slurm_config = config.get("slurm", {})
+            mem = slurm_config.get("mem", "64G")
+            time_limit = slurm_config.get("time", "4:00:00")
 
-    return jobs
+            if isinstance(mem, str):
+                mem_gb = int(mem.rstrip("G"))
+            else:
+                mem_gb = int(mem)
+
+            if isinstance(time_limit, int):
+                timeout_min = time_limit
+            elif isinstance(time_limit, str):
+                timeout_min = _parse_time(time_limit)
+            else:
+                timeout_min = 240
+
+            slurm_params = {
+                "slurm_partition": slurm_config.get("partition", "gpu"),
+                "slurm_gres": slurm_config.get("gres", "gpu:1"),
+                "cpus_per_task": slurm_config.get("cpus_per_task", 10),
+                "mem_gb": mem_gb,
+                "timeout_min": timeout_min,
+            }
+            constraint = slurm_config.get("constraint")
+            if constraint:
+                slurm_params["slurm_constraint"] = constraint
+
+        for protein_channel in protein_channels:
+            channel_config = copy.deepcopy(config)
+            channel_config["data_manager"]["out_channels"] = [
+                dna_channel,
+                protein_channel,
+            ]
+            jobs_to_submit.append(
+                {
+                    "name": f"{config_stem}_{protein_channel}",
+                    "func": extract_subcell_features,
+                    "kwargs": {"config": channel_config},
+                    "metadata": {
+                        "config": config_path,
+                        "dna_channel": dna_channel,
+                        "protein_channel": protein_channel,
+                        "experiments": experiments,
+                    },
+                }
+            )
+
+    log_dir = "/hpc/projects/intracellular_dashboard/ops/models/logs/subcell/slurm_logs"
+
+    print(f"\nSubmitting {len(jobs_to_submit)} SubCell job(s) via submit_parallel_jobs")
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs_to_submit,
+        experiment="subcell",
+        slurm_params=slurm_params,
+        log_dir=log_dir,
+        wait_for_completion=True,
+    )
+    return result
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Extract SubCell features from OPS dataset based on config"
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "--config_path",
         type=str,
-        required=True,
-        help="Path to the YAML config file",
+        help="Path to a single YAML config file",
+    )
+    group.add_argument(
+        "--config_list",
+        type=str,
+        help="Path to .txt file with one config path per line",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    subcell_main(config_path=args.config_path)
+    if args.config_list:
+        with open(args.config_list) as f:
+            config_paths = [line.strip() for line in f if line.strip()]
+    else:
+        config_paths = [args.config_path]
+    subcell_main(config_paths)
