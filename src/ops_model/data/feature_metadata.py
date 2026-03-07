@@ -541,7 +541,8 @@ class FeatureMetadata:
 
         Uses pattern matching against known channels from metadata to correctly
         handle channel names with spaces (which become underscores in CSV columns).
-        All spaces are removed from reporter names to create clean identifiers.
+        Reporter names are sanitized using sanitize_label() for consistency with
+        get_biological_signal() (spaces → underscores, organelle prefix removed).
 
         Args:
             feature_name: Original feature name from CSV
@@ -559,7 +560,7 @@ class FeatureMetadata:
             'single_object_SEC61B_nucleus_MeanIntensity'
             >>> # Channel names with spaces handled correctly
             >>> meta.replace_channel_in_feature_name("single_object_ChromaLive_561_emission_cell_Area", "ops0033")
-            'single_object_ChromaLive561emission_cell_Area'  # Spaces removed
+            'single_object_ChromaLive_561_emission_cell_Area'  # Spaces → underscores (consistent with sanitize_label)
             >>> # Colocalization features
             >>> meta.replace_channel_in_feature_name("coloc_mCherry_GFP_cell_Correlation_Pearson", "ops0031")
             'coloc_SEC61B_5xUPRE_cell_Correlation_Pearson'
@@ -593,11 +594,11 @@ class FeatureMetadata:
                 for channel_csv in get_channel_aliases(channel_name):
                     pattern = f"single_object_{channel_csv}_"
                     if pattern in feature_name:
-                        # Get reporter and remove ALL spaces (no underscores)
+                        # Get reporter and sanitize consistently with get_biological_signal
                         reporter = self.get_short_label(experiment, channel_name)
-                        reporter_clean = reporter.replace(
-                            " ", ""
-                        )  # "ChromaLive 561 emission" → "ChromaLive561emission"
+                        reporter_clean = self.sanitize_label(
+                            reporter
+                        )  # "ChromaLive 561 emission" → "ChromaLive_561_emission"
 
                         # Replace the pattern
                         replacement = f"single_object_{reporter_clean}_"
@@ -619,11 +620,11 @@ class FeatureMetadata:
                         for ch2_csv in get_channel_aliases(ch2_name):
                             pattern = f"coloc_{ch1_csv}_{ch2_csv}_"
                             if pattern in feature_name:
-                                # Get reporters and remove ALL spaces
+                                # Get reporters and sanitize consistently with get_biological_signal
                                 reporter1 = self.get_short_label(experiment, ch1_name)
                                 reporter2 = self.get_short_label(experiment, ch2_name)
-                                reporter1_clean = reporter1.replace(" ", "")
-                                reporter2_clean = reporter2.replace(" ", "")
+                                reporter1_clean = self.sanitize_label(reporter1)
+                                reporter2_clean = self.sanitize_label(reporter2)
 
                                 # Replace the pattern
                                 replacement = (

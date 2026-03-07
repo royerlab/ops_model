@@ -401,8 +401,8 @@ def cp_features_main(
             f"\nPipeline complete! Generated files:\n"
             f"  - {output_csv}\n"
             f"  - {anndata_dir}/features_processed.h5ad\n"
-            f"  - {anndata_dir}/guide_bulked_umap.h5ad\n"
-            f"  - {anndata_dir}/gene_bulked_umap.h5ad"
+            f"  - {anndata_dir}/guide_bulked.h5ad\n"
+            f"  - {anndata_dir}/gene_bulked.h5ad"
         )
         return final_df
     else:
