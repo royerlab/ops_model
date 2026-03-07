@@ -104,4 +104,5 @@ ENV/
 # IDE settings
 .vscode/
 
-configs/dinov3/
+
+configs/

@@ -25,7 +25,129 @@ import scanpy as sc
 import scanpy.external as sce
 import matplotlib.pyplot as plt
 
-from ops_model.data.feature_metadata import FeatureMetadata
+from ops_utils.data.feature_metadata import FeatureMetadata
+
+
+DEFAULT_SEARCH_DIRS = [
+    Path("/hpc/projects/icd.fast.ops"),
+    Path("/hpc/projects/icd.ops"),
+]
+
+
+def _find_experiment_dir(
+    exp_short: str,
+    base_dir: Path,
+    search_dirs: Optional[List[Path]] = None,
+) -> Path:
+    """Find an experiment directory, searching multiple storage roots if needed.
+
+    First checks ``base_dir``, then falls back to each directory in
+    ``search_dirs`` (in order).  Returns the first match.
+
+    Parameters
+    ----------
+    exp_short : str
+        Short experiment name, e.g. "ops0124".
+    base_dir : Path
+        Primary directory to search.
+    search_dirs : list of Path, optional
+        Additional directories to search if *base_dir* has no match.
+        Defaults to ``DEFAULT_SEARCH_DIRS``.
+
+    Returns
+    -------
+    Path
+        The resolved experiment directory.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no matching directory is found in any root.
+    """
+    if search_dirs is None:
+        search_dirs = DEFAULT_SEARCH_DIRS
+
+    # Build a de-duplicated ordered list: base_dir first, then search_dirs
+    roots: List[Path] = [base_dir]
+    for d in search_dirs:
+        d = Path(d)
+        if d not in roots:
+            roots.append(d)
+
+    for root in roots:
+        if not root.exists():
+            continue
+        matches = list(root.glob(f"{exp_short}*"))
+        if matches:
+            return matches[0]
+
+    searched = ", ".join(str(r) for r in roots)
+    raise FileNotFoundError(
+        f"Experiment directory not found for {exp_short} "
+        f"(searched: {searched})"
+    )
+
+
+def _get_n_cells_from_cell_file(
+    anndata_dir: Path,
+    channel: str,
+    target_level: str,
+    verbose: bool = False,
+) -> "pd.Series":
+    """Compute per-guide (or per-gene) cell counts from the cell-level h5ad.
+
+    Opens the ``features_processed_*.h5ad`` file in **backed mode** so
+    only ``.obs`` is read — the feature matrix is never loaded into memory.
+
+    Parameters
+    ----------
+    anndata_dir : Path
+        Directory containing both ``guide_bulked_*`` and ``features_processed_*`` files.
+    channel : str
+        Channel / reporter name used in the filename.
+    target_level : str
+        ``"guide"`` → group by ``sgRNA``; ``"gene"`` → group by ``label_str``.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    pd.Series
+        Cell counts, **not** indexed — caller should assign directly to
+        ``adata_agg.obs["n_cells"]``.  Falls back to 1 if the cell-level
+        file cannot be found.
+    """
+    import pandas as pd
+
+    # guide_bulked files may have "umap_" prefix (e.g. guide_bulked_umap_GFP)
+    # but features_processed files don't — strip it
+    clean_channel = channel.replace("umap_", "")
+    cell_file = anndata_dir / f"features_processed_{clean_channel}.h5ad"
+    if not cell_file.exists():
+        # Also try the original channel name
+        cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
+    if not cell_file.exists():
+        # Glob fallback
+        candidates = list(anndata_dir.glob(f"features_processed_*{clean_channel}*.h5ad"))
+        cell_file = candidates[0] if candidates else None
+
+    if cell_file is None or not cell_file.exists():
+        if verbose:
+            print(f"      n_cells: cell-level file not found for {channel}, defaulting to 1")
+        return None  # caller will handle fallback
+
+    try:
+        adata_backed = ad.read_h5ad(cell_file, backed="r")
+        group_col = "sgRNA" if target_level == "guide" else "label_str"
+        counts = adata_backed.obs[group_col].value_counts()
+        adata_backed.file.close()
+        if verbose:
+            print(f"      n_cells: computed from {cell_file.name} ({len(adata_backed)} cells)")
+        return counts  # Series indexed by sgRNA/label_str
+    except Exception as e:
+        if verbose:
+            print(f"      n_cells: failed to read {cell_file.name} ({e}), defaulting to 1")
+        return None
 
 
 def _extract_and_verify_uns_metadata(
@@ -421,6 +543,7 @@ def aggregate_to_level(
     control_gene: str = "NTC",
     control_group_size: int = 4,
     random_seed: Optional[int] = None,
+    batch_cols: Optional[List[str]] = None,
 ) -> ad.AnnData:
     """
     Aggregate cell-level data to guide or gene level.
@@ -432,6 +555,9 @@ def aggregate_to_level(
         preserve_batch_info: Keep batch metadata in aggregated object
         subsample_controls: If True, split control gene guides into random groups
                            at gene level. Only applies when level="gene".
+        batch_cols: Explicit list of secondary grouping columns (e.g. ["well"] or
+                    ["well", "experiment"]). When provided, overrides the
+                    preserve_batch_info auto-detection of experiment/batch.
         control_gene: Gene name to subsample (default: "NTC")
         control_group_size: Number of guides per control group (default: 4)
         random_seed: Random seed for reproducible control grouping
@@ -567,11 +693,27 @@ def aggregate_to_level(
         label_str_values = adata.obs["label_str"].values
         preserve_label_str = True
 
-    # Add batch column if preserving batch info
-    if preserve_batch_info and "batch" in adata.obs.columns:
-        features_df["batch"] = adata.obs["batch"].values
-        # Group by both level and batch
-        group_cols = [group_col, "batch"]
+    # Resolve secondary grouping columns.
+    # batch_cols takes priority; preserve_batch_info is the legacy auto-detect fallback.
+    if batch_cols:
+        actual_batch_cols = [c for c in batch_cols if c in adata.obs.columns]
+        if actual_batch_cols:
+            for c in actual_batch_cols:
+                features_df[c] = adata.obs[c].values
+            group_cols = [group_col] + actual_batch_cols
+        else:
+            group_cols = group_col
+    elif preserve_batch_info:
+        if "experiment" in adata.obs.columns:
+            # Per-experiment mode: group by experiment
+            features_df["experiment"] = adata.obs["experiment"].values
+            group_cols = [group_col, "experiment"]
+        elif "batch" in adata.obs.columns:
+            # Legacy batch mode: group by batch
+            features_df["batch"] = adata.obs["batch"].values
+            group_cols = [group_col, "batch"]
+        else:
+            group_cols = group_col
     else:
         group_cols = group_col
 
@@ -657,12 +799,16 @@ def aggregate_to_level(
         group_keys.append(group_key)
 
     # Create DataFrame from aggregated data with original group keys as index
-    features_agg = pd.DataFrame(X_agg, columns=feature_cols, index=group_keys)
-
-    # Set index name(s) to match grouping column(s)
     if isinstance(group_cols, list):
-        features_agg.index.names = group_cols
+        # Create MultiIndex from tuple keys
+        features_agg = pd.DataFrame(
+            X_agg,
+            columns=feature_cols,
+            index=pd.MultiIndex.from_tuples(group_keys, names=group_cols),
+        )
     else:
+        # Simple index for single grouping column
+        features_agg = pd.DataFrame(X_agg, columns=feature_cols, index=group_keys)
         features_agg.index.name = group_cols
 
     # If we preserved label_str, also aggregate it (take first value per group)
@@ -670,39 +816,50 @@ def aggregate_to_level(
     if preserve_label_str:
         # Create temporary df with grouping columns and label_str
         label_df = pd.DataFrame({group_col: adata.obs[group_col].values})
-        if preserve_batch_info and "batch" in adata.obs.columns:
-            label_df["batch"] = adata.obs["batch"].values
+        if batch_cols:
+            for c in actual_batch_cols:
+                label_df[c] = adata.obs[c].values
+        elif preserve_batch_info:
+            if "experiment" in adata.obs.columns:
+                label_df["experiment"] = adata.obs["experiment"].values
+            elif "batch" in adata.obs.columns:
+                label_df["batch"] = adata.obs["batch"].values
         label_df["label_str"] = label_str_values
         label_str_agg = label_df.groupby(group_cols, observed=False)[
             "label_str"
         ].first()
 
-    # Handle MultiIndex from groupby
-    if preserve_batch_info and "batch" in adata.obs.columns:
+    # Handle MultiIndex from groupby (batch_cols or preserve_batch_info with experiment/batch)
+    if isinstance(group_cols, list):
         # Reset index to convert MultiIndex to columns
         features_agg_reset = features_agg.reset_index()
 
-        # Create simple index for AnnData
-        simple_index = [
-            f"{row[group_col]}_{row['batch']}"
-            for _, row in features_agg_reset.iterrows()
-        ]
+        # All secondary columns (everything in group_cols except the primary)
+        secondary_cols = [c for c in group_cols if c != group_col]
 
-        # Use X_agg directly (numpy array with correct shape) instead of pandas column selection
-        # This avoids pandas expanding duplicate column names
+        # Build simple obs_names by joining all grouping column values
+        parts = [features_agg_reset[c].astype(str) for c in group_cols]
+        simple_index = parts[0]
+        for p in parts[1:]:
+            simple_index = simple_index + "_" + p
+        simple_index = simple_index.tolist()
+
         X_matrix = X_agg  # Already has shape (n_groups, n_features)
 
-        # Create AnnData with simple index
         adata_agg = ad.AnnData(X=X_matrix)
-        adata_agg.var_names = adata.var_names  # Use original var_names from input
+        adata_agg.var_names = adata.var_names
         adata_agg.obs[group_col] = features_agg_reset[group_col].values
-        adata_agg.obs["batch"] = features_agg_reset["batch"].values
+        for c in secondary_cols:
+            adata_agg.obs[c] = features_agg_reset[c].values
         adata_agg.obs_names = simple_index
 
         # Add label_str if preserved
         if preserve_label_str and label_str_agg is not None:
             label_str_reset = label_str_agg.reset_index()
-            adata_agg.obs["label_str"] = label_str_reset["label_str"].values
+            label_str_aligned = features_agg_reset[group_cols].merge(
+                label_str_reset, on=group_cols, how="left"
+            )
+            adata_agg.obs["label_str"] = label_str_aligned["label_str"].values
     else:
         # Simple case without batch info
         # Reset index to avoid index.name/column conflicts in h5ad format
@@ -752,57 +909,82 @@ def aggregate_to_level(
     # Skip fields that are the grouping key (they're already present from aggregation)
     # This matches how sgRNA is handled at guide level (it's the grouping key, so not propagated)
 
-    if "perturbation" in adata.obs.columns and group_col != "perturbation":
+    # Check if column is in grouping columns (handle both string and list cases)
+    grouping_cols = [group_cols] if isinstance(group_cols, str) else group_cols
+
+    if "perturbation" in adata.obs.columns and "perturbation" not in grouping_cols:
         # Only propagate if perturbation is NOT the grouping column
         # At gene level, perturbation IS the grouping key, so it's already in .obs
-        perturbation_df = pd.DataFrame(
-            {
-                group_col: adata.obs[group_col].values,
-                "perturbation": adata.obs["perturbation"].values,
-            }
-        )
+        perturbation_df = pd.DataFrame({group_col: adata.obs[group_col].values})
+
+        # Add secondary grouping column if present
+        if isinstance(group_cols, list) and len(group_cols) > 1:
+            for col in group_cols:
+                if col != group_col and col in adata.obs.columns:
+                    perturbation_df[col] = adata.obs[col].values
+
+        perturbation_df["perturbation"] = adata.obs["perturbation"].values
+
         perturbation_agg = perturbation_df.groupby(group_cols, observed=False)[
             "perturbation"
         ].first()
-        if preserve_batch_info and "batch" in adata.obs.columns:
+        if isinstance(group_cols, list):
             perturbation_reset = perturbation_agg.reset_index()
-            adata_agg.obs["perturbation"] = perturbation_reset["perturbation"].values
+            perturbation_aligned = features_agg_reset[group_cols].merge(
+                perturbation_reset, on=group_cols, how="left"
+            )
+            adata_agg.obs["perturbation"] = perturbation_aligned["perturbation"].values
         else:
             adata_agg.obs["perturbation"] = perturbation_agg.reset_index()[
                 "perturbation"
             ].values
 
-    if "reporter" in adata.obs.columns and group_col != "reporter":
+    if "reporter" in adata.obs.columns and "reporter" not in grouping_cols:
         # Only propagate if reporter is NOT the grouping column
-        reporter_df = pd.DataFrame(
-            {
-                group_col: adata.obs[group_col].values,
-                "reporter": adata.obs["reporter"].values,
-            }
-        )
+        reporter_df = pd.DataFrame({group_col: adata.obs[group_col].values})
+
+        # Add secondary grouping column if present
+        if isinstance(group_cols, list) and len(group_cols) > 1:
+            for col in group_cols:
+                if col != group_col and col in adata.obs.columns:
+                    reporter_df[col] = adata.obs[col].values
+
+        reporter_df["reporter"] = adata.obs["reporter"].values
+
         reporter_agg = reporter_df.groupby(group_cols, observed=False)[
             "reporter"
         ].first()
-        if preserve_batch_info and "batch" in adata.obs.columns:
+        if isinstance(group_cols, list):
             reporter_reset = reporter_agg.reset_index()
-            adata_agg.obs["reporter"] = reporter_reset["reporter"].values
+            reporter_aligned = features_agg_reset[group_cols].merge(
+                reporter_reset, on=group_cols, how="left"
+            )
+            adata_agg.obs["reporter"] = reporter_aligned["reporter"].values
         else:
             adata_agg.obs["reporter"] = reporter_agg.reset_index()["reporter"].values
 
-    if "experiment" in adata.obs.columns and group_col != "experiment":
+    if "experiment" in adata.obs.columns and "experiment" not in grouping_cols:
         # Only propagate if experiment is NOT the grouping column
-        experiment_df = pd.DataFrame(
-            {
-                group_col: adata.obs[group_col].values,
-                "experiment": adata.obs["experiment"].values,
-            }
-        )
+        # In per-experiment mode, experiment IS a grouping column, so it's already in .obs
+        experiment_df = pd.DataFrame({group_col: adata.obs[group_col].values})
+
+        # Add secondary grouping column if present
+        if isinstance(group_cols, list) and len(group_cols) > 1:
+            for col in group_cols:
+                if col != group_col and col in adata.obs.columns:
+                    experiment_df[col] = adata.obs[col].values
+
+        experiment_df["experiment"] = adata.obs["experiment"].values
+
         experiment_agg = experiment_df.groupby(group_cols, observed=False)[
             "experiment"
         ].first()
-        if preserve_batch_info and "batch" in adata.obs.columns:
+        if isinstance(group_cols, list):
             experiment_reset = experiment_agg.reset_index()
-            adata_agg.obs["experiment"] = experiment_reset["experiment"].values
+            experiment_aligned = features_agg_reset[group_cols].merge(
+                experiment_reset, on=group_cols, how="left"
+            )
+            adata_agg.obs["experiment"] = experiment_aligned["experiment"].values
         else:
             adata_agg.obs["experiment"] = experiment_agg.reset_index()[
                 "experiment"
@@ -811,9 +993,21 @@ def aggregate_to_level(
     # Propagate .uns metadata from input (validator requirements)
     # Note: experiment and reporter are in .obs, not .uns, so we don't propagate them here
     if hasattr(adata, "uns"):
-        for key in ["cell_type", "embedding_type", "channel", "channel_mapping"]:
+        for key in [
+            "cell_type",
+            "embedding_type",
+            "channel",
+            "channel_mapping",
+            "per_experiment_mode",
+            "vertical_metadata",
+        ]:
             if key in adata.uns:
                 adata_agg.uns[key] = adata.uns[key]
+
+        # Update aggregation_level if present
+        if "aggregation_level" in adata.uns:
+            # Update to reflect the current level
+            adata_agg.uns["aggregation_level"] = level
 
     print(
         f"  Aggregated to {adata_agg.shape[0]} {level}s × {adata_agg.shape[1]} features"
@@ -1295,6 +1489,8 @@ def concatenate_features_by_channel(
     compute_pca: bool = True,
     compute_umap: bool = True,
     compute_phate: bool = True,
+    search_dirs: Optional[List[Union[str, Path]]] = None,
+    metadata_path: Optional[str] = None,
 ) -> ad.AnnData:
     """
     Concatenate features from multiple channels or experiments.
@@ -1412,7 +1608,7 @@ def concatenate_features_by_channel(
             feature_dir = f"{feature_type}_features"
 
     # Initialize metadata manager
-    meta = FeatureMetadata()
+    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
 
     # Determine file prefix based on aggregation level
     if aggregation_level == "guide":
@@ -1424,6 +1620,8 @@ def concatenate_features_by_channel(
 
     # Build paths
     base_dir = Path(base_dir)
+    if search_dirs is not None:
+        search_dirs = [Path(d) for d in search_dirs]
 
     print("=" * 80)
     if strategy == "multi_channel":
@@ -1443,20 +1641,15 @@ def concatenate_features_by_channel(
     for exp, channel in experiments_channels:
         exp_short = exp.split("_")[0]  # Handle ops0089_20251119 or ops0089
 
-        # Find experiment directory (may have date suffix)
-        exp_dirs = list(base_dir.glob(f"{exp_short}*"))
-        if not exp_dirs:
-            raise FileNotFoundError(
-                f"Experiment directory not found: {base_dir}/{exp_short}*"
-            )
-        exp_dir = exp_dirs[0]  # Take first match
+        # Find experiment directory (may have date suffix), searching multiple roots
+        exp_dir = _find_experiment_dir(exp_short, base_dir, search_dirs)
 
         anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
 
         if feature_type == "cellprofiler":
             # For CellProfiler, files are named by reporter, not channel
             # Check if 'channel' is already a reporter or needs mapping
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta_temp = FeatureMetadata()
             test_reporter = meta_temp.get_short_label(exp_short, channel)
@@ -1471,7 +1664,7 @@ def concatenate_features_by_channel(
             file_path = anndata_dir / f"{file_prefix}_{reporter}.h5ad"
         else:
             # For DinoV3 and others, convert channel to reporter name
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
 
             meta_temp = FeatureMetadata()
             reporter = meta_temp.get_biological_signal(exp_short, channel)
@@ -1749,11 +1942,205 @@ def _group_by_biological_signal(
     return biological_signals
 
 
+def _handle_per_experiment_observations(
+    adata_concat: ad.AnnData,
+    level: Literal["guide", "gene"],
+    cell_counts: Dict[str, int],
+    keep_shared_only: bool = False,
+    verbose: bool = True,
+) -> ad.AnnData:
+    """
+    Handle per-experiment aggregation mode (no pooling across experiments).
+
+    This function keeps guides/genes separated by experiment instead of pooling
+    them. Useful for comparing the same guide's phenotype across experimental
+    replicates or batches.
+
+    Parameters
+    ----------
+    adata_concat : ad.AnnData
+        Concatenated data from multiple experiments with experiment column
+    level : Literal["guide", "gene"]
+        Aggregation level
+    cell_counts : Dict[str, int]
+        Number of cells from each experiment
+    keep_shared_only : bool, default=False
+        If True, only keep observations (guides/genes) present in all experiments
+    verbose : bool
+        Print progress information
+
+    Returns
+    -------
+    ad.AnnData
+        Data with experiment column, optionally filtered to shared observations
+    """
+    label_col = "sgRNA" if level == "guide" else "label_str"
+
+    # Ensure experiment column exists
+    if "experiment" not in adata_concat.obs.columns:
+        raise ValueError(
+            "Per-experiment aggregation requires 'experiment' column in .obs. "
+            "This column should be added during aggregation."
+        )
+
+    if verbose:
+        n_experiments = adata_concat.obs["experiment"].nunique()
+        n_obs_total = len(adata_concat)
+        print(
+            f"    Per-experiment mode: {n_obs_total} {level}s from {n_experiments} experiments"
+        )
+
+    # Filter to shared observations if requested
+    if keep_shared_only:
+        # Count how many experiments each observation appears in
+        obs_counts = adata_concat.obs.groupby(label_col)["experiment"].nunique()
+
+        n_experiments = adata_concat.obs["experiment"].nunique()
+        shared_obs = obs_counts[obs_counts == n_experiments].index.tolist()
+
+        if verbose:
+            n_shared = len(shared_obs)
+            n_total_unique = len(obs_counts)
+            print(
+                f"      Filtering to shared {level}s: {n_shared}/{n_total_unique} present in all {n_experiments} experiments"
+            )
+
+        # Filter to shared observations
+        mask = adata_concat.obs[label_col].isin(shared_obs)
+        adata_filtered = adata_concat[mask].copy()
+
+        if len(adata_filtered) == 0:
+            raise ValueError(
+                f"No {level}s are shared across all {n_experiments} experiments. "
+                "Consider setting aggregation_per_experiment=False or checking your data."
+            )
+
+        adata_concat = adata_filtered
+
+    # Extract and verify metadata
+    verified_uns = _extract_and_verify_uns_metadata(
+        [adata_concat], f"per-experiment {level}s"
+    )
+
+    # Add metadata to .uns
+    adata_concat.uns["per_experiment_mode"] = True
+    adata_concat.uns["aggregation_level"] = level
+    adata_concat.uns["n_experiments"] = adata_concat.obs["experiment"].nunique()
+    adata_concat.uns["cell_type"] = verified_uns["cell_type"]
+    adata_concat.uns["embedding_type"] = verified_uns["embedding_type"]
+
+    # Store vertical aggregation metadata (similar to pooled mode but without pooling)
+    adata_concat.uns["vertical_metadata"] = {
+        "experiments": list(cell_counts.keys()),
+        "cell_counts_per_experiment": cell_counts,
+        "total_cells": sum(cell_counts.values()),
+        "aggregation_method": "per_experiment",
+        "pooled_across_experiments": False,
+    }
+
+    if verbose:
+        final_counts = adata_concat.obs.groupby("experiment").size()
+        print(f"      Final {level} counts per experiment:")
+        for exp, count in final_counts.items():
+            print(f"        {exp}: {count}")
+
+    return adata_concat
+
+
+def _handle_per_well_observations(
+    adata_concat: ad.AnnData,
+    level: Literal["guide", "gene"],
+    cell_counts: Dict[str, int],
+    keep_shared_only: bool = False,
+    verbose: bool = True,
+) -> ad.AnnData:
+    """
+    Handle per-well aggregation mode (observations separated by guide/gene × well × experiment).
+
+    Each row in the result represents one (guide, well, experiment) or
+    (gene, well, experiment) triple. When keep_shared_only=True, only
+    (guide/gene, well) combinations that are present in ALL experiments are kept.
+
+    Parameters
+    ----------
+    adata_concat : ad.AnnData
+        Concatenated data from multiple experiments. Must have 'well' and
+        'experiment' columns in .obs.
+    level : Literal["guide", "gene"]
+        Aggregation level.
+    cell_counts : Dict[str, int]
+        Number of cells from each experiment.
+    keep_shared_only : bool, default=False
+        If True, only keep (guide/gene, well) combinations present in all experiments.
+    verbose : bool
+        Print progress information.
+
+    Returns
+    -------
+    ad.AnnData
+        Data with one row per (guide/gene, well, experiment), optionally filtered
+        to shared (guide/gene, well) pairs.
+    """
+    label_col = "sgRNA" if level == "guide" else "label_str"
+
+    for col in ["well", "experiment"]:
+        if col not in adata_concat.obs.columns:
+            raise ValueError(
+                f"Per-well aggregation requires '{col}' column in .obs. "
+                f"Available columns: {list(adata_concat.obs.columns)}"
+            )
+
+    if verbose:
+        n_experiments = adata_concat.obs["experiment"].nunique()
+        n_obs_total = len(adata_concat)
+        print(
+            f"    Per-well mode: {n_obs_total} {level}s from "
+            f"{n_experiments} experiments"
+        )
+
+    if keep_shared_only:
+        # keep_shared_only is a no-op in per-well mode: 'well' encodes experiment
+        # information so no (guide, well) pair can appear in multiple experiments.
+        if verbose:
+            print(
+                "      NOTE: keep_shared_only=True is ignored in per-well mode "
+                "because the 'well' column is experiment-scoped."
+            )
+
+    verified_uns = _extract_and_verify_uns_metadata(
+        [adata_concat], f"per-well {level}s"
+    )
+
+    adata_concat.uns["per_well_mode"] = True
+    adata_concat.uns["aggregation_level"] = level
+    adata_concat.uns["n_experiments"] = adata_concat.obs["experiment"].nunique()
+    adata_concat.uns["cell_type"] = verified_uns["cell_type"]
+    adata_concat.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_concat.uns["vertical_metadata"] = {
+        "experiments": list(cell_counts.keys()),
+        "cell_counts_per_experiment": cell_counts,
+        "total_cells": sum(cell_counts.values()),
+        "aggregation_method": "per_well",
+        "pooled_across_experiments": False,
+    }
+
+    if verbose:
+        final_counts = adata_concat.obs.groupby(["experiment", "well"]).size()
+        print(
+            f"      Final {level} counts per (experiment, well): {len(final_counts)} groups"
+        )
+
+    return adata_concat
+
+
 def _combine_duplicate_observations(
     adata_concat: ad.AnnData,
     level: Literal["guide", "gene"],
     cell_counts: Dict[str, int],
     verbose: bool = True,
+    pool_duplicates: bool = True,
+    keep_shared_only: bool = False,
+    per_well: bool = False,
 ) -> ad.AnnData:
     """
     Combine duplicate observations from different experiments.
@@ -1773,13 +2160,41 @@ def _combine_duplicate_observations(
         Number of cells from each experiment
     verbose : bool
         Print progress
+    pool_duplicates : bool, default=True
+        If True, pool observations with same identifier across sources.
+        If False, keep them separate (per-experiment or per-well mode).
+    keep_shared_only : bool, default=False
+        Only used when pool_duplicates=False. If True, only keep observations
+        present in ALL source experiments.
+    per_well : bool, default=False
+        When pool_duplicates=False, route to per-well mode instead of
+        per-experiment mode. Keeps one row per (guide/gene, well, experiment).
 
     Returns
     -------
     ad.AnnData
-        Pooled data with one observation per unique gene/guide
-        Contains metadata about which experiments contributed
+        Pooled data with one observation per unique gene/guide (if pool_duplicates=True),
+        per-experiment observations (if pool_duplicates=True and per_well=False),
+        or per-well observations (if pool_duplicates=False and per_well=True).
+        Contains metadata about which experiments contributed.
     """
+    # Handle per-well mode
+    if not pool_duplicates and per_well:
+        return _handle_per_well_observations(
+            adata_concat,
+            level,
+            cell_counts,
+            keep_shared_only,
+            verbose,
+        )
+
+    # Handle per-experiment mode
+    if not pool_duplicates:
+        return _handle_per_experiment_observations(
+            adata_concat, level, cell_counts, keep_shared_only, verbose
+        )
+
+    # Original pooling logic continues below
     label_key = "sgRNA" if level == "guide" else "label_str"
 
     if verbose:
@@ -1808,6 +2223,13 @@ def _combine_duplicate_observations(
         features_df["perturbation"] = adata_concat.obs["perturbation"].values
         preserve_perturbation = True
 
+    # Preserve n_cells (sum across experiments for same guide/gene)
+    preserve_n_cells = False
+    n_cells_agg = None
+    if "n_cells" in adata_concat.obs.columns:
+        features_df["n_cells"] = adata_concat.obs["n_cells"].values
+        preserve_n_cells = True
+
     # Unweighted mean: each experiment contributes equally
     # This prevents one large experiment from dominating
     feature_cols = adata_concat.var_names.tolist()
@@ -1820,6 +2242,10 @@ def _combine_duplicate_observations(
     # If preserving perturbation, aggregate it separately (take first value per group)
     if preserve_perturbation:
         perturbation_agg = features_df.groupby(label_key)["perturbation"].first()
+
+    # If preserving n_cells, sum across experiments (total cells for this guide/gene)
+    if preserve_n_cells:
+        n_cells_agg = features_df.groupby(label_key)["n_cells"].sum()
 
     # Track which experiments contributed to each observation (if experiment column exists)
     if has_experiment_col:
@@ -1861,6 +2287,11 @@ def _combine_duplicate_observations(
     if preserve_perturbation and perturbation_agg is not None:
         perturbation_reset = perturbation_agg.reset_index()
         adata_pooled.obs["perturbation"] = perturbation_reset["perturbation"].values
+
+    # Add n_cells if it was preserved (summed across experiments)
+    if preserve_n_cells and n_cells_agg is not None:
+        n_cells_reset = n_cells_agg.reset_index()
+        adata_pooled.obs["n_cells"] = n_cells_reset["n_cells"].values
 
     # Add experiment count per observation
     adata_pooled.obs["n_experiments"] = [
@@ -1909,6 +2340,12 @@ def _process_vertical_group(
     random_seed: Optional[int] = None,
     normalize_on_pooling: bool = True,
     normalize_on_controls: bool = False,
+    per_experiment: bool = False,
+    keep_shared_only: bool = False,
+    per_well: bool = False,
+    search_dirs: Optional[List[Path]] = None,
+    use_preaggregated: bool = False,
+    metadata_path: Optional[str] = None,
 ) -> ad.AnnData:
     """
     Memory-efficient vertical aggregation for same biological signal.
@@ -1950,12 +2387,23 @@ def _process_vertical_group(
         If True, z-score normalize cells from each experiment before aggregation (default: True)
     normalize_on_controls : bool
         If True, compute normalization statistics from control cells only (default: False)
+    per_experiment : bool, default=False
+        If True, keep guides/genes separated by experiment instead of pooling them.
+        Useful for comparing guide phenotypes across experimental replicates.
+    keep_shared_only : bool, default=False
+        Only used when per_experiment=True or per_well=True. If True, only keep
+        observations (guides/genes) or (guide/gene, well) pairs that are present
+        in ALL experiments.
+    per_well : bool, default=False
+        If True, keep observations separated by (guide/gene, well, experiment).
+        Implies pool_duplicates=False. Useful for QC and well-level batch analysis.
 
     Returns
     -------
     ad.AnnData
-        Aggregated AnnData at target level with pooled observations
-        Contains metadata about experiments and cell counts
+        Aggregated AnnData at target level with pooled observations (if per_experiment=False)
+        or per-experiment observations (if per_experiment=True).
+        Contains metadata about experiments and cell counts.
     """
     if verbose:
         print(
@@ -1968,24 +2416,51 @@ def _process_vertical_group(
     for exp, channel in exp_channel_pairs:
         exp_short = exp.split("_")[0]
 
-        # Find experiment directory
-        exp_dirs = list(base_dir.glob(f"{exp_short}*"))
-        if not exp_dirs:
-            raise FileNotFoundError(
-                f"Experiment directory not found: {base_dir}/{exp_short}*"
-            )
-        exp_dir = exp_dirs[0]
+        # Find experiment directory (searches multiple storage roots)
+        exp_dir = _find_experiment_dir(exp_short, base_dir, search_dirs)
 
-        # Load cell-level file
         anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
 
-        # Convert channel to reporter name using FeatureMetadata
-        # Works for both CellProfiler and DinoV3 - channel names are mapped to reporter names
+        # Fast path: load pre-aggregated file if available
+        if use_preaggregated:
+            prefix = "guide_bulked" if target_level == "guide" else "gene_bulked"
+            agg_file = anndata_dir / f"{prefix}_{channel}.h5ad"
+            if not agg_file.exists():
+                from ops_model.data.feature_metadata import FeatureMetadata
+                _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+                reporter = _meta.get_biological_signal(exp_short, channel)
+                agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
+            if agg_file.exists():
+                if verbose:
+                    print(f"    Loading pre-aggregated {agg_file.name}")
+                adata_agg = ad.read_h5ad(agg_file)
+                # Derive perturbation from label_str if missing
+                if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
+                    adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
+                # Compute real n_cells from cell-level file (backed mode — no X loaded)
+                if "n_cells" not in adata_agg.obs.columns:
+                    group_col = "sgRNA" if target_level == "guide" else "label_str"
+                    counts = _get_n_cells_from_cell_file(
+                        anndata_dir, channel, target_level, verbose
+                    )
+                    if counts is not None:
+                        adata_agg.obs["n_cells"] = adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                    else:
+                        adata_agg.obs["n_cells"] = 1
+                cell_counts[exp] = adata_agg.obs["n_cells"].sum()
+                if verbose:
+                    print(f"      Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features")
+                aggregated_list.append(adata_agg)
+                continue
+
+        # Slow path: load cell-level file, normalize, aggregate
         from ops_model.data.feature_metadata import FeatureMetadata
 
-        meta = FeatureMetadata()
+        meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
         reporter = meta.get_biological_signal(exp_short, channel)
         cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
+        if not cell_file.exists():
+            cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
         if not cell_file.exists():
             raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
@@ -2039,7 +2514,9 @@ def _process_vertical_group(
                 control_gene=control_gene,
             )
 
-        # Aggregate immediately to target level (frees cell-level memory)
+        # Aggregate immediately to target level (frees cell-level memory).
+        # In per-well mode, keep well as a secondary grouping column so each
+        # (guide, well) combination becomes one observation.
         adata_agg = aggregate_to_level(
             adata_cells,
             level=target_level,
@@ -2049,6 +2526,7 @@ def _process_vertical_group(
             control_gene=control_gene,
             control_group_size=control_group_size,
             random_seed=random_seed,
+            batch_cols=["well"] if per_well else None,
         )
 
         # DEBUG: Check if perturbation survived aggregation
@@ -2080,6 +2558,9 @@ def _process_vertical_group(
 
         # Free memory
         del adata_cells
+
+        # Add experiment identifier (used for per-experiment mode and metadata tracking)
+        adata_agg.obs["experiment"] = exp
 
         aggregated_list.append(adata_agg)
 
@@ -2117,9 +2598,15 @@ def _process_vertical_group(
                 f"      ✗ 'perturbation' column MISSING before _combine_duplicate_observations"
             )
 
-    # Combine duplicate observations
+    # Combine duplicate observations (pool, per-experiment, or per-well)
     adata_pooled = _combine_duplicate_observations(
-        adata_concat, level=target_level, cell_counts=cell_counts, verbose=verbose
+        adata_concat,
+        level=target_level,
+        cell_counts=cell_counts,
+        verbose=verbose,
+        pool_duplicates=not per_experiment and not per_well,
+        keep_shared_only=keep_shared_only,
+        per_well=per_well,
     )
 
     # DEBUG: Check after combining duplicates
@@ -2157,12 +2644,17 @@ def _process_horizontal_group(
     random_seed: Optional[int] = None,
     normalize_on_pooling: bool = True,
     normalize_on_controls: bool = False,
+    search_dirs: Optional[List[Path]] = None,
+    use_preaggregated: bool = False,
+    metadata_path: Optional[str] = None,
 ) -> ad.AnnData:
     """
     Process single-source group (different biology).
 
     Since there's only one experiment/channel pair with this biological signal,
     no vertical pooling is needed. Just load cells, normalize, and aggregate.
+    If use_preaggregated=True and a guide_bulked/gene_bulked file exists,
+    load it directly instead of re-aggregating from cell-level data.
 
     Parameters
     ----------
@@ -2203,24 +2695,58 @@ def _process_horizontal_group(
 
     exp_short = exp.split("_")[0]
 
-    # Find experiment directory
-    exp_dirs = list(base_dir.glob(f"{exp_short}*"))
-    if not exp_dirs:
-        raise FileNotFoundError(
-            f"Experiment directory not found: {base_dir}/{exp_short}*"
-        )
-    exp_dir = exp_dirs[0]
+    # Find experiment directory (searches multiple storage roots)
+    exp_dir = _find_experiment_dir(exp_short, base_dir, search_dirs)
 
-    # Load cell-level file
     anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
 
-    # Convert channel to reporter name using FeatureMetadata
-    # Works for both CellProfiler and DinoV3 - channel names are mapped to reporter names
+    # Fast path: load pre-aggregated file if it exists
+    if use_preaggregated:
+        prefix = "guide_bulked" if target_level == "guide" else "gene_bulked"
+        agg_file = anndata_dir / f"{prefix}_{channel}.h5ad"
+        if not agg_file.exists():
+            # Try reporter name
+            from ops_model.data.feature_metadata import FeatureMetadata
+            _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+            reporter = _meta.get_biological_signal(exp_short, channel)
+            agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
+        if agg_file.exists():
+            if verbose:
+                print(f"    Loading pre-aggregated {agg_file.name}")
+            adata_agg = ad.read_h5ad(agg_file)
+            # Derive perturbation from label_str if missing
+            if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
+                adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
+            # Compute real n_cells from cell-level file (backed mode — no X loaded)
+            if "n_cells" not in adata_agg.obs.columns:
+                group_col = "sgRNA" if target_level == "guide" else "label_str"
+                counts = _get_n_cells_from_cell_file(
+                    anndata_dir, channel, target_level, verbose
+                )
+                if counts is not None:
+                    adata_agg.obs["n_cells"] = adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                else:
+                    adata_agg.obs["n_cells"] = 1
+            if verbose:
+                print(f"    Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features")
+            adata_agg.uns["horizontal_metadata"] = {
+                "experiment": exp,
+                "channel": channel,
+                "n_cells": adata_agg.obs["n_cells"].sum(),
+                "n_observations": len(adata_agg),
+            }
+            if "experiment" in adata_agg.obs.columns:
+                adata_agg.obs = adata_agg.obs.drop(columns=["experiment"])
+            return adata_agg
+
+    # Load cell-level file
     from ops_model.data.feature_metadata import FeatureMetadata
 
-    meta = FeatureMetadata()
+    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
     reporter = meta.get_biological_signal(exp_short, channel)
     cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
+    if not cell_file.exists():
+        cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
     if not cell_file.exists():
         raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
@@ -2395,6 +2921,7 @@ def _concatenate_horizontal(
     feature_type: str,
     target_level: Literal["guide", "gene"],
     verbose: bool = True,
+    has_signal_map: bool = False,
 ) -> ad.AnnData:
     """
     Horizontally concatenate features from aligned biological groups.
@@ -2479,10 +3006,14 @@ def _concatenate_horizontal(
         X_list.append(adata.X)
 
         # Get short label for variable naming
-        exp_channel_pairs = biological_signals[bio_signal]
-        exp_short = exp_channel_pairs[0][0].split("_")[0]
-        channel = exp_channel_pairs[0][1]
-        short_label = meta.get_short_label(exp_short, channel)
+        if has_signal_map:
+            # signal_map keys are already descriptive labels — use directly
+            short_label = bio_signal
+        else:
+            exp_channel_pairs = biological_signals[bio_signal]
+            exp_short = exp_channel_pairs[0][0].split("_")[0]
+            channel = exp_channel_pairs[0][1]
+            short_label = meta.get_short_label(exp_short, channel)
 
         # Get feature count (needed for tracking slices)
         n_features = adata.shape[1]
@@ -2556,6 +3087,7 @@ def _create_comprehensive_metadata(
     feature_type: str,
     feature_slices: Dict[str, Dict[str, Any]],
     target_level: str,
+    has_signal_map: bool = False,
 ) -> Dict[str, Any]:
     """
     Create comprehensive metadata structure.
@@ -2605,10 +3137,14 @@ def _create_comprehensive_metadata(
             cell_counts = {}
             n_cells_total = 0
 
-        # Get short label
-        exp_short = exp_channel_pairs[0][0].split("_")[0]
-        channel = exp_channel_pairs[0][1]
-        short_label = meta.get_short_label(exp_short, channel)
+        # Get short label — skip FeatureMetadata lookup when signal_map
+        # was provided (bio_signal key already IS the label)
+        if has_signal_map:
+            short_label = bio_signal
+        else:
+            exp_short = exp_channel_pairs[0][0].split("_")[0]
+            channel = exp_channel_pairs[0][1]
+            short_label = meta.get_short_label(exp_short, channel)
 
         biological_groups[bio_signal] = {
             "biological_signal": bio_signal,
@@ -2700,6 +3236,10 @@ def concatenate_experiments_comprehensive(
     leiden_resolutions: Optional[List[float]] = None,
     normalize_on_pooling: bool = True,
     normalize_on_controls: bool = False,
+    search_dirs: Optional[List[Union[str, Path]]] = None,
+    use_preaggregated: bool = False,
+    metadata_path: Optional[str] = None,
+    signal_map: Optional[Dict[str, List[Tuple[str, str]]]] = None,
 ) -> Tuple[ad.AnnData, ad.AnnData]:
     """
     Comprehensively combine experiments using biology-driven aggregation.
@@ -2833,6 +3373,8 @@ def concatenate_experiments_comprehensive(
         )
 
     base_dir = Path(base_dir)
+    if search_dirs is not None:
+        search_dirs = [Path(d) for d in search_dirs]
 
     # Set default feature_dir if not provided
     if feature_dir is None:
@@ -2851,13 +3393,22 @@ def concatenate_experiments_comprehensive(
         print("=" * 80)
 
     # Initialize metadata manager
-    meta = FeatureMetadata()
+    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
 
     # Group by biological signal
-    # This will raise ValueError if any metadata is missing
-    biological_signals = _group_by_biological_signal(
-        experiments_channels, meta, verbose, feature_type
-    )
+    if signal_map is not None:
+        # Caller provided pre-resolved grouping — use it directly
+        biological_signals = signal_map
+        if verbose:
+            print("\nUsing caller-provided signal map (bypassing FeatureMetadata lookup)")
+            for bio_signal, pairs in biological_signals.items():
+                agg_type = "VERTICAL" if len(pairs) > 1 else "HORIZONTAL"
+                print(f"  [{agg_type}] {bio_signal}: {len(pairs)} source(s)")
+    else:
+        # Auto-detect grouping from FeatureMetadata
+        biological_signals = _group_by_biological_signal(
+            experiments_channels, meta, verbose, feature_type
+        )
 
     if verbose:
         print(f"\nIdentified {len(biological_signals)} biological signal group(s)")
@@ -2888,6 +3439,9 @@ def concatenate_experiments_comprehensive(
             random_seed,  # No subsampling at guide level
             normalize_on_pooling,
             normalize_on_controls,
+            search_dirs=search_dirs,
+            use_preaggregated=use_preaggregated,
+            metadata_path=metadata_path,
         )
 
         # Recompute embeddings on guide level
@@ -2986,6 +3540,9 @@ def concatenate_experiments_comprehensive(
                 random_seed,  # No subsampling at guide level
                 normalize_on_pooling,
                 normalize_on_controls,
+                search_dirs=search_dirs,
+                use_preaggregated=use_preaggregated,
+                metadata_path=metadata_path,
             )
 
             group_adatas_guide[bio_signal] = adata_guide
@@ -3063,6 +3620,7 @@ def concatenate_experiments_comprehensive(
             feature_type,
             "guide",
             verbose,
+            has_signal_map=signal_map is not None,
         )
 
         # Recompute embeddings on guide level
@@ -3157,6 +3715,9 @@ def concatenate_experiments_comprehensive(
                 random_seed,  # No subsampling at guide level
                 normalize_on_pooling,
                 normalize_on_controls,
+                search_dirs=search_dirs,
+                use_preaggregated=use_preaggregated,
+                metadata_path=metadata_path,
             )
         else:
             # Horizontal (single source)
@@ -3178,6 +3739,9 @@ def concatenate_experiments_comprehensive(
                 random_seed,  # No subsampling at guide level
                 normalize_on_pooling,
                 normalize_on_controls,
+                search_dirs=search_dirs,
+                use_preaggregated=use_preaggregated,
+                metadata_path=metadata_path,
             )
 
         group_adatas_guide[bio_signal] = adata_guide
@@ -3242,6 +3806,7 @@ def concatenate_experiments_comprehensive(
         feature_type,
         "guide",
         verbose,
+        has_signal_map=signal_map is not None,
     )
 
     # DEBUG: Check if perturbation survived horizontal concatenation
@@ -3284,6 +3849,7 @@ def concatenate_experiments_comprehensive(
         feature_type=feature_type,
         feature_slices=adata_guide.uns["feature_slices"],
         target_level="guide",
+        has_signal_map=signal_map is not None,
     )
 
     # ========================================================================
@@ -3368,6 +3934,7 @@ def concatenate_experiments_comprehensive(
         feature_type=feature_type,
         feature_slices=adata_gene.uns["feature_slices"],
         target_level="gene",
+        has_signal_map=signal_map is not None,
     )
 
     # ========================================================================

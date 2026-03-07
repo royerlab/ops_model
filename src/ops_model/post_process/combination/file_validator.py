@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .config_handler import CombinationConfig
-from ops_model.data.feature_metadata import FeatureMetadata
+from ops_utils.data.feature_metadata import FeatureMetadata
 
 # Initialize logger
 logger = logging.getLogger(__name__)

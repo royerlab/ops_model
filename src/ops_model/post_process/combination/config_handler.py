@@ -59,6 +59,8 @@ class CombinationConfig:
 
     # Aggregation & Normalization
     aggregation_level: Optional[str] = "cell"
+    aggregation_per_experiment: bool = False
+    aggregation_per_well: bool = False
     normalization: Dict[str, Any] = field(default_factory=dict)
     control_subsampling: Dict[str, Any] = field(default_factory=dict)
     fitted_embeddings: Dict[str, Any] = field(default_factory=dict)
@@ -156,6 +158,7 @@ def normalize_feature_type(feature_type: str) -> str:
     aliases = {
         "dino": "dinov3",
         "dinov3": "dinov3",
+        "cell_dino": "cell_dino",
         "cellprofiler": "cellprofiler",
         "cell-profiler": "cellprofiler",
     }
