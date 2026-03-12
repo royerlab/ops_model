@@ -2426,7 +2426,7 @@ def _process_vertical_group(
             prefix = "guide_bulked" if target_level == "guide" else "gene_bulked"
             agg_file = anndata_dir / f"{prefix}_{channel}.h5ad"
             if not agg_file.exists():
-                from ops_model.data.feature_metadata import FeatureMetadata
+                from ops_utils.data.feature_metadata import FeatureMetadata
                 _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
                 reporter = _meta.get_biological_signal(exp_short, channel)
                 agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
@@ -2454,7 +2454,7 @@ def _process_vertical_group(
                 continue
 
         # Slow path: load cell-level file, normalize, aggregate
-        from ops_model.data.feature_metadata import FeatureMetadata
+        from ops_utils.data.feature_metadata import FeatureMetadata
 
         meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
         reporter = meta.get_biological_signal(exp_short, channel)
@@ -2706,7 +2706,7 @@ def _process_horizontal_group(
         agg_file = anndata_dir / f"{prefix}_{channel}.h5ad"
         if not agg_file.exists():
             # Try reporter name
-            from ops_model.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
             _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
             reporter = _meta.get_biological_signal(exp_short, channel)
             agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
@@ -2740,7 +2740,7 @@ def _process_horizontal_group(
             return adata_agg
 
     # Load cell-level file
-    from ops_model.data.feature_metadata import FeatureMetadata
+    from ops_utils.data.feature_metadata import FeatureMetadata
 
     meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
     reporter = meta.get_biological_signal(exp_short, channel)
