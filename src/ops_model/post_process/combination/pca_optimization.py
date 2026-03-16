@@ -33,15 +33,20 @@ from ops_model.features.anndata_utils import aggregate_to_level
 from ops_utils.analysis.map_scores import (
     compute_auc_score,
     phenotypic_activity_assesment,
+    plot_map_scatter,
 )
 from ops_utils.analysis.normalization import zscore_normalize
 from ops_utils.data.feature_discovery import (
     build_signal_groups,
+    count_cells_per_signal_group,
     discover_cellprofiler_experiments,
     discover_dino_experiments,
+    find_cell_h5ad_path,
+    find_experiment_dir,
     get_channel_maps_path,
     get_storage_roots,
     load_attribution_config,
+    load_cell_h5ad,
     resolve_channel_label,
     sanitize_signal_filename,
 )
@@ -56,110 +61,8 @@ MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
 
 
 # =============================================================================
-# Shared utilities
+# Data loading & scoring helpers
 # =============================================================================
-
-
-def _load_cell_data(
-    exp: str,
-    channel: str,
-    storage_roots: List[Path],
-    feature_dir: str,
-    metadata_path: str,
-) -> Optional[ad.AnnData]:
-    """Load cell-level h5ad for a single experiment/channel pair."""
-    from ops_utils.data.feature_metadata import FeatureMetadata
-
-    exp_short = exp.split("_")[0]
-    fm = FeatureMetadata(metadata_path=metadata_path)
-    reporter = fm.get_biological_signal(exp_short, channel)
-
-    exp_dir = None
-    for root in storage_roots:
-        candidate = root / exp
-        if candidate.exists():
-            exp_dir = candidate
-            break
-        matches = sorted(root.glob(f"{exp_short}*"))
-        if matches:
-            exp_dir = matches[0]
-            break
-
-    if exp_dir is None:
-        return None
-
-    anndata_dir = exp_dir / "3-assembly" / feature_dir / "anndata_objects"
-    cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
-    if not cell_file.exists():
-        cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
-    if not cell_file.exists():
-        return None
-
-    return ad.read_h5ad(cell_file)
-
-
-
-
-def _count_cells_per_signal_group(
-    signal_groups: Dict[str, List[Tuple[str, str]]],
-    storage_roots: List[Path],
-    feature_dir: str,
-    metadata_path: str,
-) -> Dict[str, int]:
-    """Pre-scan cell counts per signal group (fast, reads shape via h5py).
-
-    Returns dict: signal_label -> total_cell_count across all experiments.
-    """
-    from tqdm import tqdm
-    from ops_utils.data.feature_metadata import FeatureMetadata
-    import h5py
-
-    fm = FeatureMetadata(metadata_path=metadata_path)
-
-    # Build flat task list for tqdm
-    all_tasks = []
-    for signal, pairs in signal_groups.items():
-        for exp, ch in pairs:
-            all_tasks.append((signal, exp, ch))
-
-    counts = {signal: 0 for signal in signal_groups}
-    for signal, exp, ch in tqdm(all_tasks, desc="Pre-scanning cell counts", unit="ch"):
-        exp_short = exp.split("_")[0]
-        reporter = fm.get_biological_signal(exp_short, ch)
-
-        # Find the cell h5ad file without loading it
-        cell_file = None
-        for root in storage_roots:
-            candidate = root / exp
-            if not candidate.exists():
-                matches = sorted(root.glob(f"{exp_short}*"))
-                candidate = matches[0] if matches else None
-            if candidate is not None and candidate.exists():
-                anndata_dir = candidate / "3-assembly" / feature_dir / "anndata_objects"
-                f1 = anndata_dir / f"features_processed_{reporter}.h5ad"
-                f2 = anndata_dir / f"features_processed_{ch}.h5ad"
-                cell_file = f1 if f1.exists() else (f2 if f2.exists() else None)
-                break
-
-        if cell_file is not None:
-            try:
-                with h5py.File(cell_file, "r") as f:
-                    counts[signal] += f["X"].shape[0]
-            except Exception:
-                adata = ad.read_h5ad(cell_file)
-                counts[signal] += adata.n_obs
-                del adata
-
-    # Print sorted table
-    print(f"\n  {'Signal':<45} {'Cells':>12}")
-    print(f"  {'-'*45} {'-'*12}")
-    for signal, n in sorted(counts.items(), key=lambda x: x[1], reverse=True):
-        print(f"  {signal:<45} {n:>12,}")
-    print(f"  {'─'*45} {'─'*12}")
-    print(f"  {'TOTAL':<45} {sum(counts.values()):>12,}")
-
-    return counts
-
 
 
 
@@ -540,70 +443,6 @@ def _plot_positive_controls_grid(
         logger.info(f"  Saved plots/{fname}")
 
 
-def _plot_map_scatter(ax, metric_df, metric_label, ratio):
-    """Plot p-value vs mAP scatter with density coloring on a given axis."""
-    from scipy.stats import gaussian_kde
-
-    if metric_df is None or len(metric_df) == 0:
-        ax.text(0.5, 0.5, f"{metric_label}\nNo data", ha="center", va="center",
-                transform=ax.transAxes, fontsize=14)
-        return
-
-    if "-log10(p-value)" not in metric_df.columns and "corrected_p_value" in metric_df.columns:
-        metric_df = metric_df.copy()
-        metric_df["-log10(p-value)"] = -np.log10(metric_df["corrected_p_value"].clip(lower=1e-300))
-
-    mAP_vals = metric_df["mean_average_precision"].values
-    log10p_vals = metric_df["-log10(p-value)"].values
-    is_sig = metric_df["below_corrected_p"].values if "below_corrected_p" in metric_df.columns else np.zeros(len(metric_df), dtype=bool)
-    is_ntc = metric_df["perturbation"].str.contains("NTC|non-targeting", case=False, na=False).values if "perturbation" in metric_df.columns else np.zeros(len(metric_df), dtype=bool)
-
-    nonsig = ~is_sig & ~is_ntc
-    sig = is_sig & ~is_ntc
-
-    # Compute density for significant points (where overlap matters)
-    if sig.sum() > 5:
-        xy_sig = np.vstack([mAP_vals[sig], log10p_vals[sig]])
-        try:
-            kde = gaussian_kde(xy_sig)
-            density_sig = kde(xy_sig)
-            # Sort by density so densest points are drawn on top
-            order = density_sig.argsort()
-            sc = ax.scatter(mAP_vals[sig][order], log10p_vals[sig][order],
-                           c=density_sig[order], s=40, alpha=0.8,
-                           cmap="viridis", edgecolors="black", linewidths=0.2,
-                           label=f"Significant ({sig.sum()})", zorder=3)
-            import matplotlib.pyplot as _plt
-            _plt.colorbar(sc, ax=ax, label="Density", shrink=0.7, pad=0.02)
-        except Exception:
-            ax.scatter(mAP_vals[sig], log10p_vals[sig], c="steelblue", s=40, alpha=0.7,
-                      edgecolors="black", linewidths=0.3, label=f"Significant ({sig.sum()})")
-    elif sig.any():
-        ax.scatter(mAP_vals[sig], log10p_vals[sig], c="steelblue", s=40, alpha=0.7,
-                  edgecolors="black", linewidths=0.3, label=f"Significant ({sig.sum()})")
-
-    # Non-significant as grey underneath
-    if nonsig.any():
-        ax.scatter(mAP_vals[nonsig], log10p_vals[nonsig], c="lightgrey", s=30, alpha=0.4,
-                  label="Not significant", zorder=1)
-
-    # NTC as red diamonds on top (consistent with map_umap.py)
-    if is_ntc.any():
-        ax.scatter(mAP_vals[is_ntc], log10p_vals[is_ntc], c="#E03030", s=80, alpha=0.9,
-                  marker="D", edgecolors="black", linewidths=0.5,
-                  label=f"NTC ({is_ntc.sum()})", zorder=5)
-
-    # Bonferroni-corrected p=0.05 threshold line (same as copairs default)
-    ax.axhline(-np.log10(0.05), color="black", linestyle="--", alpha=0.6, linewidth=1)
-    ax.text(ax.get_xlim()[0] + 0.01, -np.log10(0.05) + 0.1,
-            "p=0.05 (Bonferroni)", fontsize=7, alpha=0.7)
-
-    ax.set_xlabel("Mean Average Precision (mAP)")
-    ax.set_ylabel("-log10(corrected p-value)")
-    ax.set_title(f"{metric_label} — {ratio:.1%} significant")
-    ax.legend(fontsize=8, loc="best")
-    ax.grid(True, alpha=0.2)
-
 
 def _plot_sweep(sweep_df, signal, peak_t, peak_n, best_act_t, suptitle, plots_dir, file_prefix):
     """Shared 3-panel sweep plot: Activity, AUC, and #PCs vs variance threshold."""
@@ -655,10 +494,171 @@ def _plot_sweep(sweep_df, signal, peak_t, peak_n, best_act_t, suptitle, plots_di
 
 
 # =============================================================================
-# Phase 1: Per-channel PCA optimization (one SLURM job per channel)
+# Shared sweep + output helpers (used by both Phase 1a and 1b)
 # =============================================================================
 
-def process_single_channel(
+def _init_sweep_logger():
+    """Common logger setup for SLURM sweep functions."""
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("copairs").setLevel(logging.WARNING)
+    return logging.getLogger(__name__)
+
+
+def _run_threshold_sweep(
+    X_pcs: np.ndarray,
+    cumvar: np.ndarray,
+    obs_df: pd.DataFrame,
+    thresholds: List[float],
+    norm_method: str,
+    extra_sweep_cols: Dict[str, object],
+    _logger,
+):
+    """Sweep variance thresholds, score activity at each, return results + best peaks.
+
+    Returns:
+        (sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t)
+        or None if no valid threshold found.
+    """
+    best_act_t, best_act_r, best_act_a, best_act_n = None, -1.0, -1.0, 0
+    best_auc_t, best_auc_r, best_auc_a, best_auc_n = None, -1.0, -1.0, 0
+    sweep_rows = []
+
+    for threshold in thresholds:
+        n_pcs = _n_pcs_for_threshold(cumvar, threshold)
+        X_slice = X_pcs[:, :n_pcs].astype(np.float32)
+        pc_names = [f"PC{j}" for j in range(n_pcs)]
+
+        adata_tmp = ad.AnnData(
+            X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
+        )
+        guide_tmp = aggregate_to_level(adata_tmp, level="guide", method="mean", preserve_batch_info=False)
+        del adata_tmp
+        guide_tmp.X = np.asarray(guide_tmp.X, dtype=np.float32)
+
+        guide_norm = _normalize_guide(guide_tmp.copy(), norm_method)
+        guide_norm.X = np.asarray(guide_norm.X, dtype=np.float32)
+        try:
+            r, a = _score_activity(guide_norm)
+        except Exception as e:
+            _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
+            r, a = 0.0, 0.0
+        del guide_tmp, guide_norm
+
+        row = {"threshold": threshold, "n_pcs": n_pcs, "activity": r, "auc": a}
+        row.update(extra_sweep_cols)
+        sweep_rows.append(row)
+
+        if n_pcs < MIN_PCS:
+            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — {r:.1%}, AUC={a:.4f} [skipped for peak]")
+            continue
+        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — {r:.1%}, AUC={a:.4f}")
+        if r > best_act_r or (r == best_act_r and a > best_act_a):
+            best_act_t, best_act_r, best_act_a, best_act_n = threshold, r, a, n_pcs
+        if a > best_auc_a or (a == best_auc_a and r > best_auc_r):
+            best_auc_t, best_auc_r, best_auc_a, best_auc_n = threshold, r, a, n_pcs
+
+    if best_act_t is None:
+        return None
+
+    _logger.info(f"  Peak (activity): {best_act_t:.0%} ({best_act_n} PCs) → {best_act_r:.1%}, AUC={best_act_a:.4f}")
+    _logger.info(f"  Peak (AUC):      {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}")
+
+    return sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t
+
+
+def _save_sweep_outputs(
+    X_pcs: np.ndarray,
+    obs_df: pd.DataFrame,
+    cumvar: np.ndarray,
+    peak_n: int,
+    peak_t: float,
+    best_auc_r: float,
+    best_auc_a: float,
+    best_act_t: float,
+    signal: str,
+    sweep_rows: List[Dict],
+    uns_metadata: Dict[str, object],
+    output_dir: Path,
+    subdir: str,
+    file_prefix: str,
+    suptitle: str,
+    rng: np.random.RandomState,
+    _logger,
+    drop_obs_cols: Optional[List[str]] = None,
+):
+    """Build AnnData at peak PCs, save cell subsample, aggregate to guide/gene, write outputs.
+
+    Args:
+        drop_obs_cols: Columns to drop from obs before aggregation (e.g. ['experiment'] for copairs).
+    """
+    X_reduced = X_pcs[:, :peak_n].astype(np.float32)
+    pc_names = [f"{signal}_PC{j}" for j in range(peak_n)]
+
+    adata_cells = ad.AnnData(
+        X=X_reduced, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
+    )
+
+    # Save a subsampled cell-level h5ad for cross-signal UMAP/PHATE
+    n_sub = min(25000, adata_cells.n_obs)
+    sub_idx = rng.choice(adata_cells.n_obs, n_sub, replace=False)
+    sub_idx.sort()
+    cells_sub = adata_cells[sub_idx].copy()
+    cells_sub.obs["signal"] = signal
+    out_subdir = output_dir / subdir
+    out_subdir.mkdir(parents=True, exist_ok=True)
+    cells_sub.write_h5ad(out_subdir / f"{file_prefix}_cells_sub.h5ad")
+    del cells_sub
+
+    # Drop specified columns before aggregation (e.g. 'experiment' for copairs compatibility)
+    if drop_obs_cols:
+        adata_cells.obs = adata_cells.obs[[c for c in adata_cells.obs.columns if c not in drop_obs_cols]]
+
+    g = aggregate_to_level(adata_cells, level="guide", method="mean", preserve_batch_info=False)
+    e = aggregate_to_level(adata_cells, level="gene", method="mean", preserve_batch_info=False)
+    del adata_cells
+    g.X = np.asarray(g.X, dtype=np.float32)
+    e.X = np.asarray(e.X, dtype=np.float32)
+
+    # Store metadata
+    base_uns = {
+        "pca_threshold": float(peak_t),
+        "n_pcs": int(peak_n),
+        "signal": signal,
+        "explained_variance": float(cumvar[peak_n - 1]) if peak_n <= len(cumvar) else 1.0,
+        "peak_activity": float(best_auc_r),
+        "peak_auc": float(best_auc_a),
+    }
+    base_uns.update(uns_metadata)
+    for adata in [g, e]:
+        adata.uns.update(base_uns)
+
+    g.write_h5ad(out_subdir / f"{file_prefix}_guide.h5ad")
+    e.write_h5ad(out_subdir / f"{file_prefix}_gene.h5ad")
+
+    # Save sweep CSV
+    sweep_df = pd.DataFrame(sweep_rows)
+    sweep_df.to_csv(out_subdir / f"{file_prefix}_sweep.csv", index=False)
+
+    # Save sweep plot
+    try:
+        _plot_sweep(
+            sweep_df, signal, peak_t, peak_n, best_act_t,
+            suptitle=suptitle,
+            plots_dir=out_subdir / "plots",
+            file_prefix=file_prefix,
+        )
+        _logger.info(f"  Saved plot: {subdir}/plots/{file_prefix}_sweep.png")
+    except Exception as plot_err:
+        _logger.warning(f"  Plot failed: {plot_err}")
+
+
+# =============================================================================
+# Phase 1a: Per-experiment PCA sweep (one SLURM job per experiment-channel)
+# =============================================================================
+
+def pca_sweep_single_experiment(
     exp: str,
     channel: str,
     output_dir: str,
@@ -666,8 +666,11 @@ def process_single_channel(
     sweep_thresholds: Optional[List[float]] = None,
     feature_dir_override: Optional[str] = None,
 ) -> str:
-    """
-    Process a single experiment-channel pair: load, PCA sweep, save.
+    """PCA variance sweep for a single experiment-channel pair.
+
+    Loads cell-level features from one experiment/channel, fits PCA, sweeps
+    variance thresholds to find the optimal number of PCs, and saves
+    guide/gene-level h5ads at the best threshold.
 
     Top-level function (not a method) so submitit can pickle it.
 
@@ -676,12 +679,7 @@ def process_single_channel(
       - {signal}_gene.h5ad
       - {signal}_sweep.csv   (full sweep data for this channel)
     """
-    import warnings
-    warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.getLogger("copairs").setLevel(logging.WARNING)
-    _logger = logging.getLogger(__name__)
-
+    _logger = _init_sweep_logger()
     t_start = time.time()
     output_dir = Path(output_dir)
     thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
@@ -711,7 +709,7 @@ def process_single_channel(
     _logger.info(f"Processing {label} [features: {feature_dir}]...")
 
     # Load cell data
-    adata_cells = _load_cell_data(exp, channel, storage_roots, feature_dir, maps_path)
+    adata_cells = load_cell_h5ad(exp, channel, storage_roots, feature_dir, maps_path)
     if adata_cells is None:
         return f"SKIPPED: {label} — cell data not found"
 
@@ -740,136 +738,43 @@ def process_single_channel(
     del X_raw, pca_model
 
     # Sweep thresholds
-    best_act_t, best_act_r, best_act_a, best_act_n = None, -1.0, -1.0, 0
-    best_auc_t, best_auc_r, best_auc_a, best_auc_n = None, -1.0, -1.0, 0
-    sweep_rows = []
-
-    for threshold in thresholds:
-        n_pcs = _n_pcs_for_threshold(cumvar, threshold)
-        X_slice = X_pcs[:, :n_pcs].astype(np.float32)
-        pc_names = [f"PC{j}" for j in range(n_pcs)]
-
-        adata_tmp = ad.AnnData(
-            X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
-        )
-        guide_tmp = aggregate_to_level(adata_tmp, level="guide", method="mean", preserve_batch_info=False)
-        del adata_tmp
-        guide_tmp.X = np.asarray(guide_tmp.X, dtype=np.float32)
-
-        # Normalize and score
-        guide_norm = _normalize_guide(guide_tmp.copy(), norm_method)
-        guide_norm.X = np.asarray(guide_norm.X, dtype=np.float32)
-        try:
-            r, a = _score_activity(guide_norm)
-        except Exception as e:
-            _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
-            r, a = 0.0, 0.0
-        del guide_tmp, guide_norm
-
-        sweep_rows.append({
-            "experiment": exp,
-            "channel": channel,
-            "signal": sig,
-            "threshold": threshold,
-            "n_pcs": n_pcs,
-            "activity": r,
-            "auc": a,
-        })
-
-        # Only consider thresholds with >= MIN_PCS for peak selection
-        if n_pcs < MIN_PCS:
-            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — {r:.1%}, AUC={a:.4f} [skipped for peak]")
-            continue
-        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — {r:.1%}, AUC={a:.4f}")
-        if r > best_act_r or (r == best_act_r and a > best_act_a):
-            best_act_t, best_act_r, best_act_a, best_act_n = threshold, r, a, n_pcs
-        if a > best_auc_a or (a == best_auc_a and r > best_auc_r):
-            best_auc_t, best_auc_r, best_auc_a, best_auc_n = threshold, r, a, n_pcs
-
-    if best_act_t is None:
+    result = _run_threshold_sweep(
+        X_pcs, cumvar, obs_df, thresholds, norm_method,
+        extra_sweep_cols={"experiment": exp, "channel": channel, "signal": sig},
+        _logger=_logger,
+    )
+    if result is None:
         return f"FAILED: {label} — no valid threshold found (all < {MIN_PCS} PCs)"
+    sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t = result
 
-    _logger.info(f"  Peak (activity): {best_act_t:.0%} ({best_act_n} PCs) → {best_act_r:.1%}, AUC={best_act_a:.4f}")
-    _logger.info(f"  Peak (AUC):      {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}")
-
-    # Use AUC-optimized peak (produces better pooled results per hypothesis 10)
-    peak_n = best_auc_n
-    peak_t = best_auc_t
-    X_reduced = X_pcs[:, :peak_n].astype(np.float32)
-    pc_names = [f"{sig}_PC{j}" for j in range(peak_n)]
-    del X_pcs
-
-    adata_cells = ad.AnnData(
-        X=X_reduced, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
+    # Save outputs at AUC-optimized peak
+    obs_df["experiment"] = exp_short
+    file_prefix = f"{exp_short}_{sig}"
+    _save_sweep_outputs(
+        X_pcs, obs_df, cumvar,
+        peak_n=best_auc_n, peak_t=best_auc_t,
+        best_auc_r=best_auc_r, best_auc_a=best_auc_a, best_act_t=best_act_t,
+        signal=sig, sweep_rows=sweep_rows,
+        uns_metadata={
+            "experiment": exp, "channel": channel,
+            "n_cells": int(n_cells), "n_features_raw": int(n_feats),
+        },
+        output_dir=output_dir, subdir="per_channel", file_prefix=file_prefix,
+        suptitle=f"{exp_short}/{channel} → {sig} ({n_cells:,} cells, {n_feats} raw features)",
+        rng=np.random.RandomState(42), _logger=_logger,
     )
 
-    # Save a subsampled cell-level h5ad for cross-signal UMAP/PHATE
-    _rng = np.random.RandomState(42)
-    n_sub = min(25000, adata_cells.n_obs)
-    sub_idx = _rng.choice(adata_cells.n_obs, n_sub, replace=False)
-    sub_idx.sort()
-    cells_sub = adata_cells[sub_idx].copy()
-    cells_sub.obs["signal"] = sig
-    cells_sub.obs["experiment"] = exp_short
-    per_channel_dir_tmp = output_dir / "per_channel"
-    per_channel_dir_tmp.mkdir(parents=True, exist_ok=True)
-    cells_sub.write_h5ad(per_channel_dir_tmp / f"{exp_short}_{sig}_cells_sub.h5ad")
-    del cells_sub
-
-    g = aggregate_to_level(adata_cells, level="guide", method="mean", preserve_batch_info=False)
-    e = aggregate_to_level(adata_cells, level="gene", method="mean", preserve_batch_info=False)
-    del adata_cells
-    g.X = np.asarray(g.X, dtype=np.float32)
-    e.X = np.asarray(e.X, dtype=np.float32)
-
-    # Store metadata
-    for adata in [g, e]:
-        adata.uns["pca_threshold"] = float(peak_t)
-        adata.uns["n_pcs"] = int(peak_n)
-        adata.uns["signal"] = sig
-        adata.uns["experiment"] = exp
-        adata.uns["channel"] = channel
-        adata.uns["n_cells"] = int(n_cells)
-        adata.uns["n_features_raw"] = int(n_feats)
-        adata.uns["explained_variance"] = float(cumvar[peak_n - 1]) if peak_n <= len(cumvar) else 1.0
-        adata.uns["peak_activity"] = float(best_auc_r)
-        adata.uns["peak_auc"] = float(best_auc_a)
-
-    per_channel_dir = output_dir / "per_channel"
-    per_channel_dir.mkdir(parents=True, exist_ok=True)
-
-    # Use exp_short prefix to avoid collisions when multiple experiments share a signal
-    file_prefix = f"{exp_short}_{sig}"
-    g.write_h5ad(per_channel_dir / f"{file_prefix}_guide.h5ad")
-    e.write_h5ad(per_channel_dir / f"{file_prefix}_gene.h5ad")
-
-    # Save sweep CSV
-    sweep_df = pd.DataFrame(sweep_rows)
-    sweep_df.to_csv(per_channel_dir / f"{file_prefix}_sweep.csv", index=False)
-
-    # Save per-channel sweep plot
-    try:
-        _plot_sweep(
-            sweep_df, sig, peak_t, peak_n, best_act_t,
-            suptitle=f"{exp_short}/{channel} → {sig} ({n_cells:,} cells, {n_feats} raw features)",
-            plots_dir=per_channel_dir / "plots",
-            file_prefix=file_prefix,
-        )
-        _logger.info(f"  Saved plot: per_channel/plots/{file_prefix}_sweep.png")
-    except Exception as plot_err:
-        _logger.warning(f"  Plot failed: {plot_err}")
-
     elapsed = time.time() - t_start
-    _logger.info(f"  Done: {sig} in {elapsed:.0f}s — {peak_n} PCs @ {peak_t:.0%}")
+    _logger.info(f"  Done: {sig} in {elapsed:.0f}s — {best_auc_n} PCs @ {best_auc_t:.0%}")
 
-    return f"SUCCESS: {sig} — {peak_n} PCs @ {peak_t:.0%}, {best_act_r:.1%} active, AUC={best_act_a:.4f}"
+    return f"SUCCESS: {sig} — {best_auc_n} PCs @ {best_auc_t:.0%}, {best_auc_r:.1%} active, AUC={best_auc_a:.4f}"
 
 
 # =============================================================================
-# Downsampled mode: process a signal group (pool cells across experiments)
+# Phase 1b: Pooled PCA sweep (one SLURM job per biological signal group)
 # =============================================================================
 
-def process_signal_group(
+def pca_sweep_pooled_signal(
     signal: str,
     exp_channel_pairs: List[Tuple[str, str]],
     output_dir: str,
@@ -879,26 +784,24 @@ def process_signal_group(
     random_seed: int = 42,
     feature_dir_override: Optional[str] = None,
 ) -> str:
-    """
-    Process a biological signal group: pool cells across experiments, downsample,
-    PCA sweep, save.
+    """PCA variance sweep on pooled & downsampled cells for a biological signal.
+
+    Pools cells from multiple experiments that share the same biological signal
+    (e.g. "early endosome, EEA1"), downsamples to ``target_n_cells`` using
+    proportional sampling, then runs the same PCA sweep as
+    :func:`pca_sweep_single_experiment`.
+
+    Used in ``--downsampled`` mode where each signal group gets equal
+    representation regardless of how many experiments contribute to it.
 
     Top-level function (not a method) so submitit can pickle it.
-
-    Uses proportional sampling: each experiment contributes cells proportional
-    to its size, so larger experiments naturally contribute more cells.
 
     Saves to output_dir/per_signal/:
       - {signal}_guide.h5ad
       - {signal}_gene.h5ad
       - {signal}_sweep.csv
     """
-    import warnings
-    warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.getLogger("copairs").setLevel(logging.WARNING)
-    _logger = logging.getLogger(__name__)
-
+    _logger = _init_sweep_logger()
     t_start = time.time()
     output_dir = Path(output_dir)
     thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
@@ -915,25 +818,10 @@ def process_signal_group(
 
     # --- Pass 1: Lightweight pre-scan for cell counts (no full matrix load) ---
     import h5py
-    from ops_utils.data.feature_metadata import FeatureMetadata as _FM
-    _fm = _FM(metadata_path=maps_path)
 
     exp_cell_counts = {}  # (exp, ch) -> n_cells
     for exp, ch in exp_channel_pairs:
-        exp_short = exp.split("_")[0]
-        reporter = _fm.get_biological_signal(exp_short, ch)
-        cell_file = None
-        for root in storage_roots:
-            candidate = root / exp
-            if not candidate.exists():
-                matches = sorted(root.glob(f"{exp_short}*"))
-                candidate = matches[0] if matches else None
-            if candidate is not None and candidate.exists():
-                anndata_dir = candidate / "3-assembly" / feature_dir / "anndata_objects"
-                f1 = anndata_dir / f"features_processed_{reporter}.h5ad"
-                f2 = anndata_dir / f"features_processed_{ch}.h5ad"
-                cell_file = f1 if f1.exists() else (f2 if f2.exists() else None)
-                break
+        cell_file = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
         if cell_file is not None:
             try:
                 with h5py.File(cell_file, "r") as f:
@@ -957,7 +845,7 @@ def process_signal_group(
         if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
             continue
 
-        adata = _load_cell_data(exp, ch, storage_roots, feature_dir, maps_path)
+        adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
         if adata is None:
             continue
 
@@ -1033,132 +921,43 @@ def process_signal_group(
     X_pcs, cumvar, pca_model = _fit_pca(X_raw)
     del X_raw, pca_model
 
-    # --- Sweep thresholds (same as process_single_channel) ---
-    best_act_t, best_act_r, best_act_a, best_act_n = None, -1.0, -1.0, 0
-    best_auc_t, best_auc_r, best_auc_a, best_auc_n = None, -1.0, -1.0, 0
-    sweep_rows = []
-
-    for threshold in thresholds:
-        n_pcs = _n_pcs_for_threshold(cumvar, threshold)
-        X_slice = X_pcs[:, :n_pcs].astype(np.float32)
-        pc_names = [f"PC{j}" for j in range(n_pcs)]
-
-        adata_tmp = ad.AnnData(
-            X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
-        )
-        guide_tmp = aggregate_to_level(adata_tmp, level="guide", method="mean", preserve_batch_info=False)
-        del adata_tmp
-        guide_tmp.X = np.asarray(guide_tmp.X, dtype=np.float32)
-
-        guide_norm = _normalize_guide(guide_tmp.copy(), norm_method)
-        guide_norm.X = np.asarray(guide_norm.X, dtype=np.float32)
-        try:
-            r, a = _score_activity(guide_norm)
-        except Exception as e:
-            _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
-            r, a = 0.0, 0.0
-        del guide_tmp, guide_norm
-
-        sweep_rows.append({
-            "signal": signal,
-            "n_experiments": n_exps,
-            "threshold": threshold,
-            "n_pcs": n_pcs,
-            "activity": r,
-            "auc": a,
-        })
-
-        if n_pcs < MIN_PCS:
-            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — {r:.1%}, AUC={a:.4f} [skipped for peak]")
-            continue
-        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — {r:.1%}, AUC={a:.4f}")
-        if r > best_act_r or (r == best_act_r and a > best_act_a):
-            best_act_t, best_act_r, best_act_a, best_act_n = threshold, r, a, n_pcs
-        if a > best_auc_a or (a == best_auc_a and r > best_auc_r):
-            best_auc_t, best_auc_r, best_auc_a, best_auc_n = threshold, r, a, n_pcs
-
-    if best_act_t is None:
+    # Sweep thresholds
+    result = _run_threshold_sweep(
+        X_pcs, cumvar, obs_df, thresholds, norm_method,
+        extra_sweep_cols={"signal": signal, "n_experiments": n_exps},
+        _logger=_logger,
+    )
+    if result is None:
         return f"FAILED: {signal} — no valid threshold found (all < {MIN_PCS} PCs)"
+    sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t = result
 
-    _logger.info(f"  Peak (activity): {best_act_t:.0%} ({best_act_n} PCs) → {best_act_r:.1%}, AUC={best_act_a:.4f}")
-    _logger.info(f"  Peak (AUC):      {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}")
+    # Save outputs at AUC-optimized peak
+    file_prefix = sanitize_signal_filename(signal)
+    exps_str = ", ".join(exp.split("_")[0] for exp in loaded_exps[:5])
+    if len(loaded_exps) > 5:
+        exps_str += f" +{len(loaded_exps)-5} more"
 
-    # Use AUC-optimized peak
-    peak_n = best_auc_n
-    peak_t = best_auc_t
-    X_reduced = X_pcs[:, :peak_n].astype(np.float32)
-    pc_names = [f"{signal}_PC{j}" for j in range(peak_n)]
-    del X_pcs
-
-    adata_cells = ad.AnnData(
-        X=X_reduced, obs=obs_df_full.copy(), var=pd.DataFrame(index=pc_names),
+    _save_sweep_outputs(
+        X_pcs, obs_df_full, cumvar,
+        peak_n=best_auc_n, peak_t=best_auc_t,
+        best_auc_r=best_auc_r, best_auc_a=best_auc_a, best_act_t=best_act_t,
+        signal=signal, sweep_rows=sweep_rows,
+        uns_metadata={
+            "experiment": ",".join(exp.split("_")[0] for exp in loaded_exps),
+            "channel": ",".join(ch for _, ch in exp_channel_pairs),
+            "n_cells": int(n_cells), "n_cells_pooled": int(n_cells_pooled),
+            "n_experiments": int(n_exps), "n_features_raw": int(n_feats),
+        },
+        output_dir=output_dir, subdir="per_signal", file_prefix=file_prefix,
+        suptitle=f"{signal} ({n_exps} exps: {exps_str}) — {n_cells:,}/{n_cells_pooled:,} cells, {n_feats} raw features",
+        rng=rng, _logger=_logger,
+        drop_obs_cols=["experiment"],
     )
 
-    # Save a subsampled cell-level h5ad for cross-signal UMAP/PHATE visualization
-    n_subsample = min(25000, adata_cells.n_obs)
-    sub_idx = rng.choice(adata_cells.n_obs, n_subsample, replace=False)
-    sub_idx.sort()
-    cells_sub = adata_cells[sub_idx].copy()
-    cells_sub.obs["signal"] = signal
-    per_signal_dir_tmp = Path(output_dir) / "per_signal"
-    per_signal_dir_tmp.mkdir(parents=True, exist_ok=True)
-    cells_sub.write_h5ad(per_signal_dir_tmp / f"{sanitize_signal_filename(signal)}_cells_sub.h5ad")
-    _logger.info(f"  Saved {n_subsample} cell subsample for cross-signal embedding")
-    del cells_sub
-
-    # Drop experiment column before aggregation (copairs compatibility)
-    adata_cells.obs = adata_cells.obs[[c for c in adata_cells.obs.columns if c != "experiment"]]
-    g = aggregate_to_level(adata_cells, level="guide", method="mean", preserve_batch_info=False)
-    e = aggregate_to_level(adata_cells, level="gene", method="mean", preserve_batch_info=False)
-    del adata_cells
-    g.X = np.asarray(g.X, dtype=np.float32)
-    e.X = np.asarray(e.X, dtype=np.float32)
-
-    # Store metadata
-    for adata in [g, e]:
-        adata.uns["pca_threshold"] = float(peak_t)
-        adata.uns["n_pcs"] = int(peak_n)
-        adata.uns["signal"] = signal
-        adata.uns["experiment"] = ",".join(exp.split("_")[0] for exp in loaded_exps)
-        adata.uns["channel"] = ",".join(ch for _, ch in exp_channel_pairs)
-        adata.uns["n_cells"] = int(n_cells)
-        adata.uns["n_cells_pooled"] = int(n_cells_pooled)
-        adata.uns["n_experiments"] = int(n_exps)
-        adata.uns["n_features_raw"] = int(n_feats)
-        adata.uns["explained_variance"] = float(cumvar[peak_n - 1]) if peak_n <= len(cumvar) else 1.0
-        adata.uns["peak_activity"] = float(best_auc_r)
-        adata.uns["peak_auc"] = float(best_auc_a)
-
-    per_signal_dir = output_dir / "per_signal"
-    per_signal_dir.mkdir(parents=True, exist_ok=True)
-
-    file_prefix = sanitize_signal_filename(signal)
-    g.write_h5ad(per_signal_dir / f"{file_prefix}_guide.h5ad")
-    e.write_h5ad(per_signal_dir / f"{file_prefix}_gene.h5ad")
-
-    # Save sweep CSV
-    sweep_df = pd.DataFrame(sweep_rows)
-    sweep_df.to_csv(per_signal_dir / f"{file_prefix}_sweep.csv", index=False)
-
-    # Save per-signal sweep plot
-    try:
-        exps_str = ", ".join(e.split("_")[0] for e in loaded_exps[:5])
-        if len(loaded_exps) > 5:
-            exps_str += f" +{len(loaded_exps)-5} more"
-        _plot_sweep(
-            sweep_df, signal, peak_t, peak_n, best_act_t,
-            suptitle=f"{signal} ({n_exps} exps: {exps_str}) — {n_cells:,}/{n_cells_pooled:,} cells, {n_feats} raw features",
-            plots_dir=per_signal_dir / "plots",
-            file_prefix=file_prefix,
-        )
-        _logger.info(f"  Saved plot: per_signal/plots/{file_prefix}_sweep.png")
-    except Exception as ex:
-        _logger.warning(f"  Sweep plot failed: {ex}")
-
     elapsed = time.time() - t_start
-    _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {peak_n} PCs @ {peak_t:.0%}")
+    _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {best_auc_n} PCs @ {best_auc_t:.0%}")
 
-    return f"SUCCESS: {signal} — {peak_n} PCs @ {peak_t:.0%}, {best_auc_r:.1%} active, AUC={best_auc_a:.4f} ({n_exps} exps, {n_cells}/{n_cells_pooled} cells)"
+    return f"SUCCESS: {signal} — {best_auc_n} PCs @ {best_auc_t:.0%}, {best_auc_r:.1%} active, AUC={best_auc_a:.4f} ({n_exps} exps, {n_cells}/{n_cells_pooled} cells)"
 
 
 # =============================================================================
@@ -1328,7 +1127,7 @@ def aggregate_channels(
     if activity_map is not None:
         try:
             fig, ax = plt.subplots(figsize=(8, 7))
-            _plot_map_scatter(ax, activity_map, "Activity", r)
+            plot_map_scatter(ax, activity_map, "Activity", r)
             fig.suptitle(f"Phenotypic Activity — {total_feats} features", fontsize=13, fontweight="bold")
             fig.tight_layout()
             fig.savefig(plots_dir / "map_activity.png", dpi=150, bbox_inches="tight")
@@ -1649,8 +1448,8 @@ def aggregate_channels(
 
             # Save activity + distinctiveness 2-panel plot
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-            _plot_map_scatter(ax1, activity_map, "Activity", r)
-            _plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", distinctive_ratio)
+            plot_map_scatter(ax1, activity_map, "Activity", r)
+            plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", distinctive_ratio)
             fig.suptitle(f"Activity & Distinctiveness — {total_feats} features", fontsize=13, fontweight="bold")
             fig.tight_layout()
             fig.savefig(plots_dir / "map_activity_distinctiveness.png", dpi=150, bbox_inches="tight")
@@ -1685,8 +1484,8 @@ def aggregate_channels(
 
             # Save CORUM + CHAD 2-panel plot
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-            _plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", consistency_corum_ratio)
-            _plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", consistency_manual_ratio)
+            plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", consistency_corum_ratio)
+            plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", consistency_manual_ratio)
             fig.suptitle(f"Consistency Metrics — {total_feats} features", fontsize=13, fontweight="bold")
             fig.tight_layout()
             fig.savefig(plots_dir / "map_consistency.png", dpi=150, bbox_inches="tight")
@@ -1735,7 +1534,7 @@ def run_pca_optimization(
     # Phase 1: process each channel sequentially
     for i, (exp, ch) in enumerate(all_pairs):
         logger.info(f"\n[{i+1}/{len(all_pairs)}] Processing {exp}/{ch}...")
-        result = process_single_channel(
+        result = pca_sweep_single_experiment(
             exp=exp,
             channel=ch,
             output_dir=str(output_dir),
@@ -1991,7 +1790,7 @@ def main():
         if args.slurm:
             from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
             print(f"Submitting aggregation as SLURM job ({args.slurm_agg_memory}, {args.slurm_agg_time}min, {args.slurm_cpus}cpus)...")
-            if is_signal_mode:
+            if args.downsampled:
                 print(f"  Mode: signal-group (reading from {agg_output}/per_signal/)")
             agg_jobs = [{
                 "name": "pca_aggregate",
@@ -2028,7 +1827,6 @@ def main():
     # --downsampled mode: pool cells by signal group, downsample, PCA
     if args.downsampled:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-        from types import SimpleNamespace
 
         if args.cell_profiler:
             ds_output_dir = output_dir / "downsampled"  # {output_dir}/cellprofiler/downsampled/
@@ -2062,7 +1860,7 @@ def main():
 
         # Pre-scan cell counts
         print("\nPre-scanning cell counts per signal group...")
-        cell_counts = _count_cells_per_signal_group(signal_groups, storage_roots, feature_dir, maps_path)
+        cell_counts = count_cells_per_signal_group(signal_groups, storage_roots, feature_dir, maps_path)
         MIN_CELLS_FLOOR = 750_000
         raw_min = min(cell_counts.values())
         target_n_cells = max(raw_min, MIN_CELLS_FLOOR)
@@ -2111,7 +1909,7 @@ def main():
                 if _cp_feature_dir_override:
                     sg_kwargs["feature_dir_override"] = _cp_feature_dir_override
                     sg_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
-                result = process_signal_group(**sg_kwargs)
+                result = pca_sweep_pooled_signal(**sg_kwargs)
                 print(f"  {result}")
             # Aggregate
             result = aggregate_channels(
@@ -2128,7 +1926,7 @@ def main():
             sig_safe = sanitize_signal_filename(signal)[:40]
             jobs.append({
                 "name": f"pca_ds_{sig_safe}",
-                "func": process_signal_group,
+                "func": pca_sweep_pooled_signal,
                 "kwargs": {
                     "signal": signal,
                     "exp_channel_pairs": pairs,
@@ -2252,7 +2050,7 @@ def main():
                 job_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
             jobs.append({
                 "name": f"pca_{sig_safe}_{exp_short}",
-                "func": process_single_channel,
+                "func": pca_sweep_single_experiment,
                 "kwargs": job_kwargs,
                 "metadata": {"signal": sig, "experiment": exp, "channel": ch},
             })
