@@ -4226,5 +4226,134 @@ def main():
     print(adata_combined.obs[args.batch_key].value_counts())
 
 
+# =============================================================================
+# Horizontal concatenation & NTC splitting (shared with pca_optimization)
+# =============================================================================
+
+
+def hconcat_by_perturbation(blocks: List[ad.AnnData], level: str = "guide") -> ad.AnnData:
+    """Horizontally concatenate AnnData blocks by matching on perturbation/sgRNA key.
+
+    Aligns observations across blocks using the perturbation key (sgRNA for guide,
+    perturbation otherwise), then stacks features (columns) side-by-side.
+
+    Parameters
+    ----------
+    blocks : list of AnnData
+        AnnData objects to concatenate horizontally. Must share the same
+        perturbation/sgRNA observations.
+    level : str
+        "guide" uses sgRNA as the join key, otherwise uses perturbation.
+
+    Returns
+    -------
+    AnnData with horizontally concatenated features and unique var names.
+    """
+    key = "sgRNA" if level == "guide" and "sgRNA" in blocks[0].obs.columns else "perturbation"
+    common = set(blocks[0].obs[key].values)
+    for b in blocks[1:]:
+        common &= set(b.obs[key].values)
+    common = sorted(common)
+
+    matrices = []
+    var_names = []
+    ref_obs = None
+    for b in blocks:
+        mask = b.obs[key].isin(common)
+        sub = b[mask].copy()
+        order = sub.obs[key].map({k: i for i, k in enumerate(common)}).values
+        sub = sub[np.argsort(order)]
+        if ref_obs is None:
+            ref_obs = sub.obs.copy()
+        matrices.append(np.asarray(sub.X, dtype=np.float32))
+        var_names.extend(sub.var_names.tolist())
+
+    result = ad.AnnData(
+        X=np.hstack(matrices),
+        obs=ref_obs,
+        var=pd.DataFrame(index=var_names),
+    )
+    result.var_names_make_unique()
+    return result
+
+
+def split_ntc_for_embedding(
+    adata_guide: ad.AnnData,
+    group_size: int = 4,
+    random_seed: int = 42,
+) -> ad.AnnData:
+    """Create gene-level adata where NTC guides are split into random groups.
+
+    Instead of aggregating all NTC guides into one gene, they are split into
+    random groups of ``group_size``. This makes gene-level UMAP/PHATE show NTCs
+    as multiple dots matching KO gene group sizes, providing a visual null baseline.
+
+    Returns a new gene-level AnnData (does not modify adata_guide).
+    """
+    rng = np.random.RandomState(random_seed)
+    obs = adata_guide.obs.copy()
+    pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
+
+    is_ntc = obs[pert_col].apply(
+        lambda p: str(p).upper().startswith("NTC") or "non-targeting" in str(p).lower()
+    )
+    ntc_idx = np.where(is_ntc.values)[0]
+
+    if len(ntc_idx) < group_size:
+        return aggregate_to_level(
+            adata_guide, "gene", preserve_batch_info=False, subsample_controls=False,
+        )
+
+    shuffled = ntc_idx.copy()
+    rng.shuffle(shuffled)
+    new_pert = obs[pert_col].astype(str).copy()
+    grp_num = 1
+    for i in range(0, len(shuffled), group_size):
+        chunk = shuffled[i:i + group_size]
+        if len(chunk) < group_size:
+            new_pert.iloc[chunk] = f"NTC_grp{grp_num - 1}" if grp_num > 1 else f"NTC_grp{grp_num}"
+        else:
+            new_pert.iloc[chunk] = f"NTC_grp{grp_num}"
+            grp_num += 1
+
+    adata_mod = adata_guide.copy()
+    adata_mod.obs[pert_col] = new_pert
+    return aggregate_to_level(
+        adata_mod, "gene", preserve_batch_info=False, subsample_controls=False,
+    )
+
+
+def normalize_guide_adata(
+    adata_guide: ad.AnnData,
+    norm_method: str = "ntc",
+) -> ad.AnnData:
+    """Z-score normalize guide-level AnnData features.
+
+    Uses :func:`ops_utils.analysis.normalization.zscore_normalize` under the hood.
+
+    Parameters
+    ----------
+    adata_guide : AnnData
+        Guide-level data with perturbation column in obs.
+    norm_method : str
+        "ntc" for NTC-based z-scoring, "global" for global z-scoring.
+
+    Returns
+    -------
+    The same AnnData with X updated in place.
+    """
+    from ops_utils.analysis.normalization import zscore_normalize
+
+    feature_cols = list(adata_guide.var_names)
+    df = pd.DataFrame(adata_guide.X, columns=feature_cols)
+    for col in adata_guide.obs.columns:
+        df[col] = adata_guide.obs[col].values
+    df = zscore_normalize(
+        df, feature_cols, method=norm_method, perturbation_col="perturbation",
+    )
+    adata_guide.X = df[feature_cols].values.astype(np.float32)
+    return adata_guide
+
+
 if __name__ == "__main__":
     main()
