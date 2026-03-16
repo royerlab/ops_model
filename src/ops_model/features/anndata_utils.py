@@ -198,7 +198,9 @@ def _extract_and_verify_uns_metadata(
 
         for key in required_keys:
             if key not in adata.uns:
-                raise ValueError(f"Missing .uns['{key}'] in {context}: {source}")
+                # Provide sensible defaults for non-DINO feature types (e.g., CellProfiler)
+                default = "cell" if key == "cell_type" else "unknown"
+                adata.uns[key] = default
             metadata_values[key].append((source, adata.uns[key]))
 
     # Verify consistency
@@ -544,6 +546,7 @@ def aggregate_to_level(
     control_group_size: int = 4,
     random_seed: Optional[int] = None,
     batch_cols: Optional[List[str]] = None,
+    agg_funcs: Optional[List[str]] = None,
 ) -> ad.AnnData:
     """
     Aggregate cell-level data to guide or gene level.
@@ -603,7 +606,10 @@ def aggregate_to_level(
     if group_col not in adata.obs.columns:
         raise ValueError(f"Column '{group_col}' not found in adata.obs")
 
-    print(f"Aggregating to {level} level...")
+    if agg_funcs and len(agg_funcs) > 1:
+        print(f"Aggregating to {level} level (multi-stat: {agg_funcs})...")
+    else:
+        print(f"Aggregating to {level} level...")
 
     # Handle control gene subsampling if requested
     if subsample_controls and level == "gene":
@@ -733,7 +739,20 @@ def aggregate_to_level(
     # Pre-allocate result array
     n_groups = len(groups)
     n_features = len(feature_cols)
-    X_agg = np.zeros((n_groups, n_features))
+
+    # Multi-stat aggregation: compute multiple statistics per feature
+    _agg_funcs = agg_funcs  # e.g. ["mean", "std", "min", "max", "median", "sum"]
+    if _agg_funcs and len(_agg_funcs) > 1:
+        n_stats = len(_agg_funcs)
+        X_agg = np.zeros((n_groups, n_features * n_stats))
+        multi_feature_cols = []
+        for f in feature_cols:
+            for stat in _agg_funcs:
+                multi_feature_cols.append(f"{f}_{stat}")
+    else:
+        X_agg = np.zeros((n_groups, n_features))
+        multi_feature_cols = None
+
     group_keys = []
 
     # Track metadata per group (for validator requirements)
@@ -748,6 +767,16 @@ def aggregate_to_level(
     # Extract feature data into numpy array ONCE (much faster than repeated pandas indexing)
     # Use adata.X directly to avoid pandas column name issues
     X_features = adata.X  # Already a numpy array from AnnData
+
+    # Precompute numpy stat functions for multi-agg mode
+    _stat_funcs = {
+        "mean": lambda d, ax: np.mean(d, axis=ax),
+        "std": lambda d, ax: np.std(d, axis=ax, ddof=1) if d.shape[ax] > 1 else np.zeros(d.shape[1 - ax]),
+        "min": lambda d, ax: np.min(d, axis=ax),
+        "max": lambda d, ax: np.max(d, axis=ax),
+        "median": lambda d, ax: np.median(d, axis=ax),
+        "sum": lambda d, ax: np.sum(d, axis=ax),
+    }
 
     # Aggregate each group using numpy indexing
     for i, (group_key, indices) in enumerate(groups.items()):
@@ -789,7 +818,15 @@ def aggregate_to_level(
         group_data = X_features[indices_array, :]
 
         # Compute aggregation
-        if method == "mean":
+        if _agg_funcs and len(_agg_funcs) > 1:
+            # Multi-stat: interleave stats per feature [f0_mean, f0_std, ..., f1_mean, f1_std, ...]
+            stats = []
+            for stat_name in _agg_funcs:
+                stats.append(_stat_funcs[stat_name](group_data, 0))
+            # Stack and interleave: shape (n_stats, n_features) -> (n_features * n_stats,)
+            stacked = np.array(stats)  # (n_stats, n_features)
+            X_agg[i] = stacked.T.ravel()  # interleave per feature
+        elif method == "mean":
             X_agg[i] = np.mean(group_data, axis=0)
         elif method == "median":
             X_agg[i] = np.median(group_data, axis=0)
@@ -798,17 +835,20 @@ def aggregate_to_level(
 
         group_keys.append(group_key)
 
+    # Use multi-stat feature names if applicable
+    _var_names = multi_feature_cols if multi_feature_cols else feature_cols
+
     # Create DataFrame from aggregated data with original group keys as index
     if isinstance(group_cols, list):
         # Create MultiIndex from tuple keys
         features_agg = pd.DataFrame(
             X_agg,
-            columns=feature_cols,
+            columns=_var_names,
             index=pd.MultiIndex.from_tuples(group_keys, names=group_cols),
         )
     else:
         # Simple index for single grouping column
-        features_agg = pd.DataFrame(X_agg, columns=feature_cols, index=group_keys)
+        features_agg = pd.DataFrame(X_agg, columns=_var_names, index=group_keys)
         features_agg.index.name = group_cols
 
     # If we preserved label_str, also aggregate it (take first value per group)
@@ -847,7 +887,7 @@ def aggregate_to_level(
         X_matrix = X_agg  # Already has shape (n_groups, n_features)
 
         adata_agg = ad.AnnData(X=X_matrix)
-        adata_agg.var_names = adata.var_names
+        adata_agg.var_names = pd.Index(_var_names)
         adata_agg.obs[group_col] = features_agg_reset[group_col].values
         for c in secondary_cols:
             adata_agg.obs[c] = features_agg_reset[c].values
@@ -871,7 +911,7 @@ def aggregate_to_level(
 
         # Create AnnData with simple integer index
         adata_agg = ad.AnnData(X=X_matrix)
-        adata_agg.var_names = adata.var_names  # Use original var_names from input
+        adata_agg.var_names = pd.Index(_var_names)
         adata_agg.obs[group_col] = features_agg_reset[group_col].values
 
         # Add label_str if preserved
@@ -884,6 +924,7 @@ def aggregate_to_level(
     print(
         f"  Added n_cells column (range: {min(n_cells_per_group)}-{max(n_cells_per_group)})"
     )
+    print(f"  Aggregated to {len(group_keys)} {level}s × {X_agg.shape[1]} features")
 
     # Add gene-specific columns (validator requirements)
     if level == "gene":
@@ -2346,6 +2387,9 @@ def _process_vertical_group(
     search_dirs: Optional[List[Path]] = None,
     use_preaggregated: bool = False,
     metadata_path: Optional[str] = None,
+    agg_funcs: Optional[List[str]] = None,
+    cell_level_pca: bool = False,
+    cell_level_pca_threshold: float = 0.80,
 ) -> ad.AnnData:
     """
     Memory-efficient vertical aggregation for same biological signal.
@@ -2353,9 +2397,10 @@ def _process_vertical_group(
     Strategy:
     1. Load cells from each experiment
     2. Z-score normalize cells (per-experiment)
-    3. Aggregate to target level immediately (frees cell memory)
-    4. Concatenate aggregated data (much smaller)
-    5. Combine duplicate observations (e.g., same gene from multiple experiments)
+    3. (Optional) Cell-level PCA reduction per experiment
+    4. Aggregate to target level immediately (frees cell memory)
+    5. Concatenate aggregated data (much smaller)
+    6. Combine duplicate observations (e.g., same gene from multiple experiments)
 
     This avoids keeping all cells in memory at once.
 
@@ -2434,6 +2479,11 @@ def _process_vertical_group(
                 if verbose:
                     print(f"    Loading pre-aggregated {agg_file.name}")
                 adata_agg = ad.read_h5ad(agg_file)
+                # Ensure .uns has required metadata (CellProfiler files may lack these)
+                if "cell_type" not in adata_agg.uns:
+                    adata_agg.uns["cell_type"] = "cell"
+                if "embedding_type" not in adata_agg.uns:
+                    adata_agg.uns["embedding_type"] = feature_dir or "unknown"
                 # Derive perturbation from label_str if missing
                 if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
                     adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
@@ -2460,15 +2510,24 @@ def _process_vertical_group(
         reporter = meta.get_biological_signal(exp_short, channel)
         cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
         if not cell_file.exists():
+            if verbose:
+                print(f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'...")
             cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
         if not cell_file.exists():
             raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
 
         if verbose:
+            print(f"    ✓ Loaded cell-level file: {cell_file.name}")
             print(f"    Loading {exp}/{channel}...")
 
         adata_cells = ad.read_h5ad(cell_file)
+
+        # Ensure .uns has required metadata (CellProfiler files may lack these)
+        if "cell_type" not in adata_cells.uns:
+            adata_cells.uns["cell_type"] = "cell"
+        if "embedding_type" not in adata_cells.uns:
+            adata_cells.uns["embedding_type"] = feature_dir or "unknown"
 
         # Track cell counts BEFORE aggregation
         cell_counts[exp] = len(adata_cells)
@@ -2508,11 +2567,42 @@ def _process_vertical_group(
         if normalize_on_pooling:
             if verbose:
                 print(f"      Normalizing cells from {exp}...")
+            # Auto-detect control column: cell h5ads use "perturbation", older files use "label_str"
+            _ctrl_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
             adata_cells = normalize_adata_zscore(
                 adata_cells,
                 normalize_on_controls=normalize_on_controls,
+                control_column=_ctrl_col,
                 control_gene=control_gene,
             )
+
+        # Cell-level PCA reduction (before aggregation)
+        if cell_level_pca:
+            from sklearn.decomposition import PCA as _PCA
+
+            X = np.asarray(adata_cells.X, dtype=np.float64)
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            n_features_orig = X.shape[1]
+            max_components = min(X.shape[1], X.shape[0] - 1)
+            pca = _PCA(n_components=max_components)
+            X_transformed = pca.fit_transform(X)
+            cumvar = np.cumsum(pca.explained_variance_ratio_)
+            n_keep = int(np.searchsorted(cumvar, cell_level_pca_threshold) + 1)
+            n_keep = max(1, min(n_keep, max_components))
+            explained = float(cumvar[n_keep - 1])
+            if verbose:
+                print(
+                    f"      Cell-level PCA: {n_features_orig} -> {n_keep} PCs "
+                    f"({explained:.1%} variance)"
+                )
+            pc_names = [f"PC{j}" for j in range(n_keep)]
+            adata_cells = ad.AnnData(
+                X=X_transformed[:, :n_keep].astype(np.float32),
+                obs=adata_cells.obs.copy(),
+                uns=adata_cells.uns.copy(),
+            )
+            adata_cells.var_names = pc_names
+            del X, X_transformed, pca
 
         # Aggregate immediately to target level (frees cell-level memory).
         # In per-well mode, keep well as a secondary grouping column so each
@@ -2527,6 +2617,7 @@ def _process_vertical_group(
             control_group_size=control_group_size,
             random_seed=random_seed,
             batch_cols=["well"] if per_well else None,
+            agg_funcs=agg_funcs,
         )
 
         # DEBUG: Check if perturbation survived aggregation
@@ -2647,6 +2738,9 @@ def _process_horizontal_group(
     search_dirs: Optional[List[Path]] = None,
     use_preaggregated: bool = False,
     metadata_path: Optional[str] = None,
+    agg_funcs: Optional[List[str]] = None,
+    cell_level_pca: bool = False,
+    cell_level_pca_threshold: float = 0.80,
 ) -> ad.AnnData:
     """
     Process single-source group (different biology).
@@ -2714,6 +2808,11 @@ def _process_horizontal_group(
             if verbose:
                 print(f"    Loading pre-aggregated {agg_file.name}")
             adata_agg = ad.read_h5ad(agg_file)
+            # Ensure .uns has required metadata (CellProfiler files may lack these)
+            if "cell_type" not in adata_agg.uns:
+                adata_agg.uns["cell_type"] = "cell"
+            if "embedding_type" not in adata_agg.uns:
+                adata_agg.uns["embedding_type"] = feature_dir or "unknown"
             # Derive perturbation from label_str if missing
             if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
                 adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
@@ -2746,12 +2845,23 @@ def _process_horizontal_group(
     reporter = meta.get_biological_signal(exp_short, channel)
     cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
     if not cell_file.exists():
+        if verbose:
+            print(f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'...")
         cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
     if not cell_file.exists():
         raise FileNotFoundError(f"Cell-level file not found: {cell_file}")
 
+    if verbose:
+        print(f"    ✓ Loaded cell-level file: {cell_file.name}")
+
     adata_cells = ad.read_h5ad(cell_file)
+
+    # Ensure .uns has required metadata (CellProfiler files may lack these)
+    if "cell_type" not in adata_cells.uns:
+        adata_cells.uns["cell_type"] = "cell"
+    if "embedding_type" not in adata_cells.uns:
+        adata_cells.uns["embedding_type"] = feature_dir or "unknown"
 
     # Verify perturbation column exists
     if "perturbation" in adata_cells.obs.columns:
@@ -2792,11 +2902,41 @@ def _process_horizontal_group(
     if normalize_on_pooling:
         if verbose:
             print(f"    Normalizing cells from {exp}...")
+        _ctrl_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
         adata_cells = normalize_adata_zscore(
             adata_cells,
             normalize_on_controls=normalize_on_controls,
+            control_column=_ctrl_col,
             control_gene=control_gene,
         )
+
+    # Cell-level PCA reduction (before aggregation)
+    if cell_level_pca:
+        from sklearn.decomposition import PCA as _PCA
+
+        X = np.asarray(adata_cells.X, dtype=np.float64)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        n_features_orig = X.shape[1]
+        max_components = min(X.shape[1], X.shape[0] - 1)
+        pca = _PCA(n_components=max_components)
+        X_transformed = pca.fit_transform(X)
+        cumvar = np.cumsum(pca.explained_variance_ratio_)
+        n_keep = int(np.searchsorted(cumvar, cell_level_pca_threshold) + 1)
+        n_keep = max(1, min(n_keep, max_components))
+        explained = float(cumvar[n_keep - 1])
+        if verbose:
+            print(
+                f"    Cell-level PCA: {n_features_orig} -> {n_keep} PCs "
+                f"({explained:.1%} variance)"
+            )
+        pc_names = [f"PC{j}" for j in range(n_keep)]
+        adata_cells = ad.AnnData(
+            X=X_transformed[:, :n_keep].astype(np.float32),
+            obs=adata_cells.obs.copy(),
+            uns=adata_cells.uns.copy(),
+        )
+        adata_cells.var_names = pc_names
+        del X, X_transformed, pca
 
     # Aggregate to target level
     adata_agg = aggregate_to_level(
@@ -2808,6 +2948,7 @@ def _process_horizontal_group(
         control_gene=control_gene,
         control_group_size=control_group_size,
         random_seed=random_seed,
+        agg_funcs=agg_funcs,
     )
 
     # Free memory
@@ -3240,6 +3381,9 @@ def concatenate_experiments_comprehensive(
     use_preaggregated: bool = False,
     metadata_path: Optional[str] = None,
     signal_map: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+    agg_funcs: Optional[List[str]] = None,
+    cell_level_pca: bool = False,
+    cell_level_pca_threshold: float = 0.80,
 ) -> Tuple[ad.AnnData, ad.AnnData]:
     """
     Comprehensively combine experiments using biology-driven aggregation.
@@ -3442,6 +3586,9 @@ def concatenate_experiments_comprehensive(
             search_dirs=search_dirs,
             use_preaggregated=use_preaggregated,
             metadata_path=metadata_path,
+            agg_funcs=agg_funcs,
+            cell_level_pca=cell_level_pca,
+            cell_level_pca_threshold=cell_level_pca_threshold,
         )
 
         # Recompute embeddings on guide level
@@ -3543,6 +3690,9 @@ def concatenate_experiments_comprehensive(
                 search_dirs=search_dirs,
                 use_preaggregated=use_preaggregated,
                 metadata_path=metadata_path,
+                agg_funcs=agg_funcs,
+                cell_level_pca=cell_level_pca,
+                cell_level_pca_threshold=cell_level_pca_threshold,
             )
 
             group_adatas_guide[bio_signal] = adata_guide
@@ -3718,6 +3868,9 @@ def concatenate_experiments_comprehensive(
                 search_dirs=search_dirs,
                 use_preaggregated=use_preaggregated,
                 metadata_path=metadata_path,
+                agg_funcs=agg_funcs,
+                cell_level_pca=cell_level_pca,
+                cell_level_pca_threshold=cell_level_pca_threshold,
             )
         else:
             # Horizontal (single source)
@@ -3742,6 +3895,9 @@ def concatenate_experiments_comprehensive(
                 search_dirs=search_dirs,
                 use_preaggregated=use_preaggregated,
                 metadata_path=metadata_path,
+                agg_funcs=agg_funcs,
+                cell_level_pca=cell_level_pca,
+                cell_level_pca_threshold=cell_level_pca_threshold,
             )
 
         group_adatas_guide[bio_signal] = adata_guide
