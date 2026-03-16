@@ -82,17 +82,22 @@ MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
 # =============================================================================
 
 
+def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
+    """Strip obs to copairs-required columns and cast X to float64."""
+    if "n_cells" not in adata.obs.columns:
+        adata.obs["n_cells"] = 1
+    keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata.obs.columns]
+    adata.obs = adata.obs[keep].copy()
+    for col in adata.obs.columns:
+        if adata.obs[col].dtype.name == "category":
+            adata.obs[col] = adata.obs[col].astype(str)
+    adata.X = np.asarray(adata.X, dtype=np.float64)
+    return adata
+
+
 def _score_activity_per_threshold(adata_guide: ad.AnnData, null_size: int = 100_000) -> Tuple[float, float]:
     """Score guide-level AnnData. Returns (active_ratio, auc)."""
-    if "n_cells" not in adata_guide.obs.columns:
-        adata_guide.obs["n_cells"] = 1
-    keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata_guide.obs.columns]
-    adata_guide.obs = adata_guide.obs[keep].copy()
-    for col in adata_guide.obs.columns:
-        if adata_guide.obs[col].dtype.name == "category":
-            adata_guide.obs[col] = adata_guide.obs[col].astype(str)
-    adata_guide.X = np.asarray(adata_guide.X, dtype=np.float64)
-
+    adata_guide = _prepare_for_copairs(adata_guide)
     activity_map, active_ratio = phenotypic_activity_assesment(
         adata_guide, plot_results=False, null_size=null_size,
     )
@@ -634,15 +639,8 @@ def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
     _logger.info(f"  Gene: {adata_gene.n_obs} obs, {adata_gene.n_vars} features")
 
     # Strip obs to copairs-required columns (extra string cols cause isnan error)
-    for _ad in [adata_guide, adata_gene]:
-        if "n_cells" not in _ad.obs.columns:
-            _ad.obs["n_cells"] = 1
-        keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in _ad.obs.columns]
-        _ad.obs = _ad.obs[keep].copy()
-        for col in _ad.obs.columns:
-            if _ad.obs[col].dtype.name == "category":
-                _ad.obs[col] = _ad.obs[col].astype(str)
-        _ad.X = np.asarray(_ad.X, dtype=np.float64)
+    adata_guide = _prepare_for_copairs(adata_guide)
+    adata_gene = _prepare_for_copairs(adata_gene)
 
     return adata_guide, adata_gene
 
@@ -700,57 +698,52 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
     level_embeddings = {}
     level_perts = {}
 
-    # UMAP
-    try:
-        from umap import UMAP
-        for level_name, adata_level in embed_pairs:
-            _logger.info(f"  Computing {level_name} UMAP ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = clean_X_for_embedding(adata_level)
-            n_neighbors = min(15, adata_level.n_obs - 1)
-            if n_neighbors < 2:
-                _logger.warning(f"  UMAP skipped for {level_name}: too few observations")
-                continue
-            coords = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42).fit_transform(X_clean)
-            perts = get_perts_col(adata_level)
-            level_embeddings.setdefault(level_name, {})["UMAP"] = coords
-            level_perts[level_name] = perts
-            fname = plot_embedding_overlay(
-                coords, perts, metric_lookup, level_name, "UMAP",
-                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-            )
-            _logger.info(f"  Saved plots/{fname}")
-    except ImportError:
-        _logger.warning("  UMAP plots skipped: install umap-learn")
-    except Exception as umap_err:
-        _logger.warning(f"  UMAP plots failed: {umap_err}")
+    def _make_embedder(name):
+        """Return (embed_name, fit_fn) or None if library missing."""
+        if name == "UMAP":
+            from umap import UMAP
+            def _fit(X, n_obs):
+                nn = min(15, n_obs - 1)
+                if nn < 2:
+                    return None
+                return UMAP(n_components=2, n_neighbors=nn, random_state=42).fit_transform(X)
+            return _fit
+        elif name == "PHATE":
+            import phate
+            def _fit(X, n_obs):
+                knn = min(15 if n_obs > 2000 else 10, n_obs - 1)
+                if knn < 2:
+                    return None
+                return phate.PHATE(
+                    n_components=2, knn=knn, decay=15, t="auto",
+                    n_jobs=-1, random_state=42, verbose=0,
+                ).fit_transform(X)
+            return _fit
 
-    # PHATE
-    try:
-        import phate
-        for level_name, adata_level in embed_pairs:
-            _logger.info(f"  Computing {level_name} PHATE ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = clean_X_for_embedding(adata_level)
-            knn = min(15 if adata_level.n_obs > 2000 else 10, adata_level.n_obs - 1)
-            if knn < 2:
-                _logger.warning(f"  PHATE skipped for {level_name}: too few observations")
-                continue
-            phate_op = phate.PHATE(
-                n_components=2, knn=knn, decay=15, t="auto",
-                n_jobs=-1, random_state=42, verbose=0,
-            )
-            coords = phate_op.fit_transform(X_clean)
-            perts = get_perts_col(adata_level)
-            level_embeddings.setdefault(level_name, {})["PHATE"] = coords
-            level_perts[level_name] = perts
-            fname = plot_embedding_overlay(
-                coords, perts, metric_lookup, level_name, "PHATE",
-                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-            )
-            _logger.info(f"  Saved plots/{fname}")
-    except ImportError:
-        _logger.warning("  PHATE plots skipped: install phate")
-    except Exception as phate_err:
-        _logger.warning(f"  PHATE plots failed: {phate_err}")
+    for embed_name, pkg_hint in [("UMAP", "umap-learn"), ("PHATE", "phate")]:
+        try:
+            fit_fn = _make_embedder(embed_name)
+        except ImportError:
+            _logger.warning(f"  {embed_name} plots skipped: install {pkg_hint}")
+            continue
+        try:
+            for level_name, adata_level in embed_pairs:
+                _logger.info(f"  Computing {level_name} {embed_name} ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
+                X_clean = clean_X_for_embedding(adata_level)
+                coords = fit_fn(X_clean, adata_level.n_obs)
+                if coords is None:
+                    _logger.warning(f"  {embed_name} skipped for {level_name}: too few observations")
+                    continue
+                perts = get_perts_col(adata_level)
+                level_embeddings.setdefault(level_name, {})[embed_name] = coords
+                level_perts[level_name] = perts
+                fname = plot_embedding_overlay(
+                    coords, perts, metric_lookup, level_name, embed_name,
+                    plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
+                )
+                _logger.info(f"  Saved plots/{fname}")
+        except Exception as err:
+            _logger.warning(f"  {embed_name} plots failed: {err}")
 
     # Positive controls overlay grid (CHAD v4)
     for level_name in ["gene"]:
@@ -1003,6 +996,34 @@ def _submit_aggregation_slurm(agg_output, norm_method, per_unit_subdir, agg_slur
         print("Aggregation complete")
 
 
+def _submit_phase1_slurm(jobs, args, agg_output, per_unit_subdir,
+                          experiment_name, manifest_prefix, unit_label):
+    """Submit Phase 1 SLURM jobs + auto-chain Phase 2 aggregation on completion."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+    slurm_params = _make_slurm_params(args)
+    agg_slurm_params = _make_agg_slurm_params(args)
+
+    def _on_phase1_complete(submitted_jobs, experiment):
+        print(f"\nAll {unit_label} jobs complete. Submitting aggregation SLURM job...")
+        _submit_aggregation_slurm(
+            agg_output, args.norm_method, per_unit_subdir,
+            agg_slurm_params, f"{manifest_prefix}_aggregation", f"{manifest_prefix}_agg",
+        )
+
+    print(f"\nSubmitting {len(jobs)} {unit_label} SLURM jobs...")
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs, experiment=experiment_name,
+        slurm_params=slurm_params, log_dir="pca_optimization",
+        manifest_prefix=f"{manifest_prefix}_opt", wait_for_completion=True,
+        post_completion_callback=_on_phase1_complete,
+    )
+    if result.get("failed"):
+        print(f"\nWarning: {len(result['failed'])} {unit_label} failed")
+        for name in result["failed"]:
+            print(f"  - {name}")
+
+
 def _handle_umap_only(args, output_dir):
     """Generate UMAP + PHATE embedding plots from existing optimized h5ads."""
     import matplotlib
@@ -1023,12 +1044,8 @@ def _handle_umap_only(args, output_dir):
     # Load activity metrics for coloring
     activity_csv = umap_dir / "metrics" / "phenotypic_activity.csv"
     if activity_csv.exists():
-        act_df = pd.read_csv(activity_csv)
-        if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
-            act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
-        metric_lookup = act_df.set_index("perturbation")[
-            ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
-        ].to_dict("index")
+        activity_map = pd.read_csv(activity_csv)
+        metric_lookup = build_metric_lookup(activity_map)
         _logger.info(f"  Loaded activity metrics for {len(metric_lookup)} perturbations")
     else:
         metric_lookup = {}
@@ -1064,8 +1081,6 @@ def _handle_aggregate_only(args, output_dir):
 
 def _handle_downsampled(args, output_dir, cp_override):
     """Pool cells by signal group, downsample, PCA sweep (local or SLURM)."""
-    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-
     ds_output_dir = output_dir / "downsampled"
     ds_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1146,34 +1161,18 @@ def _handle_downsampled(args, output_dir, cp_override):
             "metadata": {"signal": signal, "n_experiments": len(pairs)},
         })
 
-    ds_time = max(args.slurm_time, 30)
-    slurm_params = _make_slurm_params(args)
-    slurm_params["timeout_min"] = ds_time
-    agg_slurm_params = _make_agg_slurm_params(args)
+    # Downsampled jobs need more time than per-channel
+    args.slurm_time = max(args.slurm_time, 30)
 
-    def _on_ds_phase1_complete(submitted_jobs, experiment):
-        print(f"\nAll signal-group jobs complete. Submitting aggregation SLURM job...")
-        _submit_aggregation_slurm(
-            str(ds_output_dir), args.norm_method, "per_signal",
-            agg_slurm_params, "pca_ds_aggregation", "pca_ds_agg",
-        )
-
-    print(f"\nSubmitting {len(jobs)} signal-group SLURM jobs...")
-    result = submit_parallel_jobs(
-        jobs_to_submit=jobs, experiment="pca_ds_optimization",
-        slurm_params=slurm_params, log_dir="pca_optimization",
-        manifest_prefix="pca_ds_opt", wait_for_completion=True,
-        post_completion_callback=_on_ds_phase1_complete,
+    _submit_phase1_slurm(
+        jobs, args, agg_output=str(ds_output_dir),
+        per_unit_subdir="per_signal", experiment_name="pca_ds_optimization",
+        manifest_prefix="pca_ds", unit_label="signal-group",
     )
-    if result.get("failed"):
-        print(f"\nWarning: {len(result['failed'])} signal groups failed")
-        for name in result["failed"]:
-            print(f"  - {name}")
 
 
 def _handle_per_channel_slurm(args, output_dir, cp_override):
     """Per-channel SLURM sweep + aggregation."""
-    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     import contextlib, io
 
     all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
@@ -1219,26 +1218,11 @@ def _handle_per_channel_slurm(args, output_dir, cp_override):
             print(f"    {exp} / {ch}  ->  {sig!r}")
         print()
 
-    slurm_params = _make_slurm_params(args)
-    agg_slurm_params = _make_agg_slurm_params(args)
-
-    def _on_phase1_complete(submitted_jobs, experiment):
-        print(f"\nAll per-channel jobs complete. Submitting aggregation SLURM job...")
-        _submit_aggregation_slurm(
-            str(output_dir), args.norm_method, "per_channel",
-            agg_slurm_params, "pca_aggregation", "pca_agg",
-        )
-
-    result = submit_parallel_jobs(
-        jobs_to_submit=jobs, experiment="pca_optimization",
-        slurm_params=slurm_params, log_dir="pca_optimization",
-        manifest_prefix="pca_opt", wait_for_completion=True,
-        post_completion_callback=_on_phase1_complete,
+    _submit_phase1_slurm(
+        jobs, args, agg_output=str(output_dir),
+        per_unit_subdir="per_channel", experiment_name="pca_optimization",
+        manifest_prefix="pca", unit_label="per-channel",
     )
-    if result.get("failed"):
-        print(f"\nWarning: {len(result['failed'])} channels failed")
-        for name in result["failed"]:
-            print(f"  - {name}")
 
 
 # =============================================================================
