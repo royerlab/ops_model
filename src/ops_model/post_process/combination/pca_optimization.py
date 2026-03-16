@@ -27,28 +27,45 @@ from typing import Dict, List, Optional, Tuple
 import anndata as ad
 import numpy as np
 import pandas as pd
-import yaml
 
-from ops_model.features.anndata_utils import aggregate_to_level
+from ops_model.features.anndata_utils import (
+    aggregate_to_level,
+    hconcat_by_perturbation,
+    normalize_guide_adata,
+    split_ntc_for_embedding,
+)
+from ops_utils.analysis.embedding_plots import (
+    build_metric_lookup,
+    clean_X_for_embedding,
+    get_perts_col,
+    plot_embedding_overlay,
+)
 from ops_utils.analysis.map_scores import (
     compute_auc_score,
     phenotypic_activity_assesment,
     plot_map_scatter,
 )
-from ops_utils.analysis.normalization import zscore_normalize
+from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
+from ops_utils.analysis.sweep_plots import (
+    plot_channel_peaks_bar,
+    plot_pca_sweep,
+    plot_sweep_curves_summary,
+)
 from ops_utils.data.feature_discovery import (
     build_signal_groups,
     count_cells_per_signal_group,
     discover_cellprofiler_experiments,
     discover_dino_experiments,
     find_cell_h5ad_path,
-    find_experiment_dir,
     get_channel_maps_path,
     get_storage_roots,
     load_attribution_config,
     load_cell_h5ad,
     resolve_channel_label,
     sanitize_signal_filename,
+)
+from ops_utils.data.positive_controls import (
+    plot_positive_controls_grid,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,33 +78,12 @@ MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
 
 
 # =============================================================================
-# Data loading & scoring helpers
+# Scoring helper (specific to this sweep — wraps copairs for per-threshold use)
 # =============================================================================
 
 
-
-def _fit_pca(X: np.ndarray, max_pcs: int = 500):
-    """Fit PCA on cell matrix. Returns (X_transformed, cumvar, pca_model)."""
-    from sklearn.decomposition import PCA
-
-    X = np.asarray(X, dtype=np.float64)
-    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-    n_pcs = min(X.shape[0] - 1, X.shape[1] - 1, max_pcs)
-    pca = PCA(n_components=n_pcs)
-    X_pcs = pca.fit_transform(X)
-    cumvar = np.cumsum(pca.explained_variance_ratio_)
-    return X_pcs, cumvar, pca
-
-
-def _n_pcs_for_threshold(cumvar: np.ndarray, threshold: float) -> int:
-    n = int(np.searchsorted(cumvar, threshold) + 1)
-    return min(n, len(cumvar))
-
-
-def _score_activity(adata_guide: ad.AnnData, null_size: int = 100_000) -> Tuple[float, float]:
+def _score_activity_per_threshold(adata_guide: ad.AnnData, null_size: int = 100_000) -> Tuple[float, float]:
     """Score guide-level AnnData. Returns (active_ratio, auc)."""
-    # Strip obs to only copairs-required columns — extra string/categorical columns
-    # (e.g. label_str, experiment) cause 'ufunc isnan not supported' in copairs
     if "n_cells" not in adata_guide.obs.columns:
         adata_guide.obs["n_cells"] = 1
     keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata_guide.obs.columns]
@@ -102,395 +98,6 @@ def _score_activity(adata_guide: ad.AnnData, null_size: int = 100_000) -> Tuple[
     )
     auc = compute_auc_score(activity_map)
     return active_ratio, auc
-
-
-def _normalize_guide(
-    adata_guide: ad.AnnData,
-    norm_method: str = "ntc",
-) -> ad.AnnData:
-    """Z-score normalize guide-level data."""
-    feature_cols = list(adata_guide.var_names)
-    df = pd.DataFrame(adata_guide.X, columns=feature_cols)
-    for col in adata_guide.obs.columns:
-        df[col] = adata_guide.obs[col].values
-
-    df = zscore_normalize(
-        df,
-        feature_cols,
-        method=norm_method,
-        perturbation_col="perturbation",
-    )
-    adata_guide.X = df[feature_cols].values.astype(np.float32)
-    return adata_guide
-
-
-def _hconcat(blocks: List[ad.AnnData], level: str = "guide") -> ad.AnnData:
-    """Horizontally concat AnnData blocks by matching on perturbation key."""
-    key = "sgRNA" if level == "guide" and "sgRNA" in blocks[0].obs.columns else "perturbation"
-    common = set(blocks[0].obs[key].values)
-    for b in blocks[1:]:
-        common &= set(b.obs[key].values)
-    common = sorted(common)
-
-    matrices = []
-    var_names = []
-    ref_obs = None
-    for b in blocks:
-        mask = b.obs[key].isin(common)
-        sub = b[mask].copy()
-        order = sub.obs[key].map({k: i for i, k in enumerate(common)}).values
-        sub = sub[np.argsort(order)]
-        if ref_obs is None:
-            ref_obs = sub.obs.copy()
-        matrices.append(np.asarray(sub.X, dtype=np.float32))
-        var_names.extend(sub.var_names.tolist())
-
-    result = ad.AnnData(
-        X=np.hstack(matrices),
-        obs=ref_obs,
-        var=pd.DataFrame(index=var_names),
-    )
-    result.var_names_make_unique()
-    return result
-
-
-def _plot_embedding_overlay(
-    coords, perts, metric_lookup, level_name, embed_name,
-    plots_dir, n_obs, n_vars, plt,
-):
-    """Plot 2-panel embedding (mAP viridis + p-value plasma) with NTC red diamonds."""
-    mAP_vals = np.array([metric_lookup.get(p, {}).get("mean_average_precision", np.nan) for p in perts])
-    log10p_vals = np.array([metric_lookup.get(p, {}).get("-log10(p-value)", np.nan) for p in perts])
-    is_sig = np.array([metric_lookup.get(p, {}).get("below_corrected_p", False) for p in perts])
-    is_ntc = np.array([str(p).upper().startswith("NTC") or "non-targeting" in str(p).lower() for p in perts])
-
-    ntc_mask = is_ntc
-    sig_mask = is_sig & ~is_ntc
-    nonsig_mask = ~is_sig & ~is_ntc
-    n_ntc = ntc_mask.sum()
-    n_sig = sig_mask.sum()
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-
-    for ax, color_vals, cmap_name, cbar_label, panel_title in [
-        (ax1, mAP_vals, "viridis", "Mean Average Precision", "mAP"),
-        (ax2, log10p_vals, "plasma", "-log10(p-value)", "-log10(p)"),
-    ]:
-        if nonsig_mask.any():
-            ax.scatter(coords[nonsig_mask, 0], coords[nonsig_mask, 1],
-                       c="lightgrey", s=40, alpha=0.5, label="Not significant")
-        if sig_mask.any():
-            sc = ax.scatter(coords[sig_mask, 0], coords[sig_mask, 1],
-                            c=color_vals[sig_mask], s=50, alpha=0.8,
-                            cmap=cmap_name, edgecolors="black", linewidths=0.3,
-                            label=f"Significant ({n_sig})")
-            plt.colorbar(sc, ax=ax, label=cbar_label, shrink=0.8)
-        if ntc_mask.any():
-            ax.scatter(coords[ntc_mask, 0], coords[ntc_mask, 1],
-                       c="#E03030", s=80, alpha=0.9, marker="D",
-                       edgecolors="black", linewidths=0.5,
-                       label=f"NTC ({n_ntc})", zorder=5)
-
-        ax.set_xlabel(f"{embed_name} 1", fontsize=11)
-        ax.set_ylabel(f"{embed_name} 2", fontsize=11)
-        ax.set_title(f"{level_name.title()} — Activity: {panel_title}", fontsize=12, fontweight="bold")
-        ax.legend(fontsize=9, loc="best")
-
-    fig.suptitle(
-        f"{level_name.title()}-Level {embed_name} — {n_obs} obs, {n_vars} features\n"
-        f"{n_sig}/{n_obs - n_ntc} significant ({100 * n_sig / max(n_obs - n_ntc, 1):.1f}%)",
-        fontsize=13, fontweight="bold",
-    )
-    fig.tight_layout()
-    fname = f"{embed_name.lower()}_{level_name}.png"
-    fig.savefig(plots_dir / fname, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return fname
-
-
-# ---- Positive controls overlay on embeddings ----
-
-def _split_ntc_for_embedding(
-    adata_guide: ad.AnnData,
-    group_size: int = 4,
-    random_seed: int = 42,
-) -> ad.AnnData:
-    """
-    Create a gene-level adata where NTC guides are split into random groups
-    of `group_size` instead of being aggregated into one NTC gene.
-
-    This makes gene-level UMAP/PHATE show NTCs as multiple dots matching
-    KO gene group sizes, providing a visual null baseline.
-
-    Returns a new gene-level AnnData (does not modify adata_guide).
-    """
-    rng = np.random.RandomState(random_seed)
-    obs = adata_guide.obs.copy()
-    pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
-
-    # Identify NTC guides
-    is_ntc = obs[pert_col].apply(
-        lambda p: str(p).upper().startswith("NTC") or "non-targeting" in str(p).lower()
-    )
-    ntc_idx = np.where(is_ntc.values)[0]
-
-    if len(ntc_idx) < group_size:
-        # Not enough NTCs to split — just aggregate normally
-        return aggregate_to_level(
-            adata_guide, "gene", preserve_batch_info=False, subsample_controls=False,
-        )
-
-    # Assign NTC guides to random groups of `group_size`
-    shuffled = ntc_idx.copy()
-    rng.shuffle(shuffled)
-    # Convert to string dtype to avoid Categorical issues with new categories
-    new_pert = obs[pert_col].astype(str).copy()
-    grp_num = 1
-    for i in range(0, len(shuffled), group_size):
-        chunk = shuffled[i:i + group_size]
-        if len(chunk) < group_size:
-            # Leftover NTCs (< group_size) — assign to last full group
-            new_pert.iloc[chunk] = f"NTC_grp{grp_num - 1}" if grp_num > 1 else f"NTC_grp{grp_num}"
-        else:
-            new_pert.iloc[chunk] = f"NTC_grp{grp_num}"
-            grp_num += 1
-
-    # Create a copy with modified perturbation labels
-    adata_mod = adata_guide.copy()
-    adata_mod.obs[pert_col] = new_pert
-
-    # Aggregate to gene level — NTC_grp1..N become separate gene entries
-    return aggregate_to_level(
-        adata_mod, "gene", preserve_batch_info=False, subsample_controls=False,
-    )
-
-
-CHAD_V4_PATH = Path("/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml")
-SKIP_CLUSTERS = {"NTCs"}
-MIN_GENES_PER_CLUSTER = 2
-
-
-def _load_positive_controls(path: Path = CHAD_V4_PATH) -> Dict[str, List[str]]:
-    """Load CHAD positive control clusters from YAML. Returns {name: [genes]}."""
-    if not path.exists():
-        return {}
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-    clusters = {}
-    for _id, data in raw.items():
-        name = data.get("name", f"cluster_{_id}")
-        genes = data.get("genes", [])
-        if name in SKIP_CLUSTERS or len(genes) < MIN_GENES_PER_CLUSTER:
-            continue
-        clusters[name] = genes
-    return clusters
-
-
-def _plot_positive_controls_grid(
-    embeddings: Dict[str, np.ndarray],
-    perts: np.ndarray,
-    level_name: str,
-    plots_dir: Path,
-    plt_mod,
-    random_seed: int = 42,
-):
-    """
-    Generate separate UMAP and PHATE canvases with CHAD positive control groups highlighted.
-
-    Each canvas is a multi-column grid:
-      - First panel: NTC groups highlighted (null baseline)
-      - Remaining panels: one per CHAD cluster
-
-    Parameters
-    ----------
-    embeddings : dict
-        {"UMAP": coords, "PHATE": coords} — 2D arrays of shape (n_obs, 2)
-    perts : np.ndarray
-        Perturbation labels for each observation
-    level_name : str
-        "gene" or "guide"
-    plots_dir : Path
-        Where to save the figures
-    plt_mod : module
-        matplotlib.pyplot
-    random_seed : int
-        Seed for NTC subsampling
-    """
-    import seaborn as sns
-
-    clusters = _load_positive_controls()
-    if not clusters:
-        logger.warning("  Positive controls grid skipped: could not load CHAD v4")
-        return
-
-    embed_names = [k for k in ["UMAP", "PHATE"] if k in embeddings]
-    if not embed_names:
-        return
-
-    # Filter clusters to genes present in data
-    all_perts = set(perts)
-    filtered = {}
-    for name, genes in clusters.items():
-        present = [g for g in genes if g in all_perts]
-        if len(present) >= MIN_GENES_PER_CLUSTER:
-            filtered[name] = present
-    if not filtered:
-        logger.warning("  Positive controls grid: no clusters found in data")
-        return
-
-    # Find NTC indices for the first panel
-    is_ntc = np.array([
-        str(p).upper().startswith("NTC") or "non-targeting" in str(p).lower()
-        for p in perts
-    ])
-    ntc_indices = np.where(is_ntc)[0]
-
-    n_clusters = len(filtered)
-    cluster_colors = sns.color_palette("husl", n_clusters)
-
-    # Generate one canvas per embedding type
-    for embed_name in embed_names:
-        coords = embeddings[embed_name]
-
-        # Total panels: 1 (NTC) + n_clusters
-        n_panels = 1 + n_clusters
-        n_cols = min(6, n_panels)
-        n_rows = (n_panels + n_cols - 1) // n_cols
-
-        fig_width = 4.5 * n_cols
-        fig_height = 4 * n_rows
-        fig, axes = plt_mod.subplots(n_rows, n_cols, figsize=(fig_width, fig_height))
-        if n_rows == 1 and n_cols == 1:
-            axes = np.array([[axes]])
-        elif n_rows == 1:
-            axes = axes.reshape(1, -1)
-        elif n_cols == 1:
-            axes = axes.reshape(-1, 1)
-
-        flat_axes = axes.flatten()
-
-        # --- Panel 0: NTC groups highlighted ---
-        ax0 = flat_axes[0]
-        ax0.scatter(
-            coords[:, 0], coords[:, 1],
-            c="lightgray", s=12, alpha=0.4, rasterized=True,
-        )
-        if len(ntc_indices) > 0:
-            ax0.scatter(
-                coords[ntc_indices, 0], coords[ntc_indices, 1],
-                c="#E03030", s=60, alpha=0.9, marker="D",
-                edgecolors="black", linewidths=0.6, zorder=4,
-                label=f"NTC ({len(ntc_indices)})",
-            )
-            ax0.legend(fontsize=7, loc="best")
-        ax0.set_title(f"NTCs ({len(ntc_indices)} groups of 4)", fontsize=9, fontweight="bold")
-        ax0.set_xlabel(f"{embed_name} 1", fontsize=8)
-        ax0.set_ylabel(f"{embed_name} 2", fontsize=8)
-        ax0.tick_params(labelsize=6)
-
-        # --- Panels 1..N: one per CHAD cluster ---
-        for panel_idx, (cluster_name, genes) in enumerate(filtered.items(), start=1):
-            if panel_idx >= len(flat_axes):
-                break
-            ax = flat_axes[panel_idx]
-            gene_mask = np.isin(perts, genes)
-
-            # Background
-            ax.scatter(
-                coords[:, 0], coords[:, 1],
-                c="lightgray", s=12, alpha=0.4, rasterized=True,
-            )
-
-            # Highlight cluster
-            if gene_mask.any():
-                color_idx = panel_idx - 1
-                ax.scatter(
-                    coords[gene_mask, 0], coords[gene_mask, 1],
-                    c=[cluster_colors[color_idx % len(cluster_colors)]],
-                    s=70, alpha=0.95,
-                    edgecolors="black", linewidths=0.7, rasterized=True, zorder=4,
-                )
-
-                # Label genes
-                if level_name == "gene" and len(genes) <= 15:
-                    for gene in genes:
-                        g_mask = perts == gene
-                        if g_mask.any():
-                            idx = np.where(g_mask)[0][0]
-                            ax.annotate(
-                                gene, coords[idx],
-                                fontsize=6, alpha=0.9,
-                                xytext=(3, 3), textcoords="offset points",
-                            )
-
-            ax.set_title(f"{cluster_name} ({len(genes)}g)", fontsize=8, fontweight="bold")
-            ax.set_xlabel(f"{embed_name} 1", fontsize=8)
-            ax.set_ylabel(f"{embed_name} 2", fontsize=8)
-            ax.tick_params(labelsize=6)
-
-        # Hide empty panels
-        for idx in range(n_panels, len(flat_axes)):
-            flat_axes[idx].axis("off")
-
-        fig.suptitle(
-            f"CHAD Positive Controls — {level_name.title()} {embed_name}",
-            fontsize=13, fontweight="bold", y=1.01,
-        )
-        fig.tight_layout()
-        fname = f"positive_controls_{embed_name.lower()}_{level_name}.png"
-        fig.savefig(plots_dir / fname, dpi=150, bbox_inches="tight")
-        plt_mod.close(fig)
-        logger.info(f"  Saved plots/{fname}")
-
-
-
-def _plot_sweep(sweep_df, signal, peak_t, peak_n, best_act_t, suptitle, plots_dir, file_prefix):
-    """Shared 3-panel sweep plot: Activity, AUC, and #PCs vs variance threshold."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
-    ts = sweep_df["threshold"].values
-    acts = sweep_df["activity"].values * 100
-    aucs = sweep_df["auc"].values
-    pcs = sweep_df["n_pcs"].values
-
-    # Activity vs threshold
-    ax1.plot(ts, acts, "o-", color="steelblue", linewidth=2, markersize=6)
-    ax1.axvline(peak_t, color="red", linestyle="--", alpha=0.6, label=f"AUC peak={peak_t:.0%}")
-    if best_act_t is not None and best_act_t != peak_t:
-        ax1.axvline(best_act_t, color="green", linestyle="--", alpha=0.4, label=f"Act peak={best_act_t:.0%}")
-    ax1.set_xlabel("Explained Variance Threshold")
-    ax1.set_ylabel("% Active Perturbations")
-    ax1.set_title(f"{signal}: Activity vs Threshold")
-    ax1.legend(fontsize=8)
-    ax1.grid(True, alpha=0.3)
-
-    # AUC vs threshold
-    ax2.plot(ts, aucs, "o-", color="darkorange", linewidth=2, markersize=6)
-    ax2.axvline(peak_t, color="red", linestyle="--", alpha=0.6, label=f"AUC peak={peak_t:.0%}")
-    ax2.set_xlabel("Explained Variance Threshold")
-    ax2.set_ylabel("Activity AUC")
-    ax2.set_title(f"{signal}: AUC vs Threshold")
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3)
-
-    # N PCs vs threshold
-    ax3.plot(ts, pcs, "o-", color="green", linewidth=2, markersize=6)
-    ax3.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
-    ax3.axvline(peak_t, color="red", linestyle="--", alpha=0.6, label=f"Selected={peak_n} PCs")
-    ax3.set_xlabel("Explained Variance Threshold")
-    ax3.set_ylabel("Number of PCs")
-    ax3.set_title(f"{signal}: PCs vs Threshold")
-    ax3.legend(fontsize=8)
-    ax3.grid(True, alpha=0.3)
-
-    fig.suptitle(suptitle, fontsize=11)
-    fig.tight_layout()
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(plots_dir / f"{file_prefix}_sweep.png", dpi=150)
-    plt.close(fig)
 
 
 # =============================================================================
@@ -526,7 +133,7 @@ def _run_threshold_sweep(
     sweep_rows = []
 
     for threshold in thresholds:
-        n_pcs = _n_pcs_for_threshold(cumvar, threshold)
+        n_pcs = n_pcs_for_threshold(cumvar, threshold)
         X_slice = X_pcs[:, :n_pcs].astype(np.float32)
         pc_names = [f"PC{j}" for j in range(n_pcs)]
 
@@ -537,10 +144,10 @@ def _run_threshold_sweep(
         del adata_tmp
         guide_tmp.X = np.asarray(guide_tmp.X, dtype=np.float32)
 
-        guide_norm = _normalize_guide(guide_tmp.copy(), norm_method)
+        guide_norm = normalize_guide_adata(guide_tmp.copy(), norm_method)
         guide_norm.X = np.asarray(guide_norm.X, dtype=np.float32)
         try:
-            r, a = _score_activity(guide_norm)
+            r, a = _score_activity_per_threshold(guide_norm)
         except Exception as e:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
             r, a = 0.0, 0.0
@@ -643,7 +250,7 @@ def _save_sweep_outputs(
 
     # Save sweep plot
     try:
-        _plot_sweep(
+        plot_pca_sweep(
             sweep_df, signal, peak_t, peak_n, best_act_t,
             suptitle=suptitle,
             plots_dir=out_subdir / "plots",
@@ -734,7 +341,7 @@ def pca_sweep_single_experiment(
         _logger.info(f"  Applied global z-score scaling (CellProfiler mode)")
 
     # Fit PCA once
-    X_pcs, cumvar, pca_model = _fit_pca(X_raw)
+    X_pcs, cumvar, pca_model = fit_pca(X_raw)
     del X_raw, pca_model
 
     # Sweep thresholds
@@ -918,7 +525,7 @@ def pca_sweep_pooled_signal(
             _logger.info(f"  Applied global z-score scaling (CellProfiler mode, no experiment info)")
 
     # --- Fit PCA once ---
-    X_pcs, cumvar, pca_model = _fit_pca(X_raw)
+    X_pcs, cumvar, pca_model = fit_pca(X_raw)
     del X_raw, pca_model
 
     # Sweep thresholds
@@ -1011,13 +618,13 @@ def _load_per_unit_blocks(per_unit_dir, _logger):
 
 def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
     """Horizontal concat, NTC normalize, re-aggregate to gene, strip obs for copairs."""
-    adata_guide = _hconcat(guide_blocks, "guide")
-    adata_gene = _hconcat(gene_blocks, "gene")
+    adata_guide = hconcat_by_perturbation(guide_blocks, "guide")
+    adata_gene = hconcat_by_perturbation(gene_blocks, "gene")
     del guide_blocks, gene_blocks
 
     _logger.info(f"Concatenated: {adata_guide.n_obs} guides, {adata_guide.n_vars} features")
     _logger.info(f"NTC normalizing at guide level...")
-    adata_guide = _normalize_guide(adata_guide, norm_method)
+    adata_guide = normalize_guide_adata(adata_guide, norm_method)
     adata_guide.X = np.asarray(adata_guide.X, dtype=np.float32)
 
     adata_gene = aggregate_to_level(
@@ -1084,188 +691,9 @@ def _save_aggregated_h5ads(adata_guide, adata_gene, report_rows, output_dir,
     _logger.info(f"  Saved guide_pca_optimized.h5ad, gene_pca_optimized.h5ad, pca_report.csv")
 
 
-def _plot_sweep_curves(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger):
-    """Collect sweep CSVs and generate per-channel sweep, n_pcs, and summary plots."""
-    sweep_csvs = sorted(per_unit_dir.glob("*_sweep.csv"))
-    if not sweep_csvs:
-        return
-
-    sweep_df = pd.concat([pd.read_csv(f) for f in sweep_csvs], ignore_index=True)
-    sweep_df.to_csv(output_dir / "pca_sweep_all_channels.csv", index=False)
-    _logger.info(f"  Saved pca_sweep_all_channels.csv ({len(sweep_df)} rows)")
-
-    signals = sorted(sweep_df["signal"].unique())
-    colors = plt.cm.tab20(np.linspace(0, 1, len(signals)))
-    legend_cols = max(1, len(signals) // 20)
-
-    # Plot 1: Per-channel sweep curves (activity + AUC)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-    for i, sig in enumerate(signals):
-        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-        ax1.plot(sub["threshold"], sub["activity"] * 100, "o-", color=colors[i],
-                 linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-        ax2.plot(sub["threshold"], sub["auc"], "o-", color=colors[i],
-                 linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-    ax1.axhline(r * 100, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({r:.1%})")
-    ax2.axhline(a, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({a:.4f})")
-    for ax in [ax1, ax2]:
-        ax.axvline(0.80, color="gray", linestyle="--", alpha=0.3, label="80% threshold")
-        ax.set_xlabel("Explained Variance Threshold")
-        ax.grid(True, alpha=0.3)
-    ax1.set_ylabel("% Active Perturbations")
-    ax1.set_title("Per-Channel PCA Sweep: Activity")
-    ax2.set_ylabel("Activity AUC")
-    ax2.set_title("Per-Channel PCA Sweep: AUC")
-    ax2.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-               ncol=legend_cols, borderaxespad=0, frameon=True)
-    fig.tight_layout(rect=[0, 0, 0.82, 1])
-    fig.savefig(plots_dir / "per_channel_sweep.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    _logger.info(f"  Saved plots/per_channel_sweep.png")
-
-    # Plot 2: N PCs vs threshold
-    fig, ax = plt.subplots(figsize=(16, 8))
-    for i, sig in enumerate(signals):
-        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-        ax.plot(sub["threshold"], sub["n_pcs"], "o-", color=colors[i],
-                linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-    ax.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
-    ax.set_xlabel("Explained Variance Threshold")
-    ax.set_ylabel("Number of PCs")
-    ax.set_title("PCs Selected vs Variance Threshold (per channel)")
-    ax.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-              ncol=legend_cols, borderaxespad=0, frameon=True)
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout(rect=[0, 0, 0.82, 1])
-    fig.savefig(plots_dir / "n_pcs_vs_threshold.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    _logger.info(f"  Saved plots/n_pcs_vs_threshold.png")
-
-    # Plot 3: Summary sweep with mean curve
-    fig, axes = plt.subplots(1, 3, figsize=(26, 8))
-    ax_act, ax_auc, ax_pcs = axes
-    all_thresholds = sorted(sweep_df["threshold"].unique())
-    act_matrix, auc_matrix, pcs_matrix = [], [], []
-    for sig in signals:
-        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-        act_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["activity"]))
-        auc_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["auc"]))
-        pcs_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["n_pcs"]))
-    mean_act = np.array(act_matrix).mean(axis=0)
-    mean_auc = np.array(auc_matrix).mean(axis=0)
-    mean_pcs = np.array(pcs_matrix).mean(axis=0)
-
-    for i, sig in enumerate(signals):
-        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-        ax_act.plot(sub["threshold"], sub["activity"] * 100, "-", color=colors[i],
-                    linewidth=0.8, alpha=0.35, label=sig)
-        ax_auc.plot(sub["threshold"], sub["auc"], "-", color=colors[i],
-                    linewidth=0.8, alpha=0.35, label=sig)
-        ax_pcs.plot(sub["threshold"], sub["n_pcs"], "-", color=colors[i],
-                    linewidth=0.8, alpha=0.35, label=sig)
-    ax_act.plot(all_thresholds, mean_act * 100, "o-", color="black",
-                linewidth=2.5, markersize=5, label="Mean", zorder=10)
-    ax_auc.plot(all_thresholds, mean_auc, "o-", color="black",
-                linewidth=2.5, markersize=5, label="Mean", zorder=10)
-    ax_pcs.plot(all_thresholds, mean_pcs, "o-", color="black",
-                linewidth=2.5, markersize=5, label="Mean", zorder=10)
-    ax_act.axhline(r * 100, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
-    ax_auc.axhline(a, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
-    ax_pcs.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
-    for ax in axes:
-        ax.axvline(0.80, color="gray", linestyle="--", alpha=0.3)
-        ax.set_xlabel("Explained Variance Threshold")
-        ax.grid(True, alpha=0.3)
-    ax_pcs.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                  ncol=legend_cols, borderaxespad=0, frameon=True)
-    ax_act.set_ylabel("% Active Perturbations")
-    ax_act.set_title("Activity vs Threshold")
-    ax_auc.set_ylabel("Activity AUC")
-    ax_auc.set_title("AUC vs Threshold")
-    ax_pcs.set_ylabel("Number of PCs")
-    ax_pcs.set_title("PCs vs Threshold")
-    fig.suptitle(f"Summary Sweep: {len(signals)} channels, mean shown in black", fontsize=12)
-    fig.tight_layout(rect=[0, 0, 0.82, 1])
-    fig.savefig(plots_dir / "summary_sweep.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    _logger.info(f"  Saved plots/summary_sweep.png")
-
-
-def _plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger):
-    """Bar chart of per-channel peak activity and AUC."""
-    report_df = pd.DataFrame(report_rows)
-    if len(report_df) == 0:
-        return
-    exp_short = report_df["experiment"].apply(lambda e: str(e).split("_")[0] if pd.notna(e) else "")
-    report_df["bar_label"] = exp_short + "_" + report_df["signal"].astype(str)
-
-    df_by_activity = report_df.sort_values("activity", ascending=False).reset_index(drop=True)
-    df_by_auc = report_df.sort_values("auc", ascending=False).reset_index(drop=True)
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(16, len(report_df) * 1.0), 14))
-
-    x1 = np.arange(len(df_by_activity))
-    ax1.bar(x1, df_by_activity["activity"] * 100, color="steelblue", alpha=0.8)
-    ax1.axhline(r * 100, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
-    for i, (_, row) in enumerate(df_by_activity.iterrows()):
-        ax1.text(x1[i], row["activity"] * 100 + 0.5,
-                 f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
-                 ha="center", va="bottom", fontsize=7)
-    ax1.set_xticks(x1)
-    ax1.set_xticklabels(df_by_activity["bar_label"], rotation=45, ha="right", fontsize=7)
-    ax1.set_ylabel("% Active Perturbations")
-    ax1.set_title("Per-Channel Peak Activity (at optimal PCA threshold) — sorted by activity")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3, axis="y")
-
-    x2 = np.arange(len(df_by_auc))
-    ax2.bar(x2, df_by_auc["auc"], color="darkorange", alpha=0.8)
-    ax2.axhline(a, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
-    for i, (_, row) in enumerate(df_by_auc.iterrows()):
-        ax2.text(x2[i], row["auc"] + 0.002,
-                 f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
-                 ha="center", va="bottom", fontsize=7)
-    ax2.set_xticks(x2)
-    ax2.set_xticklabels(df_by_auc["bar_label"], rotation=45, ha="right", fontsize=7)
-    ax2.set_ylabel("Activity AUC")
-    ax2.set_title("Per-Channel Peak AUC (at optimal PCA threshold) — sorted by AUC")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3, axis="y")
-    fig.subplots_adjust(bottom=0.25, hspace=0.45)
-    fig.savefig(plots_dir / "per_channel_peaks.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    _logger.info(f"  Saved plots/per_channel_peaks.png")
-
-
-def _build_metric_lookup(activity_map):
-    """Build perturbation → metric dict from activity_map for embedding coloring."""
-    if activity_map is None:
-        return {}
-    act_df = activity_map
-    if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
-        act_df = act_df.copy()
-        act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
-    return act_df.set_index("perturbation")[
-        ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
-    ].to_dict("index")
-
-
-def _clean_X_for_embedding(adata_level):
-    """Clean X matrix for UMAP/PHATE (float32, fill NaN/inf)."""
-    X = np.asarray(adata_level.X, dtype=np.float32)
-    return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
-
-def _get_perts_col(adata_level):
-    """Get perturbation labels from adata obs."""
-    obs = adata_level.obs
-    pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
-    return obs[pert_col].values
-
-
 def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger):
     """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls."""
-    adata_gene_embed = _split_ntc_for_embedding(adata_guide, random_seed=42)
+    adata_gene_embed = split_ntc_for_embedding(adata_guide, random_seed=42)
     _logger.info(f"  Gene (NTC-split for embedding): {adata_gene_embed.n_obs} obs")
 
     embed_pairs = [("guide", adata_guide), ("gene", adata_gene_embed)]
@@ -1277,16 +705,16 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
         from umap import UMAP
         for level_name, adata_level in embed_pairs:
             _logger.info(f"  Computing {level_name} UMAP ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = _clean_X_for_embedding(adata_level)
+            X_clean = clean_X_for_embedding(adata_level)
             n_neighbors = min(15, adata_level.n_obs - 1)
             if n_neighbors < 2:
                 _logger.warning(f"  UMAP skipped for {level_name}: too few observations")
                 continue
             coords = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42).fit_transform(X_clean)
-            perts = _get_perts_col(adata_level)
+            perts = get_perts_col(adata_level)
             level_embeddings.setdefault(level_name, {})["UMAP"] = coords
             level_perts[level_name] = perts
-            fname = _plot_embedding_overlay(
+            fname = plot_embedding_overlay(
                 coords, perts, metric_lookup, level_name, "UMAP",
                 plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
             )
@@ -1301,7 +729,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
         import phate
         for level_name, adata_level in embed_pairs:
             _logger.info(f"  Computing {level_name} PHATE ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = _clean_X_for_embedding(adata_level)
+            X_clean = clean_X_for_embedding(adata_level)
             knn = min(15 if adata_level.n_obs > 2000 else 10, adata_level.n_obs - 1)
             if knn < 2:
                 _logger.warning(f"  PHATE skipped for {level_name}: too few observations")
@@ -1311,10 +739,10 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                 n_jobs=-1, random_state=42, verbose=0,
             )
             coords = phate_op.fit_transform(X_clean)
-            perts = _get_perts_col(adata_level)
+            perts = get_perts_col(adata_level)
             level_embeddings.setdefault(level_name, {})["PHATE"] = coords
             level_perts[level_name] = perts
-            fname = _plot_embedding_overlay(
+            fname = plot_embedding_overlay(
                 coords, perts, metric_lookup, level_name, "PHATE",
                 plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
             )
@@ -1328,7 +756,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
     for level_name in ["gene"]:
         if level_name in level_embeddings and level_name in level_perts:
             try:
-                _plot_positive_controls_grid(
+                plot_positive_controls_grid(
                     level_embeddings[level_name], level_perts[level_name],
                     level_name, plots_dir, plt,
                 )
@@ -1458,11 +886,11 @@ def aggregate_channels(
         except Exception as e:
             _logger.warning(f"  Activity plot failed: {e}")
 
-    _plot_sweep_curves(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger)
-    _plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger)
+    plot_sweep_curves_summary(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger, min_pcs=MIN_PCS)
+    plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger)
 
     # Step 6: Embeddings (UMAP + PHATE)
-    metric_lookup = _build_metric_lookup(activity_map)
+    metric_lookup = build_metric_lookup(activity_map)
     _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
 
     # Step 7: Distinctiveness + consistency (slow)
