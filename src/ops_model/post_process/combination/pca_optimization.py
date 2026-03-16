@@ -46,7 +46,7 @@ from ops_utils.analysis.map_scores import (
     plot_map_scatter,
 )
 from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
-from ops_utils.analysis.sweep_plots import (
+from ops_utils.analysis.pca_sweep_plots import (
     plot_channel_peaks_bar,
     plot_pca_sweep,
     plot_sweep_curves_summary,
