@@ -961,57 +961,28 @@ def pca_sweep_pooled_signal(
 
 
 # =============================================================================
-# Phase 2: Aggregation (load per-channel h5ads, hconcat, normalize, score, plot)
+# Phase 2: Aggregation sub-steps (used by aggregate_channels)
 # =============================================================================
 
-def aggregate_channels(
-    output_dir: str,
-    norm_method: str = "ntc",
-    per_unit_subdir: str = "per_channel",
-) -> str:
-    """
-    Load per-channel (or per-signal) h5ads, horizontally concatenate, normalize, score, save.
-
-    Top-level function (not a method) so submitit can pickle it.
-
-    Args:
-        per_unit_subdir: subdirectory containing guide/gene h5ads.
-            "per_channel" for standard mode, "per_signal" for downsampled mode.
-    """
-    import warnings
-    warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.getLogger("copairs").setLevel(logging.WARNING)
-    _logger = logging.getLogger(__name__)
-
-    t_start = time.time()
-    output_dir = Path(output_dir)
-    per_channel_dir = output_dir / per_unit_subdir
-
-    # Discover per-channel outputs
-    guide_files = sorted(per_channel_dir.glob("*_guide.h5ad"))
+def _load_per_unit_blocks(per_unit_dir, _logger):
+    """Load per-channel/per-signal guide+gene h5ads, return blocks + report rows."""
+    guide_files = sorted(per_unit_dir.glob("*_guide.h5ad"))
     if not guide_files:
-        return "FAILED: no per-channel h5ad files found"
+        return None, None, [], 0
 
-    _logger.info(f"Found {len(guide_files)} per-channel guide files")
-
-    # Load all per-channel blocks
-    guide_blocks = []
-    gene_blocks = []
-    report_rows = []
+    _logger.info(f"Found {len(guide_files)} per-unit guide files")
+    guide_blocks, gene_blocks, report_rows = [], [], []
     total_cells = 0
 
     for gf in guide_files:
         file_prefix = gf.stem.replace("_guide", "")
-        gene_file = per_channel_dir / f"{file_prefix}_gene.h5ad"
+        gene_file = per_unit_dir / f"{file_prefix}_gene.h5ad"
         if not gene_file.exists():
             _logger.warning(f"  Skipping {file_prefix}: no gene file")
             continue
 
         g = ad.read_h5ad(gf)
         sig = g.uns.get("signal", file_prefix)
-
-        # Skip unmapped channels that slipped through
         if sig == "unknown" or sig.startswith("(unmapped:"):
             _logger.warning(f"  Skipping {file_prefix}: unmapped channel (signal={sig!r})")
             continue
@@ -1035,58 +1006,52 @@ def aggregate_channels(
         })
         _logger.info(f"  {sig}: {g.n_obs} guides x {g.n_vars} PCs @ {g.uns.get('pca_threshold', '?')}")
 
-    if not guide_blocks:
-        return "FAILED: no valid per-channel data loaded"
+    return guide_blocks or None, gene_blocks, report_rows, total_cells
 
-    # Horizontal concat
+
+def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
+    """Horizontal concat, NTC normalize, re-aggregate to gene, strip obs for copairs."""
     adata_guide = _hconcat(guide_blocks, "guide")
     adata_gene = _hconcat(gene_blocks, "gene")
     del guide_blocks, gene_blocks
 
-    total_feats = adata_guide.n_vars
-    _logger.info(f"Concatenated: {adata_guide.n_obs} guides, {total_feats} features")
-
-    # NTC normalize
+    _logger.info(f"Concatenated: {adata_guide.n_obs} guides, {adata_guide.n_vars} features")
     _logger.info(f"NTC normalizing at guide level...")
     adata_guide = _normalize_guide(adata_guide, norm_method)
     adata_guide.X = np.asarray(adata_guide.X, dtype=np.float32)
 
-    # Re-aggregate to gene level
     adata_gene = aggregate_to_level(
-        adata_guide, "gene",
-        preserve_batch_info=False,
-        subsample_controls=False,
+        adata_guide, "gene", preserve_batch_info=False, subsample_controls=False,
     )
     _logger.info(f"  Guide: {adata_guide.n_obs} obs, {adata_guide.n_vars} features")
     _logger.info(f"  Gene: {adata_gene.n_obs} obs, {adata_gene.n_vars} features")
 
-    # Strip obs to copairs-required columns (extra string cols cause isnan error in copairs)
+    # Strip obs to copairs-required columns (extra string cols cause isnan error)
     for _ad in [adata_guide, adata_gene]:
-        if _ad is not None:
-            if "n_cells" not in _ad.obs.columns:
-                _ad.obs["n_cells"] = 1
-            keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in _ad.obs.columns]
-            _ad.obs = _ad.obs[keep].copy()
-            for col in _ad.obs.columns:
-                if _ad.obs[col].dtype.name == "category":
-                    _ad.obs[col] = _ad.obs[col].astype(str)
-            _ad.X = np.asarray(_ad.X, dtype=np.float64)
+        if "n_cells" not in _ad.obs.columns:
+            _ad.obs["n_cells"] = 1
+        keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in _ad.obs.columns]
+        _ad.obs = _ad.obs[keep].copy()
+        for col in _ad.obs.columns:
+            if _ad.obs[col].dtype.name == "category":
+                _ad.obs[col] = _ad.obs[col].astype(str)
+        _ad.X = np.asarray(_ad.X, dtype=np.float64)
 
-    # --- Phase 2a: Activity scoring (fast) ---
+    return adata_guide, adata_gene
+
+
+def _score_activity_aggregated(adata_guide, metrics_dir, _logger):
+    """Run phenotypic activity scoring on aggregated data. Returns (activity_map, ratio, auc)."""
     _logger.info(f"Running activity scoring...")
-    metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    map_results = None
     try:
         activity_map, active_ratio = phenotypic_activity_assesment(
             adata_guide, plot_results=False, null_size=100_000,
         )
         activity_map.to_csv(metrics_dir / "phenotypic_activity.csv", index=False)
-        r = active_ratio
-        a = compute_auc_score(activity_map)
-        _logger.info(f"  Activity: {r:.1%} active, AUC={a:.4f}")
+        auc = compute_auc_score(activity_map)
+        _logger.info(f"  Activity: {active_ratio:.1%} active, AUC={auc:.4f}")
 
-        # Print inactive genes
         inactive = activity_map[~activity_map["below_corrected_p"]]
         inactive = inactive[inactive["perturbation"] != "NTC"]
         if len(inactive) > 0:
@@ -1094,12 +1059,15 @@ def aggregate_channels(
             _logger.info(f"  Inactive genes ({len(names)}): {', '.join(names)}")
         else:
             _logger.info(f"  All non-NTC perturbations are active")
+        return activity_map, active_ratio, auc
     except Exception as exc:
         _logger.error(f"  Activity scoring failed: {exc}")
-        activity_map = None
-        r, a = 0.0, 0.0
+        return None, 0.0, 0.0
 
-    # Save h5ads immediately (before slow metrics)
+
+def _save_aggregated_h5ads(adata_guide, adata_gene, report_rows, output_dir,
+                           r, a, norm_method, total_cells, _logger):
+    """Write guide/gene h5ads and report CSV with metadata."""
     adata_guide.uns["pca_optimized"] = True
     adata_guide.uns["pca_report"] = pd.DataFrame(report_rows).to_dict(orient="list")
     adata_guide.uns["baseline_activity"] = float(r)
@@ -1115,7 +1083,362 @@ def aggregate_channels(
     pd.DataFrame(report_rows).to_csv(output_dir / "pca_report.csv", index=False)
     _logger.info(f"  Saved guide_pca_optimized.h5ad, gene_pca_optimized.h5ad, pca_report.csv")
 
-    # --- Setup plots ---
+
+def _plot_sweep_curves(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger):
+    """Collect sweep CSVs and generate per-channel sweep, n_pcs, and summary plots."""
+    sweep_csvs = sorted(per_unit_dir.glob("*_sweep.csv"))
+    if not sweep_csvs:
+        return
+
+    sweep_df = pd.concat([pd.read_csv(f) for f in sweep_csvs], ignore_index=True)
+    sweep_df.to_csv(output_dir / "pca_sweep_all_channels.csv", index=False)
+    _logger.info(f"  Saved pca_sweep_all_channels.csv ({len(sweep_df)} rows)")
+
+    signals = sorted(sweep_df["signal"].unique())
+    colors = plt.cm.tab20(np.linspace(0, 1, len(signals)))
+    legend_cols = max(1, len(signals) // 20)
+
+    # Plot 1: Per-channel sweep curves (activity + AUC)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+    for i, sig in enumerate(signals):
+        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
+        ax1.plot(sub["threshold"], sub["activity"] * 100, "o-", color=colors[i],
+                 linewidth=1.5, markersize=4, label=sig, alpha=0.8)
+        ax2.plot(sub["threshold"], sub["auc"], "o-", color=colors[i],
+                 linewidth=1.5, markersize=4, label=sig, alpha=0.8)
+    ax1.axhline(r * 100, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({r:.1%})")
+    ax2.axhline(a, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({a:.4f})")
+    for ax in [ax1, ax2]:
+        ax.axvline(0.80, color="gray", linestyle="--", alpha=0.3, label="80% threshold")
+        ax.set_xlabel("Explained Variance Threshold")
+        ax.grid(True, alpha=0.3)
+    ax1.set_ylabel("% Active Perturbations")
+    ax1.set_title("Per-Channel PCA Sweep: Activity")
+    ax2.set_ylabel("Activity AUC")
+    ax2.set_title("Per-Channel PCA Sweep: AUC")
+    ax2.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
+               ncol=legend_cols, borderaxespad=0, frameon=True)
+    fig.tight_layout(rect=[0, 0, 0.82, 1])
+    fig.savefig(plots_dir / "per_channel_sweep.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved plots/per_channel_sweep.png")
+
+    # Plot 2: N PCs vs threshold
+    fig, ax = plt.subplots(figsize=(16, 8))
+    for i, sig in enumerate(signals):
+        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
+        ax.plot(sub["threshold"], sub["n_pcs"], "o-", color=colors[i],
+                linewidth=1.5, markersize=4, label=sig, alpha=0.8)
+    ax.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
+    ax.set_xlabel("Explained Variance Threshold")
+    ax.set_ylabel("Number of PCs")
+    ax.set_title("PCs Selected vs Variance Threshold (per channel)")
+    ax.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
+              ncol=legend_cols, borderaxespad=0, frameon=True)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout(rect=[0, 0, 0.82, 1])
+    fig.savefig(plots_dir / "n_pcs_vs_threshold.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved plots/n_pcs_vs_threshold.png")
+
+    # Plot 3: Summary sweep with mean curve
+    fig, axes = plt.subplots(1, 3, figsize=(26, 8))
+    ax_act, ax_auc, ax_pcs = axes
+    all_thresholds = sorted(sweep_df["threshold"].unique())
+    act_matrix, auc_matrix, pcs_matrix = [], [], []
+    for sig in signals:
+        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
+        act_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["activity"]))
+        auc_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["auc"]))
+        pcs_matrix.append(np.interp(all_thresholds, sub["threshold"], sub["n_pcs"]))
+    mean_act = np.array(act_matrix).mean(axis=0)
+    mean_auc = np.array(auc_matrix).mean(axis=0)
+    mean_pcs = np.array(pcs_matrix).mean(axis=0)
+
+    for i, sig in enumerate(signals):
+        sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
+        ax_act.plot(sub["threshold"], sub["activity"] * 100, "-", color=colors[i],
+                    linewidth=0.8, alpha=0.35, label=sig)
+        ax_auc.plot(sub["threshold"], sub["auc"], "-", color=colors[i],
+                    linewidth=0.8, alpha=0.35, label=sig)
+        ax_pcs.plot(sub["threshold"], sub["n_pcs"], "-", color=colors[i],
+                    linewidth=0.8, alpha=0.35, label=sig)
+    ax_act.plot(all_thresholds, mean_act * 100, "o-", color="black",
+                linewidth=2.5, markersize=5, label="Mean", zorder=10)
+    ax_auc.plot(all_thresholds, mean_auc, "o-", color="black",
+                linewidth=2.5, markersize=5, label="Mean", zorder=10)
+    ax_pcs.plot(all_thresholds, mean_pcs, "o-", color="black",
+                linewidth=2.5, markersize=5, label="Mean", zorder=10)
+    ax_act.axhline(r * 100, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
+    ax_auc.axhline(a, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
+    ax_pcs.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
+    for ax in axes:
+        ax.axvline(0.80, color="gray", linestyle="--", alpha=0.3)
+        ax.set_xlabel("Explained Variance Threshold")
+        ax.grid(True, alpha=0.3)
+    ax_pcs.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
+                  ncol=legend_cols, borderaxespad=0, frameon=True)
+    ax_act.set_ylabel("% Active Perturbations")
+    ax_act.set_title("Activity vs Threshold")
+    ax_auc.set_ylabel("Activity AUC")
+    ax_auc.set_title("AUC vs Threshold")
+    ax_pcs.set_ylabel("Number of PCs")
+    ax_pcs.set_title("PCs vs Threshold")
+    fig.suptitle(f"Summary Sweep: {len(signals)} channels, mean shown in black", fontsize=12)
+    fig.tight_layout(rect=[0, 0, 0.82, 1])
+    fig.savefig(plots_dir / "summary_sweep.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved plots/summary_sweep.png")
+
+
+def _plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger):
+    """Bar chart of per-channel peak activity and AUC."""
+    report_df = pd.DataFrame(report_rows)
+    if len(report_df) == 0:
+        return
+    exp_short = report_df["experiment"].apply(lambda e: str(e).split("_")[0] if pd.notna(e) else "")
+    report_df["bar_label"] = exp_short + "_" + report_df["signal"].astype(str)
+
+    df_by_activity = report_df.sort_values("activity", ascending=False).reset_index(drop=True)
+    df_by_auc = report_df.sort_values("auc", ascending=False).reset_index(drop=True)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(16, len(report_df) * 1.0), 14))
+
+    x1 = np.arange(len(df_by_activity))
+    ax1.bar(x1, df_by_activity["activity"] * 100, color="steelblue", alpha=0.8)
+    ax1.axhline(r * 100, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
+    for i, (_, row) in enumerate(df_by_activity.iterrows()):
+        ax1.text(x1[i], row["activity"] * 100 + 0.5,
+                 f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
+                 ha="center", va="bottom", fontsize=7)
+    ax1.set_xticks(x1)
+    ax1.set_xticklabels(df_by_activity["bar_label"], rotation=45, ha="right", fontsize=7)
+    ax1.set_ylabel("% Active Perturbations")
+    ax1.set_title("Per-Channel Peak Activity (at optimal PCA threshold) — sorted by activity")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis="y")
+
+    x2 = np.arange(len(df_by_auc))
+    ax2.bar(x2, df_by_auc["auc"], color="darkorange", alpha=0.8)
+    ax2.axhline(a, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
+    for i, (_, row) in enumerate(df_by_auc.iterrows()):
+        ax2.text(x2[i], row["auc"] + 0.002,
+                 f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
+                 ha="center", va="bottom", fontsize=7)
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(df_by_auc["bar_label"], rotation=45, ha="right", fontsize=7)
+    ax2.set_ylabel("Activity AUC")
+    ax2.set_title("Per-Channel Peak AUC (at optimal PCA threshold) — sorted by AUC")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis="y")
+    fig.subplots_adjust(bottom=0.25, hspace=0.45)
+    fig.savefig(plots_dir / "per_channel_peaks.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved plots/per_channel_peaks.png")
+
+
+def _build_metric_lookup(activity_map):
+    """Build perturbation → metric dict from activity_map for embedding coloring."""
+    if activity_map is None:
+        return {}
+    act_df = activity_map
+    if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
+        act_df = act_df.copy()
+        act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
+    return act_df.set_index("perturbation")[
+        ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
+    ].to_dict("index")
+
+
+def _clean_X_for_embedding(adata_level):
+    """Clean X matrix for UMAP/PHATE (float32, fill NaN/inf)."""
+    X = np.asarray(adata_level.X, dtype=np.float32)
+    return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _get_perts_col(adata_level):
+    """Get perturbation labels from adata obs."""
+    obs = adata_level.obs
+    pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
+    return obs[pert_col].values
+
+
+def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger):
+    """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls."""
+    adata_gene_embed = _split_ntc_for_embedding(adata_guide, random_seed=42)
+    _logger.info(f"  Gene (NTC-split for embedding): {adata_gene_embed.n_obs} obs")
+
+    embed_pairs = [("guide", adata_guide), ("gene", adata_gene_embed)]
+    level_embeddings = {}
+    level_perts = {}
+
+    # UMAP
+    try:
+        from umap import UMAP
+        for level_name, adata_level in embed_pairs:
+            _logger.info(f"  Computing {level_name} UMAP ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
+            X_clean = _clean_X_for_embedding(adata_level)
+            n_neighbors = min(15, adata_level.n_obs - 1)
+            if n_neighbors < 2:
+                _logger.warning(f"  UMAP skipped for {level_name}: too few observations")
+                continue
+            coords = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42).fit_transform(X_clean)
+            perts = _get_perts_col(adata_level)
+            level_embeddings.setdefault(level_name, {})["UMAP"] = coords
+            level_perts[level_name] = perts
+            fname = _plot_embedding_overlay(
+                coords, perts, metric_lookup, level_name, "UMAP",
+                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
+            )
+            _logger.info(f"  Saved plots/{fname}")
+    except ImportError:
+        _logger.warning("  UMAP plots skipped: install umap-learn")
+    except Exception as umap_err:
+        _logger.warning(f"  UMAP plots failed: {umap_err}")
+
+    # PHATE
+    try:
+        import phate
+        for level_name, adata_level in embed_pairs:
+            _logger.info(f"  Computing {level_name} PHATE ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
+            X_clean = _clean_X_for_embedding(adata_level)
+            knn = min(15 if adata_level.n_obs > 2000 else 10, adata_level.n_obs - 1)
+            if knn < 2:
+                _logger.warning(f"  PHATE skipped for {level_name}: too few observations")
+                continue
+            phate_op = phate.PHATE(
+                n_components=2, knn=knn, decay=15, t="auto",
+                n_jobs=-1, random_state=42, verbose=0,
+            )
+            coords = phate_op.fit_transform(X_clean)
+            perts = _get_perts_col(adata_level)
+            level_embeddings.setdefault(level_name, {})["PHATE"] = coords
+            level_perts[level_name] = perts
+            fname = _plot_embedding_overlay(
+                coords, perts, metric_lookup, level_name, "PHATE",
+                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
+            )
+            _logger.info(f"  Saved plots/{fname}")
+    except ImportError:
+        _logger.warning("  PHATE plots skipped: install phate")
+    except Exception as phate_err:
+        _logger.warning(f"  PHATE plots failed: {phate_err}")
+
+    # Positive controls overlay grid (CHAD v4)
+    for level_name in ["gene"]:
+        if level_name in level_embeddings and level_name in level_perts:
+            try:
+                _plot_positive_controls_grid(
+                    level_embeddings[level_name], level_perts[level_name],
+                    level_name, plots_dir, plt,
+                )
+            except Exception as pc_err:
+                _logger.warning(f"  Positive controls grid failed for {level_name}: {pc_err}")
+
+
+def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger):
+    """Run phenotypic distinctiveness scoring, save CSV and plots."""
+    if activity_map is None:
+        return
+    try:
+        from ops_utils.analysis.map_scores import phenotypic_distinctivness
+        _logger.info(f"Running distinctiveness...")
+        distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
+            adata_guide, activity_map, plot_results=False, null_size=100_000,
+        )
+        distinctiveness_map.to_csv(metrics_dir / "phenotypic_distinctiveness.csv", index=False)
+        _logger.info(f"  Distinctiveness: {distinctive_ratio:.1%}")
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        plot_map_scatter(ax1, activity_map, "Activity", r)
+        plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", distinctive_ratio)
+        fig.suptitle(f"Activity & Distinctiveness — {total_feats} features", fontsize=13, fontweight="bold")
+        fig.tight_layout()
+        fig.savefig(plots_dir / "map_activity_distinctiveness.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        _logger.info(f"  Saved plots/map_activity_distinctiveness.png")
+    except Exception as exc:
+        _logger.error(f"  Distinctiveness failed: {exc}")
+
+
+def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger):
+    """Run CORUM + CHAD consistency scoring, save CSVs and plots."""
+    if activity_map is None:
+        return
+    try:
+        from ops_utils.analysis.map_scores import (
+            phenotypic_consistency_corum,
+            phenotypic_consistency_manual_annotation,
+        )
+
+        _logger.info(f"Running CORUM consistency...")
+        consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
+            adata_gene, activity_map, plot_results=False, null_size=100_000,
+            cache_similarity=True,
+        )
+        consistency_corum_map.to_csv(metrics_dir / "phenotypic_consistency_corum.csv", index=False)
+        _logger.info(f"  CORUM: {consistency_corum_ratio:.1%}")
+
+        _logger.info(f"Running CHAD consistency...")
+        consistency_manual_map, consistency_manual_ratio = phenotypic_consistency_manual_annotation(
+            adata_gene, activity_map, plot_results=False, null_size=100_000,
+            cache_similarity=True,
+        )
+        consistency_manual_map.to_csv(metrics_dir / "phenotypic_consistency_manual.csv", index=False)
+        _logger.info(f"  Manual (CHAD): {consistency_manual_ratio:.1%}")
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", consistency_corum_ratio)
+        plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", consistency_manual_ratio)
+        fig.suptitle(f"Consistency Metrics — {total_feats} features", fontsize=13, fontweight="bold")
+        fig.tight_layout()
+        fig.savefig(plots_dir / "map_consistency.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        _logger.info(f"  Saved plots/map_consistency.png")
+    except Exception as exc:
+        _logger.error(f"  Consistency metrics failed: {exc}")
+
+
+# =============================================================================
+# Phase 2: Aggregation (top-level entry point)
+# =============================================================================
+
+def aggregate_channels(
+    output_dir: str,
+    norm_method: str = "ntc",
+    per_unit_subdir: str = "per_channel",
+) -> str:
+    """Load per-channel (or per-signal) h5ads, concatenate, normalize, score, save.
+
+    Top-level function (not a method) so submitit can pickle it.
+
+    Args:
+        per_unit_subdir: subdirectory containing guide/gene h5ads.
+            "per_channel" for standard mode, "per_signal" for downsampled mode.
+    """
+    _logger = _init_sweep_logger()
+    t_start = time.time()
+    output_dir = Path(output_dir)
+    per_unit_dir = output_dir / per_unit_subdir
+
+    # Step 1: Load per-channel/per-signal blocks
+    guide_blocks, gene_blocks, report_rows, total_cells = _load_per_unit_blocks(per_unit_dir, _logger)
+    if guide_blocks is None:
+        return "FAILED: no valid per-channel data loaded"
+
+    # Step 2: Concat + normalize
+    adata_guide, adata_gene = _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger)
+    total_feats = adata_guide.n_vars
+
+    # Step 3: Activity scoring
+    metrics_dir = output_dir / "metrics"
+    activity_map, r, a = _score_activity_aggregated(adata_guide, metrics_dir, _logger)
+
+    # Step 4: Save h5ads (before slow metrics)
+    _save_aggregated_h5ads(adata_guide, adata_gene, report_rows, output_dir,
+                           r, a, norm_method, total_cells, _logger)
+
+    # Step 5: Plots
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1123,7 +1446,6 @@ def aggregate_channels(
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save activity mAP scatter immediately
     if activity_map is not None:
         try:
             fig, ax = plt.subplots(figsize=(8, 7))
@@ -1136,364 +1458,16 @@ def aggregate_channels(
         except Exception as e:
             _logger.warning(f"  Activity plot failed: {e}")
 
-    # Collect all per-channel sweep CSVs into one
-    sweep_csvs = sorted(per_channel_dir.glob("*_sweep.csv"))
-    if sweep_csvs:
-        sweep_df = pd.concat([pd.read_csv(f) for f in sweep_csvs], ignore_index=True)
-        sweep_df.to_csv(output_dir / "pca_sweep_all_channels.csv", index=False)
-        _logger.info(f"  Saved pca_sweep_all_channels.csv ({len(sweep_df)} rows)")
+    _plot_sweep_curves(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger)
+    _plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger)
 
-    if sweep_csvs:
-        sweep_df = pd.read_csv(output_dir / "pca_sweep_all_channels.csv")
-        signals_in_sweep = sweep_df["signal"].unique()
-        colors = plt.cm.tab20(np.linspace(0, 1, len(signals_in_sweep)))
+    # Step 6: Embeddings (UMAP + PHATE)
+    metric_lookup = _build_metric_lookup(activity_map)
+    _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
 
-        # Plot 1: Per-channel sweep curves
-        n_signals = len(signals_in_sweep)
-        legend_cols = max(1, n_signals // 20)
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-        for i, sig in enumerate(sorted(signals_in_sweep)):
-            sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-            ax1.plot(sub["threshold"], sub["activity"] * 100, "o-", color=colors[i],
-                     linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-            ax2.plot(sub["threshold"], sub["auc"], "o-", color=colors[i],
-                     linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-        ax1.axhline(r * 100, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({r:.1%})")
-        ax2.axhline(a, color="black", linestyle=":", alpha=0.5, label=f"Pooled baseline ({a:.4f})")
-        ax1.axvline(0.80, color="gray", linestyle="--", alpha=0.3, label="80% threshold")
-        ax2.axvline(0.80, color="gray", linestyle="--", alpha=0.3, label="80% threshold")
-        ax1.set_xlabel("Explained Variance Threshold")
-        ax1.set_ylabel("% Active Perturbations")
-        ax1.set_title("Per-Channel PCA Sweep: Activity")
-        ax1.grid(True, alpha=0.3)
-        ax2.set_xlabel("Explained Variance Threshold")
-        ax2.set_ylabel("Activity AUC")
-        ax2.set_title("Per-Channel PCA Sweep: AUC")
-        ax2.grid(True, alpha=0.3)
-        # Single legend outside the plots (from ax2, which has same labels)
-        ax2.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                   ncol=legend_cols, borderaxespad=0, frameon=True)
-        fig.tight_layout(rect=[0, 0, 0.82, 1])
-        fig.savefig(plots_dir / "per_channel_sweep.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        _logger.info(f"  Saved plots/per_channel_sweep.png")
-
-        # Plot 2: N PCs vs threshold
-        fig, ax = plt.subplots(figsize=(16, 8))
-        for i, sig in enumerate(sorted(signals_in_sweep)):
-            sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-            ax.plot(sub["threshold"], sub["n_pcs"], "o-", color=colors[i],
-                    linewidth=1.5, markersize=4, label=sig, alpha=0.8)
-        ax.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
-        ax.set_xlabel("Explained Variance Threshold")
-        ax.set_ylabel("Number of PCs")
-        ax.set_title("PCs Selected vs Variance Threshold (per channel)")
-        ax.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                  ncol=legend_cols, borderaxespad=0, frameon=True)
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout(rect=[0, 0, 0.82, 1])
-        fig.savefig(plots_dir / "n_pcs_vs_threshold.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        _logger.info(f"  Saved plots/n_pcs_vs_threshold.png")
-
-        # Plot 3: Summary sweep with mean curve
-        # All channels as light lines, bold mean overlay
-        fig, axes = plt.subplots(1, 3, figsize=(26, 8))
-        ax_act, ax_auc, ax_pcs = axes
-
-        # Compute mean curves by interpolating all channels onto common thresholds
-        all_thresholds = sorted(sweep_df["threshold"].unique())
-        act_matrix = []  # (n_channels, n_thresholds)
-        auc_matrix = []
-        pcs_matrix = []
-
-        for sig in sorted(signals_in_sweep):
-            sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-            # Interpolate to common thresholds
-            act_interp = np.interp(all_thresholds, sub["threshold"], sub["activity"])
-            auc_interp = np.interp(all_thresholds, sub["threshold"], sub["auc"])
-            pcs_interp = np.interp(all_thresholds, sub["threshold"], sub["n_pcs"])
-            act_matrix.append(act_interp)
-            auc_matrix.append(auc_interp)
-            pcs_matrix.append(pcs_interp)
-
-        act_matrix = np.array(act_matrix)
-        auc_matrix = np.array(auc_matrix)
-        pcs_matrix = np.array(pcs_matrix)
-        mean_act = act_matrix.mean(axis=0)
-        mean_auc = auc_matrix.mean(axis=0)
-        mean_pcs = pcs_matrix.mean(axis=0)
-
-        # Plot individual channels as light lines
-        for i, sig in enumerate(sorted(signals_in_sweep)):
-            sub = sweep_df[sweep_df["signal"] == sig].sort_values("threshold")
-            ax_act.plot(sub["threshold"], sub["activity"] * 100, "-", color=colors[i],
-                        linewidth=0.8, alpha=0.35, label=sig)
-            ax_auc.plot(sub["threshold"], sub["auc"], "-", color=colors[i],
-                        linewidth=0.8, alpha=0.35, label=sig)
-            ax_pcs.plot(sub["threshold"], sub["n_pcs"], "-", color=colors[i],
-                        linewidth=0.8, alpha=0.35, label=sig)
-
-        # Overlay mean as bold black line
-        ax_act.plot(all_thresholds, mean_act * 100, "o-", color="black",
-                    linewidth=2.5, markersize=5, label="Mean", zorder=10)
-        ax_auc.plot(all_thresholds, mean_auc, "o-", color="black",
-                    linewidth=2.5, markersize=5, label="Mean", zorder=10)
-        ax_pcs.plot(all_thresholds, mean_pcs, "o-", color="black",
-                    linewidth=2.5, markersize=5, label="Mean", zorder=10)
-
-        # Baselines and reference lines
-        ax_act.axhline(r * 100, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
-        ax_auc.axhline(a, color="red", linestyle=":", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
-        ax_pcs.axhline(MIN_PCS, color="red", linestyle="--", alpha=0.5, label=f"MIN_PCS={MIN_PCS}")
-        for ax in axes:
-            ax.axvline(0.80, color="gray", linestyle="--", alpha=0.3)
-            ax.set_xlabel("Explained Variance Threshold")
-            ax.grid(True, alpha=0.3)
-        # Single legend outside plots (from ax_act which has all channel labels + mean)
-        ax_pcs.legend(fontsize=5, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                      ncol=legend_cols, borderaxespad=0, frameon=True)
-
-        ax_act.set_ylabel("% Active Perturbations")
-        ax_act.set_title("Activity vs Threshold")
-        ax_auc.set_ylabel("Activity AUC")
-        ax_auc.set_title("AUC vs Threshold")
-        ax_pcs.set_ylabel("Number of PCs")
-        ax_pcs.set_title("PCs vs Threshold")
-
-        fig.suptitle(f"Summary Sweep: {len(signals_in_sweep)} channels, mean shown in black", fontsize=12)
-        fig.tight_layout(rect=[0, 0, 0.82, 1])
-        fig.savefig(plots_dir / "summary_sweep.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        _logger.info(f"  Saved plots/summary_sweep.png")
-
-    # Plot 4: Bar chart of per-channel peaks
-    report_df = pd.DataFrame(report_rows)
-    if len(report_df) > 0:
-        # Create exp_signal labels (e.g. ops0046_Phase)
-        exp_short = report_df["experiment"].apply(lambda e: str(e).split("_")[0] if pd.notna(e) else "")
-        report_df["bar_label"] = exp_short + "_" + report_df["signal"].astype(str)
-
-        # Sort by activity (highest to lowest) for top plot
-        df_by_activity = report_df.sort_values("activity", ascending=False).reset_index(drop=True)
-        # Sort by AUC (highest to lowest) for bottom plot
-        df_by_auc = report_df.sort_values("auc", ascending=False).reset_index(drop=True)
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(16, len(report_df) * 1.0), 14))
-
-        x1 = np.arange(len(df_by_activity))
-        bars1 = ax1.bar(x1, df_by_activity["activity"] * 100, color="steelblue", alpha=0.8)
-        ax1.axhline(r * 100, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({r:.1%})")
-        for i, (_, row) in enumerate(df_by_activity.iterrows()):
-            ax1.text(x1[i], row["activity"] * 100 + 0.5,
-                     f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
-                     ha="center", va="bottom", fontsize=7)
-        ax1.set_xticks(x1)
-        ax1.set_xticklabels(df_by_activity["bar_label"], rotation=45, ha="right", fontsize=7)
-        ax1.set_ylabel("% Active Perturbations")
-        ax1.set_title("Per-Channel Peak Activity (at optimal PCA threshold) — sorted by activity")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3, axis="y")
-
-        x2 = np.arange(len(df_by_auc))
-        bars2 = ax2.bar(x2, df_by_auc["auc"], color="darkorange", alpha=0.8)
-        ax2.axhline(a, color="red", linestyle="--", alpha=0.6, label=f"Pooled baseline ({a:.4f})")
-        for i, (_, row) in enumerate(df_by_auc.iterrows()):
-            ax2.text(x2[i], row["auc"] + 0.002,
-                     f"thr={row['peak_threshold']:.0%}\n{row['n_pcs']}PCs",
-                     ha="center", va="bottom", fontsize=7)
-        ax2.set_xticks(x2)
-        ax2.set_xticklabels(df_by_auc["bar_label"], rotation=45, ha="right", fontsize=7)
-        ax2.set_ylabel("Activity AUC")
-        ax2.set_title("Per-Channel Peak AUC (at optimal PCA threshold) — sorted by AUC")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3, axis="y")
-        fig.subplots_adjust(bottom=0.25, hspace=0.45)
-        fig.savefig(plots_dir / "per_channel_peaks.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        _logger.info(f"  Saved plots/per_channel_peaks.png")
-
-    # --- Phase 2b: Embedding plots (UMAP + PHATE, before slow metrics) ---
-
-    # Build metric lookup from activity_map
-    metric_lookup = {}
-    if activity_map is not None:
-        act_df = activity_map
-        if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
-            act_df = act_df.copy()
-            act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
-        metric_lookup = act_df.set_index("perturbation")[
-            ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
-        ].to_dict("index")
-
-    # Helper to get perts array from adata
-    def _get_perts(adata_level):
-        obs = adata_level.obs
-        pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
-        return obs[pert_col].values
-
-    def _clean_X(adata_level):
-        X = np.asarray(adata_level.X, dtype=np.float32)
-        return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Build gene-level adata with NTCs split into random groups of 4
-    # This way the gene UMAP/PHATE shows NTCs as multiple dots matching KO group sizes
-    adata_gene_embed = _split_ntc_for_embedding(adata_guide, random_seed=42)
-    _logger.info(f"  Gene (NTC-split for embedding): {adata_gene_embed.n_obs} obs")
-
-    # Track embeddings for positive controls grid
-    # {level_name: {"UMAP": coords, "PHATE": coords}}
-    level_embeddings = {}
-    level_perts = {}
-
-    # UMAP
-    try:
-        from umap import UMAP
-
-        for level_name, adata_level in [("guide", adata_guide), ("gene", adata_gene_embed)]:
-            _logger.info(f"  Computing {level_name} UMAP ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = _clean_X(adata_level)
-            n_neighbors = min(15, adata_level.n_obs - 1)
-            if n_neighbors < 2:
-                _logger.warning(f"  UMAP skipped for {level_name}: too few observations")
-                continue
-
-            umap_model = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42)
-            coords = umap_model.fit_transform(X_clean)
-            perts = _get_perts(adata_level)
-
-            level_embeddings.setdefault(level_name, {})["UMAP"] = coords
-            level_perts[level_name] = perts
-
-            fname = _plot_embedding_overlay(
-                coords, perts, metric_lookup, level_name, "UMAP",
-                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-            )
-            _logger.info(f"  Saved plots/{fname}")
-
-    except ImportError:
-        _logger.warning("  UMAP plots skipped: install umap-learn (pip install umap-learn)")
-    except Exception as umap_err:
-        _logger.warning(f"  UMAP plots failed: {umap_err}")
-
-    # PHATE
-    try:
-        import phate
-
-        for level_name, adata_level in [("guide", adata_guide), ("gene", adata_gene_embed)]:
-            _logger.info(f"  Computing {level_name} PHATE ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-            X_clean = _clean_X(adata_level)
-
-            # Optimal PHATE params:
-            #   knn=10 for gene (~1000 obs), knn=15 for guide (~4000 obs)
-            #   t='auto' lets PHATE pick diffusion time via knee-point
-            #   decay=15 sharpens the kernel for cleaner structure
-            #   n_jobs=-1 for full parallelism
-            knn = min(15 if adata_level.n_obs > 2000 else 10, adata_level.n_obs - 1)
-            if knn < 2:
-                _logger.warning(f"  PHATE skipped for {level_name}: too few observations")
-                continue
-
-            phate_op = phate.PHATE(
-                n_components=2,
-                knn=knn,
-                decay=15,
-                t="auto",
-                n_jobs=-1,
-                random_state=42,
-                verbose=0,
-            )
-            coords = phate_op.fit_transform(X_clean)
-            perts = _get_perts(adata_level)
-
-            level_embeddings.setdefault(level_name, {})["PHATE"] = coords
-            level_perts[level_name] = perts
-
-            fname = _plot_embedding_overlay(
-                coords, perts, metric_lookup, level_name, "PHATE",
-                plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-            )
-            _logger.info(f"  Saved plots/{fname}")
-
-    except ImportError:
-        _logger.warning("  PHATE plots skipped: install phate (pip install phate)")
-    except Exception as phate_err:
-        _logger.warning(f"  PHATE plots failed: {phate_err}")
-
-    # Positive controls overlay grid (CHAD v4)
-    for level_name in ["gene"]:
-        if level_name in level_embeddings and level_name in level_perts:
-            try:
-                _plot_positive_controls_grid(
-                    level_embeddings[level_name],
-                    level_perts[level_name],
-                    level_name,
-                    plots_dir,
-                    plt,
-                )
-            except Exception as pc_err:
-                _logger.warning(f"  Positive controls grid failed for {level_name}: {pc_err}")
-
-    # --- Phase 2c: Distinctiveness (medium speed) ---
-    distinctiveness_map = None
-    if activity_map is not None:
-        try:
-            from ops_utils.analysis.map_scores import phenotypic_distinctivness
-            _logger.info(f"Running distinctiveness...")
-            distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
-                adata_guide, activity_map, plot_results=False, null_size=100_000,
-            )
-            distinctiveness_map.to_csv(metrics_dir / "phenotypic_distinctiveness.csv", index=False)
-            _logger.info(f"  Distinctiveness: {distinctive_ratio:.1%}")
-
-            # Save activity + distinctiveness 2-panel plot
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-            plot_map_scatter(ax1, activity_map, "Activity", r)
-            plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", distinctive_ratio)
-            fig.suptitle(f"Activity & Distinctiveness — {total_feats} features", fontsize=13, fontweight="bold")
-            fig.tight_layout()
-            fig.savefig(plots_dir / "map_activity_distinctiveness.png", dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            _logger.info(f"  Saved plots/map_activity_distinctiveness.png")
-        except Exception as exc:
-            _logger.error(f"  Distinctiveness failed: {exc}")
-
-    # --- Phase 2d: Consistency metrics (slow — CORUM + CHAD) ---
-    if activity_map is not None:
-        try:
-            from ops_utils.analysis.map_scores import (
-                phenotypic_consistency_corum,
-                phenotypic_consistency_manual_annotation,
-            )
-
-            _logger.info(f"Running CORUM consistency...")
-            consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
-                adata_gene, activity_map, plot_results=False, null_size=100_000,
-                cache_similarity=True,
-            )
-            consistency_corum_map.to_csv(metrics_dir / "phenotypic_consistency_corum.csv", index=False)
-            _logger.info(f"  CORUM: {consistency_corum_ratio:.1%}")
-
-            _logger.info(f"Running CHAD consistency...")
-            consistency_manual_map, consistency_manual_ratio = phenotypic_consistency_manual_annotation(
-                adata_gene, activity_map, plot_results=False, null_size=100_000,
-                cache_similarity=True,
-            )
-            consistency_manual_map.to_csv(metrics_dir / "phenotypic_consistency_manual.csv", index=False)
-            _logger.info(f"  Manual (CHAD): {consistency_manual_ratio:.1%}")
-
-            # Save CORUM + CHAD 2-panel plot
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-            plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", consistency_corum_ratio)
-            plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", consistency_manual_ratio)
-            fig.suptitle(f"Consistency Metrics — {total_feats} features", fontsize=13, fontweight="bold")
-            fig.tight_layout()
-            fig.savefig(plots_dir / "map_consistency.png", dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            _logger.info(f"  Saved plots/map_consistency.png")
-
-        except Exception as exc:
-            _logger.error(f"  Consistency metrics failed: {exc}")
+    # Step 7: Distinctiveness + consistency (slow)
+    _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger)
+    _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger)
 
     elapsed = time.time() - t_start
     _logger.info(f"\nDone in {elapsed/60:.1f} minutes")
@@ -1513,15 +1487,10 @@ def run_pca_optimization(
     norm_method: str = "ntc",
 ) -> str:
     """Run full pipeline locally (sequential): discover, per-channel sweep, aggregate."""
-    import warnings
-    warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.getLogger("copairs").setLevel(logging.WARNING)
-
+    _logger = _init_sweep_logger()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover experiments
     attr_config = load_attribution_config()
     storage_roots = get_storage_roots(attr_config)
     feature_dir = attr_config.get("feature_dir", "dino_features")
@@ -1531,594 +1500,389 @@ def run_pca_optimization(
     if not all_pairs:
         return "FAILED: no experiment-channel pairs found"
 
-    # Phase 1: process each channel sequentially
     for i, (exp, ch) in enumerate(all_pairs):
         logger.info(f"\n[{i+1}/{len(all_pairs)}] Processing {exp}/{ch}...")
         result = pca_sweep_single_experiment(
-            exp=exp,
-            channel=ch,
-            output_dir=str(output_dir),
-            norm_method=norm_method,
-            sweep_thresholds=sweep_thresholds,
+            exp=exp, channel=ch, output_dir=str(output_dir),
+            norm_method=norm_method, sweep_thresholds=sweep_thresholds,
         )
         logger.info(f"  {result}")
 
-    # Phase 2: aggregate
     return aggregate_channels(output_dir=str(output_dir), norm_method=norm_method)
+
+
+# =============================================================================
+# CLI: mode handlers
+# =============================================================================
+
+def _discover_experiment_pairs(cp_override):
+    """Common experiment discovery for SLURM modes. Returns (all_pairs, attr_config, storage_roots, feature_dir, maps_path)."""
+    attr_config = load_attribution_config()
+    storage_roots = get_storage_roots(attr_config)
+    feature_dir = cp_override or attr_config.get("feature_dir", "dino_features")
+    maps_path = get_channel_maps_path()
+    if cp_override:
+        all_pairs = discover_cellprofiler_experiments(storage_roots)
+    else:
+        all_pairs = discover_dino_experiments(storage_roots, feature_dir)
+    return all_pairs, attr_config, storage_roots, feature_dir, maps_path
+
+
+def _make_slurm_params(args):
+    """Build standard SLURM params dict from parsed args."""
+    return {
+        "timeout_min": args.slurm_time,
+        "mem": args.slurm_memory,
+        "cpus_per_task": args.slurm_cpus,
+        "slurm_partition": args.slurm_partition,
+    }
+
+
+def _make_agg_slurm_params(args):
+    """Build aggregation SLURM params dict from parsed args."""
+    return {
+        "timeout_min": args.slurm_agg_time,
+        "mem": args.slurm_agg_memory,
+        "cpus_per_task": args.slurm_cpus,
+        "slurm_partition": args.slurm_partition,
+    }
+
+
+def _submit_aggregation_slurm(agg_output, norm_method, per_unit_subdir, agg_slurm_params,
+                               experiment_name, manifest_prefix):
+    """Submit a single aggregation SLURM job."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    agg_jobs = [{
+        "name": f"{manifest_prefix}_aggregate",
+        "func": aggregate_channels,
+        "kwargs": {
+            "output_dir": agg_output,
+            "norm_method": norm_method,
+            "per_unit_subdir": per_unit_subdir,
+        },
+    }]
+    agg_result = submit_parallel_jobs(
+        jobs_to_submit=agg_jobs,
+        experiment=experiment_name,
+        slurm_params=agg_slurm_params,
+        log_dir="pca_optimization",
+        manifest_prefix=manifest_prefix,
+        wait_for_completion=True,
+    )
+    if agg_result.get("failed"):
+        print("Aggregation FAILED")
+    else:
+        print("Aggregation complete")
+
+
+def _handle_umap_only(args, output_dir):
+    """Generate UMAP + PHATE embedding plots from existing optimized h5ads."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logger = logging.getLogger(__name__)
+
+    umap_dir = output_dir / "downsampled" if args.downsampled else output_dir
+    guide_path = umap_dir / "guide_pca_optimized.h5ad"
+    if not guide_path.exists():
+        print(f"ERROR: {guide_path} not found. Run --aggregate-only first.")
+        return
+
+    _logger.info(f"Loading {guide_path}...")
+    adata_guide = ad.read_h5ad(guide_path)
+
+    # Load activity metrics for coloring
+    activity_csv = umap_dir / "metrics" / "phenotypic_activity.csv"
+    if activity_csv.exists():
+        act_df = pd.read_csv(activity_csv)
+        if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
+            act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
+        metric_lookup = act_df.set_index("perturbation")[
+            ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
+        ].to_dict("index")
+        _logger.info(f"  Loaded activity metrics for {len(metric_lookup)} perturbations")
+    else:
+        metric_lookup = {}
+        _logger.warning(f"  No activity CSV found at {activity_csv}, UMAPs will be uncolored")
+
+    plots_dir = umap_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
+    print("SUCCESS: Embedding plots saved")
+
+
+def _handle_aggregate_only(args, output_dir):
+    """Run only the aggregation step (Phase 2)."""
+    if args.downsampled:
+        agg_output = str(output_dir / "downsampled")
+        agg_subdir = "per_signal"
+    else:
+        agg_output = str(output_dir)
+        agg_subdir = "per_channel"
+
+    if args.slurm:
+        print(f"Submitting aggregation as SLURM job ({args.slurm_agg_memory}, {args.slurm_agg_time}min)...")
+        if args.downsampled:
+            print(f"  Mode: signal-group (reading from {agg_output}/per_signal/)")
+        _submit_aggregation_slurm(
+            agg_output, args.norm_method, agg_subdir,
+            _make_agg_slurm_params(args), "pca_aggregation", "pca_agg",
+        )
+    else:
+        result = aggregate_channels(output_dir=agg_output, norm_method=args.norm_method, per_unit_subdir=agg_subdir)
+        print(result)
+
+
+def _handle_downsampled(args, output_dir, cp_override):
+    """Pool cells by signal group, downsample, PCA sweep (local or SLURM)."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+    ds_output_dir = output_dir / "downsampled"
+    ds_output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
+    if not all_pairs:
+        print("No experiment-channel pairs found!")
+        return
+
+    from ops_utils.data.feature_metadata import FeatureMetadata
+    fm = FeatureMetadata(metadata_path=maps_path)
+    signal_groups = build_signal_groups(all_pairs, fm)
+    n_signals = len(signal_groups)
+
+    mode_label = "CellProfiler" if cp_override else "Downsampled"
+    print(f"\n{mode_label} PCA Optimization: {len(all_pairs)} channels -> {n_signals} signal groups")
+    print(f"Output: {ds_output_dir}")
+
+    # Pre-scan cell counts and compute downsampling target
+    print("\nPre-scanning cell counts per signal group...")
+    cell_counts = count_cells_per_signal_group(signal_groups, storage_roots, feature_dir, maps_path)
+    MIN_CELLS_FLOOR = 750_000
+    target_n_cells = max(min(cell_counts.values()), MIN_CELLS_FLOOR)
+
+    small_groups = {s: n for s, n in cell_counts.items() if n < target_n_cells}
+    if small_groups:
+        print(f"\n  {len(small_groups)} signal group(s) have fewer than {target_n_cells:,} cells (will use all available):")
+        for s, n in sorted(small_groups.items(), key=lambda x: x[1]):
+            print(f"    {s}: {n:,} cells")
+
+    # Print + save manifest
+    print(f"\nSignal group manifest (downsampling all to {target_n_cells:,} cells):")
+    print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'-> Downsampled':>15}")
+    print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*15}")
+    manifest_rows = []
+    for signal in sorted(signal_groups.keys()):
+        pairs = signal_groups[signal]
+        n_cells = cell_counts[signal]
+        print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} -> {target_n_cells:>12,}")
+        manifest_rows.append({
+            "signal": signal, "n_experiments": len(pairs),
+            "n_cells_pooled": n_cells, "n_cells_downsampled": target_n_cells,
+            "experiments": ",".join(e.split("_")[0] for e, c in pairs),
+        })
+    print(f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells -> {target_n_cells:,} per group")
+    pd.DataFrame(manifest_rows).to_csv(ds_output_dir / "downsampled_manifest.csv", index=False)
+
+    # Build common kwargs for signal-group jobs
+    def _signal_job_kwargs(signal, pairs):
+        kwargs = dict(
+            signal=signal, exp_channel_pairs=pairs,
+            output_dir=str(ds_output_dir), target_n_cells=target_n_cells,
+            norm_method=args.norm_method,
+        )
+        if cp_override:
+            kwargs["feature_dir_override"] = cp_override
+            kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
+        return kwargs
+
+    if not args.slurm:
+        print("\nRunning locally (sequential)...")
+        for signal, pairs in signal_groups.items():
+            result = pca_sweep_pooled_signal(**_signal_job_kwargs(signal, pairs))
+            print(f"  {result}")
+        result = aggregate_channels(
+            output_dir=str(ds_output_dir), norm_method=args.norm_method, per_unit_subdir="per_signal",
+        )
+        print(result)
+        return
+
+    # SLURM mode: one job per signal group
+    jobs = []
+    for signal, pairs in signal_groups.items():
+        sig_safe = sanitize_signal_filename(signal)[:40]
+        jobs.append({
+            "name": f"pca_ds_{sig_safe}",
+            "func": pca_sweep_pooled_signal,
+            "kwargs": _signal_job_kwargs(signal, pairs),
+            "metadata": {"signal": signal, "n_experiments": len(pairs)},
+        })
+
+    ds_time = max(args.slurm_time, 30)
+    slurm_params = _make_slurm_params(args)
+    slurm_params["timeout_min"] = ds_time
+    agg_slurm_params = _make_agg_slurm_params(args)
+
+    def _on_ds_phase1_complete(submitted_jobs, experiment):
+        print(f"\nAll signal-group jobs complete. Submitting aggregation SLURM job...")
+        _submit_aggregation_slurm(
+            str(ds_output_dir), args.norm_method, "per_signal",
+            agg_slurm_params, "pca_ds_aggregation", "pca_ds_agg",
+        )
+
+    print(f"\nSubmitting {len(jobs)} signal-group SLURM jobs...")
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs, experiment="pca_ds_optimization",
+        slurm_params=slurm_params, log_dir="pca_optimization",
+        manifest_prefix="pca_ds_opt", wait_for_completion=True,
+        post_completion_callback=_on_ds_phase1_complete,
+    )
+    if result.get("failed"):
+        print(f"\nWarning: {len(result['failed'])} signal groups failed")
+        for name in result["failed"]:
+            print(f"  - {name}")
+
+
+def _handle_per_channel_slurm(args, output_dir, cp_override):
+    """Per-channel SLURM sweep + aggregation."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    import contextlib, io
+
+    all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
+    if not all_pairs:
+        print("No experiment-channel pairs found!")
+        return
+
+    from ops_utils.data.feature_metadata import FeatureMetadata
+    fm = FeatureMetadata(metadata_path=maps_path)
+
+    print(f"\nPCA Optimization: {len(all_pairs)} channels to process")
+    print(f"Output: {output_dir}")
+
+    # Build per-channel jobs, skipping unmapped channels
+    jobs = []
+    skipped_unmapped = []
+    for exp, ch in all_pairs:
+        exp_short = exp.split("_")[0]
+        with contextlib.redirect_stdout(io.StringIO()):
+            resolved = resolve_channel_label(fm, exp, ch)
+        sig = resolved["label"]
+        if sig == "unknown" or sig.startswith("(unmapped:"):
+            skipped_unmapped.append((exp, ch, sig))
+            continue
+        sig_safe = sig.replace(" ", "_").replace(",", "").replace("(", "").replace(")", "")[:40]
+        job_kwargs = {
+            "exp": exp, "channel": ch,
+            "output_dir": str(output_dir), "norm_method": args.norm_method,
+        }
+        if cp_override:
+            job_kwargs["feature_dir_override"] = cp_override
+            job_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
+        jobs.append({
+            "name": f"pca_{sig_safe}_{exp_short}",
+            "func": pca_sweep_single_experiment,
+            "kwargs": job_kwargs,
+            "metadata": {"signal": sig, "experiment": exp, "channel": ch},
+        })
+
+    if skipped_unmapped:
+        print(f"\n  {len(skipped_unmapped)} experiment-channel pairs could not be mapped and will be SKIPPED:")
+        for exp, ch, sig in skipped_unmapped:
+            print(f"    {exp} / {ch}  ->  {sig!r}")
+        print()
+
+    slurm_params = _make_slurm_params(args)
+    agg_slurm_params = _make_agg_slurm_params(args)
+
+    def _on_phase1_complete(submitted_jobs, experiment):
+        print(f"\nAll per-channel jobs complete. Submitting aggregation SLURM job...")
+        _submit_aggregation_slurm(
+            str(output_dir), args.norm_method, "per_channel",
+            agg_slurm_params, "pca_aggregation", "pca_agg",
+        )
+
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs, experiment="pca_optimization",
+        slurm_params=slurm_params, log_dir="pca_optimization",
+        manifest_prefix="pca_opt", wait_for_completion=True,
+        post_completion_callback=_on_phase1_complete,
+    )
+    if result.get("failed"):
+        print(f"\nWarning: {len(result['failed'])} channels failed")
+        for name in result["failed"]:
+            print(f"  - {name}")
 
 
 # =============================================================================
 # CLI
 # =============================================================================
 
-def main():
+def _build_parser():
+    """Build argparse parser for the PCA optimization CLI."""
     parser = argparse.ArgumentParser(
         description="Per-channel cell-level PCA optimization for organelle attribution"
     )
     parser.add_argument(
-        "-o", "--output-dir",
-        type=str,
+        "-o", "--output-dir", type=str,
         default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
         help="Output directory for PCA-optimized h5ad files",
     )
-    parser.add_argument(
-        "--norm-method",
-        type=str,
-        default="ntc",
-        choices=["ntc", "global"],
-        help="Normalization method (default: ntc)",
-    )
-    parser.add_argument(
-        "--slurm",
-        action="store_true",
-        help="Submit per-channel SLURM jobs + aggregation job",
-    )
-    parser.add_argument(
-        "--slurm-memory",
-        type=str,
-        default="100GB",
-        help="SLURM memory per channel job (default: 100GB)",
-    )
-    parser.add_argument(
-        "--slurm-time",
-        type=int,
-        default=10,
-        help="SLURM time limit per channel job in minutes (default: 10)",
-    )
-    parser.add_argument(
-        "--slurm-cpus",
-        type=int,
-        default=16,
-        help="SLURM CPUs per channel job (default: 16)",
-    )
-    parser.add_argument(
-        "--slurm-partition",
-        type=str,
-        default="cpu,gpu",
-        help="SLURM partition (default: cpu,gpu)",
-    )
-    parser.add_argument(
-        "-y", "--yes",
-        action="store_true",
-        help="Skip confirmation prompt",
-    )
-    parser.add_argument(
-        "--slurm-agg-memory",
-        type=str,
-        default="500GB",
-        help="SLURM memory for aggregation job (default: 500GB)",
-    )
-    parser.add_argument(
-        "--slurm-agg-time",
-        type=int,
-        default=60,
-        help="SLURM time limit for aggregation job in minutes (default: 60)",
-    )
-    parser.add_argument(
-        "--aggregate-only",
-        action="store_true",
-        help="Only run the aggregation step (Phase 2). "
-             "Use after per-channel jobs have completed.",
-    )
-    parser.add_argument(
-        "--umap-only",
-        action="store_true",
-        help="Only generate embedding plots (UMAP + PHATE) from existing optimized h5ads. "
-             "Loads guide/gene_pca_optimized.h5ad and metrics CSVs.",
-    )
-    parser.add_argument(
-        "--downsampled",
-        action="store_true",
-        help="Pool cells by biological signal across experiments, downsample to "
-             "equal cell counts per signal, then run PCA optimization. "
-             "Outputs to {output_dir}/downsampled/.",
-    )
-    parser.add_argument(
-        "--cell-profiler",
-        action="store_true",
-        help="Use CellProfiler morphological features instead of DINO embeddings. "
-             "Loads from 3-assembly/cell-profiler/anndata_objects/. "
-             "Outputs to {output_dir}/cellprofiler/.",
-    )
+    parser.add_argument("--norm-method", type=str, default="ntc", choices=["ntc", "global"],
+                        help="Normalization method (default: ntc)")
+    parser.add_argument("--slurm", action="store_true",
+                        help="Submit per-channel SLURM jobs + aggregation job")
+    parser.add_argument("--slurm-memory", type=str, default="100GB",
+                        help="SLURM memory per channel job (default: 100GB)")
+    parser.add_argument("--slurm-time", type=int, default=10,
+                        help="SLURM time limit per channel job in minutes (default: 10)")
+    parser.add_argument("--slurm-cpus", type=int, default=16,
+                        help="SLURM CPUs per channel job (default: 16)")
+    parser.add_argument("--slurm-partition", type=str, default="cpu,gpu",
+                        help="SLURM partition (default: cpu,gpu)")
+    parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--slurm-agg-memory", type=str, default="500GB",
+                        help="SLURM memory for aggregation job (default: 500GB)")
+    parser.add_argument("--slurm-agg-time", type=int, default=60,
+                        help="SLURM time limit for aggregation job in minutes (default: 60)")
+    parser.add_argument("--aggregate-only", action="store_true",
+                        help="Only run the aggregation step (Phase 2).")
+    parser.add_argument("--umap-only", action="store_true",
+                        help="Only generate embedding plots from existing optimized h5ads.")
+    parser.add_argument("--downsampled", action="store_true",
+                        help="Pool cells by biological signal, downsample, then PCA optimize.")
+    parser.add_argument("--cell-profiler", action="store_true",
+                        help="Use CellProfiler morphological features instead of DINO embeddings.")
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    args = _build_parser().parse_args()
     output_dir = Path(args.output_dir)
 
     # --cell-profiler: override feature_dir and nest output in cellprofiler/ subdir
-    _cp_feature_dir_override = None
+    cp_override = None
     if args.cell_profiler:
-        _cp_feature_dir_override = "cell-profiler"
+        cp_override = "cell-profiler"
         output_dir = output_dir / "cellprofiler"
         print(f"CellProfiler mode: features from 3-assembly/cell-profiler/anndata_objects/")
-        print(f"PCA sweep thresholds: {DEFAULT_SWEEP_THRESHOLDS_CP} (lower range — CP features are independent, not redundant like DINO)")
+        print(f"PCA sweep thresholds: {DEFAULT_SWEEP_THRESHOLDS_CP} (lower range — CP features are independent)")
         print(f"Output: {output_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # UMAP-only mode
+    # Dispatch to mode handler
     if args.umap_only:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-        _logger = logging.getLogger(__name__)
-
-        umap_dir = output_dir / "downsampled" if args.downsampled else output_dir
-        guide_path = umap_dir / "guide_pca_optimized.h5ad"
-        gene_path = umap_dir / "gene_pca_optimized.h5ad"
-        if not guide_path.exists():
-            print(f"ERROR: {guide_path} not found. Run --aggregate-only first.")
-            return
-        _logger.info(f"Loading {guide_path}...")
-        adata_guide = ad.read_h5ad(guide_path)
-        adata_gene = ad.read_h5ad(gene_path) if gene_path.exists() else None
-        if adata_gene is None:
-            _logger.warning(f"  {gene_path} not found, skipping gene-level UMAP")
-
-        # Load activity metrics if available
-        activity_csv = umap_dir / "metrics" / "phenotypic_activity.csv"
-        metric_lookup = {}
-        if activity_csv.exists():
-            act_df = pd.read_csv(activity_csv)
-            if "-log10(p-value)" not in act_df.columns and "corrected_p_value" in act_df.columns:
-                act_df["-log10(p-value)"] = -np.log10(act_df["corrected_p_value"].clip(lower=1e-300))
-            metric_lookup = act_df.set_index("perturbation")[
-                ["mean_average_precision", "-log10(p-value)", "below_corrected_p"]
-            ].to_dict("index")
-            _logger.info(f"  Loaded activity metrics for {len(metric_lookup)} perturbations")
-        else:
-            _logger.warning(f"  No activity CSV found at {activity_csv}, UMAPs will be uncolored")
-
-        plots_dir = umap_dir / "plots"
-        plots_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build gene-level with NTCs split into groups of 4 for embedding
-        adata_gene_embed = _split_ntc_for_embedding(adata_guide, random_seed=42)
-        _logger.info(f"  Gene (NTC-split for embedding): {adata_gene_embed.n_obs} obs")
-
-        embed_pairs = [("guide", adata_guide), ("gene", adata_gene_embed)]
-
-        def _clean_X(adata_level):
-            X = np.asarray(adata_level.X, dtype=np.float32)
-            return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
-        def _get_perts(adata_level):
-            obs = adata_level.obs
-            pert_col = "perturbation" if "perturbation" in obs.columns else "label_str"
-            return obs[pert_col].values
-
-        # Track embeddings for positive controls grid
-        level_embeddings = {}
-        level_perts_map = {}
-
-        # UMAP
-        try:
-            from umap import UMAP
-            for level_name, adata_level in embed_pairs:
-                _logger.info(f"  Computing {level_name} UMAP ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-                X_clean = _clean_X(adata_level)
-                n_neighbors = min(15, adata_level.n_obs - 1)
-                if n_neighbors < 2:
-                    continue
-                coords = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42).fit_transform(X_clean)
-                perts = _get_perts(adata_level)
-                level_embeddings.setdefault(level_name, {})["UMAP"] = coords
-                level_perts_map[level_name] = perts
-                fname = _plot_embedding_overlay(
-                    coords, perts, metric_lookup, level_name, "UMAP",
-                    plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-                )
-                _logger.info(f"  Saved plots/{fname}")
-        except ImportError:
-            _logger.warning("  UMAP skipped: install umap-learn")
-        except Exception as e:
-            _logger.warning(f"  UMAP failed: {e}")
-
-        # PHATE
-        try:
-            import phate
-            for level_name, adata_level in embed_pairs:
-                _logger.info(f"  Computing {level_name} PHATE ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
-                X_clean = _clean_X(adata_level)
-                knn = min(15 if adata_level.n_obs > 2000 else 10, adata_level.n_obs - 1)
-                if knn < 2:
-                    continue
-                phate_op = phate.PHATE(
-                    n_components=2, knn=knn, decay=15, t="auto",
-                    n_jobs=-1, random_state=42, verbose=0,
-                )
-                coords = phate_op.fit_transform(X_clean)
-                perts = _get_perts(adata_level)
-                level_embeddings.setdefault(level_name, {})["PHATE"] = coords
-                level_perts_map[level_name] = perts
-                fname = _plot_embedding_overlay(
-                    coords, perts, metric_lookup, level_name, "PHATE",
-                    plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
-                )
-                _logger.info(f"  Saved plots/{fname}")
-        except ImportError:
-            _logger.warning("  PHATE skipped: install phate")
-        except Exception as e:
-            _logger.warning(f"  PHATE failed: {e}")
-
-        # Positive controls overlay grid (CHAD v4)
-        for level_name in ["gene"]:
-            if level_name in level_embeddings and level_name in level_perts_map:
-                try:
-                    _plot_positive_controls_grid(
-                        level_embeddings[level_name],
-                        level_perts_map[level_name],
-                        level_name,
-                        plots_dir,
-                        plt,
-                    )
-                except Exception as pc_err:
-                    _logger.warning(f"  Positive controls grid failed for {level_name}: {pc_err}")
-
-        print("SUCCESS: Embedding plots saved")
-        return
-
-    # Aggregate-only mode (local or SLURM)
-    if args.aggregate_only:
-        # Resolve paths and subdir for downsampled mode
-        if args.downsampled:
-            agg_output = str(output_dir / "downsampled")
-            agg_subdir = "per_signal"
-        else:
-            agg_output = str(output_dir)
-            agg_subdir = "per_channel"
-        if args.slurm:
-            from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-            print(f"Submitting aggregation as SLURM job ({args.slurm_agg_memory}, {args.slurm_agg_time}min, {args.slurm_cpus}cpus)...")
-            if args.downsampled:
-                print(f"  Mode: signal-group (reading from {agg_output}/per_signal/)")
-            agg_jobs = [{
-                "name": "pca_aggregate",
-                "func": aggregate_channels,
-                "kwargs": {
-                    "output_dir": agg_output,
-                    "norm_method": args.norm_method,
-                    "per_unit_subdir": agg_subdir,
-                },
-            }]
-            agg_slurm_params = {
-                "timeout_min": args.slurm_agg_time,
-                "mem": args.slurm_agg_memory,
-                "cpus_per_task": args.slurm_cpus,
-                "slurm_partition": args.slurm_partition,
-            }
-            agg_result = submit_parallel_jobs(
-                jobs_to_submit=agg_jobs,
-                experiment="pca_aggregation",
-                slurm_params=agg_slurm_params,
-                log_dir="pca_optimization",
-                manifest_prefix="pca_agg",
-                wait_for_completion=True,
-            )
-            if agg_result.get("failed"):
-                print("Aggregation FAILED")
-            else:
-                print("Aggregation complete")
-        else:
-            result = aggregate_channels(output_dir=agg_output, norm_method=args.norm_method, per_unit_subdir=agg_subdir)
-            print(result)
-        return
-
-    # --downsampled mode: pool cells by signal group, downsample, PCA
-    if args.downsampled:
-        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-
-        if args.cell_profiler:
-            ds_output_dir = output_dir / "downsampled"  # {output_dir}/cellprofiler/downsampled/
-        else:
-            ds_output_dir = output_dir / "downsampled"
-        ds_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Discover experiments
-        attr_config = load_attribution_config()
-        storage_roots = get_storage_roots(attr_config)
-        feature_dir = _cp_feature_dir_override or attr_config.get("feature_dir", "dino_features")
-        maps_path = get_channel_maps_path()
-
-        if _cp_feature_dir_override:
-            all_pairs = discover_cellprofiler_experiments(storage_roots)
-        else:
-            all_pairs = discover_dino_experiments(storage_roots, feature_dir)
-
-        if not all_pairs:
-            print("No experiment-channel pairs found!")
-            return
-        from ops_utils.data.feature_metadata import FeatureMetadata
-        fm = FeatureMetadata(metadata_path=maps_path)
-
-        # Build signal groups
-        signal_groups = build_signal_groups(all_pairs, fm)
-        n_signals = len(signal_groups)
-        mode_label = "CellProfiler" if _cp_feature_dir_override else "Downsampled"
-        print(f"\n{mode_label} PCA Optimization: {len(all_pairs)} channels → {n_signals} signal groups")
-        print(f"Output: {ds_output_dir}")
-
-        # Pre-scan cell counts
-        print("\nPre-scanning cell counts per signal group...")
-        cell_counts = count_cells_per_signal_group(signal_groups, storage_roots, feature_dir, maps_path)
-        MIN_CELLS_FLOOR = 750_000
-        raw_min = min(cell_counts.values())
-        target_n_cells = max(raw_min, MIN_CELLS_FLOOR)
-        max_n_cells = max(cell_counts.values())
-
-        # Warn about signal groups that have fewer cells than the floor
-        small_groups = {s: n for s, n in cell_counts.items() if n < target_n_cells}
-        if small_groups:
-            print(f"\n⚠️  {len(small_groups)} signal group(s) have fewer than {target_n_cells:,} cells (will use all available):")
-            for s, n in sorted(small_groups.items(), key=lambda x: x[1]):
-                print(f"    {s}: {n:,} cells")
-
-        # Print manifest
-        print(f"\nSignal group manifest (downsampling all to {target_n_cells:,} cells):")
-        print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'→ Downsampled':>15}")
-        print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*15}")
-        manifest_rows = []
-        for signal in sorted(signal_groups.keys()):
-            pairs = signal_groups[signal]
-            n_cells = cell_counts[signal]
-            print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} → {target_n_cells:>12,}")
-            manifest_rows.append({
-                "signal": signal,
-                "n_experiments": len(pairs),
-                "n_cells_pooled": n_cells,
-                "n_cells_downsampled": target_n_cells,
-                "experiments": ",".join(e.split("_")[0] for e, c in pairs),
-            })
-        print(f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells → {target_n_cells:,} per group")
-
-        # Save manifest
-        manifest_df = pd.DataFrame(manifest_rows)
-        manifest_df.to_csv(ds_output_dir / "downsampled_manifest.csv", index=False)
-
-        if not args.slurm:
-            # Local sequential mode
-            print("\nRunning locally (sequential)...")
-            for signal, pairs in signal_groups.items():
-                sg_kwargs = dict(
-                    signal=signal,
-                    exp_channel_pairs=pairs,
-                    output_dir=str(ds_output_dir),
-                    target_n_cells=target_n_cells,
-                    norm_method=args.norm_method,
-                )
-                if _cp_feature_dir_override:
-                    sg_kwargs["feature_dir_override"] = _cp_feature_dir_override
-                    sg_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
-                result = pca_sweep_pooled_signal(**sg_kwargs)
-                print(f"  {result}")
-            # Aggregate
-            result = aggregate_channels(
-                output_dir=str(ds_output_dir),
-                norm_method=args.norm_method,
-                per_unit_subdir="per_signal",
-            )
-            print(result)
-            return
-
-        # SLURM mode: one job per signal group
-        jobs = []
-        for signal, pairs in signal_groups.items():
-            sig_safe = sanitize_signal_filename(signal)[:40]
-            jobs.append({
-                "name": f"pca_ds_{sig_safe}",
-                "func": pca_sweep_pooled_signal,
-                "kwargs": {
-                    "signal": signal,
-                    "exp_channel_pairs": pairs,
-                    "output_dir": str(ds_output_dir),
-                    "target_n_cells": target_n_cells,
-                    "norm_method": args.norm_method,
-                    **({"feature_dir_override": _cp_feature_dir_override} if _cp_feature_dir_override else {}),
-                    **({"sweep_thresholds": DEFAULT_SWEEP_THRESHOLDS_CP} if _cp_feature_dir_override else {}),
-                },
-                "metadata": {"signal": signal, "n_experiments": len(pairs)},
-            })
-
-        # Downsampled jobs load many experiments per signal — need more time than per-channel
-        ds_time = max(args.slurm_time, 30)
-        slurm_params = {
-            "timeout_min": ds_time,
-            "mem": args.slurm_memory,
-            "cpus_per_task": args.slurm_cpus,
-            "slurm_partition": args.slurm_partition,
-        }
-
-        # Phase 1: Submit per-signal-group jobs
-        def _on_ds_phase1_complete(submitted_jobs, experiment):
-            """Callback after all signal-group jobs complete — submit aggregation."""
-            print(f"\nAll signal-group jobs complete. Submitting aggregation SLURM job...")
-            agg_jobs = [{
-                "name": "pca_ds_aggregate",
-                "func": aggregate_channels,
-                "kwargs": {
-                    "output_dir": str(ds_output_dir),
-                    "norm_method": args.norm_method,
-                    "per_unit_subdir": "per_signal",
-                },
-            }]
-            agg_slurm_params = {
-                "timeout_min": args.slurm_agg_time,
-                "mem": args.slurm_agg_memory,
-                "cpus_per_task": args.slurm_cpus,
-                "slurm_partition": args.slurm_partition,
-            }
-            agg_result = submit_parallel_jobs(
-                jobs_to_submit=agg_jobs,
-                experiment="pca_ds_aggregation",
-                slurm_params=agg_slurm_params,
-                log_dir="pca_optimization",
-                manifest_prefix="pca_ds_agg",
-                wait_for_completion=True,
-            )
-            if agg_result.get("failed"):
-                print(f"\nAggregation FAILED")
-            else:
-                print(f"\nAggregation complete")
-
-        print(f"\nSubmitting {len(jobs)} signal-group SLURM jobs...")
-        result = submit_parallel_jobs(
-            jobs_to_submit=jobs,
-            experiment="pca_ds_optimization",
-            slurm_params=slurm_params,
-            log_dir="pca_optimization",
-            manifest_prefix="pca_ds_opt",
-            wait_for_completion=True,
-            post_completion_callback=_on_ds_phase1_complete,
-        )
-
-        if result.get("failed"):
-            print(f"\nWarning: {len(result['failed'])} signal groups failed")
-            for name in result["failed"]:
-                print(f"  - {name}")
-
-        return
-
-    if args.slurm:
-        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-
-        # Discover experiments
-        attr_config = load_attribution_config()
-        slurm_storage_roots = get_storage_roots(attr_config)
-        slurm_feature_dir = _cp_feature_dir_override or attr_config.get("feature_dir", "dino_features")
-
-        if _cp_feature_dir_override:
-            all_pairs = discover_cellprofiler_experiments(slurm_storage_roots)
-        else:
-            all_pairs = discover_dino_experiments(slurm_storage_roots, slurm_feature_dir)
-
-        if not all_pairs:
-            print("No experiment-channel pairs found!")
-            return
-
-        # Build signal map using robust channel resolution
-        import contextlib
-        import io
-
-        maps_path = get_channel_maps_path()
-        from ops_utils.data.feature_metadata import FeatureMetadata
-        fm = FeatureMetadata(metadata_path=maps_path)
-
-        print(f"\nPCA Optimization: {len(all_pairs)} channels to process")
-        print(f"Output: {output_dir}")
-
-        # Build per-channel jobs, skipping unmapped channels
-        jobs = []
-        skipped_unmapped = []
-        for exp, ch in all_pairs:
-            exp_short = exp.split("_")[0]
-            with contextlib.redirect_stdout(io.StringIO()):
-                resolved = resolve_channel_label(fm, exp, ch)
-            sig = resolved["label"]
-            if sig == "unknown" or sig.startswith("(unmapped:"):
-                skipped_unmapped.append((exp, ch, sig))
-                continue
-            # Sanitize for SLURM job name (no spaces/special chars)
-            sig_safe = sig.replace(" ", "_").replace(",", "").replace("(", "").replace(")", "")[:40]
-            job_kwargs = {
-                    "exp": exp,
-                    "channel": ch,
-                    "output_dir": str(output_dir),
-                    "norm_method": args.norm_method,
-            }
-            if _cp_feature_dir_override:
-                job_kwargs["feature_dir_override"] = _cp_feature_dir_override
-                job_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
-            jobs.append({
-                "name": f"pca_{sig_safe}_{exp_short}",
-                "func": pca_sweep_single_experiment,
-                "kwargs": job_kwargs,
-                "metadata": {"signal": sig, "experiment": exp, "channel": ch},
-            })
-
-        if skipped_unmapped:
-            print(f"\n⚠️  {len(skipped_unmapped)} experiment-channel pairs could not be mapped to a biological signal and will be SKIPPED:")
-            for exp, ch, sig in skipped_unmapped:
-                print(f"    {exp} / {ch}  →  {sig!r}")
-            print()
-
-        slurm_params = {
-            "timeout_min": args.slurm_time,
-            "mem": args.slurm_memory,
-            "cpus_per_task": args.slurm_cpus,
-            "slurm_partition": args.slurm_partition,
-        }
-
-        # Phase 1: Submit per-channel jobs
-        def _on_phase1_complete(submitted_jobs, experiment):
-            """Callback after all per-channel jobs complete — submit aggregation SLURM job."""
-            print(f"\nAll per-channel jobs complete. Submitting aggregation SLURM job...")
-            agg_jobs = [{
-                "name": "pca_aggregate",
-                "func": aggregate_channels,
-                "kwargs": {
-                    "output_dir": str(output_dir),
-                    "norm_method": args.norm_method,
-                },
-            }]
-            agg_slurm_params = {
-                "timeout_min": args.slurm_agg_time,
-                "mem": args.slurm_agg_memory,
-                "cpus_per_task": args.slurm_cpus,
-                "slurm_partition": args.slurm_partition,
-            }
-            agg_result = submit_parallel_jobs(
-                jobs_to_submit=agg_jobs,
-                experiment="pca_aggregation",
-                slurm_params=agg_slurm_params,
-                log_dir="pca_optimization",
-                manifest_prefix="pca_agg",
-                wait_for_completion=True,
-            )
-            if agg_result.get("failed"):
-                print(f"\nAggregation FAILED")
-            else:
-                print(f"\nAggregation complete")
-
-        result = submit_parallel_jobs(
-            jobs_to_submit=jobs,
-            experiment="pca_optimization",
-            slurm_params=slurm_params,
-            log_dir="pca_optimization",
-            manifest_prefix="pca_opt",
-            wait_for_completion=True,
-            post_completion_callback=_on_phase1_complete,
-        )
-
-        if result.get("failed"):
-            print(f"\nWarning: {len(result['failed'])} channels failed")
-            for name in result["failed"]:
-                print(f"  - {name}")
-
+        _handle_umap_only(args, output_dir)
+    elif args.aggregate_only:
+        _handle_aggregate_only(args, output_dir)
+    elif args.downsampled:
+        _handle_downsampled(args, output_dir, cp_override)
+    elif args.slurm:
+        _handle_per_channel_slurm(args, output_dir, cp_override)
     else:
-        # Local mode
         result = run_pca_optimization(
             output_dir=str(output_dir),
-            sweep_thresholds=DEFAULT_SWEEP_THRESHOLDS_CP if _cp_feature_dir_override else None,
+            sweep_thresholds=DEFAULT_SWEEP_THRESHOLDS_CP if cp_override else None,
             norm_method=args.norm_method,
         )
         print(result)
