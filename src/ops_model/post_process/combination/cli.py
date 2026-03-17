@@ -119,7 +119,6 @@ def run_combination(config: CombinationConfig):
         adata_guide, adata_gene = combiner.combine()
     elif config.concatenation_method == "vertical":
         # Vertical concatenation - pool same biological signal across experiments
-        from pathlib import Path
         from ops_model.features.anndata_utils import _process_vertical_group
 
         if not config.experiments or not config.channel:

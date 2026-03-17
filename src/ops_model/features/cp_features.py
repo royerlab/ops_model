@@ -242,6 +242,7 @@ def anndata_conversion_worker(csv_path: str, config_path: str = None):
 
 def cp_features_main(
     config_path: str,
+    wait_for_completion: bool | None = None,
 ):
     """
     Main function to orchestrate distributed CellProfiler feature extraction and processing.
@@ -261,6 +262,9 @@ def cp_features_main(
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
+
+    if wait_for_completion is not None:
+        config["wait_for_completion"] = wait_for_completion
 
     output_csv = Path(config["output_dir"]) / f"cp_features.csv"
     output_dir = output_csv.parent
@@ -413,20 +417,72 @@ def cp_features_main(
         return array_jobs, concat_job, anndata_job
 
 
+def cp_features_bulk_main(config_paths: list[str]):
+    """Submit CellProfiler feature extraction pipelines for multiple configs.
+
+    Iterates configs sequentially, submitting each pipeline with
+    wait_for_completion=False (fire-and-forget). SLURM handles parallelism.
+
+    Args:
+        config_paths: List of absolute paths to YAML configuration files.
+    """
+    submitted = []
+    failed = []
+
+    print(f"\n{'='*50}")
+    print(f"BULK CELLPROFILER SUBMISSION")
+    print(f"{'='*50}")
+    print(f"Total configs: {len(config_paths)}\n")
+
+    for i, config_path in enumerate(config_paths):
+        print(f"[{i + 1}/{len(config_paths)}] Submitting: {config_path}")
+        try:
+            result = cp_features_main(config_path, wait_for_completion=False)
+            submitted.append((config_path, result))
+            print(f"  ✓ Jobs submitted")
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            failed.append(config_path)
+        print()
+
+    print(f"{'='*50}")
+    print(f"SUMMARY")
+    print(f"{'='*50}")
+    print(f"Submitted: {len(submitted)}/{len(config_paths)}")
+    if failed:
+        print(f"Failed ({len(failed)}):")
+        for f in failed:
+            print(f"  - {f}")
+    print(f"\nCheck job status with: squeue -u $USER")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Extract CellProfiler features using distributed SLURM jobs"
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "--config_path",
         type=str,
-        required=True,
-        help="Path to YAML config file specifying parameters",
+        help="Path to a single YAML config file",
+    )
+    group.add_argument(
+        "--config_list",
+        type=str,
+        help="Path to .txt file with one absolute config path per line",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    config_path = args.config_path
-    cp_features_main(config_path)
+    if args.config_list:
+        with open(args.config_list) as f:
+            config_paths = [
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        cp_features_bulk_main(config_paths)
+    else:
+        cp_features_main(args.config_path)
