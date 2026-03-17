@@ -359,7 +359,7 @@ def batch_process_slurm(
         "timeout_min": 30,
         "slurm_partition": "cpu",
         "cpus_per_task": 4,
-        "mem": "48G",
+        "mem": "72G",
     }
     if slurm_config:
         defaults.update(slurm_config)
