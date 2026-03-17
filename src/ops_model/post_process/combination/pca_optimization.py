@@ -233,6 +233,16 @@ def _save_sweep_outputs(
     g.X = np.asarray(g.X, dtype=np.float32)
     e.X = np.asarray(e.X, dtype=np.float32)
 
+    # Store PCA embeddings in obsm (X IS the PCA-reduced space)
+    variance_ratio_per_pc = np.diff(np.concatenate([[0.0], cumvar])).astype(np.float32)
+    pca_uns = {
+        "variance_ratio": variance_ratio_per_pc[:peak_n],
+        "params": {"n_components": peak_n, "threshold": float(peak_t), "zero_center": True},
+    }
+    for adata in [g, e]:
+        adata.obsm["X_pca"] = np.asarray(adata.X, dtype=np.float32)
+        adata.uns["pca"] = pca_uns
+
     # Store metadata
     base_uns = {
         "pca_threshold": float(peak_t),
@@ -361,7 +371,7 @@ def pca_sweep_single_experiment(
 
     # Save outputs at AUC-optimized peak
     obs_df["experiment"] = exp_short
-    file_prefix = f"{exp_short}_{sig}"
+    file_prefix = f"{exp_short}_{sanitize_signal_filename(sig)}"
     _save_sweep_outputs(
         X_pcs, obs_df, cumvar,
         peak_n=best_auc_n, peak_t=best_auc_t,
@@ -690,34 +700,48 @@ def _save_aggregated_h5ads(adata_guide, adata_gene, report_rows, output_dir,
 
 
 def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger):
-    """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls."""
+    """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls.
+
+    Returns adata_gene_embed with embeddings stored in obsm — caller should save it.
+    """
     adata_gene_embed = split_ntc_for_embedding(adata_guide, random_seed=42)
     _logger.info(f"  Gene (NTC-split for embedding): {adata_gene_embed.n_obs} obs")
+    # Propagate X_pca and pca uns from guide (same feature space, gene-level aggregation)
+    adata_gene_embed.obsm["X_pca"] = np.asarray(adata_gene_embed.X, dtype=np.float32)
+    if "pca" in adata_guide.uns:
+        adata_gene_embed.uns["pca"] = adata_guide.uns["pca"]
 
     embed_pairs = [("guide", adata_guide), ("gene", adata_gene_embed)]
     level_embeddings = {}
     level_perts = {}
 
     def _make_embedder(name):
-        """Return (embed_name, fit_fn) or None if library missing."""
+        """Return fit_fn(X, n_obs) -> (coords, params_dict) or None if library missing."""
         if name == "UMAP":
             from umap import UMAP
             def _fit(X, n_obs):
                 nn = min(15, n_obs - 1)
                 if nn < 2:
-                    return None
-                return UMAP(n_components=2, n_neighbors=nn, random_state=42).fit_transform(X)
+                    return None, {}
+                model = UMAP(n_components=2, n_neighbors=nn, random_state=42)
+                coords = model.fit_transform(X)
+                params = {"n_neighbors": nn, "random_state": 42, "metric": "euclidean",
+                          "a": float(getattr(model, "a_", None) or getattr(model, "_a", None) or 0),
+                          "b": float(getattr(model, "b_", None) or getattr(model, "_b", None) or 0)}
+                return coords, params
             return _fit
         elif name == "PHATE":
             import phate
             def _fit(X, n_obs):
                 knn = min(15 if n_obs > 2000 else 10, n_obs - 1)
                 if knn < 2:
-                    return None
-                return phate.PHATE(
+                    return None, {}
+                coords = phate.PHATE(
                     n_components=2, knn=knn, decay=15, t="auto",
                     n_jobs=-1, random_state=42, verbose=0,
                 ).fit_transform(X)
+                params = {"knn": knn, "decay": 15, "t": "auto", "random_state": 42}
+                return coords, params
             return _fit
 
     for embed_name, pkg_hint in [("UMAP", "umap-learn"), ("PHATE", "phate")]:
@@ -730,13 +754,17 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
             for level_name, adata_level in embed_pairs:
                 _logger.info(f"  Computing {level_name} {embed_name} ({adata_level.n_obs} obs, {adata_level.n_vars} features)...")
                 X_clean = clean_X_for_embedding(adata_level)
-                coords = fit_fn(X_clean, adata_level.n_obs)
+                coords, embed_params = fit_fn(X_clean, adata_level.n_obs)
                 if coords is None:
                     _logger.warning(f"  {embed_name} skipped for {level_name}: too few observations")
                     continue
                 perts = get_perts_col(adata_level)
                 level_embeddings.setdefault(level_name, {})[embed_name] = coords
                 level_perts[level_name] = perts
+                # Store embedding in obsm/uns (guide level is adata_guide, passed by ref)
+                obsm_key = f"X_{embed_name.lower()}"
+                adata_level.obsm[obsm_key] = coords.astype(np.float32)
+                adata_level.uns[embed_name.lower()] = {"params": embed_params}
                 fname = plot_embedding_overlay(
                     coords, perts, metric_lookup, level_name, embed_name,
                     plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
@@ -755,6 +783,8 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                 )
             except Exception as pc_err:
                 _logger.warning(f"  Positive controls grid failed for {level_name}: {pc_err}")
+
+    return adata_gene_embed
 
 
 def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger):
@@ -855,7 +885,12 @@ def aggregate_channels(
     metrics_dir = output_dir / "metrics"
     activity_map, r, a = _score_activity_aggregated(adata_guide, metrics_dir, _logger)
 
-    # Step 4: Save h5ads (before slow metrics)
+    # Step 4: Save h5ads (before slow metrics) — store X_pca now; UMAP/PHATE added after step 6
+    adata_guide.obsm["X_pca"] = np.asarray(adata_guide.X, dtype=np.float32)
+    variance_ratio_per_pc = np.array([
+        float(row.get("explained_variance", 0)) for row in report_rows
+    ], dtype=np.float32)
+    adata_guide.uns["pca"] = {"params": {"n_components": total_feats, "zero_center": True}}
     _save_aggregated_h5ads(adata_guide, adata_gene, report_rows, output_dir,
                            r, a, norm_method, total_cells, _logger)
 
@@ -882,9 +917,15 @@ def aggregate_channels(
     plot_sweep_curves_summary(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger, min_pcs=MIN_PCS)
     plot_channel_peaks_bar(report_rows, r, a, plots_dir, plt, _logger)
 
-    # Step 6: Embeddings (UMAP + PHATE)
+    # Step 6: Embeddings (UMAP + PHATE) — stored directly into adata_guide.obsm/uns
+    # Returns adata_gene_embed (NTC-split gene-level object) with embeddings in obsm
     metric_lookup = build_metric_lookup(activity_map)
-    _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
+    adata_gene_embed = _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
+    # Re-save guide + gene-embed with embeddings now populated
+    adata_guide.write_h5ad(output_dir / "guide_pca_optimized.h5ad")
+    if adata_gene_embed is not None:
+        adata_gene_embed.write_h5ad(output_dir / "gene_embedding_pca_optimized.h5ad")
+    _logger.info("  Re-saved guide_pca_optimized.h5ad + gene_embedding_pca_optimized.h5ad with embeddings")
 
     # Step 7: Distinctiveness + consistency (slow)
     _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger)
@@ -1271,7 +1312,7 @@ def main():
     args = _build_parser().parse_args()
     output_dir = Path(args.output_dir)
 
-    # --cell-profiler: override feature_dir and nest output in cellprofiler/ subdir
+    # Nest output under feature-type subdir: dino/ or cellprofiler/
     cp_override = None
     if args.cell_profiler:
         cp_override = "cell-profiler"
@@ -1279,6 +1320,8 @@ def main():
         print(f"CellProfiler mode: features from 3-assembly/cell-profiler/anndata_objects/")
         print(f"PCA sweep thresholds: {DEFAULT_SWEEP_THRESHOLDS_CP} (lower range — CP features are independent)")
         print(f"Output: {output_dir}")
+    else:
+        output_dir = output_dir / "dino"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
