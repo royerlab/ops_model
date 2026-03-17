@@ -370,15 +370,14 @@ def process_embedding_csv(
     save_dir = save_path.parent / "anndata_objects"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract channel from CSV filename (e.g., dinov3_features_CP1_nuclei_Hoechst.csv -> CP1_nuclei_Hoechst)
-    csv_stem = save_path.stem  # e.g., "dinov3_features_CP1_nuclei_Hoechst"
-    prefix = "dinov3_features_"
-    if csv_stem.startswith(prefix):
-        channel = csv_stem[len(prefix):]
-    elif "_" in csv_stem:
-        channel = csv_stem.split("_", 2)[-1]  # fallback: drop first two parts
+    # Extract channel from CSV filename.
+    # Convention: {model_type}_features_{channel}.csv
+    # e.g. dinov3_features_Phase2D.csv, cell_dino_features_Phase2D.csv, subcell_features_GFP.csv
+    csv_stem = save_path.stem
+    marker = "_features_"
+    if marker in csv_stem:
+        channel = csv_stem[csv_stem.index(marker) + len(marker):]
     else:
-        # Fallback if no underscore found (shouldn't happen with standard naming)
         channel = "unknown"
 
     print(f"Detected channel: {channel}")
@@ -393,9 +392,11 @@ def process_embedding_csv(
             experiment = None
             print("Warning: experiment column not found in CSV")
 
-    # Use channel name as filename suffix (unique, avoids collisions like CP1/CP2 both having Hoechst)
-    filename_suffix = channel
-    print(f"Using channel name for files: {channel}")
+    # Use reporter name as filename suffix
+    from ops_utils.data.feature_metadata import FeatureMetadata
+    meta = FeatureMetadata()
+    filename_suffix = meta.get_biological_signal(experiment, channel)
+    print(f"Using reporter name for files: {filename_suffix}")
 
     # Define checkpoint paths with appropriate suffix
     checkpoint_path = save_dir / f"features_processed_{filename_suffix}.h5ad"
