@@ -109,6 +109,19 @@ def _build_comparison_configs(output_dir: Path, comparison: str, feature_type: s
 # I/O helpers
 # ----------------------------------------------------------------------------
 
+_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+
+def _chad_num_to_name() -> dict:
+    """Load CHAD YAML and return {int_key: name} lookup."""
+    try:
+        import yaml
+        with open(_CHAD_YAML) as f:
+            d = yaml.safe_load(f)
+        return {k: v["name"] for k, v in d.items() if isinstance(v, dict) and "name" in v}
+    except Exception:
+        return {}
+
+
 def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
     if not path.exists():
         return None
@@ -118,6 +131,10 @@ def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
         return None
     if id_col == "perturbation":
         df = df[~df[id_col].str.contains("NTC|non-targeting", case=False, na=False)]
+    if id_col == "complex_num":
+        name_map = _chad_num_to_name()
+        if name_map:
+            df[id_col] = df[id_col].map(lambda x: name_map.get(x, name_map.get(int(x), x)))
     keep = [c for c in [id_col, "mean_average_precision",
                          "corrected_p_value", "below_corrected_p"] if c in df.columns]
     return df[keep].rename(columns={id_col: "entity"}).copy()
@@ -161,7 +178,7 @@ def _ax_scatter(ax: plt.Axes, merged: pd.DataFrame, title: str,
     ax.plot(lim, lim, color="grey", lw=0.7, ls=":", alpha=0.4)
     ax.set_xlim(*lim); ax.set_ylim(*lim)
 
-    for _, row in merged[merged["discordant"]].nlargest(TOP_N_LABELS, "delta_abs").iterrows():
+    for _, row in merged[merged["discordant"]].iterrows():
         ax.annotate(row["entity"],
                     (row["mean_average_precision_a"], row["mean_average_precision_b"]),
                     fontsize=4.5, xytext=(3, 2), textcoords="offset points",

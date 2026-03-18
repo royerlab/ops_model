@@ -346,6 +346,7 @@ def pca_sweep_single_experiment(
     # Keep obs cols needed for aggregation
     keep_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in adata_cells.obs.columns]
     obs_df = adata_cells.obs[keep_cols].copy()
+    feature_names = list(adata_cells.var_names)
     X_raw = np.asarray(adata_cells.X, dtype=np.float32)
     del adata_cells
 
@@ -355,8 +356,10 @@ def pca_sweep_single_experiment(
         X_raw = StandardScaler().fit_transform(X_raw)
         _logger.info(f"  Applied global z-score scaling (CellProfiler mode)")
 
-    # Fit PCA once
+    # Fit PCA once — keep components for loadings analysis before deleting model
     X_pcs, cumvar, pca_model = fit_pca(X_raw)
+    pca_components = pca_model.components_.copy()  # (n_pcs, n_features)
+    pca_var_ratio  = pca_model.explained_variance_ratio_.copy()
     del X_raw, pca_model
 
     # Sweep thresholds
@@ -372,6 +375,7 @@ def pca_sweep_single_experiment(
     # Save outputs at AUC-optimized peak
     obs_df["experiment"] = exp_short
     file_prefix = f"{exp_short}_{sanitize_signal_filename(sig)}"
+    out_subdir = output_dir / "per_channel"
     _save_sweep_outputs(
         X_pcs, obs_df, cumvar,
         peak_n=best_auc_n, peak_t=best_auc_t,
@@ -380,6 +384,8 @@ def pca_sweep_single_experiment(
         uns_metadata={
             "experiment": exp, "channel": channel,
             "n_cells": int(n_cells), "n_features_raw": int(n_feats),
+            "pca_components": pca_components[:best_auc_n].tolist(),
+            "pca_feature_names": feature_names,
         },
         output_dir=output_dir, subdir="per_channel", file_prefix=file_prefix,
         suptitle=f"{exp_short}/{channel} → {sig} ({n_cells:,} cells, {n_feats} raw features)",
@@ -522,6 +528,7 @@ def pca_sweep_pooled_signal(
     obs_df_full = adata_cells.obs[keep_cols].copy()
     score_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in obs_df_full.columns]
     obs_df = obs_df_full[score_cols].copy()
+    feature_names = list(adata_cells.var_names)
     X_raw = np.asarray(adata_cells.X, dtype=np.float32)
     del adata_cells
 
@@ -539,8 +546,10 @@ def pca_sweep_pooled_signal(
             X_raw = StandardScaler().fit_transform(X_raw)
             _logger.info(f"  Applied global z-score scaling (CellProfiler mode, no experiment info)")
 
-    # --- Fit PCA once ---
+    # --- Fit PCA once — keep components for loadings analysis before deleting model ---
     X_pcs, cumvar, pca_model = fit_pca(X_raw)
+    pca_components = pca_model.components_.copy()
+    pca_var_ratio  = pca_model.explained_variance_ratio_.copy()
     del X_raw, pca_model
 
     # Sweep thresholds
@@ -569,6 +578,8 @@ def pca_sweep_pooled_signal(
             "channel": ",".join(ch for _, ch in exp_channel_pairs),
             "n_cells": int(n_cells), "n_cells_pooled": int(n_cells_pooled),
             "n_experiments": int(n_exps), "n_features_raw": int(n_feats),
+            "pca_components": pca_components[:best_auc_n].tolist(),
+            "pca_feature_names": feature_names,
         },
         output_dir=output_dir, subdir="per_signal", file_prefix=file_prefix,
         suptitle=f"{signal} ({n_exps} exps: {exps_str}) — {n_cells:,}/{n_cells_pooled:,} cells, {n_feats} raw features",
