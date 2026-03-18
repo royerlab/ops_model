@@ -292,8 +292,8 @@ def normalize_adata_zscore(
     # Avoid division by zero
     stds[stds == 0] = 1.0
 
-    # Normalize in-place
-    adata.X = (features_array - means) / stds
+    # Normalize in-place, casting back to input dtype to avoid float64 upcasting
+    adata.X = ((features_array - means) / stds).astype(features_array.dtype)
 
     print(f"  Features normalized to z-scores (mean=0, std=1)")
 
@@ -2472,6 +2472,7 @@ def _process_vertical_group(
             agg_file = anndata_dir / f"{prefix}_{channel}.h5ad"
             if not agg_file.exists():
                 from ops_utils.data.feature_metadata import FeatureMetadata
+                from ops_utils.data.feature_metadata import FeatureMetadata
                 _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
                 reporter = _meta.get_biological_signal(exp_short, channel)
                 agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
@@ -2504,6 +2505,7 @@ def _process_vertical_group(
                 continue
 
         # Slow path: load cell-level file, normalize, aggregate
+        from ops_utils.data.feature_metadata import FeatureMetadata
         from ops_utils.data.feature_metadata import FeatureMetadata
 
         meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
@@ -2801,6 +2803,7 @@ def _process_horizontal_group(
         if not agg_file.exists():
             # Try reporter name
             from ops_utils.data.feature_metadata import FeatureMetadata
+            from ops_utils.data.feature_metadata import FeatureMetadata
             _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
             reporter = _meta.get_biological_signal(exp_short, channel)
             agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
@@ -2839,6 +2842,7 @@ def _process_horizontal_group(
             return adata_agg
 
     # Load cell-level file
+    from ops_utils.data.feature_metadata import FeatureMetadata
     from ops_utils.data.feature_metadata import FeatureMetadata
 
     meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
