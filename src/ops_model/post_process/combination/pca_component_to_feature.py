@@ -1,27 +1,36 @@
-"""PCA loadings analysis for interpretable features (CellProfiler).
+"""Map PCA components back to interpretable CellProfiler features.
 
 Parses CellProfiler feature names into (channel, compartment, category) and
-produces per-PC and per-channel/reporter loading plots.
+produces per-PC bar charts and cross-signal summary plots showing which
+biological features each PC captures.
+
+Only PCs explaining ≥2% variance are shown.
 
 Feature name conventions handled:
   single_object_{channel}_{compartment}_{category}_{stat}
   coloc_{channel_a}_{channel_b}_{stat}
   {compartment}_{feature}   (shape / morphology, channel-free)
 
-Outputs (written under output_dir/loadings/):
-  top_features.csv                    — top-N loadings per PC, all PCs
-  loadings_heatmap.png                — features × PCs heatmap (top features)
-  {channel}/                          — one subdir per channel/reporter
-    {channel}_loading_profile.png     — which PCs this channel dominates + top features
+Outputs (written under <output_dir>/loadings/):
+  {signal}_top_features.csv           — top-N loadings per PC
+  {signal}_loadings_heatmap.png       — features × PCs heatmap (top features)
+  {channel}/
+    {channel}_loading_profile.png     — grid of per-PC bar charts (top features,
+                                        coloured by sign/direction)
+    {channel}_top_features.csv
+  summary_pc_categories.png           — PC × feature category stacked bar + consistency
+  summary_pc_compartments.png         — PC × compartment stacked bar + consistency
+  summary_pc_top_features.png         — mean |loading| heatmap across all signals
+  summary_cross_signal.csv
 
 Usage
 -----
   # Per-channel mode (-o must be the parent of per_channel/):
-  python -m ops_model.post_process.combination.pca_loadings_analysis \\
+  python -m ops_model.post_process.combination.pca_component_to_feature \\
       -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized/cellprofiler
 
   # Downsampled mode (-o must be the parent of per_signal/, i.e. the downsampled/ subdir):
-  python -m ops_model.post_process.combination.pca_loadings_analysis \\
+  python -m ops_model.post_process.combination.pca_component_to_feature \\
       -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized/cellprofiler/downsampled \\
       --downsampled
 """
