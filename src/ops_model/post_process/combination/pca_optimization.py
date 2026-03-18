@@ -1224,12 +1224,18 @@ def _handle_per_channel_slurm(args, output_dir, cp_override):
     from ops_utils.data.feature_metadata import FeatureMetadata
     fm = FeatureMetadata(metadata_path=maps_path)
 
+    # Determine phase filter from args
+    phase_filter = getattr(args, "phase_filter", None)  # "phase_only" | "no_phase" | None
+
     print(f"\nPCA Optimization: {len(all_pairs)} channels to process")
+    if phase_filter:
+        print(f"Phase filter: {phase_filter}")
     print(f"Output: {output_dir}")
 
-    # Build per-channel jobs, skipping unmapped channels
+    # Build per-channel jobs, skipping unmapped channels + applying phase filter
     jobs = []
     skipped_unmapped = []
+    skipped_phase_filter = []
     for exp, ch in all_pairs:
         exp_short = exp.split("_")[0]
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1237,6 +1243,13 @@ def _handle_per_channel_slurm(args, output_dir, cp_override):
         sig = resolved["label"]
         if sig == "unknown" or sig.startswith("(unmapped:"):
             skipped_unmapped.append((exp, ch, sig))
+            continue
+        is_phase = (sig == "Phase")
+        if phase_filter == "phase_only" and not is_phase:
+            skipped_phase_filter.append((exp, ch, sig))
+            continue
+        if phase_filter == "no_phase" and is_phase:
+            skipped_phase_filter.append((exp, ch, sig))
             continue
         sig_safe = sig.replace(" ", "_").replace(",", "").replace("(", "").replace(")", "")[:40]
         job_kwargs = {
@@ -1258,6 +1271,8 @@ def _handle_per_channel_slurm(args, output_dir, cp_override):
         for exp, ch, sig in skipped_unmapped:
             print(f"    {exp} / {ch}  ->  {sig!r}")
         print()
+    if skipped_phase_filter:
+        print(f"  {len(skipped_phase_filter)} channels excluded by --{phase_filter.replace('_', '-')} filter")
 
     _submit_phase1_slurm(
         jobs, args, agg_output=str(output_dir),
@@ -1305,6 +1320,13 @@ def _build_parser():
                         help="Pool cells by biological signal, downsample, then PCA optimize.")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Use CellProfiler morphological features instead of DINO embeddings.")
+    phase_group = parser.add_mutually_exclusive_group()
+    phase_group.add_argument("--phase-only", action="store_true",
+                             help="Include only Phase (label-free brightfield) channels. "
+                                  "Output nested under phase_only/. Not compatible with --downsampled.")
+    phase_group.add_argument("--no-phase", action="store_true",
+                             help="Exclude Phase channels, include all fluorescent channels. "
+                                  "Output nested under no_phase/. Not compatible with --downsampled.")
     return parser
 
 
@@ -1322,6 +1344,24 @@ def main():
         print(f"Output: {output_dir}")
     else:
         output_dir = output_dir / "dino"
+
+    # Phase filter: nest under phase_only/ or no_phase/ subdir
+    if args.phase_only:
+        if args.downsampled:
+            print("ERROR: --phase-only is not compatible with --downsampled (Phase is a single signal group).")
+            return
+        output_dir = output_dir / "phase_only"
+        args.phase_filter = "phase_only"
+        print(f"Phase-only mode: output → {output_dir}")
+    elif args.no_phase:
+        if args.downsampled:
+            print("ERROR: --no-phase is not compatible with --downsampled.")
+            return
+        output_dir = output_dir / "no_phase"
+        args.phase_filter = "no_phase"
+        print(f"No-phase mode: output → {output_dir}")
+    else:
+        args.phase_filter = None
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
