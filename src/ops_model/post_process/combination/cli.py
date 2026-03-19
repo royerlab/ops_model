@@ -15,7 +15,7 @@ import anndata as ad
 
 from .config_handler import CombinationConfig, load_config
 from .file_validator import FileValidator
-from .combiners import ComprehensiveCombiner
+from .combiners import ComprehensiveCombiner, PcaOptimizationCombiner
 from ..anndata_processing.anndata_validator import AnndataValidator, IssueLevel
 
 # Initialize logger
@@ -109,11 +109,26 @@ def run_combination(config: CombinationConfig):
     """
     logger.info("--- Starting Combination Pipeline ---")
 
-    # 1. Validate and collect input files
+    # pca_optimized handles its own file discovery — skip the file validator entirely.
+    if config.concatenation_method == "pca_optimized":
+        combiner = PcaOptimizationCombiner(config)
+        adata_guide, adata_gene = combiner.combine()
+
+        if config.output_path:
+            output_dir = Path(config.output_path)
+            stem = config.output_filename or "combined"
+            validate_and_save(adata_guide, output_dir / f"{stem}_guide.h5ad", level="multi_experiment")
+            validate_and_save(adata_gene,  output_dir / f"{stem}_gene.h5ad",  level="multi_experiment")
+        else:
+            logger.warning("output_path is not set. Skipping save.")
+
+        logger.info("--- Combination Pipeline Finished ---")
+        return
+
+    # All other methods need the file validator.
     file_validator = FileValidator(config)
     valid_files = file_validator.validate_and_collect_files()
 
-    # The `comprehensive` method handles its own file loading.
     if config.concatenation_method == "comprehensive":
         combiner = ComprehensiveCombiner(config)
         adata_guide, adata_gene = combiner.combine()
