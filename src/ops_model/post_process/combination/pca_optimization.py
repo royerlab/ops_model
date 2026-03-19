@@ -1,20 +1,58 @@
-"""Per-channel cell-level PCA optimization & pre-reduction.
+"""Per-signal pooled PCA optimization & pre-reduction.
 
-Produces PCA-reduced guide/gene h5ad files for the attribution stage.
+Pools cells across experiments sharing the same biological signal, fits PCA, sweeps
+variance thresholds to find the optimal number of PCs, then aggregates all signals into
+combined guide/gene h5ads and scores 4 phenotypic metrics (activity, distinctiveness,
+CORUM consistency, CHAD consistency).
 
 Two-phase SLURM architecture
 -----------------------------
-Phase 1  One SLURM job per channel -- load cells, PCA sweep, save per-channel h5ad.
-Phase 2  One aggregation job -- load per-channel h5ads, hconcat, normalize, score, plot.
+Phase 1  One SLURM job per biological signal group -- pool & downsample cells, PCA sweep,
+         save per-signal h5ad.  Output → <root>/per_signal/
+Phase 2  One aggregation job -- load per-signal h5ads, hconcat, NTC-normalize, score all
+         4 metrics (also per-reporter), compute embeddings, save plots.
 
-Usage
------
-  # Phase 1 (parallel SLURM):
-  python -m ops_model.post_process.combination.pca_optimization --slurm -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_test -y
+ROOT = /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_all
 
-  # Phase 2 (aggregation):
-  python -m ops_model.post_process.combination.pca_optimization \\
-      --aggregate-only -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized
+8 variants — feature type × channel subset
+------------------------------------------
+Each variant produces an independent output subtree and can be compared via
+compare_map_scores.py.  Replace --slurm with --aggregate-only --slurm to re-run
+Phase 2 only (e.g. after code changes) without redoing the PCA sweeps.
+
+  Variant                  Flags                                    Output subdir
+  ──────────────────────── ──────────────────────────────────────── ─────────────────────────
+  DINO        all          --slurm                                  dino/all/
+  DINO        phase-only   --phase-only --slurm                     dino/phase_only/
+  DINO        no-phase     --no-phase --slurm                       dino/no_phase/
+  DINO        downsampled  --downsampled --slurm                    dino/downsampled/
+  CellProfiler all         --cell-profiler --slurm                  cellprofiler/all/
+  CellProfiler phase-only  --phase-only --cell-profiler --slurm     cellprofiler/phase_only/
+  CellProfiler no-phase    --no-phase --cell-profiler --slurm       cellprofiler/no_phase/
+  CellProfiler downsampled --downsampled --cell-profiler --slurm    cellprofiler/downsampled/
+
+  Channel subsets:
+    (default)    all fluorescent + phase channels, all cells pooled per signal group
+    --phase-only label-free brightfield (Phase) only
+    --no-phase   fluorescent channels only (excludes Phase)
+    --downsampled all channels but cells equalised across signal groups (floor 750k/group)
+
+  Append --aggregate-only to re-run Phase 2 only (e.g. after code changes).
+  Use run_aggregate_all.sh to submit all 8 --aggregate-only jobs in parallel.
+
+Output structure
+----------------
+  <root>/
+    dino/
+      all/          (default)
+      phase_only/   (--phase-only)
+      no_phase/     (--no-phase)
+      downsampled/  (--downsampled)
+    cellprofiler/
+      all/
+      phase_only/
+      no_phase/
+      downsampled/
 """
 
 import argparse
@@ -75,7 +113,7 @@ DEFAULT_SWEEP_THRESHOLDS = [0.60, 0.70, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84, 0.88
 # so PCA is destructive at high thresholds. Optimal region is ~50% variance explained.
 DEFAULT_SWEEP_THRESHOLDS_CP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
 MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
-MAX_CELLS_ALL_MODE = 5_000_000  # Memory cap for --all-cells mode (fit PCA on all cells up to this limit)
+PCA_FIT_CAP = 5_000_000  # Cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
 
 
 # =============================================================================
@@ -278,129 +316,7 @@ def _save_sweep_outputs(
 
 
 # =============================================================================
-# Phase 1a: Per-experiment PCA sweep (one SLURM job per experiment-channel)
-# =============================================================================
-
-def pca_sweep_single_experiment(
-    exp: str,
-    channel: str,
-    output_dir: str,
-    norm_method: str = "ntc",
-    sweep_thresholds: Optional[List[float]] = None,
-    feature_dir_override: Optional[str] = None,
-) -> str:
-    """PCA variance sweep for a single experiment-channel pair.
-
-    Loads cell-level features from one experiment/channel, fits PCA, sweeps
-    variance thresholds to find the optimal number of PCs, and saves
-    guide/gene-level h5ads at the best threshold.
-
-    Top-level function (not a method) so submitit can pickle it.
-
-    Saves to output_dir/per_channel/:
-      - {signal}_guide.h5ad  (aggregated at peak PCs, pre-NTC-normalization)
-      - {signal}_gene.h5ad
-      - {signal}_sweep.csv   (full sweep data for this channel)
-    """
-    _logger = _init_sweep_logger()
-    t_start = time.time()
-    output_dir = Path(output_dir)
-    thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
-
-    # Resolve metadata using robust channel resolution (same as attribution stage)
-    import io, contextlib
-    maps_path = get_channel_maps_path()
-    from ops_utils.data.feature_metadata import FeatureMetadata
-    fm = FeatureMetadata(metadata_path=maps_path)
-    exp_short = exp.split("_")[0]
-    with contextlib.redirect_stdout(io.StringIO()):
-        resolved = resolve_channel_label(fm, exp, channel)
-    sig = resolved["label"]
-
-    # Skip unmapped channels — notify user and return early
-    if sig == "unknown" or sig.startswith("(unmapped:"):
-        msg = f"SKIPPED: {exp} / {channel} — could not resolve channel to a biological signal (label={sig!r})"
-        _logger.warning(msg)
-        return msg
-
-    # Resolve storage roots from config
-    attr_config = load_attribution_config()
-    storage_roots = get_storage_roots(attr_config)
-    feature_dir = feature_dir_override or attr_config.get("feature_dir", "dino_features")
-
-    label = f"{exp_short}/{channel} ({sig})"
-    _logger.info(f"Processing {label} [features: {feature_dir}]...")
-
-    # Load cell data
-    adata_cells = load_cell_h5ad(exp, channel, storage_roots, feature_dir, maps_path)
-    if adata_cells is None:
-        return f"SKIPPED: {label} — cell data not found"
-
-    n_cells = adata_cells.n_obs
-    n_feats = adata_cells.n_vars
-    _logger.info(f"  {n_cells} cells, {n_feats} features")
-
-    # Ensure label_str exists (CellProfiler uses 'perturbation' instead)
-    if "label_str" not in adata_cells.obs.columns and "perturbation" in adata_cells.obs.columns:
-        adata_cells.obs["label_str"] = adata_cells.obs["perturbation"]
-
-    # Keep obs cols needed for aggregation
-    keep_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in adata_cells.obs.columns]
-    obs_df = adata_cells.obs[keep_cols].copy()
-    feature_names = list(adata_cells.var_names)
-    X_raw = np.asarray(adata_cells.X, dtype=np.float32)
-    del adata_cells
-
-    # Global z-score before PCA for CellProfiler features (different scales need standardization)
-    if feature_dir_override and "cell-profiler" in feature_dir_override:
-        from sklearn.preprocessing import StandardScaler
-        X_raw = StandardScaler().fit_transform(X_raw)
-        _logger.info(f"  Applied global z-score scaling (CellProfiler mode)")
-
-    # Fit PCA once — keep components for loadings analysis before deleting model
-    X_pcs, cumvar, pca_model = fit_pca(X_raw)
-    pca_components = pca_model.components_.copy()  # (n_pcs, n_features)
-    pca_var_ratio  = pca_model.explained_variance_ratio_.copy()
-    del X_raw, pca_model
-
-    # Sweep thresholds
-    result = _run_threshold_sweep(
-        X_pcs, cumvar, obs_df, thresholds, norm_method,
-        extra_sweep_cols={"experiment": exp, "channel": channel, "signal": sig},
-        _logger=_logger,
-    )
-    if result is None:
-        return f"FAILED: {label} — no valid threshold found (all < {MIN_PCS} PCs)"
-    sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t = result
-
-    # Save outputs at AUC-optimized peak
-    obs_df["experiment"] = exp_short
-    file_prefix = f"{exp_short}_{sanitize_signal_filename(sig)}"
-    out_subdir = output_dir / "per_channel"
-    _save_sweep_outputs(
-        X_pcs, obs_df, cumvar,
-        peak_n=best_auc_n, peak_t=best_auc_t,
-        best_auc_r=best_auc_r, best_auc_a=best_auc_a, best_act_t=best_act_t,
-        signal=sig, sweep_rows=sweep_rows,
-        uns_metadata={
-            "experiment": exp, "channel": channel,
-            "n_cells": int(n_cells), "n_features_raw": int(n_feats),
-            "pca_components": pca_components[:best_auc_n].tolist(),
-            "pca_feature_names": feature_names,
-        },
-        output_dir=output_dir, subdir="per_channel", file_prefix=file_prefix,
-        suptitle=f"{exp_short}/{channel} → {sig} ({n_cells:,} cells, {n_feats} raw features)",
-        rng=np.random.RandomState(42), _logger=_logger,
-    )
-
-    elapsed = time.time() - t_start
-    _logger.info(f"  Done: {sig} in {elapsed:.0f}s — {best_auc_n} PCs @ {best_auc_t:.0%}")
-
-    return f"SUCCESS: {sig} — {best_auc_n} PCs @ {best_auc_t:.0%}, {best_auc_r:.1%} active, AUC={best_auc_a:.4f}"
-
-
-# =============================================================================
-# Phase 1b: Pooled PCA sweep (one SLURM job per biological signal group)
+# Phase 1: Pooled PCA sweep (one SLURM job per biological signal group)
 # =============================================================================
 
 def pca_sweep_pooled_signal(
@@ -551,7 +467,6 @@ def pca_sweep_pooled_signal(
             _logger.info(f"  Applied global z-score scaling (CellProfiler mode, no experiment info)")
 
     # --- Fit PCA on subsample, transform all cells in chunks ---
-    PCA_FIT_CAP = 5_000_000  # cells used to learn PC axes (covariance stabilizes well below this)
     t_pca = time.time()
     n_total = X_raw.shape[0]
 
@@ -1060,40 +975,6 @@ def aggregate_channels(
 
 
 # =============================================================================
-# Local mode: sequential (for testing or small runs)
-# =============================================================================
-
-def run_pca_optimization(
-    output_dir: str,
-    sweep_thresholds: Optional[List[float]] = None,
-    norm_method: str = "ntc",
-) -> str:
-    """Run full pipeline locally (sequential): discover, per-channel sweep, aggregate."""
-    _logger = _init_sweep_logger()
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    attr_config = load_attribution_config()
-    storage_roots = get_storage_roots(attr_config)
-    feature_dir = attr_config.get("feature_dir", "dino_features")
-    all_pairs = discover_dino_experiments(storage_roots, feature_dir)
-    logger.info(f"Found {len(all_pairs)} experiment-channel pairs")
-
-    if not all_pairs:
-        return "FAILED: no experiment-channel pairs found"
-
-    for i, (exp, ch) in enumerate(all_pairs):
-        logger.info(f"\n[{i+1}/{len(all_pairs)}] Processing {exp}/{ch}...")
-        result = pca_sweep_single_experiment(
-            exp=exp, channel=ch, output_dir=str(output_dir),
-            norm_method=norm_method, sweep_thresholds=sweep_thresholds,
-        )
-        logger.info(f"  {result}")
-
-    return aggregate_channels(output_dir=str(output_dir), norm_method=norm_method)
-
-
-# =============================================================================
 # CLI: mode handlers
 # =============================================================================
 
@@ -1220,12 +1101,8 @@ def _handle_umap_only(args, output_dir):
 
 def _handle_aggregate_only(args, output_dir):
     """Run only the aggregation step (Phase 2)."""
-    if args.downsampled or getattr(args, "all_cells", False):
-        agg_output = str(output_dir)
-        agg_subdir = "per_signal"
-    else:
-        agg_output = str(output_dir)
-        agg_subdir = "per_channel"
+    agg_output = str(output_dir)
+    agg_subdir = "per_signal"
 
     if args.slurm:
         print(f"Submitting aggregation as SLURM job ({args.slurm_agg_memory}, {args.slurm_agg_time}min)...")
@@ -1266,40 +1143,16 @@ def _handle_downsampled(args, output_dir, cp_override):
 
     n_signals = len(signal_groups)
 
-    if cp_override:
-        mode_label = "CellProfiler"
-    elif getattr(args, "all_cells", False):
-        mode_label = "All-Cells (per-signal cap)"
-    else:
-        mode_label = "Downsampled"
+    mode_label = "CellProfiler" if cp_override else ("Downsampled" if args.downsampled else "All-Cells")
     print(f"\n{mode_label} PCA Optimization: {len(all_pairs)} channels -> {n_signals} signal groups")
     print(f"Output: {ds_output_dir}")
 
-    # Pre-scan cell counts and compute downsampling target
+    # Pre-scan cell counts and compute per-signal target
     print("\nPre-scanning cell counts per signal group...")
     cell_counts = count_cells_per_signal_group(signal_groups, storage_roots, feature_dir, maps_path)
 
-    all_cells_mode = getattr(args, "all_cells", False)
-    no_cap = getattr(args, "no_cap", False)
-    max_cells = getattr(args, "max_cells", MAX_CELLS_ALL_MODE)
-
-    if all_cells_mode:
-        if no_cap:
-            # No cap: use all cells regardless of count
-            per_signal_target = dict(cell_counts)
-            print(f"\nSignal group manifest (all cells, no cap):")
-        else:
-            # Per-signal target: use all cells, cap at max_cells to fit PCA in memory
-            per_signal_target = {s: min(n, max_cells) for s, n in cell_counts.items()}
-            capped_groups = {s: n for s, n in cell_counts.items() if n > max_cells}
-            if capped_groups:
-                print(f"\n  {len(capped_groups)} signal group(s) exceed {max_cells:,} cells and will be capped:")
-                for s, n in sorted(capped_groups.items(), key=lambda x: -x[1]):
-                    print(f"    {s}: {n:,} -> {max_cells:,}")
-            print(f"\nSignal group manifest (all cells, capped at {max_cells:,}):")
-        print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'-> Used':>12}")
-        print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*12}")
-    else:
+    if args.downsampled:
+        # Equalise: all groups target the smallest group (floor 750k)
         MIN_CELLS_FLOOR = 750_000
         global_target = max(min(cell_counts.values()), MIN_CELLS_FLOOR)
         per_signal_target = {s: global_target for s in cell_counts}
@@ -1311,16 +1164,26 @@ def _handle_downsampled(args, output_dir, cp_override):
         print(f"\nSignal group manifest (downsampling all to {global_target:,} cells):")
         print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'-> Downsampled':>15}")
         print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*15}")
+    else:
+        # All-cells: load every cell; pca_sweep_pooled_signal uses passthrough PCA for >5M
+        per_signal_target = dict(cell_counts)
+        print(f"\nSignal group manifest (all cells — PCA fit subsampled at >{PCA_FIT_CAP:,}):")
+        print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10}")
+        print(f"  {'-'*45} {'-'*5} {'-'*10}")
 
     manifest_rows = []
     for signal in sorted(signal_groups.keys()):
         pairs = signal_groups[signal]
         n_cells = cell_counts[signal]
         t = per_signal_target[signal]
-        print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} -> {t:>12,}")
+        if args.downsampled:
+            print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} -> {t:>15,}")
+        else:
+            pca_note = f" (passthrough PCA)" if n_cells > PCA_FIT_CAP else ""
+            print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,}{pca_note}")
         manifest_rows.append({
             "signal": signal, "n_experiments": len(pairs),
-            "n_cells_pooled": n_cells, "n_cells_downsampled": t,
+            "n_cells_pooled": n_cells, "n_cells_used": t,
             "experiments": ",".join(e.split("_")[0] for e, c in pairs),
         })
     print(f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells")
@@ -1425,74 +1288,6 @@ def _handle_downsampled(args, output_dir, cp_override):
     )
 
 
-def _handle_per_channel_slurm(args, output_dir, cp_override):
-    """Per-channel SLURM sweep + aggregation."""
-    import contextlib, io
-
-    all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
-    if not all_pairs:
-        print("No experiment-channel pairs found!")
-        return
-
-    from ops_utils.data.feature_metadata import FeatureMetadata
-    fm = FeatureMetadata(metadata_path=maps_path)
-
-    # Determine phase filter from args
-    phase_filter = getattr(args, "phase_filter", None)  # "phase_only" | "no_phase" | None
-
-    print(f"\nPCA Optimization: {len(all_pairs)} channels to process")
-    if phase_filter:
-        print(f"Phase filter: {phase_filter}")
-    print(f"Output: {output_dir}")
-
-    # Build per-channel jobs, skipping unmapped channels + applying phase filter
-    jobs = []
-    skipped_unmapped = []
-    skipped_phase_filter = []
-    for exp, ch in all_pairs:
-        exp_short = exp.split("_")[0]
-        with contextlib.redirect_stdout(io.StringIO()):
-            resolved = resolve_channel_label(fm, exp, ch)
-        sig = resolved["label"]
-        if sig == "unknown" or sig.startswith("(unmapped:"):
-            skipped_unmapped.append((exp, ch, sig))
-            continue
-        is_phase = (sig == "Phase")
-        if phase_filter == "phase_only" and not is_phase:
-            skipped_phase_filter.append((exp, ch, sig))
-            continue
-        if phase_filter == "no_phase" and is_phase:
-            skipped_phase_filter.append((exp, ch, sig))
-            continue
-        sig_safe = sig.replace(" ", "_").replace(",", "").replace("(", "").replace(")", "")[:40]
-        job_kwargs = {
-            "exp": exp, "channel": ch,
-            "output_dir": str(output_dir), "norm_method": args.norm_method,
-        }
-        if cp_override:
-            job_kwargs["feature_dir_override"] = cp_override
-            job_kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
-        jobs.append({
-            "name": f"pca_{sig_safe}_{exp_short}",
-            "func": pca_sweep_single_experiment,
-            "kwargs": job_kwargs,
-            "metadata": {"signal": sig, "experiment": exp, "channel": ch},
-        })
-
-    if skipped_unmapped:
-        print(f"\n  {len(skipped_unmapped)} experiment-channel pairs could not be mapped and will be SKIPPED:")
-        for exp, ch, sig in skipped_unmapped:
-            print(f"    {exp} / {ch}  ->  {sig!r}")
-        print()
-    if skipped_phase_filter:
-        print(f"  {len(skipped_phase_filter)} channels excluded by --{phase_filter.replace('_', '-')} filter")
-
-    _submit_phase1_slurm(
-        jobs, args, agg_output=str(output_dir),
-        per_unit_subdir="per_channel", experiment_name="pca_optimization",
-        manifest_prefix="pca", unit_label="per-channel",
-    )
-
 
 # =============================================================================
 # CLI
@@ -1501,23 +1296,23 @@ def _handle_per_channel_slurm(args, output_dir, cp_override):
 def _build_parser():
     """Build argparse parser for the PCA optimization CLI."""
     parser = argparse.ArgumentParser(
-        description="Per-channel cell-level PCA optimization for organelle attribution"
+        description="Per-signal pooled PCA optimization for organelle attribution"
     )
     parser.add_argument(
         "-o", "--output-dir", type=str,
         default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
-        help="Output directory for PCA-optimized h5ad files",
+        help="Root output directory (feature-type and channel-subset subdirs are added automatically)",
     )
     parser.add_argument("--norm-method", type=str, default="ntc", choices=["ntc", "global"],
                         help="Normalization method (default: ntc)")
     parser.add_argument("--slurm", action="store_true",
-                        help="Submit per-channel SLURM jobs + aggregation job")
+                        help="Submit Phase 1 signal-group SLURM jobs + Phase 2 aggregation job")
     parser.add_argument("--slurm-memory", type=str, default="100GB",
-                        help="SLURM memory per channel job (default: 100GB)")
+                        help="SLURM memory per signal-group job (default: 100GB)")
     parser.add_argument("--slurm-time", type=int, default=10,
-                        help="SLURM time limit per channel job in minutes (default: 10)")
+                        help="SLURM time limit per signal-group job in minutes (default: 10)")
     parser.add_argument("--slurm-cpus", type=int, default=16,
-                        help="SLURM CPUs per channel job (default: 16)")
+                        help="SLURM CPUs per signal-group job (default: 16)")
     parser.add_argument("--slurm-partition", type=str, default="cpu,gpu",
                         help="SLURM partition (default: cpu,gpu)")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
@@ -1526,30 +1321,21 @@ def _build_parser():
     parser.add_argument("--slurm-agg-time", type=int, default=60,
                         help="SLURM time limit for aggregation job in minutes (default: 60)")
     parser.add_argument("--aggregate-only", action="store_true",
-                        help="Only run the aggregation step (Phase 2).")
+                        help="Only run Phase 2 aggregation (skips PCA sweeps, reads existing per_signal/ h5ads).")
     parser.add_argument("--umap-only", action="store_true",
                         help="Only generate embedding plots from existing optimized h5ads.")
     parser.add_argument("--downsampled", action="store_true",
-                        help="Pool cells by biological signal, downsample to the smallest group (floor 750k), then PCA optimize.")
-    parser.add_argument("--all-cells", action="store_true",
-                        help="Pool ALL cells per signal group for PCA (no cross-group equalization). "
-                             "Groups exceeding --max-cells are proportionally sampled down to fit memory.")
-    parser.add_argument("--max-cells", type=int, default=MAX_CELLS_ALL_MODE,
-                        help=f"Memory cap for --all-cells mode: groups above this are downsampled (default: {MAX_CELLS_ALL_MODE:,}).")
-    parser.add_argument("--no-cap", action="store_true",
-                        help="With --all-cells, disable the max-cells cap entirely. Use all cells for every signal group.")
+                        help="Equalise cells across signal groups by downsampling to the smallest group "
+                             "(floor 750k). Default mode uses all cells per group. Output → downsampled/.")
     parser.add_argument("--phase-memory", type=str, default="600GB",
-                        help="SLURM memory for Phase signal job (default: 600GB). Phase often has ~50M cells "
-                             "and needs more memory than other signals.")
+                        help="SLURM memory for Phase signal job (default: 600GB). Phase ~50M cells needs more.")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Use CellProfiler morphological features instead of DINO embeddings.")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true",
-                             help="Include only Phase (label-free brightfield) channels. "
-                                  "Output nested under phase_only/. Not compatible with --downsampled.")
+                             help="Include only Phase (label-free brightfield) channels. Output → phase_only/.")
     phase_group.add_argument("--no-phase", action="store_true",
-                             help="Exclude Phase channels, include all fluorescent channels. "
-                                  "Output nested under no_phase/. Not compatible with --downsampled.")
+                             help="Exclude Phase channels, fluorescent only. Output → no_phase/.")
     return parser
 
 
@@ -1568,32 +1354,32 @@ def main():
     else:
         output_dir = output_dir / "dino"
 
-    # Phase filter: nest under phase_only/ or no_phase/ subdir
-    # --all-cells without phase filter nests under all/
+    # Nest under channel-subset subdir; default (no filter) goes to all/
     if args.phase_only:
         if args.downsampled:
-            print("ERROR: --phase-only is not compatible with --downsampled (use --all-cells --phase-only instead).")
+            print("ERROR: --phase-only is not compatible with --downsampled.")
             return
         output_dir = output_dir / "phase_only"
         args.phase_filter = "phase_only"
         print(f"Phase-only mode: output → {output_dir}")
     elif args.no_phase:
         if args.downsampled:
-            print("ERROR: --no-phase is not compatible with --downsampled (use --all-cells --no-phase instead).")
+            print("ERROR: --no-phase is not compatible with --downsampled.")
             return
         output_dir = output_dir / "no_phase"
         args.phase_filter = "no_phase"
         print(f"No-phase mode: output → {output_dir}")
-    elif args.all_cells:
-        output_dir = output_dir / "all"
-        args.phase_filter = None
-        print(f"All-cells mode: output → {output_dir}")
     elif args.downsampled:
         output_dir = output_dir / "downsampled"
         args.phase_filter = None
         print(f"Downsampled mode: output → {output_dir}")
     else:
+        output_dir = output_dir / "all"
         args.phase_filter = None
+        print(f"All-cells mode (default): output → {output_dir}")
+
+    # all_cells=True is now always the default (non-downsampled path)
+    args.all_cells = not args.downsampled
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1602,17 +1388,8 @@ def main():
         _handle_umap_only(args, output_dir)
     elif args.aggregate_only:
         _handle_aggregate_only(args, output_dir)
-    elif args.downsampled or args.all_cells:
-        _handle_downsampled(args, output_dir, cp_override)
-    elif args.slurm:
-        _handle_per_channel_slurm(args, output_dir, cp_override)
     else:
-        result = run_pca_optimization(
-            output_dir=str(output_dir),
-            sweep_thresholds=DEFAULT_SWEEP_THRESHOLDS_CP if cp_override else None,
-            norm_method=args.norm_method,
-        )
-        print(result)
+        _handle_downsampled(args, output_dir, cp_override)
 
 
 if __name__ == "__main__":
