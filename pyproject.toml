@@ -39,6 +39,7 @@ dependencies = [
     "phate>=1.0.7",
     "tabulate",
     "pyarrow",
+    "submitit",
 ]
 
 # extras
