@@ -940,7 +940,6 @@ def aggregate_channels(
             _logger.warning(f"  Activity plot failed: {e}")
 
     plot_sweep_curves_summary(per_unit_dir, output_dir, plots_dir, r, a, plt, _logger, min_pcs=MIN_PCS)
-    plot_channel_peaks_bar(report_rows, r, plots_dir, plt, _logger)
 
     # Step 6: Embeddings (UMAP + PHATE) — stored directly into adata_guide.obsm/uns
     # Returns adata_gene_embed (NTC-split gene-level object) with embeddings in obsm
@@ -955,6 +954,10 @@ def aggregate_channels(
     # Step 7: Distinctiveness + consistency (slow)
     dist_map, dist_ratio = _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger)
     corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger)
+
+    # Per-reporter bar chart with all 4 aggregate baselines
+    plot_channel_peaks_bar(report_rows, r, plots_dir, plt, _logger,
+                           dist_ratio=dist_ratio, corum_ratio=corum_ratio, chad_ratio=chad_ratio)
 
     # Bar charts for all 4 metrics (per-perturbation mAP)
     plot_metric_map_bar(activity_map, "Activity", "perturbation", r, plots_dir, plt, _logger)
