@@ -3321,17 +3321,19 @@ def _create_comprehensive_metadata(
 def _run_leiden_clustering(
     adata: ad.AnnData,
     resolutions: List[float],
+    n_neighbors: int = 15,
     random_state: Optional[int] = None,
     verbose: bool = True,
 ) -> ad.AnnData:
     """
     Run Leiden clustering at multiple resolutions.
 
-    Requires that sc.pp.neighbors() has already been called.
+    If no neighbors graph is present, sc.pp.neighbors() is run automatically.
 
     Args:
-        adata: AnnData object with neighbors graph
+        adata: AnnData object
         resolutions: List of resolution parameters
+        n_neighbors: Number of neighbors for sc.pp.neighbors() if not already computed
         random_state: Random seed for reproducibility
         verbose: Print progress
 
@@ -3339,10 +3341,9 @@ def _run_leiden_clustering(
         AnnData with leiden_{resolution} columns in .obs
     """
     if "neighbors" not in adata.uns:
-        raise ValueError(
-            "Neighbors graph not found. Run sc.pp.neighbors() first or set "
-            "recompute_embeddings=True to compute embeddings before clustering."
-        )
+        if verbose:
+            print(f"No neighbors graph found. Running sc.pp.neighbors(n_neighbors={n_neighbors})...")
+        sc.pp.neighbors(adata, n_neighbors=n_neighbors, random_state=random_state)
 
     if verbose:
         print(f"\nRunning Leiden clustering at {len(resolutions)} resolution(s)...")
@@ -3351,7 +3352,7 @@ def _run_leiden_clustering(
         key = f"leiden_{res}"
         if verbose:
             print(f"  Resolution {res}...")
-        sc.tl.leiden(adata, resolution=res, key_added=key, random_state=random_state)
+        sc.tl.leiden(adata, resolution=res, key_added=key, random_state=random_state, flavor="igraph", n_iterations=2, directed=False)
         if verbose:
             n_clusters = adata.obs[key].nunique()
             print(f"    → {n_clusters} clusters")
