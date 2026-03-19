@@ -1,37 +1,30 @@
-"""Compare phenotypic mAP scores between two feature sets or channel subsets.
+"""Compare phenotypic mAP scores between feature sets and channel subsets.
 
-Supports two comparison modes:
-  --comparison dino-vs-cp        DINO embeddings vs CellProfiler features
-  --comparison phase-vs-nophase  Phase-only embedding vs no-Phase embedding
-                                  (run separately per feature type via --feature-type)
+Auto-discovers all available metrics directories under a root output directory
+and runs every valid comparison:
 
-Metrics compared:
-  - Activity            (phenotypic_activity.csv)
-  - Distinctiveness     (phenotypic_distinctiveness.csv)
-  - Consistency (CORUM) (phenotypic_consistency_corum.csv)
-  - Consistency (CHAD)  (phenotypic_consistency_manual.csv)
+  1. Phase vs No-phase (per feature type: dino, cellprofiler)
+  2. DINO vs CellProfiler (per channel subset: all, no_phase, phase_only)
 
-Produces two figures per mode (full / downsampled where applicable):
-  1. {tag}_panel.png        — 2×4 grid: scatter + regression / slopegraph
-  2. {tag}_delta_violin.png — delta distributions (Wilcoxon p-values)
+Expected directory structure::
+
+    <root>/
+      dino/
+        all/metrics/
+        no_phase/metrics/          (or no_phase/all_cells_per_reporter/metrics/)
+        phase_only/metrics/        (or phase_only/all_cells_per_reporter/metrics/)
+      cellprofiler/
+        all/metrics/
+        no_phase/all_cells_per_reporter/metrics/
+        phase_only/all_cells_per_reporter/metrics/
 
 Usage
 -----
-  # DINO vs CellProfiler
+  # Auto-discover and run all comparisons
   python -m ops_model.post_process.combination.compare_map_scores \\
-      -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized
+      -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_all
 
-  # Phase-only vs No-phase (DINO features)
-  python -m ops_model.post_process.combination.compare_map_scores \\
-      -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized \\
-      --comparison phase-vs-nophase --feature-type dino
-
-  # Phase-only vs No-phase (CellProfiler features)
-  python -m ops_model.post_process.combination.compare_map_scores \\
-      -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized \\
-      --comparison phase-vs-nophase --feature-type cellprofiler
-
-Output → <output_dir>/comparison/{comparison_name}/
+Output → <root>/comparison/
 """
 
 import argparse
@@ -75,34 +68,73 @@ _COMPARISON_COLOURS = {
     "phase-vs-nophase":  ("#2E7D32", "#6A1B9A"),   # green, purple
 }
 
+# Feature type directories to scan
+_FEATURE_TYPES = ["dino", "cellprofiler"]
+# Channel subset directories to scan
+_CHANNEL_SUBSETS = ["all", "no_phase", "phase_only", "downsampled"]
+
 
 # ----------------------------------------------------------------------------
-# Comparison configs
+# Auto-discovery
 # ----------------------------------------------------------------------------
 
-def _build_comparison_configs(output_dir: Path, comparison: str, feature_type: str) -> List[dict]:
-    """Return list of comparison dicts: {tag, label_a, label_b, dir_a, dir_b, col_a, col_b}."""
-    col_a, col_b = _COMPARISON_COLOURS.get(comparison, ("#E65100", "#1565C0"))
+def _find_metrics_dir(base: Path) -> Optional[Path]:
+    """Find the metrics/ directory under base, checking common nesting patterns."""
+    # Direct: base/metrics/
+    if (base / "metrics").is_dir():
+        return base / "metrics"
+    # Nested: base/all_cells_per_reporter/metrics/
+    for sub in base.iterdir():
+        if sub.is_dir() and (sub / "metrics").is_dir():
+            return sub / "metrics"
+    return None
 
-    if comparison == "dino-vs-cp":
-        return [
-            dict(tag="full",        label_a="DINO", label_b="CellProfiler", col_a=col_a, col_b=col_b,
-                 dir_a=output_dir / "dino"         / "metrics",
-                 dir_b=output_dir / "cellprofiler" / "metrics"),
-            dict(tag="downsampled", label_a="DINO", label_b="CellProfiler", col_a=col_a, col_b=col_b,
-                 dir_a=output_dir / "dino"         / "downsampled" / "metrics",
-                 dir_b=output_dir / "cellprofiler" / "downsampled" / "metrics"),
-        ]
 
-    if comparison == "phase-vs-nophase":
-        ft = feature_type
-        return [
-            dict(tag=f"{ft}_full",        label_a="Phase only", label_b="No phase", col_a=col_a, col_b=col_b,
-                 dir_a=output_dir / ft / "phase_only" / "metrics",
-                 dir_b=output_dir / ft / "no_phase"   / "metrics"),
-        ]
+def _auto_discover_configs(root: Path) -> List[dict]:
+    """Discover all valid comparison pairs from the root directory structure.
 
-    raise ValueError(f"Unknown comparison: {comparison!r}. Choose dino-vs-cp or phase-vs-nophase.")
+    Generates two types of comparisons:
+      1. phase-vs-nophase: for each feature type that has both phase_only and no_phase
+      2. dino-vs-cp: for each channel subset that exists under both dino/ and cellprofiler/
+    """
+    configs = []
+
+    # --- Phase vs No-phase (per feature type) ---
+    col_a, col_b = _COMPARISON_COLOURS["phase-vs-nophase"]
+    for ft in _FEATURE_TYPES:
+        ft_dir = root / ft
+        if not ft_dir.is_dir():
+            continue
+        phase_dir = ft_dir / "phase_only"
+        nophase_dir = ft_dir / "no_phase"
+        metrics_a = _find_metrics_dir(phase_dir) if phase_dir.is_dir() else None
+        metrics_b = _find_metrics_dir(nophase_dir) if nophase_dir.is_dir() else None
+        if metrics_a and metrics_b:
+            configs.append(dict(
+                group="phase_vs_nophase",
+                tag=f"{ft}_phase_vs_nophase",
+                label_a=f"{ft.upper()} Phase", label_b=f"{ft.upper()} No-phase",
+                col_a=col_a, col_b=col_b,
+                dir_a=metrics_a, dir_b=metrics_b,
+            ))
+
+    # --- DINO vs CellProfiler (per channel subset) ---
+    col_a, col_b = _COMPARISON_COLOURS["dino-vs-cp"]
+    for subset in _CHANNEL_SUBSETS:
+        dino_sub = root / "dino" / subset
+        cp_sub = root / "cellprofiler" / subset
+        metrics_a = _find_metrics_dir(dino_sub) if dino_sub.is_dir() else None
+        metrics_b = _find_metrics_dir(cp_sub) if cp_sub.is_dir() else None
+        if metrics_a and metrics_b:
+            configs.append(dict(
+                group="dino_vs_cp",
+                tag=f"dino_vs_cp_{subset}",
+                label_a=f"DINO ({subset})", label_b=f"CP ({subset})",
+                col_a=col_a, col_b=col_b,
+                dir_a=metrics_a, dir_b=metrics_b,
+            ))
+
+    return configs
 
 
 # ----------------------------------------------------------------------------
@@ -174,7 +206,8 @@ def _ax_scatter(ax: plt.Axes, merged: pd.DataFrame, title: str,
     ax.plot(xl, slope * xl + intercept, "k--", lw=1.2, zorder=4,
             label=f"r={r:.3f}  slope={slope:.2f}")
 
-    lim = (min(x.min(), y.min()) - 0.02, max(x.max(), y.max()) + 0.02)
+    margin = 0.08
+    lim = (min(x.min(), y.min()) - margin, max(x.max(), y.max()) + margin)
     ax.plot(lim, lim, color="grey", lw=0.7, ls=":", alpha=0.4)
     ax.set_xlim(*lim); ax.set_ylim(*lim)
 
@@ -182,7 +215,7 @@ def _ax_scatter(ax: plt.Axes, merged: pd.DataFrame, title: str,
         ax.annotate(row["entity"],
                     (row["mean_average_precision_a"], row["mean_average_precision_b"]),
                     fontsize=4.5, xytext=(3, 2), textcoords="offset points",
-                    color=_COL_DISCORD, clip_on=True)
+                    color=_COL_DISCORD, clip_on=False)
 
     n, nd = len(merged), int(merged["discordant"].sum())
     ax.text(0.97, 0.03, f"n={n}  disc={nd}", transform=ax.transAxes,
@@ -286,12 +319,12 @@ def _ax_violin(ax: plt.Axes, metric_deltas: Dict[str, np.ndarray], title: str,
 
     ax.axhline(0, color="black", lw=0.9, ls="--", alpha=0.45)
 
-    y_top = max(np.max(np.abs(d)) for d in data) * 1.18
+    y_bottom = -max(np.max(np.abs(d)) for d in data) * 1.05
     for i, (p, d) in enumerate(zip(pvals, data)):
         sig = ("***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns") \
               if not np.isnan(p) else "n/a"
         p_str = f"p={p:.1e}" if not np.isnan(p) else ""
-        ax.text(positions[i], y_top, f"{sig}\n{p_str}\nμΔ={np.mean(d):+.3f}",
+        ax.text(positions[i], y_bottom, f"{sig}\n{p_str}\nμΔ={np.mean(d):+.3f}",
                 ha="center", va="top", fontsize=6.5, color="dimgrey")
 
     ax.set_xticks(positions)
@@ -368,53 +401,49 @@ def _run_comparison(cfg: dict, comp_dir: Path) -> List[dict]:
 # Entry point
 # ----------------------------------------------------------------------------
 
-def compare_maps(output_dir: str, comparison: str = "dino-vs-cp",
-                 feature_type: str = "dino") -> None:
+def compare_maps(output_dir: str) -> None:
     output_dir = Path(output_dir)
-    comp_dir = output_dir / "comparison" / comparison.replace("-", "_")
+    comp_dir = output_dir / "comparison"
     comp_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    configs = _build_comparison_configs(output_dir, comparison, feature_type)
+    configs = _auto_discover_configs(output_dir)
+
+    if not configs:
+        logger.error(f"No comparison pairs found under {output_dir}. "
+                     f"Expected subdirs like dino/{{all,no_phase,phase_only}}/metrics/")
+        return
+
+    logger.info(f"Discovered {len(configs)} comparisons under {output_dir}:")
+    for cfg in configs:
+        logger.info(f"  {cfg['tag']}: {cfg['dir_a']} vs {cfg['dir_b']}")
 
     all_summary = []
-    ran_any = False
     for cfg in configs:
-        if not cfg["dir_a"].exists() and not cfg["dir_b"].exists():
-            continue
+        group_dir = comp_dir / cfg.get("group", "other")
+        group_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"\n=== {cfg['tag']}: {cfg['label_a']} vs {cfg['label_b']} ===")
-        all_summary.extend(_run_comparison(cfg, comp_dir))
-        ran_any = True
-
-    if not ran_any:
-        logger.error(f"No metrics directories found for comparison '{comparison}'. "
-                     f"Expected:\n  A: {configs[0]['dir_a']}\n  B: {configs[0]['dir_b']}")
-        return
+        all_summary.extend(_run_comparison(cfg, group_dir))
 
     if all_summary:
         df = pd.DataFrame(all_summary)
         df.to_csv(comp_dir / "summary.csv", index=False)
-        logger.info(f"\n{'tag':<20} {'metric':<16} {'n':>5} {'mean_Δ':>8} {'r':>7} {'disc':>6}")
-        logger.info("-" * 62)
+        logger.info(f"\n{'tag':<30} {'metric':<16} {'n':>5} {'mean_Δ':>8} {'r':>7} {'disc':>6}")
+        logger.info("-" * 72)
         for _, r in df.iterrows():
-            logger.info(f"{r['tag']:<20} {r['metric']:<16} {r['n']:>5} "
+            logger.info(f"{r['tag']:<30} {r['metric']:<16} {r['n']:>5} "
                         f"{r['mean_delta']:>+8.3f} {r['r']:>7.3f} {r['n_discordant']:>6}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare phenotypic mAP scores between two feature sets or channel subsets"
+        description="Auto-discover and compare phenotypic mAP scores across feature types and channel subsets"
     )
     parser.add_argument("-o", "--output-dir", type=str,
-                        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized")
-    parser.add_argument("--comparison", type=str, default="dino-vs-cp",
-                        choices=["dino-vs-cp", "phase-vs-nophase"],
-                        help="Which comparison to run (default: dino-vs-cp)")
-    parser.add_argument("--feature-type", type=str, default="dino",
-                        choices=["dino", "cellprofiler"],
-                        help="Feature type for phase-vs-nophase comparison (default: dino)")
+                        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
+                        help="Root output directory containing dino/ and cellprofiler/ subdirs")
     args = parser.parse_args()
-    compare_maps(args.output_dir, args.comparison, args.feature_type)
+    compare_maps(args.output_dir)
 
 
 if __name__ == "__main__":
