@@ -1,6 +1,7 @@
 import pytest
 import torch
 import zarr
+import pandas as pd
 from ops_model.data import data_loader
 
 import warnings
@@ -90,6 +91,56 @@ def test_batch_keys_basic(basic_batch):
 
         assert isinstance(basic_batch[k], v)
     return
+
+
+# ============================================================================
+# normalize_link_csv tests
+# ============================================================================
+
+
+def test_normalize_link_csv_passthrough():
+    """Canonical column names pass through unchanged."""
+    df = pd.DataFrame(
+        {"gene_name": ["GENE_A"], "sgRNA": ["GENE_A_sg1"], "bbox": ["[0,0,10,10]"]}
+    )
+    result = data_loader.normalize_link_csv(df)
+    assert list(result.columns) == list(df.columns)
+    pd.testing.assert_frame_equal(result, df)
+
+
+def test_normalize_link_csv_minibinder():
+    """New-style minibinder columns are renamed to canonical names."""
+    df = pd.DataFrame(
+        {
+            "minibinder_perturbation": ["mb_001"],
+            "AA_sequence": ["MASTK..."],
+            "gene_target": ["EGFR"],
+        }
+    )
+    result = data_loader.normalize_link_csv(df)
+    assert "gene_name" in result.columns
+    assert "sgRNA" in result.columns
+    assert "minibinder_perturbation" not in result.columns
+    assert "AA_sequence" not in result.columns
+    # gene_target has no alias — should remain intact
+    assert "gene_target" in result.columns
+
+
+def test_normalize_link_csv_unknown_columns_untouched():
+    """Columns absent from COLUMN_ALIASES are left intact."""
+    df = pd.DataFrame(
+        {"some_new_col": [1, 2], "minibinder_perturbation": ["mb_001", "mb_002"]}
+    )
+    result = data_loader.normalize_link_csv(df)
+    assert "some_new_col" in result.columns
+    assert "gene_name" in result.columns
+
+
+def test_get_labels_gene_name_column_present(basic_data_manager):
+    """get_labels() always returns a DataFrame with a non-null gene_name column."""
+    labels = basic_data_manager.get_labels()
+    assert "gene_name" in labels.columns
+    assert labels["gene_name"].notna().all()
 
 
 # Test that the data returned is normalized

@@ -14,7 +14,7 @@ class OpsPaths:
         else:
             self.well_prefix = None
 
-        self.base = Path("/hpc/projects/intracellular_dashboard/ops")
+        self.base = Path("/hpc/projects/icd.fast.ops")
 
         self.stores = {
             "phenotyping": self.base / self.experiment / "3-assembly/phenotyping.zarr",

@@ -66,6 +66,14 @@ class CombinationConfig:
     fitted_embeddings: Dict[str, Any] = field(default_factory=dict)
     leiden_clustering: Dict[str, Any] = field(default_factory=dict)
 
+    # Cell-level PCA optimization (pca_optimized method)
+    auto_discover: bool = False
+    reporters: Optional[List[str]] = None
+    pca: Dict[str, Any] = field(default_factory=dict)
+    downsampling: Dict[str, Any] = field(default_factory=dict)
+    slurm: Dict[str, Any] = field(default_factory=dict)
+    output_filename: Optional[str] = None
+
     # Embedding Configs
     embeddings: Dict[str, EmbeddingConfig] = field(default_factory=dict)
 
