@@ -118,6 +118,7 @@ _SWEEP_THRESHOLDS_DINO = [0.60, 0.70, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84, 0.88, 
 _SWEEP_THRESHOLDS_CP   = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
 _MIN_PCS         = 10       # skip thresholds that yield fewer PCs than this
 _MIN_CELLS_FLOOR = 750_000  # floor for auto target_n_cells
+_PCA_FIT_CAP     = 5_000_000  # cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
 
 
 # =============================================================================
@@ -359,8 +360,31 @@ def _process_signal_group(
     X_raw = np.asarray(adata_cells.X, dtype=np.float32)
     del adata_cells
 
-    # --- Fit PCA once ---
-    X_pcs, cumvar, pca_model = fit_pca(X_raw)
+    # --- Fit PCA on subsample, transform all cells in chunks ---
+    t_pca = time.time()
+    n_total = X_raw.shape[0]
+
+    if n_total > _PCA_FIT_CAP:
+        fit_idx = rng.choice(n_total, _PCA_FIT_CAP, replace=False)
+        fit_idx.sort()
+        _logger.info(f"  Fitting PCA on {_PCA_FIT_CAP:,}/{n_total:,} subsampled cells...")
+        _, cumvar, pca_model = fit_pca(X_raw[fit_idx])
+        del fit_idx
+        _logger.info(f"  Transforming all {n_total:,} cells in chunks...")
+        chunk_size = 2_000_000
+        X_pcs_chunks = []
+        for i in range(0, n_total, chunk_size):
+            chunk = np.asarray(X_raw[i:i + chunk_size], dtype=np.float64)
+            chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
+            X_pcs_chunks.append(pca_model.transform(chunk).astype(np.float32))
+            _logger.info(f"    Transformed chunk {i:,}-{min(i + chunk_size, n_total):,}")
+        X_pcs = np.vstack(X_pcs_chunks)
+        del X_pcs_chunks
+    else:
+        _logger.info(f"  Fitting PCA on {n_total:,} x {X_raw.shape[1]} matrix...")
+        X_pcs, cumvar, pca_model = fit_pca(X_raw)
+
+    _logger.info(f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components")
     pca_components = pca_model.components_.copy()
     del X_raw, pca_model
 
@@ -385,6 +409,11 @@ def _process_signal_group(
     pc_names = [f"{signal}_PC{j}" for j in range(n_pcs)]
     del X_pcs
 
+    # Compute n_experiments per sgRNA from obs_full before dropping the experiment column.
+    # Injected directly into g.obs after guide aggregation (aggregate_to_level at guide level
+    # does not carry arbitrary cell-obs columns through, so cell-level injection is lost).
+    sgRNA_to_n_exp = obs_full.groupby("sgRNA")["experiment"].nunique()
+
     # Drop experiment column before aggregation (copairs incompatible with extra string cols)
     obs_for_agg = obs_full[[c for c in obs_full.columns if c != "experiment"]]
     adata_reduced = ad.AnnData(
@@ -400,6 +429,12 @@ def _process_signal_group(
 
     g.X = g.X.astype(np.float32)
     e.X = e.X.astype(np.float32)
+
+    # Inject n_experiments into guide obs so Phase 2's guide→gene aggregation picks it up
+    # via aggregate_to_level's max() path (lines 804-808 of anndata_utils.py).
+    g.obs["n_experiments"] = g.obs["sgRNA"].map(sgRNA_to_n_exp).fillna(1).astype(int)
+    g.uns["aggregation_method"] = "mean"
+    e.uns["aggregation_method"] = "mean"
 
     uns = {
         "signal":             signal,
@@ -419,6 +454,15 @@ def _process_signal_group(
     }
     for adata in [g, e]:
         adata.uns.update(uns)
+
+    from ops_model.post_process.anndata_processing.anndata_validator import AnndataValidator
+    _validator = AnndataValidator()
+    for _adata, _level in [(g, "guide"), (e, "gene")]:
+        _report = _validator.validate(_adata, level=_level, strict=False)
+        if not _report.is_valid:
+            _logger.warning(f"  {signal} {_level}-level AnnData failed validation:\n{_report.summary()}")
+        else:
+            _logger.info(f"  {signal} {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)")
 
     file_prefix = sanitize_signal_filename(signal)
     g.write_h5ad(per_channel_dir / f"{file_prefix}_guide.h5ad")
@@ -773,6 +817,17 @@ class PcaOptimizationCombiner:
             adata.uns["cell_type"] = cell_type
             adata.uns["embedding_type"] = embedding_type
             adata.uns["comprehensive_metadata"] = meta
+            adata.uns["aggregation_method"] = "mean"
+
+        # Validate before returning
+        from ops_model.post_process.anndata_processing.anndata_validator import AnndataValidator
+        _validator = AnndataValidator()
+        for _adata, _level in [(adata_guide, "guide"), (adata_gene, "gene")]:
+            _report = _validator.validate(_adata, level=_level, strict=False)
+            if not _report.is_valid:
+                logger.warning(f"Phase 2 {_level}-level AnnData failed validation:\n{_report.summary()}")
+            else:
+                logger.info(f"Phase 2 {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)")
 
         # Embeddings on gene level
         embedding_config = (

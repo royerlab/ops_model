@@ -20,11 +20,12 @@ Both levels, merged into one output row::
         --guide_embedding /path/to/guide_embeddings.h5ad \\
         --gene_embedding /path/to/gene_embeddings.h5ad
 
-Specify output path explicitly (default is <embedding_dir>/<timestamp>_eval.csv)::
+Save CSVs and plots alongside the metrics CSV::
 
     uv run run_eval \\
         --guide_embedding /path/to/guide_embeddings.h5ad \\
-        --output /path/to/results.csv
+        --gene_embedding /path/to/gene_embeddings.h5ad \\
+        --save-outputs
 
 .. note::
     When both embeddings are provided, the ``activity_map`` from the guide-level
@@ -44,6 +45,7 @@ import pandas as pd
 
 from ops_model.eval.evaluate_guide import evaluate_guide_level
 from ops_model.eval.evaluate_gene import evaluate_gene_level
+from ops_model.eval.eval_io import save_guide_eval, save_gene_eval
 
 
 def _default_output_path(embedding_path: str) -> str:
@@ -75,6 +77,11 @@ def main() -> None:
         default=None,
         help="Output CSV path. Defaults to <embedding_dir>/<timestamp>_eval.csv.",
     )
+    parser.add_argument(
+        "--save-outputs",
+        action="store_true",
+        help="Save per-metric CSVs and plots alongside the summary CSV.",
+    )
     args = parser.parse_args()
 
     if not args.guide_embedding and not args.gene_embedding:
@@ -82,24 +89,33 @@ def main() -> None:
             "At least one of --guide_embedding or --gene_embedding must be provided."
         )
 
+    output_path = args.output or _default_output_path(
+        args.guide_embedding or args.gene_embedding  # type: ignore[arg-type]
+    )
+    output_dir = Path(output_path).parent
+
     results: dict = {}
     activity_map = None
 
     if args.guide_embedding:
         adata_guide = ad.read_h5ad(args.guide_embedding)
-        guide_metrics, activity_map = evaluate_guide_level(adata_guide)
+        guide_metrics, activity_map, distinctiveness_map = evaluate_guide_level(adata_guide)
         del adata_guide
         results.update(guide_metrics)
         results["guide_embedding_path"] = args.guide_embedding
+        if args.save_outputs:
+            save_guide_eval(activity_map, distinctiveness_map, guide_metrics, output_dir)
 
     if args.gene_embedding:
         adata_gene = ad.read_h5ad(args.gene_embedding)
-        results.update(evaluate_gene_level(adata_gene, activity_map=activity_map))
+        gene_metrics, consistency_corum_map, consistency_manual_map = evaluate_gene_level(
+            adata_gene, activity_map=activity_map
+        )
+        results.update(gene_metrics)
         results["gene_embedding_path"] = args.gene_embedding
+        if args.save_outputs:
+            save_gene_eval(consistency_corum_map, consistency_manual_map, gene_metrics, output_dir)
 
-    output_path = args.output or _default_output_path(
-        args.guide_embedding or args.gene_embedding  # type: ignore[arg-type]
-    )
     pd.DataFrame([results]).to_csv(output_path, index=False)
     print(f"Evaluation results written to {output_path}")
 

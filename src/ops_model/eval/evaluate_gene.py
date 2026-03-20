@@ -28,7 +28,7 @@ def _load_gene_clusters() -> dict:
 
 def evaluate_gene_level(
     adata: ad.AnnData, activity_map: pd.DataFrame | None = None
-) -> dict:
+) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """Evaluate gene-level embeddings and return a flat dict of scalar metrics.
 
     Parameters
@@ -45,11 +45,15 @@ def evaluate_gene_level(
 
     Returns
     -------
-    dict
+    metrics : dict
         Flat dict of scalar metrics. Keys:
         ``pct_complexes_significant_manual``, ``mean_map_complexes_manual``,
         ``pct_complexes_significant_corum``, ``mean_map_complexes_corum``,
         ``mean_cosine_sim_within_complex``, ``silhouette_within_complex``.
+    consistency_corum_map : DataFrame
+        Per-complex mAP results from ``phenotypic_consistency_corum``.
+    consistency_manual_map : DataFrame
+        Per-complex mAP results from ``phenotypic_consistency_manual_annotation``.
     """
     # 1. Validate
     # debug: 
@@ -123,7 +127,7 @@ def evaluate_gene_level(
         else float("nan")
     )
 
-    return {
+    metrics = {
         "pct_complexes_significant_manual": pct_complexes_significant_manual,
         "mean_map_complexes_manual": mean_map_complexes_manual,
         "pct_complexes_significant_corum": pct_complexes_significant_corum,
@@ -131,3 +135,4 @@ def evaluate_gene_level(
         "mean_cosine_sim_within_complex": mean_cosine_sim_within_complex,
         "silhouette_within_complex": silhouette_within_complex,
     }
+    return metrics, consistency_corum_map, consistency_manual_map

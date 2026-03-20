@@ -25,7 +25,7 @@ def _load_pos_controls() -> dict:
         return yaml.safe_load(f)
 
 
-def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame]:
+def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """Evaluate guide-level embeddings and return metrics and the activity map.
 
     Parameters
@@ -45,6 +45,8 @@ def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame]:
     activity_map : DataFrame
         Per-perturbation mAP results from ``phenotypic_activity_assesment``.
         Pass this to ``evaluate_gene_level`` to filter by active genes.
+    distinctiveness_map : DataFrame
+        Per-perturbation mAP results from ``phenotypic_distinctivness``.
     """
     # 1. Validate
     AnndataValidator().validate(adata, level="guide", strict=False)
@@ -102,4 +104,4 @@ def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame]:
         "mean_cosine_sim_within_gene": mean_cosine_sim_within_gene,
         "silhouette_within_gene": silhouette_within_gene,
     }
-    return metrics, activity_map
+    return metrics, activity_map, distinctiveness_map
