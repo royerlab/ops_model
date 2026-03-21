@@ -1,15 +1,17 @@
 model_type: dynaclr
-run_name: &run_name 'ops_bagofchannels_gene_n_reporter_grouped_reporter_256proj_10cplx_convnext_tiny_temp1p0_512bs'
+run_name: &run_name 'ops_bagofchannels_gene_n_reporter_grouped_reporter_256proj_373genes_convnext_tiny_temp0p5_512bs_lr1e-4_pretrained_self'
 dataset_type: contrastive
 
 trainer:
   max_epochs: 300
   fast_dev_run: false
   use_distributed_sampler: false
+  num_sanity_val_steps: 0
   # enable_model_summary: false
-  # limit_train_batches: 5000
-  # limit_val_batches: 500
+  limit_train_batches: 400
+  limit_val_batches: 100
   precision: "bf16-mixed"
+  gradient_clip_val: 1.0
   accelerator: "gpu"
   strategy: "auto"
   devices: 4
@@ -53,10 +55,10 @@ data_manager:
   balanced_sampling: False
   balanced_sampling_val: False
   grouped_sampling: True
-  grouped_sampling_val: True
+  grouped_sampling_val: False
   group_col: reporter
   balance_col: gene_name
-  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/labels_testset_10complex_n_NTC_v2_filtered.parquet
+  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/373genes_filtered.parquet
   contrastive_kwargs:
     positive_source: "perturbation_n_reporter"
     use_negative: False
@@ -113,12 +115,13 @@ data_manager:
     
 
 model:
-  lr: 0.0002
-  schedule: Constant
+  lr: 0.0001
+  schedule: WarmupCosine
+  warmup_epochs: 1
   log_batches_per_epoch: 8
   log_samples_per_batch: 1
   log_embeddings: True
-  temperature: 1.0
+  temperature: 0.5
   encoder:
     backbone: "convnext_tiny"
     in_channels: 1
@@ -130,4 +133,4 @@ model:
     drop_path_rate: 0.0
 
 resume_training: false
-# ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_10k_n_NTC/version_0/checkpoints/epoch=010-loss=5.254.ckpt"
+ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_373genes_convnext_tiny_temp0p1_512bs_fix_sampler/version_2/checkpoints/last.ckpt"
