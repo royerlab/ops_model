@@ -1,77 +1,18 @@
+import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import anndata as ad
+import torch
+import yaml
 import zarr
+import lightning as L
+from lightning import seed_everything
 from lightning.pytorch.callbacks import BasePredictionWriter
 from pytorch_metric_learning.losses import NTXentLoss
 from viscy.representation.contrastive import ContrastiveEncoder
 from viscy.representation.engine import ContrastiveModule
-
-# FIXME: celltype should be added to the csv or metadata file instead of hardcoding it here
-
-
-class DynaClrPredictionWriter(BasePredictionWriter):
-    def __init__(self, output_dir: str, zarr_suffix: str, write_interval):
-        super().__init__(write_interval)
-        self.output_dir = Path(output_dir)
-        self.zarr_suffix = zarr_suffix
-        self.high_count = 0
-        self.low_count = 0
-        self.metadata = {}
-
-    def setup(self, trainer, pl_module, stage):
-        if stage == "predict":
-            self.emb_store = zarr.open_group(
-                self.output_dir / f"features_{self.zarr_suffix}.zarr", mode="w"
-            )
-            self.emb_store.create_group(self.high_count)
-
-        return
-
-    def write_on_batch_end(
-        self,
-        trainer,
-        pl_module,
-        prediction,
-        batch_indices,  # index of the sample within the epoch
-        batch,
-        batch_idx,
-        dataloader_idx,
-    ):
-
-        out_dict = prediction
-        features = out_dict["features"]
-        projections = out_dict["projections"]
-
-        self.emb_store[self.high_count].create_dataset(
-            self.low_count,
-            data=features.detach().cpu().numpy(),
-            shape=features.shape,
-            chunks=(1,) + features.shape[1:],
-        )
-
-        for i in range(features.shape[0]):
-            total_index = batch["total_index"][i].detach().item()
-            self.metadata[total_index] = {
-                "position": f"{self.high_count}/{self.low_count}",
-                "batch_index": batch_indices[i],
-                "index": i,
-                "gene_label": batch["gene_label"][i].detach().item(),
-                "total_index": batch["total_index"][i].detach().item(),
-            }
-
-        self.emb_store.attrs.put(self.metadata)
-
-        self.low_count += 1
-        if self.low_count % 10 == 0:
-            self.high_count += 1
-            self.emb_store.create_group(self.high_count)
-            self.low_count = 0
-
-        return
-
 
 class DynaClrAnnDataWriter(BasePredictionWriter):
     """
@@ -140,53 +81,75 @@ class DynaClrAnnDataWriter(BasePredictionWriter):
         obs_group.attrs["encoding-type"] = "dataframe"
         obs_group.attrs["encoding-version"] = "0.2.0"
         obs_group.attrs["_index"] = "_index"
-        obs_group.attrs["column-order"] = [
+
+        # Define all obs columns with their zarr dtype and encoding type.
+        # String columns use "string-array", numeric columns use "array".
+        self._obs_string_cols = [
             "perturbation",
-            "gene_int",
             "experiment",
             "tile",
+            "barcode",
+            "sgRNA",
+            "reporter",
+            "channel",
+            "well",
+            "subpool",
+            "dep_map_gene_name",
+        ]
+        self._obs_int_cols = ["gene_int", "NCBI_ID"]
+        self._obs_float_cols = [
             "x_local",
             "y_local",
+            "x_pheno",
+            "y_pheno",
+            "gene_effect",
+            "segmentation_id",
         ]
+        obs_group.attrs["column-order"] = (
+            self._obs_string_cols + self._obs_int_cols + self._obs_float_cols
+        )
+
+        chunk_size = min(n_obs, 10000)
 
         obs_group.create_array(
             "_index",
             shape=(n_obs,),
-            chunks=(min(n_obs, 10000),),
+            chunks=(chunk_size,),
             dtype="<U32",
             fill_value="",
         )
         obs_group["_index"].attrs["encoding-type"] = "string-array"
         obs_group["_index"].attrs["encoding-version"] = "0.2.0"
 
-        for col in ["perturbation", "experiment", "tile"]:
+        for col in self._obs_string_cols:
             obs_group.create_array(
                 col,
                 shape=(n_obs,),
-                chunks=(min(n_obs, 10000),),
+                chunks=(chunk_size,),
                 dtype="<U128",
                 fill_value="",
             )
             obs_group[col].attrs["encoding-type"] = "string-array"
             obs_group[col].attrs["encoding-version"] = "0.2.0"
 
-        obs_group.create_array(
-            "gene_int",
-            shape=(n_obs,),
-            chunks=(min(n_obs, 10000),),
-            dtype="int64",
-            fill_value=0,
-        )
-        obs_group["gene_int"].attrs["encoding-type"] = "array"
-        obs_group["gene_int"].attrs["encoding-version"] = "0.2.0"
-
-        for col in ["x_local", "y_local"]:
+        for col in self._obs_int_cols:
             obs_group.create_array(
                 col,
                 shape=(n_obs,),
-                chunks=(min(n_obs, 10000),),
+                chunks=(chunk_size,),
+                dtype="int64",
+                fill_value=0,
+            )
+            obs_group[col].attrs["encoding-type"] = "array"
+            obs_group[col].attrs["encoding-version"] = "0.2.0"
+
+        for col in self._obs_float_cols:
+            obs_group.create_array(
+                col,
+                shape=(n_obs,),
+                chunks=(chunk_size,),
                 dtype="float64",
-                fill_value=0.0,
+                fill_value=np.nan,
             )
             obs_group[col].attrs["encoding-type"] = "array"
             obs_group[col].attrs["encoding-version"] = "0.2.0"
@@ -295,32 +258,51 @@ class DynaClrAnnDataWriter(BasePredictionWriter):
 
         obs = self.root["obs"]
         obs["_index"][start:end] = np.array([str(idx) for idx in total_indices])
-        obs["perturbation"][start:end] = np.array(
-            [self.labels_df.loc[idx, "gene_name"] for idx in total_indices]
-        )
         obs["gene_int"][start:end] = gene_labels
-        obs["experiment"][start:end] = np.array(
-            [self.labels_df.loc[idx, "store_key"] for idx in total_indices]
-        )
-        obs["tile"][start:end] = np.array(
-            [self.labels_df.loc[idx, "tile_pheno"] for idx in total_indices]
-        )
-        obs["x_local"][start:end] = np.array(
-            [self.labels_df.loc[idx, "x_local_pheno"] for idx in total_indices],
-            dtype="float64",
-        )
-        obs["y_local"][start:end] = np.array(
-            [self.labels_df.loc[idx, "y_local_pheno"] for idx in total_indices],
-            dtype="float64",
-        )
 
-        bbox_raw = [self.labels_df.loc[idx, "bbox"] for idx in total_indices]
+        # Mapping from zarr obs column name -> labels_df column name.
+        # Columns not listed here use the same name in both.
+        _col_map = {
+            "perturbation": "gene_name",
+            "experiment": "store_key",
+            "tile": "tile_pheno",
+            "x_local": "x_local_pheno",
+            "y_local": "y_local_pheno",
+        }
+
+        rows = self.labels_df.loc[total_indices]
+
+        for col in self._obs_string_cols:
+            src_col = _col_map.get(col, col)
+            if src_col in rows.columns:
+                vals = rows[src_col].fillna("").values.astype(str)
+            else:
+                vals = np.full(bs, "", dtype="<U128")
+            obs[col][start:end] = vals
+
+        for col in self._obs_int_cols:
+            if col == "gene_int":
+                continue  # already written above from prediction
+            src_col = _col_map.get(col, col)
+            if src_col in rows.columns:
+                obs[col][start:end] = rows[src_col].fillna(0).values.astype(np.int64)
+            else:
+                obs[col][start:end] = np.zeros(bs, dtype=np.int64)
+
+        for col in self._obs_float_cols:
+            src_col = _col_map.get(col, col)
+            if src_col in rows.columns:
+                obs[col][start:end] = rows[src_col].fillna(np.nan).values.astype(np.float64)
+            else:
+                obs[col][start:end] = np.full(bs, np.nan, dtype=np.float64)
+
+        bbox_raw = rows["bbox"].values
         if isinstance(bbox_raw[0], str):
             bbox_arr = np.array(
                 [[float(x) for x in b.strip("()").split(",")] for b in bbox_raw]
             )
         else:
-            bbox_arr = np.asarray(bbox_raw, dtype="float64")
+            bbox_arr = np.asarray(bbox_raw.tolist(), dtype="float64")
         self.root["obsm"]["bbox"][start:end] = bbox_arr
 
         if self.save_projections:
@@ -360,10 +342,10 @@ class LitDynaClr(ContrastiveModule):
     def __init__(
         self,
         encoder=None,
-        # loss_function=nn.TripletMarginLoss(margin=0.5),
         loss_function=NTXentLoss(temperature=0.07),
         lr=1e-3,
-        schedule="Constant",
+        schedule="WarmupCosine",
+        warmup_epochs=10,
         log_batches_per_epoch=8,
         log_samples_per_batch=1,
         log_embeddings=False,
@@ -372,6 +354,8 @@ class LitDynaClr(ContrastiveModule):
     ):
         if encoder is None:
             encoder = ContrastiveEncoder(**encoder_kwargs)
+
+        self.warmup_epochs = warmup_epochs
 
         super().__init__(
             encoder=encoder,
@@ -383,6 +367,33 @@ class LitDynaClr(ContrastiveModule):
             log_embeddings=log_embeddings,
             example_input_array_shape=example_input_array_shape,
         )
+
+    def _log_step_samples(self, batch_idx, samples, stage):
+        if self.trainer.is_global_zero:
+            super()._log_step_samples(batch_idx, samples, stage)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        if self.schedule == "WarmupCosine":
+            from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+            warmup = LinearLR(
+                optimizer, start_factor=0.01, total_iters=self.warmup_epochs
+            )
+            cosine = CosineAnnealingLR(
+                optimizer,
+                T_max=self.trainer.max_epochs - self.warmup_epochs,
+            )
+            scheduler = SequentialLR(
+                optimizer,
+                schedulers=[warmup, cosine],
+                milestones=[self.warmup_epochs],
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
+            }
+        return optimizer
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         """Prediction step for extracting embeddings.
@@ -402,3 +413,256 @@ class LitDynaClr(ContrastiveModule):
             "total_index": batch["total_index"],
             "gene_label": batch["gene_label"],
         }
+
+
+def extract_dynaclr_features(config: dict):
+    """
+    Run DynaCLR inference and write embeddings to an AnnData zarr store.
+
+    Mirrors the DINOv3 ``extract_dinov3_features`` interface so both models
+    can be driven from the same config-based SLURM orchestration pattern.
+
+    Parameters
+    ----------
+    config : dict
+        Parsed YAML config dict.  The ``data_manager`` block may contain
+        either ``experiments`` (dict mapping experiment name → wells, loaded
+        via ``OpsDataManager.get_labels()``) or ``labels_df_path`` (path to a
+        pre-filtered parquet/CSV).
+
+    Returns
+    -------
+    Path
+        Path to the generated AnnData zarr file.
+    """
+    from ops_model.data import data_loader
+    from monai.transforms import CenterSpatialCropd, Compose, SpatialPadd, ToTensord
+
+    seed_everything(42)
+
+    dm_cfg = config["data_manager"]
+
+    # ------------------------------------------------------------------
+    # Build labels_df — support both DINOv3-style experiments dict and
+    # the legacy labels_df_path approach.
+    # ------------------------------------------------------------------
+    if "labels_df_path" in dm_cfg:
+        labels_path = dm_cfg["labels_df_path"]
+        if labels_path.endswith(".parquet"):
+            labels_df = pd.read_parquet(labels_path)
+        else:
+            labels_df = pd.read_csv(labels_path, low_memory=False)
+        labels_df.set_index("total_index", inplace=True, drop=False)
+        experiment_dict = {exp: [] for exp in labels_df["store_key"].unique().tolist()}
+    else:
+        experiment_dict = dm_cfg["experiments"]
+        data_manager_tmp = data_loader.OpsDataManager(
+            experiments=experiment_dict,
+            batch_size=dm_cfg["batch_size"],
+            data_split=tuple(dm_cfg.get("data_split", [0.0, 0.0, 1.0])),
+            out_channels=dm_cfg.get("out_channels", None),
+            initial_yx_patch_size=tuple(dm_cfg["initial_yx_patch_size"]),
+            final_yx_patch_size=tuple(dm_cfg["final_yx_patch_size"]),
+        )
+        labels_df = data_manager_tmp.get_labels()
+
+        # BasicDataset requires a 'channel' column. If out_channels is specified,
+        # expand each cell row into one row per channel so all channels are embedded.
+        out_channels = dm_cfg.get("out_channels")
+        if out_channels and "channel" not in labels_df.columns:
+            labels_df = pd.concat(
+                [labels_df.assign(channel=ch) for ch in out_channels],
+                ignore_index=True,
+            )
+            labels_df["total_index"] = np.arange(len(labels_df))
+
+        labels_df.set_index("total_index", inplace=True, drop=False)
+
+    # ------------------------------------------------------------------
+    # Data manager + dataloader
+    # ------------------------------------------------------------------
+    data_manager = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=dm_cfg["batch_size"],
+        data_split=tuple(dm_cfg.get("data_split", [0.0, 0.0, 1.0])),
+        out_channels=dm_cfg.get("out_channels", None),
+        initial_yx_patch_size=tuple(dm_cfg["initial_yx_patch_size"]),
+        final_yx_patch_size=tuple(dm_cfg["final_yx_patch_size"]),
+    )
+
+    basic_kwargs = {
+        "cell_masks": dm_cfg.get("cell_masks", False),
+        "transform": Compose(
+            [
+                SpatialPadd(
+                    keys=["data", "mask"],
+                    spatial_size=data_manager.initial_yx_patch_size,
+                ),
+                CenterSpatialCropd(
+                    keys=["data", "mask"],
+                    roi_size=data_manager.final_yx_patch_size,
+                ),
+                ToTensord(keys=["data", "mask"]),
+            ]
+        ),
+    }
+
+    data_manager.construct_dataloaders(
+        labels_df=labels_df,
+        num_workers=dm_cfg["num_workers"],
+        pin_memory=dm_cfg.get("pin_memory", True),
+        prefetch_factor=dm_cfg.get("prefetch_factor", 2),
+        dataset_type="basic",
+        basic_kwargs=basic_kwargs,
+    )
+    test_loader = data_manager.test_loader
+    print(f"Created dataset with {len(test_loader.dataset)} crops")
+
+    # ------------------------------------------------------------------
+    # Load model
+    # ------------------------------------------------------------------
+    model_config = config["model"].copy()
+    encoder_config = model_config.pop("encoder")
+    temperature = model_config.pop("temperature")
+
+    lit_model = LitDynaClr.load_from_checkpoint(
+        config["ckpt_path"],
+        loss_function=NTXentLoss(temperature=temperature),
+        **model_config,
+        **encoder_config,
+    )
+    lit_model.eval()
+    lit_model.freeze()
+    print("DynaCLR model loaded")
+
+    # ------------------------------------------------------------------
+    # Prediction writer + trainer
+    # ------------------------------------------------------------------
+    prediction_cfg = config.get("prediction", {})
+    embedding_type = f"{config['model_type']}_{config['run_name']}"
+
+    writer = DynaClrAnnDataWriter(
+        output_dir=prediction_cfg["output_dir"],
+        run_name=config["run_name"],
+        labels_df=labels_df,
+        save_features=prediction_cfg.get("save_features", True),
+        save_projections=prediction_cfg.get("save_projections", False),
+        cell_type=config.get("cell_type"),
+        embedding_type=embedding_type,
+    )
+
+    trainer_cfg = config.get("trainer", {})
+    trainer = L.Trainer(
+        accelerator=trainer_cfg.get("accelerator", "gpu"),
+        devices=trainer_cfg.get("devices", 1),
+        precision=trainer_cfg.get("precision", "32-true"),
+        callbacks=[writer],
+        logger=False,
+    )
+
+    print(f"Running prediction on {len(test_loader.dataset)} samples...")
+    trainer.predict(lit_model, dataloaders=test_loader)
+
+    output_path = (
+        Path(prediction_cfg["output_dir"])
+        / f"dynaclr_embeddings_{config['run_name']}.zarr"
+    )
+    print(f"\nPrediction complete! Output saved to:\n{output_path}")
+    return output_path
+
+
+def dynaclr_main(config_path: str):
+    """
+    Main orchestrator for DynaCLR feature extraction.
+
+    Submits a SLURM job via submitit that calls ``extract_dynaclr_features``.
+    Mirrors the ``dinov3_main`` pattern so both models share the same
+    config-driven submission workflow.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to YAML configuration file.
+
+    Returns
+    -------
+    submitit.Job
+        The submitted SLURM job object.
+    """
+    import submitit
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    experiments = list(
+        config["data_manager"].get(
+            "experiments", {"unknown": []}
+        ).keys()
+    )
+    output_dir = Path(config["prediction"]["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    slurm_cfg = config.get("slurm", {})
+    partition = slurm_cfg.get("partition", "gpu")
+    gres = slurm_cfg.get("gres", "gpu:1")
+    cpus_per_task = slurm_cfg.get("cpus_per_task", 20)
+    mem = slurm_cfg.get("mem", "64G")
+    time_limit = slurm_cfg.get("time", "6:00:00")
+    constraint = slurm_cfg.get("constraint", "h100|h200|a100|a40")
+
+    mem_gb = int(mem.rstrip("G")) if isinstance(mem, str) else int(mem)
+
+    if isinstance(time_limit, int):
+        timeout_min = time_limit
+    elif isinstance(time_limit, str):
+        parts = time_limit.split(":")
+        if len(parts) == 3:
+            timeout_min = int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 2:
+            timeout_min = int(parts[0])
+        else:
+            timeout_min = 360
+    else:
+        timeout_min = 360
+
+    exp_tag = experiments[0].split("_")[0] if experiments else "dynaclr"
+    log_dir = Path("slurm_logs") / "slurm_dynaclr_inference" / (experiments[0] if experiments else "run")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    executor = submitit.AutoExecutor(folder=log_dir)
+    executor.update_parameters(
+        timeout_min=timeout_min,
+        slurm_partition=partition,
+        slurm_gres=gres,
+        cpus_per_task=cpus_per_task,
+        mem_gb=mem_gb,
+        slurm_constraint=constraint,
+        slurm_job_name=f"dynaclr_{exp_tag}",
+    )
+
+    print(f"Submitting DynaCLR inference job for experiment(s): {experiments}")
+    print(f"Output directory: {output_dir}")
+
+    job = executor.submit(extract_dynaclr_features, config=config)
+    print(f"Submitted job {job.job_id}")
+    print("Check status with 'squeue -u $USER'")
+
+    return job
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="Extract DynaCLR features from OPS dataset based on config"
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        required=True,
+        help="Path to the YAML config file",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = _parse_args()
+    dynaclr_main(config_path=args.config_path)

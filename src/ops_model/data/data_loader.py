@@ -80,11 +80,12 @@ class GroupedBatchSampler(BatchSampler):
         self.group_indices = {}
         self.group_weights_per_group = {}
 
+        # Build a vectorized label->positional map once for all groups
+        label_to_pos = np.arange(len(df))
+        pos_by_label = pd.Series(label_to_pos, index=df.index)
+
         for group_val, group_df in df.groupby(group_col):
-            indices = group_df.index.to_numpy()
-            positional = np.array(
-                [df.index.get_loc(idx) for idx in indices]
-            )
+            positional = pos_by_label.loc[group_df.index].to_numpy()
             self.group_indices[group_val] = positional
 
             class_counts = group_df[balance_col].value_counts().to_dict()
@@ -95,13 +96,15 @@ class GroupedBatchSampler(BatchSampler):
             self.group_weights_per_group[group_val] = weights
 
         self.groups = list(self.group_indices.keys())
-        group_sizes = np.array(
-            [len(self.group_indices[g]) for g in self.groups]
-        )
-        self.group_probs = group_sizes / group_sizes.sum()
+        self.group_probs = np.ones(len(self.groups)) / len(self.groups)
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
 
     def __iter__(self):
-        rng = np.random.RandomState()
+        # Seed with epoch + rank so each rank gets a different but reproducible sequence
+        rng = np.random.RandomState(self.epoch + self.rank)
         for _ in range(self.num_batches):
             group = rng.choice(self.groups, p=self.group_probs)
             indices = self.group_indices[group]
@@ -695,6 +698,81 @@ class CellProfileDataset(BaseDataset):
         return batch
 
 
+class DistributedTwoStageClassBalancedSampler(torch.utils.data.Sampler):
+    """DDP-aware class-balanced sampler using two-stage sampling.
+
+    Stage 1: sample a class uniformly (e.g. gene_name or reporter).
+    Stage 2: sample a cell uniformly from that class.
+
+    This is equivalent to WeightedRandomSampler(weight=1/class_count) but
+    operates on vectors of length num_classes instead of num_cells, avoiding
+    the torch.multinomial 2^24 category limit entirely.
+
+    Indices are generated globally then sharded by rank, matching the behavior
+    of torch.utils.data.distributed.DistributedSampler. Use with
+    ``use_distributed_sampler: false`` in the Lightning trainer config.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataframe for this split (train or val).
+    balance_col : str
+        Column to balance across (e.g. 'gene_name' or 'reporter').
+    num_samples : int
+        Total number of indices to yield across all ranks per epoch.
+        Must be divisible by world_size.
+    rank : int
+        Rank of the current process.
+    world_size : int
+        Total number of processes.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        balance_col: str,
+        num_samples: int,
+        rank: int,
+        world_size: int,
+    ):
+        self.rank = rank
+        self.world_size = world_size
+        self.num_samples_per_rank = num_samples // world_size
+        self.total_size = self.num_samples_per_rank * world_size
+        self.epoch = 0
+
+        self.classes = df[balance_col].unique().tolist()
+        # Store as numpy arrays for vectorized sampling
+        col_values = df[balance_col].values
+        self._class_indices_arr = [
+            np.where(col_values == cls)[0] for cls in self.classes
+        ]
+        self.class_indices = {
+            cls: self._class_indices_arr[i]
+            for i, cls in enumerate(self.classes)
+        }
+
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+
+    def __iter__(self):
+        rng = np.random.RandomState(self.epoch)
+        # Stage 1: sample class indices uniformly
+        class_draws = rng.randint(0, len(self.classes), size=self.total_size)
+        # Stage 2: for each class draw, sample one cell from that class's pool
+        indices = np.array([
+            pool[rng.randint(0, len(pool))]
+            for pool, _ in (
+                (self._class_indices_arr[c], None) for c in class_draws
+            )
+        ])
+        # Shard by rank
+        return iter(indices[self.rank : self.total_size : self.world_size].tolist())
+
+    def __len__(self):
+        return self.num_samples_per_rank
+
+
 class OpsDataManager:
     def __init__(
         self,
@@ -743,7 +821,7 @@ class OpsDataManager:
             for w in wells:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
-                labels_path = OpsPaths(exp_name, well=w).links["training"]
+                labels_path = str(OpsPaths(exp_name, well=w).links["training"])
                 if labels_path.endswith(".parquet"):
                     labels_tmp = pd.read_parquet(labels_path)
                 else:
@@ -794,33 +872,24 @@ class OpsDataManager:
 
         return stores
 
-    def balanced_sample_weights(self, df: pd.DataFrame, balance_col: str = "gene_name"):
-        """
-        Needs to be run on the individual train/val/test dataframes, becuase the
-        entries get shuffled during splitting.
-        """
-        class_counts = df[balance_col].value_counts().to_dict()
-        class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
-        sample_weights = np.array(
-            [class_weights[gene_name] for gene_name in df[balance_col]]
-        )
-
-        return sample_weights
-
     def create_sampler(
         self, df: pd.DataFrame, balanced: bool, balance_col: str = "gene_name"
     ):
-        if not balanced:
-            return None
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
 
-        sample_weights = self.balanced_sample_weights(df, balance_col=balance_col)
-
-        sampler = torch.utils.data.WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),  # total samples per epoch
-            replacement=True,
+        # Size the sampler to what will actually be consumed per epoch.
+        # Using len(df) would generate tens of millions of indices upfront
+        # even when limit_train_batches truncates most of them.
+        num_samples = min(len(df), self.batch_size * 8192)
+        num_samples = num_samples - (num_samples % world_size)
+        return DistributedTwoStageClassBalancedSampler(
+            df=df,
+            balance_col=balance_col,
+            num_samples=num_samples,
+            rank=rank,
+            world_size=world_size,
         )
-        return sampler
 
     @staticmethod
     def worker_init_fn(worker_id):
