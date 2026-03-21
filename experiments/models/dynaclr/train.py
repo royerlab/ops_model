@@ -50,7 +50,9 @@ def train(config_path):
         prefetch_factor=config["data_manager"].get("prefetch_factor", 2),
         labels_df=labels_df,
         balanced_sampling=config["data_manager"].get("balanced_sampling", True),
-        balanced_sampling_val=config["data_manager"].get("balanced_sampling_val", False),
+        balanced_sampling_val=config["data_manager"].get(
+            "balanced_sampling_val", False
+        ),
         balance_col=config["data_manager"].get("balance_col", "reporter"),
         grouped_sampling=config["data_manager"].get("grouped_sampling", False),
         grouped_sampling_val=config["data_manager"].get("grouped_sampling_val", False),
