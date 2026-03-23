@@ -14,31 +14,36 @@ Phase 2  One aggregation job -- load per-signal h5ads, hconcat, NTC-normalize, s
 
 ROOT = /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_all
 
-8 variants — feature type × channel subset
-------------------------------------------
+12 variants — feature type × channel subset
+-------------------------------------------
 Each variant produces an independent output subtree and can be compared via
 compare_map_scores.py.  Replace --slurm with --aggregate-only --slurm to re-run
 Phase 2 only (e.g. after code changes) without redoing the PCA sweeps.
 
-  Variant                  Flags                                    Output subdir
-  ──────────────────────── ──────────────────────────────────────── ─────────────────────────
-  DINO        all          --slurm                                  dino/all/
-  DINO        phase-only   --phase-only --slurm                     dino/phase_only/
-  DINO        no-phase     --no-phase --slurm                       dino/no_phase/
-  DINO        downsampled  --downsampled --slurm                    dino/downsampled/
-  CellProfiler all         --cell-profiler --slurm                  cellprofiler/all/
-  CellProfiler phase-only  --phase-only --cell-profiler --slurm     cellprofiler/phase_only/
-  CellProfiler no-phase    --no-phase --cell-profiler --slurm       cellprofiler/no_phase/
-  CellProfiler downsampled --downsampled --cell-profiler --slurm    cellprofiler/downsampled/
+  Variant                           Flags                                              Output subdir
+  ───────────────────────────────── ────────────────────────────────────────────────── ─────────────────────────────────
+  DINO        all                   --slurm                                            dino/all/
+  DINO        phase-only            --phase-only --slurm                               dino/phase_only/
+  DINO        no-phase              --no-phase --slurm                                 dino/no_phase/
+  DINO        downsampled           --downsampled --slurm                              dino/downsampled/
+  DINO        phase-only-ds         --phase-only --downsampled --slurm                 dino/phase_only_downsampled/
+  DINO        no-phase-ds           --no-phase --downsampled --slurm                   dino/no_phase_downsampled/
+  CellProfiler all                  --cell-profiler --slurm                            cellprofiler/all/
+  CellProfiler phase-only           --phase-only --cell-profiler --slurm               cellprofiler/phase_only/
+  CellProfiler no-phase             --no-phase --cell-profiler --slurm                 cellprofiler/no_phase/
+  CellProfiler downsampled          --downsampled --cell-profiler --slurm              cellprofiler/downsampled/
+  CellProfiler phase-only-ds        --phase-only --downsampled --cell-profiler --slurm cellprofiler/phase_only_downsampled/
+  CellProfiler no-phase-ds          --no-phase --downsampled --cell-profiler --slurm   cellprofiler/no_phase_downsampled/
 
   Channel subsets:
     (default)    all fluorescent + phase channels, all cells pooled per signal group
     --phase-only label-free brightfield (Phase) only
     --no-phase   fluorescent channels only (excludes Phase)
-    --downsampled all channels but cells equalised across signal groups (floor 750k/group)
+    --downsampled cells equalised across signal groups (floor 750k/group, top 3 exps per signal)
+    Combine --phase-only/--no-phase with --downsampled for filtered + downsampled variants.
 
   Append --aggregate-only to re-run Phase 2 only (e.g. after code changes).
-  Use run_aggregate_all.sh to submit all 8 --aggregate-only jobs in parallel.
+  Use run_aggregate_all.sh to submit all 12 --aggregate-only jobs in parallel.
 
 Output structure
 ----------------
@@ -251,16 +256,22 @@ def _save_sweep_outputs(
         X=X_reduced, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
     )
 
+    out_subdir = output_dir / subdir
+    out_subdir.mkdir(parents=True, exist_ok=True)
+
+    # Save full cell-level h5ad (PCA-reduced) for downstream titration analysis
+    adata_cells.obs["signal"] = signal
+    adata_cells.write_h5ad(out_subdir / f"{file_prefix}_cells.h5ad")
+
     # Save a subsampled cell-level h5ad for cross-signal UMAP/PHATE
     n_sub = min(25000, adata_cells.n_obs)
     sub_idx = rng.choice(adata_cells.n_obs, n_sub, replace=False)
     sub_idx.sort()
     cells_sub = adata_cells[sub_idx].copy()
-    cells_sub.obs["signal"] = signal
-    out_subdir = output_dir / subdir
-    out_subdir.mkdir(parents=True, exist_ok=True)
     cells_sub.write_h5ad(out_subdir / f"{file_prefix}_cells_sub.h5ad")
     del cells_sub
+    # Remove signal col before aggregation (not needed and may interfere)
+    adata_cells.obs = adata_cells.obs.drop(columns=["signal"])
 
     # Drop specified columns before aggregation (e.g. 'experiment' for copairs compatibility)
     if drop_obs_cols:
@@ -378,10 +389,140 @@ def pca_sweep_pooled_signal(
     if n_cells_pooled == 0:
         return f"FAILED: {signal} — no cell data found for any experiment"
 
-    actual_target = min(target_n_cells, n_cells_pooled)
-    _logger.info(f"  Total pooled: {n_cells_pooled:,} cells, target: {actual_target:,}")
+    # When downsampling and >2 experiments contribute to a signal group, use
+    # the fewest experiments needed to reach target_n_cells (starting from the
+    # largest).  Spreading a fixed cell budget across many batches lets batch
+    # effects overwhelm the signal.
+    #
+    # ⚠ HARDCODE: For the "Phase" signal group, force ops0094 first then ops0100.
+    # These were manually selected as the highest-quality Phase experiments.
+    _PHASE_PREFERRED_ORDER = ("ops0094", "ops0100")
 
-    # --- Pass 2: Load one experiment at a time, subsample, collect raw arrays ---
+    if len(exp_cell_counts) > 2 and n_cells_pooled > target_n_cells:
+        if signal == "Phase":
+            _logger.warning("  ⚠ HARDCODED EXPERIMENT ORDER FOR PHASE: %s — update pca_optimization.py to change",
+                            _PHASE_PREFERRED_ORDER)
+            # Put preferred experiments first (in order), then the rest ranked by cell count
+            preferred = []
+            remainder = []
+            for pair in exp_cell_counts:
+                exp_short = pair[0].split("_")[0]
+                if exp_short in _PHASE_PREFERRED_ORDER:
+                    preferred.append(pair)
+                else:
+                    remainder.append(pair)
+            preferred.sort(key=lambda p: _PHASE_PREFERRED_ORDER.index(p[0].split("_")[0]))
+            remainder.sort(key=lambda p: exp_cell_counts[p], reverse=True)
+            ranked = preferred + remainder
+        else:
+            ranked = sorted(exp_cell_counts, key=exp_cell_counts.get, reverse=True)
+        kept = []
+        running_total = 0
+        for pair in ranked:
+            kept.append(pair)
+            running_total += exp_cell_counts[pair]
+            if running_total >= target_n_cells:
+                break
+        dropped = set(exp_cell_counts) - set(kept)
+        for d in sorted(dropped, key=lambda k: exp_cell_counts[k], reverse=True):
+            _logger.info(f"  Dropping {d[0].split('_')[0]}/{d[1]} ({exp_cell_counts[d]:,} cells) — enough cells from top {len(kept)} experiments")
+        exp_cell_counts = {k: v for k, v in exp_cell_counts.items() if k in set(kept)}
+        n_cells_pooled = sum(exp_cell_counts.values())
+        _logger.info(f"  Kept {len(kept)} of {len(ranked)} experiments ({n_cells_pooled:,} cells >= {target_n_cells:,} target)")
+
+    actual_target = min(target_n_cells, n_cells_pooled)
+    _logger.info(f"  Total pooled: {n_cells_pooled:,} cells ({len(exp_cell_counts)} experiments), target: {actual_target:,}")
+
+    # --- Pass 2a (CellProfiler only): Deduplicate, normalize, and intersect features ---
+    # CellProfiler feature names embed the channel name (e.g. single_object_SEC61B_cell_Area).
+    # Different experiments may use different channel name formatting for the same reporter,
+    # causing spurious feature mismatches.  We:
+    #   1. Deduplicate: keep only the highest-feature h5ad per (experiment_short, signal).
+    #   2. Normalize: strip channel name from single_object_* features.
+    #   3. Intersect all remaining experiments to get common features.
+    is_cellprofiler = feature_dir_override and "cell-profiler" in feature_dir_override
+    common_var_names = None
+    # Maps normalized feature name -> original feature name (per experiment, populated during load)
+    _cp_norm_to_raw: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if is_cellprofiler:
+        _logger.info("  CellProfiler mode: pre-scanning feature names...")
+
+        # Step 1: Scan all experiments and collect raw + normalized feature names
+        _exp_var_raw: Dict[Tuple[str, str], List[str]] = {}
+        for exp, ch in exp_channel_pairs:
+            if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
+                continue
+            adata_tmp = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
+            if adata_tmp is not None:
+                _exp_var_raw[(exp, ch)] = list(adata_tmp.var_names)
+                del adata_tmp
+
+        # Step 2: Deduplicate — keep only the h5ad with the most features per experiment
+        _best_per_exp: Dict[str, Tuple[str, str]] = {}  # exp_short -> (exp, ch) with most features
+        for (exp, ch), var_list in _exp_var_raw.items():
+            exp_short = exp.split("_")[0]
+            prev = _best_per_exp.get(exp_short)
+            if prev is None or len(var_list) > len(_exp_var_raw[prev]):
+                _best_per_exp[exp_short] = (exp, ch)
+        # Drop duplicates
+        dedup_keys = set(_best_per_exp.values())
+        for key in list(_exp_var_raw.keys()):
+            if key not in dedup_keys:
+                _logger.info(
+                    f"  Dedup: dropping {key[0].split('_')[0]}/{key[1]} "
+                    f"({len(_exp_var_raw[key])} feat) — keeping "
+                    f"{_best_per_exp[key[0].split('_')[0]][1]} "
+                    f"({len(_exp_var_raw[_best_per_exp[key[0].split('_')[0]]])} feat)"
+                )
+                del _exp_var_raw[key]
+                if key in exp_cell_counts:
+                    del exp_cell_counts[key]
+
+        if not _exp_var_raw:
+            return f"FAILED: {signal} — no CellProfiler experiments after deduplication"
+
+        # Step 3: Normalize channel names in feature names
+        def _normalize_cp_var(var_name: str, channel: str) -> str:
+            """Replace channel name in single_object features with __CHANNEL__."""
+            if not var_name.startswith("single_object_"):
+                return var_name
+            rest = var_name[len("single_object_"):]
+            # Try exact channel, then stripped (no underscores/hyphens)
+            for ch_variant in [channel, channel.replace("_", "").replace("-", "")]:
+                if rest.startswith(ch_variant):
+                    return "single_object___CHANNEL__" + rest[len(ch_variant):]
+            return var_name
+
+        _exp_var_norm: Dict[Tuple[str, str], set] = {}
+        for (exp, ch), raw_list in _exp_var_raw.items():
+            norm_set = set()
+            norm_map = {}  # normalized -> raw
+            for v in raw_list:
+                nv = _normalize_cp_var(v, ch)
+                norm_set.add(nv)
+                norm_map[nv] = v
+            _exp_var_norm[(exp, ch)] = norm_set
+            _cp_norm_to_raw[(exp, ch)] = norm_map
+
+        # Step 4: Intersect all normalized feature sets
+        common_var_norm = set.intersection(*_exp_var_norm.values())
+        sizes = {len(v) for v in _exp_var_norm.values()}
+        if len(sizes) > 1:
+            _logger.warning(f"  CellProfiler normalized feature counts vary: {sizes}")
+        _logger.info(
+            f"  CellProfiler: {len(_exp_var_norm)} experiments, "
+            f"{len(common_var_norm)} common features (after dedup + normalization)"
+        )
+
+        # common_var_names holds normalized names; Pass 2b uses _cp_norm_to_raw
+        # to map back to raw names per experiment.
+        common_var_names = common_var_norm  # set of normalized names
+
+        # Recalculate pooled count after dropping
+        n_cells_pooled = sum(exp_cell_counts.values())
+        actual_target = min(target_n_cells, n_cells_pooled)
+
+    # --- Pass 2b: Load one experiment at a time, subsample, collect raw arrays ---
     X_blocks = []       # list of np arrays
     obs_blocks = []     # list of DataFrames
     n_vars_expected = None
@@ -397,7 +538,18 @@ def pca_sweep_pooled_signal(
         if adata is None:
             continue
 
-        # Skip experiments with mismatched feature counts
+        # CellProfiler: subset to common normalized features using per-exp raw name mapping
+        if is_cellprofiler and common_var_names is not None:
+            norm_to_raw = _cp_norm_to_raw.get((exp, ch), {})
+            # Map normalized common names back to this experiment's raw names
+            raw_cols = [norm_to_raw[nv] for nv in sorted(common_var_names) if nv in norm_to_raw]
+            if not raw_cols:
+                _logger.warning(f"  SKIPPING {exp.split('_')[0]}/{ch}: no common features after normalization")
+                del adata
+                continue
+            adata = adata[:, raw_cols].copy()
+            # Rename to normalized names so all experiments share identical var_names
+            adata.var_names = pd.Index([nv for nv in sorted(common_var_names) if nv in norm_to_raw])
         if n_vars_expected is None:
             n_vars_expected = adata.n_vars
             var_names = list(adata.var_names)
@@ -546,14 +698,29 @@ def pca_sweep_pooled_signal(
 # Phase 2: Aggregation sub-steps (used by aggregate_channels)
 # =============================================================================
 
+def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of activity_map with all perturbations marked as active.
+
+    Used to compute unfiltered metrics (distinctiveness, CORUM, CHAD) on all
+    genes rather than only the active subset.
+    """
+    fake = activity_map.copy()
+    fake["below_corrected_p"] = True
+    return fake
+
+
 def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=10_000):
     """Score all 4 phenotypic metrics for one reporter's guide h5ad.
 
     Uses a smaller null_size than the aggregate run for speed.
-    Returns dict with activity, auc, distinctiveness, corum, chad (NaN on failure).
+    Returns dict with activity, auc, distinctiveness, corum, chad,
+    and unfiltered variants: distinctiveness_all, corum_all, chad_all (NaN on failure).
     """
     import math
-    result = {k: math.nan for k in ("activity", "auc", "distinctiveness", "corum", "chad")}
+    result = {k: math.nan for k in (
+        "activity", "auc", "distinctiveness", "corum", "chad",
+        "distinctiveness_all", "corum_all", "chad_all",
+    )}
     try:
         from ops_utils.analysis.map_scores import (
             phenotypic_activity_assesment,
@@ -587,6 +754,24 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=10_000
             e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True,
         )
         result["chad"] = float(chad_ratio)
+
+        # Unfiltered metrics — all genes treated as active
+        all_active_map = _make_all_active_map(activity_map)
+
+        _, dist_all = phenotypic_distinctivness(
+            g_norm, all_active_map, plot_results=False, null_size=null_size,
+        )
+        result["distinctiveness_all"] = float(dist_all)
+
+        _, corum_all = phenotypic_consistency_corum(
+            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True,
+        )
+        result["corum_all"] = float(corum_all)
+
+        _, chad_all = phenotypic_consistency_manual_annotation(
+            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True,
+        )
+        result["chad_all"] = float(chad_all)
 
     except Exception as exc:
         _logger.warning(f"  Per-reporter metrics scoring failed: {exc}")
@@ -639,11 +824,16 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger):
             "distinctiveness": reporter_metrics["distinctiveness"],
             "corum":           reporter_metrics["corum"],
             "chad":            reporter_metrics["chad"],
+            "distinctiveness_all": reporter_metrics["distinctiveness_all"],
+            "corum_all":           reporter_metrics["corum_all"],
+            "chad_all":            reporter_metrics["chad_all"],
         })
         _logger.info(
             f"  {sig}: {g.n_obs} guides x {g.n_vars} PCs @ {g.uns.get('pca_threshold', '?')} | "
             f"act={reporter_metrics['activity']:.1%} dist={reporter_metrics['distinctiveness']:.1%} "
-            f"corum={reporter_metrics['corum']:.1%} chad={reporter_metrics['chad']:.1%}"
+            f"corum={reporter_metrics['corum']:.1%} chad={reporter_metrics['chad']:.1%} | "
+            f"all: dist={reporter_metrics['distinctiveness_all']:.1%} "
+            f"corum={reporter_metrics['corum_all']:.1%} chad={reporter_metrics['chad_all']:.1%}"
         )
 
     return guide_blocks or None, gene_blocks, report_rows, total_cells
@@ -955,9 +1145,45 @@ def aggregate_channels(
     dist_map, dist_ratio = _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger)
     corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger)
 
-    # Per-reporter bar chart with all 4 aggregate baselines
+    # Per-reporter bar chart with all 4 aggregate baselines (active-only)
     plot_channel_peaks_bar(report_rows, r, plots_dir, plt, _logger,
                            dist_ratio=dist_ratio, corum_ratio=corum_ratio, chad_ratio=chad_ratio)
+
+    # Per-reporter bar chart — unfiltered (all genes, not just active)
+    # Compute unfiltered aggregate baselines using all-active map
+    all_active_map = _make_all_active_map(activity_map) if activity_map is not None else None
+    dist_ratio_all, corum_ratio_all, chad_ratio_all = None, None, None
+    if all_active_map is not None:
+        try:
+            from ops_utils.analysis.map_scores import (
+                phenotypic_distinctivness,
+                phenotypic_consistency_corum,
+                phenotypic_consistency_manual_annotation,
+            )
+            _, dist_ratio_all = phenotypic_distinctivness(
+                adata_guide, all_active_map, plot_results=False, null_size=100_000,
+            )
+            _, corum_ratio_all = phenotypic_consistency_corum(
+                adata_gene, all_active_map, plot_results=False, cache_similarity=True,
+            )
+            _, chad_ratio_all = phenotypic_consistency_manual_annotation(
+                adata_gene, all_active_map, plot_results=False, cache_similarity=True,
+            )
+            _logger.info(f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}")
+        except Exception as e:
+            _logger.warning(f"  Unfiltered aggregate baselines failed: {e}")
+
+    # Build report rows remapped to the _all columns for the unfiltered plot
+    unfiltered_rows = []
+    for row in report_rows:
+        r2 = dict(row)
+        r2["distinctiveness"] = r2.get("distinctiveness_all", float("nan"))
+        r2["corum"] = r2.get("corum_all", float("nan"))
+        r2["chad"] = r2.get("chad_all", float("nan"))
+        unfiltered_rows.append(r2)
+    plot_channel_peaks_bar(unfiltered_rows, r, plots_dir, plt, _logger,
+                           dist_ratio=dist_ratio_all, corum_ratio=corum_ratio_all, chad_ratio=chad_ratio_all,
+                           filename="per_channel_peaks_all_genes.png")
 
     # Bar charts for all 4 metrics (per-perturbation mAP)
     plot_metric_map_bar(activity_map, "Activity", "perturbation", r, plots_dir, plt, _logger)
@@ -1125,6 +1351,14 @@ def _handle_downsampled(args, output_dir, cp_override):
     ds_output_dir = output_dir
     ds_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # --clean: wipe stale per-signal h5ads so Phase 1 runs from scratch
+    if getattr(args, "clean", False):
+        import shutil
+        per_signal_dir = ds_output_dir / "per_signal"
+        if per_signal_dir.exists():
+            print(f"--clean: removing {per_signal_dir}")
+            shutil.rmtree(per_signal_dir)
+
     all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
     if not all_pairs:
         print("No experiment-channel pairs found!")
@@ -1258,7 +1492,7 @@ def _handle_downsampled(args, output_dir, cp_override):
 
     if phase_jobs:
         phase_memory = getattr(args, "phase_memory", "600GB")
-        phase_slurm_params = {**slurm_params, "mem": phase_memory}
+        phase_slurm_params = {**slurm_params, "mem": phase_memory, "timeout_min": 60}
         print(f"\nSubmitting {len(phase_jobs)} Phase SLURM job(s) ({phase_memory} memory)...")
         result_phase = submit_parallel_jobs(
             jobs_to_submit=phase_jobs, experiment="pca_ds_optimization_phase",
@@ -1323,6 +1557,8 @@ def _build_parser():
                         help="SLURM memory for aggregation job (default: 500GB)")
     parser.add_argument("--slurm-agg-time", type=int, default=60,
                         help="SLURM time limit for aggregation job in minutes (default: 60)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Delete existing per_signal/ directory before Phase 1 to ensure a fresh run.")
     parser.add_argument("--aggregate-only", action="store_true",
                         help="Only run Phase 2 aggregation (skips PCA sweeps, reads existing per_signal/ h5ads).")
     parser.add_argument("--umap-only", action="store_true",
@@ -1357,18 +1593,20 @@ def main():
     else:
         output_dir = output_dir / "dino"
 
-    # Nest under channel-subset subdir; default (no filter) goes to all/
-    if args.phase_only:
-        if args.downsampled:
-            print("ERROR: --phase-only is not compatible with --downsampled.")
-            return
+    # Nest under channel-subset subdir
+    if args.phase_only and args.downsampled:
+        output_dir = output_dir / "phase_only_downsampled"
+        args.phase_filter = "phase_only"
+        print(f"Phase-only downsampled mode: output → {output_dir}")
+    elif args.no_phase and args.downsampled:
+        output_dir = output_dir / "no_phase_downsampled"
+        args.phase_filter = "no_phase"
+        print(f"No-phase downsampled mode: output → {output_dir}")
+    elif args.phase_only:
         output_dir = output_dir / "phase_only"
         args.phase_filter = "phase_only"
         print(f"Phase-only mode: output → {output_dir}")
     elif args.no_phase:
-        if args.downsampled:
-            print("ERROR: --no-phase is not compatible with --downsampled.")
-            return
         output_dir = output_dir / "no_phase"
         args.phase_filter = "no_phase"
         print(f"No-phase mode: output → {output_dir}")
