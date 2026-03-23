@@ -36,7 +36,7 @@ dependencies = [
     "cytoself @ git+https://github.com/royerlab/cytoself.git@version_1.5",
     "pytorch-metric-learning",
     "cp-measure",
-    "iohub==0.3.0a6",
+    "iohub>=0.3.0a7",
     "viscy",
     "monai",
     "diffusers[torch]",
