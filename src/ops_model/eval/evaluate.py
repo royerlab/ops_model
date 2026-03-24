@@ -295,22 +295,22 @@ def run_inference(
             log_embeddings=config["model"]["log_embeddings"],
             **config["model"].get("encoder", {}),
         )
-        pred_writer = dynaclr.DynaClrPredictionWriter
+        output_dir = f"/hpc/projects/intracellular_dashboard/ops/models/predictions/{model_type}"
+        labels_df = data_manager.labels_df.set_index("total_index")
+        pred_writer = dynaclr.DynaClrAnnDataWriter(
+            output_dir=output_dir,
+            run_name=run_name,
+            labels_df=labels_df,
+        )
 
     trainer = L.Trainer(
         devices=1,
         accelerator="gpu",
-        callbacks=[
-            pred_writer(
-                output_dir=f"/hpc/projects/intracellular_dashboard/ops/models/predictions/{model_type}",
-                zarr_suffix=run_name,
-                write_interval="batch",
-            )
-        ],
+        callbacks=[pred_writer],
     )
     predictions = trainer.predict(lit_model, dataloaders=test_loader)
 
-    return f"/hpc/projects/intracellular_dashboard/ops/models/predictions/{model_type}/features_{run_name}.zarr"
+    return f"{output_dir}/dynaclr_embeddings_{run_name}.zarr"
 
 
 def evaluate(config_path, num_samples: int = 1000, run_predict: bool = False):

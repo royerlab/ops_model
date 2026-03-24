@@ -372,6 +372,18 @@ class LitDynaClr(ContrastiveModule):
         if self.trainer.is_global_zero:
             super()._log_step_samples(batch_idx, samples, stage)
 
+    def on_train_epoch_end(self):
+        if self.trainer.is_global_zero:
+            super().on_train_epoch_end()
+        else:
+            self.training_step_outputs.clear()
+
+    def on_validation_epoch_end(self):
+        if self.trainer.is_global_zero:
+            super().on_validation_epoch_end()
+        else:
+            self.validation_step_outputs.clear()
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         if self.schedule == "WarmupCosine":
