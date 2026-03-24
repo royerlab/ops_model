@@ -132,5 +132,5 @@ model:
     projection_dim: 256
     drop_path_rate: 0.0
 
-resume_training: false
-ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_373genes_convnext_tiny_temp0p1_512bs_fix_sampler/version_2/checkpoints/last.ckpt"
+resume_training: true
+ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_gene_n_reporter_grouped_reporter_256proj_373genes_convnext_tiny_temp0p5_512bs_lr1e-4_pretrained_self/version_0/checkpoints/last.ckpt"
