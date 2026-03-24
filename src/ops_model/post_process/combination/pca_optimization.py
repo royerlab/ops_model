@@ -709,7 +709,7 @@ def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
     return fake
 
 
-def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=10_000):
+def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_000):
     """Score all 4 phenotypic metrics for one reporter's guide h5ad.
 
     Uses a smaller null_size than the aggregate run for speed.
