@@ -274,7 +274,7 @@ def _plot_pair_comparison(
         metric_title = _METRIC_TITLES[metric]
         ratio_ylabel = _RATIO_YLABELS[metric]
 
-        for scale in ("log10",):
+        for scale in ("log10", "linear"):
             fig, (ax_ratio, ax_map) = plt.subplots(1, 2, figsize=(20, 8))
 
             for rep_label, color, ls, marker, lw in zip(
@@ -362,14 +362,19 @@ def main():
         description="Titration comparison: reporter A alone vs B alone vs A+B combined.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--reporter-a", required=True,
+    parser.add_argument("--reporter-a", default=None,
                         help="Path to reporter A *_cells.h5ad")
-    parser.add_argument("--reporter-b", required=True,
+    parser.add_argument("--reporter-b", default=None,
                         help="Path to reporter B *_cells.h5ad")
     parser.add_argument("--name-a", default=None,
                         help="Display name for reporter A (default: stem of filename)")
     parser.add_argument("--name-b", default=None,
                         help="Display name for reporter B (default: stem of filename)")
+    parser.add_argument("--all-pairs-with", default=None, metavar="REFERENCE_H5AD",
+                        help="Submit one SLURM job per reporter paired with this reference "
+                             "(e.g. Phase_cells.h5ad). Discovers all *_cells.h5ad in --per-signal-dir.")
+    parser.add_argument("--per-signal-dir", default=None,
+                        help="Directory containing *_cells.h5ad files for --all-pairs-with mode.")
     parser.add_argument("-o", "--output-dir", required=True,
                         help="Output directory for CSVs and plots")
     parser.add_argument("--norm-method", default="ntc", choices=["ntc", "global"],
@@ -390,12 +395,87 @@ def main():
 
     _init_logger()
 
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # --all-pairs-with: submit one job per reporter paired with reference
+    # ------------------------------------------------------------------
+    if args.all_pairs_with:
+        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+        from ops_utils.data.feature_discovery import sanitize_signal_filename
+
+        ref_path = Path(args.all_pairs_with)
+        ref_name = args.name_a or ref_path.stem.replace("_cells", "")
+
+        per_signal_dir = Path(args.per_signal_dir) if args.per_signal_dir \
+                         else ref_path.parent
+        other_files = sorted(
+            f for f in per_signal_dir.glob("*_cells.h5ad")
+            if "_sub" not in f.name and f.resolve() != ref_path.resolve()
+        )
+
+        slurm_params = {
+            "timeout_min": args.slurm_time,
+            "mem": args.slurm_memory,
+            "cpus_per_task": args.slurm_cpus,
+            "slurm_partition": "cpu,gpu",
+        }
+
+        jobs = []
+        for other in other_files:
+            other_name = other.stem.replace("_cells", "")
+            safe = sanitize_signal_filename(other_name)[:35]
+            pair_out = output_dir / safe
+            jobs.append({
+                "name": f"titr_{ref_name[:10]}_{safe[:20]}",
+                "func": run_pair_titration_job,
+                "kwargs": {
+                    "reporter_a": str(ref_path),
+                    "reporter_b": str(other),
+                    "name_a": ref_name,
+                    "name_b": other_name,
+                    "output_dir": str(pair_out),
+                    "norm_method": args.norm_method,
+                    "seed": args.seed,
+                },
+            })
+
+        if not args.yes:
+            print(f"\nPhase-pairs SLURM submission:")
+            print(f"  Reference:   {ref_name}  ({ref_path.name})")
+            print(f"  Partners:    {len(jobs)} reporters from {per_signal_dir}")
+            print(f"  Output root: {output_dir}")
+            print(f"  Memory: {args.slurm_memory}  |  Time: {args.slurm_time} min  |  CPUs: {args.slurm_cpus}")
+            if input("\nSubmit? [y/N] ").strip().lower() != "y":
+                print("Cancelled.")
+                return
+
+        result = submit_parallel_jobs(
+            jobs_to_submit=jobs,
+            experiment="pca_titration_phase_pairs",
+            slurm_params=slurm_params,
+            log_dir="pca_optimization",
+            manifest_prefix="pca_titration_phase_pairs",
+            wait_for_completion=True,
+        )
+        if result.get("failed"):
+            print(f"\n{len(result['failed'])} jobs failed")
+        else:
+            print(f"\nAll {len(jobs)} jobs complete → {output_dir}")
+        return
+
+    # ------------------------------------------------------------------
+    # Single-pair mode
+    # ------------------------------------------------------------------
+    if not args.reporter_a or not args.reporter_b:
+        print("ERROR: provide --reporter-a and --reporter-b, or use --all-pairs-with")
+        return
+
     path_a = Path(args.reporter_a)
     path_b = Path(args.reporter_b)
     name_a = args.name_a or path_a.stem.replace("_cells", "")
     name_b = args.name_b or path_b.stem.replace("_cells", "")
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = output_dir / "titration_pair.csv"
 
