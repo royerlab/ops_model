@@ -115,7 +115,7 @@ from ops_utils.data.positive_controls import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SWEEP_THRESHOLDS = [0.60, 0.70, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84, 0.88, 0.90, 0.95]
+DEFAULT_SWEEP_THRESHOLDS = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99]
 # CellProfiler features are hand-crafted and independent (not redundant like DINO embeddings),
 # so PCA is destructive at high thresholds. Optimal region is ~50% variance explained.
 DEFAULT_SWEEP_THRESHOLDS_CP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
@@ -173,15 +173,16 @@ def _run_threshold_sweep(
     extra_sweep_cols: Dict[str, object],
     _logger,
     distance: str = "cosine",
-):
+) -> Optional[Dict]:
     """Sweep variance thresholds, score activity + distinctiveness_all + chad_all at each.
 
-    Returns:
-        (sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t)
-        or None if no valid threshold found.
+    Returns dict with keys:
+        sweep_rows, consensus_t, consensus_n, consensus_r, consensus_a,
+        peak_act_t, peak_dist_t, peak_chad_t
+    or None if no valid threshold found.
+
+    consensus_t is the threshold maximizing the normalized sum of all 3 mAP ratios.
     """
-    best_act_t, best_act_r, best_act_a, best_act_n = None, -1.0, -1.0, 0
-    best_auc_t, best_auc_r, best_auc_a, best_auc_n = None, -1.0, -1.0, 0
     sweep_rows = []
 
     for threshold in thresholds:
@@ -209,8 +210,9 @@ def _run_threshold_sweep(
             r, a = _score_activity_per_threshold(guide_norm, distance=distance)
             g_cp = _prepare_for_copairs(guide_norm.copy())
             e_cp = _prepare_for_copairs(gene_norm.copy())
-            from ops_utils.analysis.map_scores import phenotypic_activity_assesment as _paa
-            activity_map, _ = _paa(g_cp, plot_results=False, null_size=100_000, distance=distance)
+            activity_map, _ = phenotypic_activity_assesment(
+                g_cp, plot_results=False, null_size=100_000, distance=distance,
+            )
             all_active = activity_map.copy()
             all_active["below_corrected_p"] = True
             _, dist_all = phenotypic_distinctivness(
@@ -232,22 +234,48 @@ def _run_threshold_sweep(
         row.update(extra_sweep_cols)
         sweep_rows.append(row)
 
-        if n_pcs < MIN_PCS:
-            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%} [skipped for peak]")
-            continue
-        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%} AUC={a:.4f}")
-        if r > best_act_r or (r == best_act_r and a > best_act_a):
-            best_act_t, best_act_r, best_act_a, best_act_n = threshold, r, a, n_pcs
-        if a > best_auc_a or (a == best_auc_a and r > best_auc_r):
-            best_auc_t, best_auc_r, best_auc_a, best_auc_n = threshold, r, a, n_pcs
+        skip = " [skipped for peak]" if n_pcs < MIN_PCS else ""
+        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%}{skip}")
 
-    if best_act_t is None:
+    # Only consider thresholds with enough PCs for peak selection
+    valid = [row for row in sweep_rows if row["n_pcs"] >= MIN_PCS]
+    if not valid:
         return None
 
-    _logger.info(f"  Peak (activity): {best_act_t:.0%} ({best_act_n} PCs) → {best_act_r:.1%}, AUC={best_act_a:.4f}")
-    _logger.info(f"  Peak (AUC):      {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}")
+    valid_df = pd.DataFrame(valid)
 
-    return sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t
+    def _peak_threshold(col):
+        idx = valid_df[col].idxmax()
+        return valid_df.loc[idx, "threshold"], valid_df.loc[idx, "n_pcs"]
+
+    peak_act_t, _ = _peak_threshold("activity")
+    peak_dist_t, _ = _peak_threshold("distinctiveness_all")
+    peak_chad_t, _ = _peak_threshold("chad_all")
+
+    # Consensus: normalize each metric to [0,1] across valid thresholds, sum, pick argmax
+    def _norm(col):
+        vals = valid_df[col].values.astype(float)
+        vmin, vmax = vals.min(), vals.max()
+        return (vals - vmin) / (vmax - vmin) if vmax > vmin else np.ones_like(vals)
+
+    consensus_scores = _norm("activity") + _norm("distinctiveness_all") + _norm("chad_all")
+    best_idx = int(np.argmax(consensus_scores))
+    consensus_t = valid_df.iloc[best_idx]["threshold"]
+    consensus_n = int(valid_df.iloc[best_idx]["n_pcs"])
+    consensus_r = float(valid_df.iloc[best_idx]["activity"])
+    consensus_a = float(valid_df.iloc[best_idx]["auc"])
+
+    _logger.info(f"  Peak activity:       {peak_act_t:.0%}")
+    _logger.info(f"  Peak distinctiveness:{peak_dist_t:.0%}")
+    _logger.info(f"  Peak CHAD:           {peak_chad_t:.0%}")
+    _logger.info(f"  Consensus peak:      {consensus_t:.0%} ({consensus_n} PCs) → act={consensus_r:.1%}")
+
+    return {
+        "sweep_rows": sweep_rows,
+        "consensus_t": consensus_t, "consensus_n": consensus_n,
+        "consensus_r": consensus_r, "consensus_a": consensus_a,
+        "peak_act_t": peak_act_t, "peak_dist_t": peak_dist_t, "peak_chad_t": peak_chad_t,
+    }
 
 
 def _save_sweep_outputs(
@@ -256,9 +284,9 @@ def _save_sweep_outputs(
     cumvar: np.ndarray,
     peak_n: int,
     peak_t: float,
-    best_auc_r: float,
-    best_auc_a: float,
-    best_act_t: float,
+    peak_activity_r: float,
+    peak_activity_auc: float,
+    best_act_t: float,  # kept for back-compat, now unused in plot (use metric_peaks)
     signal: str,
     sweep_rows: List[Dict],
     uns_metadata: Dict[str, object],
@@ -270,6 +298,8 @@ def _save_sweep_outputs(
     _logger,
     drop_obs_cols: Optional[List[str]] = None,
     fixed_threshold: Optional[float] = None,
+    sweep_peak_t: Optional[float] = None,
+    metric_peaks: Optional[Dict] = None,
 ):
     """Build AnnData at peak PCs, save cell subsample, aggregate to guide/gene, write outputs.
 
@@ -326,8 +356,8 @@ def _save_sweep_outputs(
         "n_pcs": int(peak_n),
         "signal": signal,
         "explained_variance": float(cumvar[peak_n - 1]) if peak_n <= len(cumvar) else 1.0,
-        "peak_activity": float(best_auc_r),
-        "peak_auc": float(best_auc_a),
+        "peak_activity": float(peak_activity_r),
+        "peak_auc": float(peak_activity_auc),
     }
     base_uns.update(uns_metadata)
     for adata in [g, e]:
@@ -343,11 +373,13 @@ def _save_sweep_outputs(
     # Save sweep plot
     try:
         plot_pca_sweep(
-            sweep_df, signal, peak_t, peak_n, best_act_t,
+            sweep_df, signal, peak_t, peak_n,
             suptitle=suptitle,
             plots_dir=out_subdir / "plots",
             file_prefix=file_prefix,
             fixed_threshold=fixed_threshold,
+            sweep_peak_t=sweep_peak_t,
+            metric_peaks=metric_peaks,
         )
         _logger.info(f"  Saved plot: {subdir}/plots/{file_prefix}_sweep.png")
     except Exception as plot_err:
@@ -693,16 +725,23 @@ def pca_sweep_pooled_signal(
     _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
     if result is None:
         return f"FAILED: {signal} — no valid threshold found (all < {MIN_PCS} PCs)"
-    sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t = result
+    sweep_rows = result["sweep_rows"]
+    consensus_t = result["consensus_t"]
+    consensus_n = result["consensus_n"]
+    consensus_r = result["consensus_r"]
+    consensus_a = result["consensus_a"]
+    metric_peaks = {k: result[k] for k in ("peak_act_t", "peak_dist_t", "peak_chad_t")}
 
-    # Override peak with fixed_threshold if specified
+    # Override peak with fixed_threshold if specified; otherwise use consensus
+    sweep_peak_t = consensus_t  # preserve consensus for plot reference
+    selected_t, selected_n, selected_r, selected_a = consensus_t, consensus_n, consensus_r, consensus_a
     if fixed_threshold is not None:
         fixed_n = n_pcs_for_threshold(cumvar, fixed_threshold)
         fixed_row = next((r for r in sweep_rows if r["threshold"] == fixed_threshold), None)
-        fixed_r = fixed_row["activity"] if fixed_row else best_auc_r
-        fixed_a = fixed_row["auc"] if fixed_row else best_auc_a
-        _logger.info(f"  Fixed threshold override: {fixed_threshold:.0%} → {fixed_n} PCs (sweep peak was {best_auc_t:.0%})")
-        best_auc_t, best_auc_n, best_auc_r, best_auc_a = fixed_threshold, fixed_n, fixed_r, fixed_a
+        selected_r = fixed_row["activity"] if fixed_row else consensus_r
+        selected_a = fixed_row["auc"] if fixed_row else consensus_a
+        _logger.info(f"  Fixed threshold override: {fixed_threshold:.0%} → {fixed_n} PCs (consensus was {consensus_t:.0%})")
+        selected_t, selected_n = fixed_threshold, fixed_n
 
     # Save outputs at selected peak
     file_prefix = sanitize_signal_filename(signal)
@@ -712,15 +751,16 @@ def pca_sweep_pooled_signal(
 
     _save_sweep_outputs(
         X_pcs, obs_df_full, cumvar,
-        peak_n=best_auc_n, peak_t=best_auc_t,
-        best_auc_r=best_auc_r, best_auc_a=best_auc_a, best_act_t=best_act_t,
+        peak_n=selected_n, peak_t=selected_t,
+        peak_activity_r=selected_r, peak_activity_auc=selected_a, best_act_t=metric_peaks["peak_act_t"],
+        metric_peaks=metric_peaks,
         signal=signal, sweep_rows=sweep_rows,
         uns_metadata={
             "experiment": ",".join(exp.split("_")[0] for exp in loaded_exps),
             "channel": ",".join(ch for _, ch in exp_channel_pairs),
             "n_cells": int(n_cells), "n_cells_pooled": int(n_cells_pooled),
             "n_experiments": int(n_exps), "n_features_raw": int(n_feats),
-            "pca_components": pca_components[:best_auc_n].tolist(),
+            "pca_components": pca_components[:selected_n].tolist(),
             "pca_feature_names": feature_names,
         },
         output_dir=output_dir, subdir="per_signal", file_prefix=file_prefix,
@@ -728,12 +768,13 @@ def pca_sweep_pooled_signal(
         rng=rng, _logger=_logger,
         drop_obs_cols=["experiment"],
         fixed_threshold=fixed_threshold,
+        sweep_peak_t=sweep_peak_t,
     )
 
     elapsed = time.time() - t_start
-    _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {best_auc_n} PCs @ {best_auc_t:.0%}")
+    _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {selected_n} PCs @ {selected_t:.0%}")
 
-    return f"SUCCESS: {signal} — {best_auc_n} PCs @ {best_auc_t:.0%}, {best_auc_r:.1%} active, AUC={best_auc_a:.4f} ({n_exps} exps, {n_cells}/{n_cells_pooled} cells)"
+    return f"SUCCESS: {signal} — {selected_n} PCs @ {selected_t:.0%}, {selected_r:.1%} active ({n_exps} exps, {n_cells}/{n_cells_pooled} cells)"
 
 
 # =============================================================================
@@ -1037,38 +1078,42 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
     return adata_gene_embed
 
 
-def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine"):
+def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine",
+                           suffix=""):
     """Run phenotypic distinctiveness scoring, save CSV and plots. Returns (distinctiveness_map, ratio) or (None, 0)."""
+    label = "all geneKOs" if suffix else "active only"
     if activity_map is None:
         return None, 0.0
     try:
         from ops_utils.analysis.map_scores import phenotypic_distinctivness
-        _logger.info(f"Running distinctiveness...")
+        _logger.info(f"Running distinctiveness ({label})...")
         distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
             adata_guide, activity_map, plot_results=False, null_size=100_000, distance=distance,
         )
-        distinctiveness_map.to_csv(metrics_dir / "phenotypic_distinctiveness.csv", index=False)
-        _logger.info(f"  Distinctiveness: {distinctive_ratio:.1%}")
+        distinctiveness_map.to_csv(metrics_dir / f"phenotypic_distinctiveness{suffix}.csv", index=False)
+        _logger.info(f"  Distinctiveness ({label}): {distinctive_ratio:.1%}")
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         plot_map_scatter(ax1, activity_map, "Activity", r, show_ntc=False)
-        plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", distinctive_ratio, show_ntc=False)
-        fig.suptitle(f"Activity & Distinctiveness — {total_feats} features", fontsize=13, fontweight="bold")
+        plot_map_scatter(ax2, distinctiveness_map, f"Distinctiveness ({label})", distinctive_ratio, show_ntc=False)
+        fig.suptitle(f"Activity & Distinctiveness ({label}) — {total_feats} features", fontsize=13, fontweight="bold")
         fig.tight_layout()
-        fig.savefig(plots_dir / "map_activity_distinctiveness.png", dpi=150, bbox_inches="tight")
+        fig.savefig(plots_dir / f"map_activity_distinctiveness{suffix}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
-        _logger.info(f"  Saved plots/map_activity_distinctiveness.png")
+        _logger.info(f"  Saved plots/map_activity_distinctiveness{suffix}.png")
         return distinctiveness_map, distinctive_ratio
     except Exception as exc:
-        _logger.error(f"  Distinctiveness failed: {exc}")
+        _logger.error(f"  Distinctiveness ({label}) failed: {exc}")
         return None, 0.0
 
 
-def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine"):
+def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine",
+                       suffix=""):
     """Run CORUM + CHAD consistency scoring, save CSVs and plots.
 
     Returns (corum_map, corum_ratio, chad_map, chad_ratio) or (None, 0, None, 0) on failure.
     """
+    label = "all geneKOs" if suffix else "active only"
     if activity_map is None:
         return None, 0.0, None, 0.0
     try:
@@ -1077,33 +1122,33 @@ def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics
             phenotypic_consistency_manual_annotation,
         )
 
-        _logger.info(f"Running CORUM consistency...")
+        _logger.info(f"Running CORUM consistency ({label})...")
         consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
             adata_gene, activity_map, plot_results=False, null_size=100_000,
             cache_similarity=True, distance=distance,
         )
-        consistency_corum_map.to_csv(metrics_dir / "phenotypic_consistency_corum.csv", index=False)
-        _logger.info(f"  CORUM: {consistency_corum_ratio:.1%}")
+        consistency_corum_map.to_csv(metrics_dir / f"phenotypic_consistency_corum{suffix}.csv", index=False)
+        _logger.info(f"  CORUM ({label}): {consistency_corum_ratio:.1%}")
 
-        _logger.info(f"Running CHAD consistency...")
+        _logger.info(f"Running CHAD consistency ({label})...")
         consistency_manual_map, consistency_manual_ratio = phenotypic_consistency_manual_annotation(
             adata_gene, activity_map, plot_results=False, null_size=100_000,
             cache_similarity=True, distance=distance,
         )
-        consistency_manual_map.to_csv(metrics_dir / "phenotypic_consistency_manual.csv", index=False)
-        _logger.info(f"  Manual (CHAD): {consistency_manual_ratio:.1%}")
+        consistency_manual_map.to_csv(metrics_dir / f"phenotypic_consistency_manual{suffix}.csv", index=False)
+        _logger.info(f"  Manual CHAD ({label}): {consistency_manual_ratio:.1%}")
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", consistency_corum_ratio, show_ntc=False)
-        plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", consistency_manual_ratio, show_ntc=False)
-        fig.suptitle(f"Consistency Metrics — {total_feats} features", fontsize=13, fontweight="bold")
+        plot_map_scatter(ax1, consistency_corum_map, f"Consistency CORUM ({label})", consistency_corum_ratio, show_ntc=False)
+        plot_map_scatter(ax2, consistency_manual_map, f"Consistency CHAD ({label})", consistency_manual_ratio, show_ntc=False)
+        fig.suptitle(f"Consistency Metrics ({label}) — {total_feats} features", fontsize=13, fontweight="bold")
         fig.tight_layout()
-        fig.savefig(plots_dir / "map_consistency.png", dpi=150, bbox_inches="tight")
+        fig.savefig(plots_dir / f"map_consistency{suffix}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
-        _logger.info(f"  Saved plots/map_consistency.png")
+        _logger.info(f"  Saved plots/map_consistency{suffix}.png")
         return consistency_corum_map, consistency_corum_ratio, consistency_manual_map, consistency_manual_ratio
     except Exception as exc:
-        _logger.error(f"  Consistency metrics failed: {exc}")
+        _logger.error(f"  Consistency metrics ({label}) failed: {exc}")
         return None, 0.0, None, 0.0
 
 
@@ -1184,9 +1229,17 @@ def aggregate_channels(
         adata_gene_embed.write_h5ad(output_dir / "gene_embedding_pca_optimized.h5ad")
     _logger.info("  Re-saved guide_pca_optimized.h5ad + gene_embedding_pca_optimized.h5ad with embeddings")
 
-    # Step 7: Distinctiveness + consistency (slow)
+    # Step 7: Distinctiveness + consistency (slow) — active-only
     dist_map, dist_ratio = _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance)
     corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance)
+
+    # Step 7b: All-geneKOs versions (same metrics but unfiltered)
+    all_active_map_agg = _make_all_active_map(activity_map) if activity_map is not None else None
+    if all_active_map_agg is not None:
+        _score_distinctiveness(adata_guide, all_active_map_agg, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance,
+                               suffix="_all_genes")
+        _score_consistency(adata_gene, all_active_map_agg, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance,
+                           suffix="_all_genes")
 
     # Per-reporter bar chart with all 4 aggregate baselines (active-only)
     plot_channel_peaks_bar(report_rows, r, plots_dir, plt, _logger,
