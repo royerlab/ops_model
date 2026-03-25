@@ -85,6 +85,8 @@ from ops_utils.analysis.embedding_plots import (
 from ops_utils.analysis.map_scores import (
     compute_auc_score,
     phenotypic_activity_assesment,
+    phenotypic_consistency_manual_annotation,
+    phenotypic_distinctivness,
     plot_map_scatter,
 )
 from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
@@ -139,11 +141,11 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
-def _score_activity_per_threshold(adata_guide: ad.AnnData, null_size: int = 100_000) -> Tuple[float, float]:
+def _score_activity_per_threshold(adata_guide: ad.AnnData, null_size: int = 100_000, distance: str = "cosine") -> Tuple[float, float]:
     """Score guide-level AnnData. Returns (active_ratio, auc)."""
     adata_guide = _prepare_for_copairs(adata_guide)
     activity_map, active_ratio = phenotypic_activity_assesment(
-        adata_guide, plot_results=False, null_size=null_size,
+        adata_guide, plot_results=False, null_size=null_size, distance=distance,
     )
     auc = compute_auc_score(activity_map)
     return active_ratio, auc
@@ -170,8 +172,9 @@ def _run_threshold_sweep(
     norm_method: str,
     extra_sweep_cols: Dict[str, object],
     _logger,
+    distance: str = "cosine",
 ):
-    """Sweep variance thresholds, score activity at each, return results + best peaks.
+    """Sweep variance thresholds, score activity + distinctiveness_all + chad_all at each.
 
     Returns:
         (sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t)
@@ -190,26 +193,49 @@ def _run_threshold_sweep(
             X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names),
         )
         guide_tmp = aggregate_to_level(adata_tmp, level="guide", method="mean", preserve_batch_info=False)
+        gene_tmp = aggregate_to_level(adata_tmp, level="gene", method="mean", preserve_batch_info=False)
         del adata_tmp
         guide_tmp.X = np.asarray(guide_tmp.X, dtype=np.float32)
+        gene_tmp.X = np.asarray(gene_tmp.X, dtype=np.float32)
 
         guide_norm = normalize_guide_adata(guide_tmp.copy(), norm_method)
         guide_norm.X = np.asarray(guide_norm.X, dtype=np.float32)
+        gene_norm = aggregate_to_level(guide_norm, "gene", preserve_batch_info=False, subsample_controls=False)
+        del guide_tmp, gene_tmp
+
+        r, a = 0.0, 0.0
+        dist_all, chad_all = 0.0, 0.0
         try:
-            r, a = _score_activity_per_threshold(guide_norm)
+            r, a = _score_activity_per_threshold(guide_norm, distance=distance)
+            g_cp = _prepare_for_copairs(guide_norm.copy())
+            e_cp = _prepare_for_copairs(gene_norm.copy())
+            from ops_utils.analysis.map_scores import phenotypic_activity_assesment as _paa
+            activity_map, _ = _paa(g_cp, plot_results=False, null_size=100_000, distance=distance)
+            all_active = activity_map.copy()
+            all_active["below_corrected_p"] = True
+            _, dist_all = phenotypic_distinctivness(
+                g_cp, all_active, plot_results=False, null_size=100_000, distance=distance,
+            )
+            _, chad_all = phenotypic_consistency_manual_annotation(
+                e_cp, all_active, plot_results=False, null_size=100_000,
+                cache_similarity=True, distance=distance,
+            )
         except Exception as e:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
-            r, a = 0.0, 0.0
-        del guide_tmp, guide_norm
+        del guide_norm, gene_norm
 
-        row = {"threshold": threshold, "n_pcs": n_pcs, "activity": r, "auc": a}
+        row = {
+            "threshold": threshold, "n_pcs": n_pcs,
+            "activity": r, "auc": a,
+            "distinctiveness_all": dist_all, "chad_all": chad_all,
+        }
         row.update(extra_sweep_cols)
         sweep_rows.append(row)
 
         if n_pcs < MIN_PCS:
-            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — {r:.1%}, AUC={a:.4f} [skipped for peak]")
+            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {MIN_PCS}) — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%} [skipped for peak]")
             continue
-        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — {r:.1%}, AUC={a:.4f}")
+        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%} AUC={a:.4f}")
         if r > best_act_r or (r == best_act_r and a > best_act_a):
             best_act_t, best_act_r, best_act_a, best_act_n = threshold, r, a, n_pcs
         if a > best_auc_a or (a == best_auc_a and r > best_auc_r):
@@ -243,6 +269,7 @@ def _save_sweep_outputs(
     rng: np.random.RandomState,
     _logger,
     drop_obs_cols: Optional[List[str]] = None,
+    fixed_threshold: Optional[float] = None,
 ):
     """Build AnnData at peak PCs, save cell subsample, aggregate to guide/gene, write outputs.
 
@@ -320,6 +347,7 @@ def _save_sweep_outputs(
             suptitle=suptitle,
             plots_dir=out_subdir / "plots",
             file_prefix=file_prefix,
+            fixed_threshold=fixed_threshold,
         )
         _logger.info(f"  Saved plot: {subdir}/plots/{file_prefix}_sweep.png")
     except Exception as plot_err:
@@ -339,6 +367,8 @@ def pca_sweep_pooled_signal(
     sweep_thresholds: Optional[List[float]] = None,
     random_seed: int = 42,
     feature_dir_override: Optional[str] = None,
+    distance: str = "cosine",
+    fixed_threshold: Optional[float] = None,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -360,7 +390,9 @@ def pca_sweep_pooled_signal(
     _logger = _init_sweep_logger()
     t_start = time.time()
     output_dir = Path(output_dir)
-    thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
+    # When fixed_threshold is set, always run the full sweep for plotting but
+    # override peak selection afterwards.
+    thresholds = DEFAULT_SWEEP_THRESHOLDS if fixed_threshold is not None else (sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS)
     rng = np.random.RandomState(random_seed)
 
     # Resolve storage roots from config
@@ -656,14 +688,23 @@ def pca_sweep_pooled_signal(
     result = _run_threshold_sweep(
         X_pcs, cumvar, obs_df, thresholds, norm_method,
         extra_sweep_cols={"signal": signal, "n_experiments": n_exps},
-        _logger=_logger,
+        _logger=_logger, distance=distance,
     )
     _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
     if result is None:
         return f"FAILED: {signal} — no valid threshold found (all < {MIN_PCS} PCs)"
     sweep_rows, best_auc_t, best_auc_r, best_auc_a, best_auc_n, best_act_t = result
 
-    # Save outputs at AUC-optimized peak
+    # Override peak with fixed_threshold if specified
+    if fixed_threshold is not None:
+        fixed_n = n_pcs_for_threshold(cumvar, fixed_threshold)
+        fixed_row = next((r for r in sweep_rows if r["threshold"] == fixed_threshold), None)
+        fixed_r = fixed_row["activity"] if fixed_row else best_auc_r
+        fixed_a = fixed_row["auc"] if fixed_row else best_auc_a
+        _logger.info(f"  Fixed threshold override: {fixed_threshold:.0%} → {fixed_n} PCs (sweep peak was {best_auc_t:.0%})")
+        best_auc_t, best_auc_n, best_auc_r, best_auc_a = fixed_threshold, fixed_n, fixed_r, fixed_a
+
+    # Save outputs at selected peak
     file_prefix = sanitize_signal_filename(signal)
     exps_str = ", ".join(exp.split("_")[0] for exp in loaded_exps[:5])
     if len(loaded_exps) > 5:
@@ -686,6 +727,7 @@ def pca_sweep_pooled_signal(
         suptitle=f"{signal} ({n_exps} exps: {exps_str}) — {n_cells:,}/{n_cells_pooled:,} cells, {n_feats} raw features",
         rng=rng, _logger=_logger,
         drop_obs_cols=["experiment"],
+        fixed_threshold=fixed_threshold,
     )
 
     elapsed = time.time() - t_start
@@ -709,7 +751,7 @@ def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
     return fake
 
 
-def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_000):
+def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_000, distance="cosine"):
     """Score all 4 phenotypic metrics for one reporter's guide h5ad.
 
     Uses a smaller null_size than the aggregate run for speed.
@@ -732,13 +774,13 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
         g_norm = _prepare_for_copairs(g_norm)
 
         activity_map, active_ratio = phenotypic_activity_assesment(
-            g_norm, plot_results=False, null_size=null_size,
+            g_norm, plot_results=False, null_size=null_size, distance=distance,
         )
         result["activity"] = float(active_ratio)
         result["auc"] = float(compute_auc_score(activity_map))
 
         _, dist_ratio = phenotypic_distinctivness(
-            g_norm, activity_map, plot_results=False, null_size=null_size,
+            g_norm, activity_map, plot_results=False, null_size=null_size, distance=distance,
         )
         result["distinctiveness"] = float(dist_ratio)
 
@@ -746,12 +788,12 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
         e_norm = _prepare_for_copairs(e_norm)
 
         _, corum_ratio = phenotypic_consistency_corum(
-            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True,
+            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
         )
         result["corum"] = float(corum_ratio)
 
         _, chad_ratio = phenotypic_consistency_manual_annotation(
-            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True,
+            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
         )
         result["chad"] = float(chad_ratio)
 
@@ -759,17 +801,17 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
         all_active_map = _make_all_active_map(activity_map)
 
         _, dist_all = phenotypic_distinctivness(
-            g_norm, all_active_map, plot_results=False, null_size=null_size,
+            g_norm, all_active_map, plot_results=False, null_size=null_size, distance=distance,
         )
         result["distinctiveness_all"] = float(dist_all)
 
         _, corum_all = phenotypic_consistency_corum(
-            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True,
+            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
         )
         result["corum_all"] = float(corum_all)
 
         _, chad_all = phenotypic_consistency_manual_annotation(
-            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True,
+            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
         )
         result["chad_all"] = float(chad_all)
 
@@ -778,7 +820,7 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
     return result
 
 
-def _load_per_unit_blocks(per_unit_dir, norm_method, _logger):
+def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine"):
     """Load per-channel/per-signal guide+gene h5ads, return blocks + report rows."""
     guide_files = sorted(per_unit_dir.glob("*_guide.h5ad"))
     if not guide_files:
@@ -808,7 +850,7 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger):
         total_cells += n_cells
 
         _logger.info(f"  {sig}: scoring all 4 metrics per-reporter...")
-        reporter_metrics = _score_single_reporter_metrics(g, norm_method, _logger)
+        reporter_metrics = _score_single_reporter_metrics(g, norm_method, _logger, distance=distance)
 
         report_rows.append({
             "experiment": g.uns.get("experiment", ""),
@@ -863,13 +905,13 @@ def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
     return adata_guide, adata_gene
 
 
-def _score_activity_aggregated(adata_guide, metrics_dir, _logger):
+def _score_activity_aggregated(adata_guide, metrics_dir, _logger, distance="cosine"):
     """Run phenotypic activity scoring on aggregated data. Returns (activity_map, ratio, auc)."""
     _logger.info(f"Running activity scoring...")
     metrics_dir.mkdir(parents=True, exist_ok=True)
     try:
         activity_map, active_ratio = phenotypic_activity_assesment(
-            adata_guide, plot_results=False, null_size=100_000,
+            adata_guide, plot_results=False, null_size=100_000, distance=distance,
         )
         activity_map.to_csv(metrics_dir / "phenotypic_activity.csv", index=False)
         auc = compute_auc_score(activity_map)
@@ -995,7 +1037,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
     return adata_gene_embed
 
 
-def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger):
+def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine"):
     """Run phenotypic distinctiveness scoring, save CSV and plots. Returns (distinctiveness_map, ratio) or (None, 0)."""
     if activity_map is None:
         return None, 0.0
@@ -1003,7 +1045,7 @@ def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir,
         from ops_utils.analysis.map_scores import phenotypic_distinctivness
         _logger.info(f"Running distinctiveness...")
         distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
-            adata_guide, activity_map, plot_results=False, null_size=100_000,
+            adata_guide, activity_map, plot_results=False, null_size=100_000, distance=distance,
         )
         distinctiveness_map.to_csv(metrics_dir / "phenotypic_distinctiveness.csv", index=False)
         _logger.info(f"  Distinctiveness: {distinctive_ratio:.1%}")
@@ -1022,7 +1064,7 @@ def _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir,
         return None, 0.0
 
 
-def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger):
+def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger, distance="cosine"):
     """Run CORUM + CHAD consistency scoring, save CSVs and plots.
 
     Returns (corum_map, corum_ratio, chad_map, chad_ratio) or (None, 0, None, 0) on failure.
@@ -1038,7 +1080,7 @@ def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics
         _logger.info(f"Running CORUM consistency...")
         consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
             adata_gene, activity_map, plot_results=False, null_size=100_000,
-            cache_similarity=True,
+            cache_similarity=True, distance=distance,
         )
         consistency_corum_map.to_csv(metrics_dir / "phenotypic_consistency_corum.csv", index=False)
         _logger.info(f"  CORUM: {consistency_corum_ratio:.1%}")
@@ -1046,7 +1088,7 @@ def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics
         _logger.info(f"Running CHAD consistency...")
         consistency_manual_map, consistency_manual_ratio = phenotypic_consistency_manual_annotation(
             adata_gene, activity_map, plot_results=False, null_size=100_000,
-            cache_similarity=True,
+            cache_similarity=True, distance=distance,
         )
         consistency_manual_map.to_csv(metrics_dir / "phenotypic_consistency_manual.csv", index=False)
         _logger.info(f"  Manual (CHAD): {consistency_manual_ratio:.1%}")
@@ -1073,6 +1115,7 @@ def aggregate_channels(
     output_dir: str,
     norm_method: str = "ntc",
     per_unit_subdir: str = "per_channel",
+    distance: str = "cosine",
 ) -> str:
     """Load per-channel (or per-signal) h5ads, concatenate, normalize, score, save.
 
@@ -1088,7 +1131,7 @@ def aggregate_channels(
     per_unit_dir = output_dir / per_unit_subdir
 
     # Step 1: Load per-channel/per-signal blocks
-    guide_blocks, gene_blocks, report_rows, total_cells = _load_per_unit_blocks(per_unit_dir, norm_method, _logger)
+    guide_blocks, gene_blocks, report_rows, total_cells = _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance=distance)
     if guide_blocks is None:
         return "FAILED: no valid per-channel data loaded"
 
@@ -1098,7 +1141,7 @@ def aggregate_channels(
 
     # Step 3: Activity scoring
     metrics_dir = output_dir / "metrics"
-    activity_map, r, a = _score_activity_aggregated(adata_guide, metrics_dir, _logger)
+    activity_map, r, a = _score_activity_aggregated(adata_guide, metrics_dir, _logger, distance=distance)
 
     # Step 4: Save h5ads (before slow metrics) — store X_pca now; UMAP/PHATE added after step 6
     adata_guide.obsm["X_pca"] = np.asarray(adata_guide.X, dtype=np.float32)
@@ -1142,8 +1185,8 @@ def aggregate_channels(
     _logger.info("  Re-saved guide_pca_optimized.h5ad + gene_embedding_pca_optimized.h5ad with embeddings")
 
     # Step 7: Distinctiveness + consistency (slow)
-    dist_map, dist_ratio = _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger)
-    corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger)
+    dist_map, dist_ratio = _score_distinctiveness(adata_guide, activity_map, r, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance)
+    corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics_dir, plt, _logger, distance=distance)
 
     # Per-reporter bar chart with all 4 aggregate baselines (active-only)
     plot_channel_peaks_bar(report_rows, r, plots_dir, plt, _logger,
@@ -1161,13 +1204,13 @@ def aggregate_channels(
                 phenotypic_consistency_manual_annotation,
             )
             _, dist_ratio_all = phenotypic_distinctivness(
-                adata_guide, all_active_map, plot_results=False, null_size=100_000,
+                adata_guide, all_active_map, plot_results=False, null_size=100_000, distance=distance,
             )
             _, corum_ratio_all = phenotypic_consistency_corum(
-                adata_gene, all_active_map, plot_results=False, cache_similarity=True,
+                adata_gene, all_active_map, plot_results=False, cache_similarity=True, distance=distance,
             )
             _, chad_ratio_all = phenotypic_consistency_manual_annotation(
-                adata_gene, all_active_map, plot_results=False, cache_similarity=True,
+                adata_gene, all_active_map, plot_results=False, cache_similarity=True, distance=distance,
             )
             _logger.info(f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}")
         except Exception as e:
@@ -1241,7 +1284,7 @@ def _make_agg_slurm_params(args):
 
 
 def _submit_aggregation_slurm(agg_output, norm_method, per_unit_subdir, agg_slurm_params,
-                               experiment_name, manifest_prefix):
+                               experiment_name, manifest_prefix, distance="cosine"):
     """Submit a single aggregation SLURM job."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     agg_jobs = [{
@@ -1251,6 +1294,7 @@ def _submit_aggregation_slurm(agg_output, norm_method, per_unit_subdir, agg_slur
             "output_dir": agg_output,
             "norm_method": norm_method,
             "per_unit_subdir": per_unit_subdir,
+            "distance": distance,
         },
     }]
     agg_result = submit_parallel_jobs(
@@ -1280,6 +1324,7 @@ def _submit_phase1_slurm(jobs, args, agg_output, per_unit_subdir,
         _submit_aggregation_slurm(
             agg_output, args.norm_method, per_unit_subdir,
             agg_slurm_params, f"{manifest_prefix}_aggregation", f"{manifest_prefix}_agg",
+            distance=args.distance,
         )
 
     print(f"\nSubmitting {len(jobs)} {unit_label} SLURM jobs...")
@@ -1329,9 +1374,25 @@ def _handle_umap_only(args, output_dir):
 
 
 def _handle_aggregate_only(args, output_dir):
-    """Run only the aggregation step (Phase 2)."""
+    """Run only the aggregation step (Phase 2).
+
+    When a non-default distance metric is used, the per_signal/ h5ads live in
+    the *parent* directory (the original cosine sweep output).  We read from
+    there but write results into the distance-specific subdirectory.
+    """
     agg_output = str(output_dir)
     agg_subdir = "per_signal"
+
+    # If per_signal/ doesn't exist here but does in the parent, read from parent
+    per_signal_dir = Path(agg_output) / agg_subdir
+    if not per_signal_dir.exists() and (Path(agg_output).parent / agg_subdir).exists():
+        # e.g. output_dir = .../all/euclidean, per_signal lives in .../all/per_signal
+        source_subdir = str(Path(agg_output).parent / agg_subdir)
+        print(f"Reading swept h5ads from {source_subdir}")
+        print(f"Writing aggregated results to {agg_output}")
+        # Symlink per_signal into the output dir so aggregate_channels can find it
+        per_signal_dir.parent.mkdir(parents=True, exist_ok=True)
+        per_signal_dir.symlink_to(Path(agg_output).parent / agg_subdir)
 
     if args.slurm:
         print(f"Submitting aggregation as SLURM job ({args.slurm_agg_memory}, {args.slurm_agg_time}min)...")
@@ -1340,9 +1401,10 @@ def _handle_aggregate_only(args, output_dir):
         _submit_aggregation_slurm(
             agg_output, args.norm_method, agg_subdir,
             _make_agg_slurm_params(args), "pca_aggregation", "pca_agg",
+            distance=args.distance,
         )
     else:
-        result = aggregate_channels(output_dir=agg_output, norm_method=args.norm_method, per_unit_subdir=agg_subdir)
+        result = aggregate_channels(output_dir=agg_output, norm_method=args.norm_method, per_unit_subdir=agg_subdir, distance=args.distance)
         print(result)
 
 
@@ -1431,11 +1493,13 @@ def _handle_downsampled(args, output_dir, cp_override):
         kwargs = dict(
             signal=signal, exp_channel_pairs=pairs,
             output_dir=str(ds_output_dir), target_n_cells=per_signal_target[signal],
-            norm_method=args.norm_method,
+            norm_method=args.norm_method, distance=args.distance,
         )
         if cp_override:
             kwargs["feature_dir_override"] = cp_override
             kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
+        if args.fixed_threshold is not None:
+            kwargs["fixed_threshold"] = args.fixed_threshold
         return kwargs
 
     if not args.slurm:
@@ -1445,6 +1509,7 @@ def _handle_downsampled(args, output_dir, cp_override):
             print(f"  {result}")
         result = aggregate_channels(
             output_dir=str(ds_output_dir), norm_method=args.norm_method, per_unit_subdir="per_signal",
+            distance=args.distance,
         )
         print(result)
         return
@@ -1522,6 +1587,7 @@ def _handle_downsampled(args, output_dir, cp_override):
     _submit_aggregation_slurm(
         str(ds_output_dir), args.norm_method, "per_signal",
         agg_slurm_params, "pca_ds_aggregation", "pca_ds_agg",
+        distance=args.distance,
     )
 
 
@@ -1542,6 +1608,11 @@ def _build_parser():
     )
     parser.add_argument("--norm-method", type=str, default="ntc", choices=["ntc", "global"],
                         help="Normalization method (default: ntc)")
+    parser.add_argument("--distance", type=str, default="cosine", choices=["cosine", "euclidean"],
+                        help="Distance metric for mAP scoring (default: cosine)")
+    parser.add_argument("--fixed-threshold", type=float, default=None,
+                        help="Skip the variance sweep and use a single fixed PCA threshold (e.g. 0.80). "
+                             "Useful for direct cosine vs euclidean comparison at a known threshold.")
     parser.add_argument("--slurm", action="store_true",
                         help="Submit Phase 1 signal-group SLURM jobs + Phase 2 aggregation job")
     parser.add_argument("--slurm-memory", type=str, default="100GB",
@@ -1621,6 +1692,17 @@ def main():
 
     # all_cells=True is now always the default (non-downsampled path)
     args.all_cells = not args.downsampled
+
+    # Nest under fixed-threshold subdir when specified
+    if args.fixed_threshold is not None:
+        thresh_tag = f"fixed_{args.fixed_threshold:.0%}"
+        output_dir = output_dir / thresh_tag
+        print(f"Fixed threshold: {args.fixed_threshold:.0%} — output → {output_dir}")
+
+    # Nest under distance metric subdir (always, for clarity)
+    if args.fixed_threshold is not None or args.distance != "cosine":
+        output_dir = output_dir / args.distance
+        print(f"Distance metric: {args.distance} — output → {output_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

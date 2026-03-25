@@ -25,7 +25,7 @@ def _load_pos_controls() -> dict:
         return yaml.safe_load(f)
 
 
-def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+def evaluate_guide_level(adata: ad.AnnData, distance: str = "cosine") -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """Evaluate guide-level embeddings and return metrics and the activity map.
 
     Parameters
@@ -52,7 +52,7 @@ def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame, pd.Data
     AnndataValidator().validate(adata, level="guide", strict=False)
 
     # 2. Phenotypic activity
-    activity_map, active_ratio = phenotypic_activity_assesment(adata, plot_results=False)
+    activity_map, active_ratio = phenotypic_activity_assesment(adata, plot_results=False, distance=distance)
     pct_perturbations_active = float(active_ratio)
     mean_map_active = float(
         activity_map[activity_map["below_corrected_p"]]["mean_average_precision"].mean()
@@ -69,7 +69,7 @@ def evaluate_guide_level(adata: ad.AnnData) -> tuple[dict, pd.DataFrame, pd.Data
 
     # 4. Phenotypic distinctiveness
     distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
-        adata, activity_map, plot_results=False
+        adata, activity_map, plot_results=False, distance=distance,
     )
     pct_perturbations_distinct = float(distinctive_ratio)
     mean_map_distinct = float(

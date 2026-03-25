@@ -27,7 +27,8 @@ def _load_gene_clusters() -> dict:
 
 
 def evaluate_gene_level(
-    adata: ad.AnnData, activity_map: pd.DataFrame | None = None
+    adata: ad.AnnData, activity_map: pd.DataFrame | None = None,
+    distance: str = "cosine",
 ) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """Evaluate gene-level embeddings and return a flat dict of scalar metrics.
 
@@ -82,7 +83,7 @@ def evaluate_gene_level(
 
     # 3. Phenotypic consistency -- manual annotation
     consistency_manual_map, consistency_manual_ratio = (
-        phenotypic_consistency_manual_annotation(adata, activity_map, plot_results=False)
+        phenotypic_consistency_manual_annotation(adata, activity_map, plot_results=False, distance=distance)
     )
     pct_complexes_significant_manual = float(consistency_manual_ratio)
     mean_map_complexes_manual = float(
@@ -91,7 +92,7 @@ def evaluate_gene_level(
 
     # 4. Phenotypic consistency -- CORUM
     consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
-        adata, activity_map, plot_results=False
+        adata, activity_map, plot_results=False, distance=distance,
     )
     pct_complexes_significant_corum = float(consistency_corum_ratio)
     mean_map_complexes_corum = float(

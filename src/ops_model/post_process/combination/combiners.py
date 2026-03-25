@@ -177,7 +177,7 @@ def _sweep_pca_thresholds(
         guide_norm = _prepare_cells_for_scoring(guide_norm)
 
         try:
-            activity_map, active_ratio = phenotypic_activity_assesment(
+            activity_map, active_ratio = phenotypic_activity_assesment(  # distance default="cosine"
                 guide_norm, plot_results=False, null_size=100_000,
             )
             auc = compute_auc_score(activity_map)

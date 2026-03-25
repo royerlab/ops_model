@@ -164,7 +164,7 @@ def _subsample_and_aggregate(adata_cells: ad.AnnData, target_n_cells: int,
     return g
 
 
-def _score_all_metrics(g_norm: ad.AnnData, _logger) -> dict:
+def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine") -> dict:
     """Score all 4 metrics on a guide-level AnnData. Returns dict of ratios + mAPs."""
     from ops_utils.analysis.map_scores import (
         phenotypic_distinctivness,
@@ -182,7 +182,7 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger) -> dict:
     try:
         g_copairs = _prepare_for_copairs(g_norm.copy())
         activity_map, active_ratio = phenotypic_activity_assesment(
-            g_copairs, plot_results=False, null_size=NULL_SIZE,
+            g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
         result["activity_ratio"] = float(active_ratio)
         result["activity_map_mean"] = float(activity_map["mean_average_precision"].mean())
@@ -197,7 +197,7 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger) -> dict:
 
     try:
         dist_map, dist_ratio = phenotypic_distinctivness(
-            g_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE,
+            g_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
         result["distinctiveness_ratio"] = float(dist_ratio)
         if dist_map is not None and "mean_average_precision" in dist_map.columns:
@@ -210,14 +210,14 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger) -> dict:
         e_copairs = _prepare_for_copairs(e_norm)
 
         corum_map, corum_ratio = phenotypic_consistency_corum(
-            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True,
+            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True, distance=distance,
         )
         result["corum_ratio"] = float(corum_ratio)
         if corum_map is not None and "mean_average_precision" in corum_map.columns:
             result["corum_map_mean"] = float(corum_map["mean_average_precision"].mean())
 
         chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
-            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True,
+            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True, distance=distance,
         )
         result["chad_ratio"] = float(chad_ratio)
         if chad_map is not None and "mean_average_precision" in chad_map.columns:
@@ -281,7 +281,7 @@ def titrate_single_reporter(
 
         g_sub = _subsample_and_aggregate(adata_cells, target, rng)
         g_norm = normalize_guide_adata(g_sub, norm_method)
-        scores = _score_all_metrics(g_norm, _logger)
+        scores = _score_all_metrics(g_norm, _logger)  # distance default="cosine"
         scores["n_cells"] = target
         scores["n_guides"] = g_sub.n_obs
         scores["signal"] = signal
