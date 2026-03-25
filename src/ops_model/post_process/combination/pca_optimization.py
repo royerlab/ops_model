@@ -1746,16 +1746,18 @@ def main():
     # all_cells=True is now always the default (non-downsampled path)
     args.all_cells = not args.downsampled
 
-    # Nest under fixed-threshold subdir when specified
+    # Nest under threshold-selection subdir
     if args.fixed_threshold is not None:
         thresh_tag = f"fixed_{args.fixed_threshold:.0%}"
         output_dir = output_dir / thresh_tag
         print(f"Fixed threshold: {args.fixed_threshold:.0%} — output → {output_dir}")
+    else:
+        output_dir = output_dir / "consensus_sweep"
+        print(f"Consensus sweep mode — output → {output_dir}")
 
-    # Nest under distance metric subdir (always, for clarity)
-    if args.fixed_threshold is not None or args.distance != "cosine":
-        output_dir = output_dir / args.distance
-        print(f"Distance metric: {args.distance} — output → {output_dir}")
+    # Nest under distance metric subdir
+    output_dir = output_dir / args.distance
+    print(f"Distance metric: {args.distance} — output → {output_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
