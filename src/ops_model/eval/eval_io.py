@@ -43,8 +43,8 @@ def save_guide_eval(
     distinctiveness_map.to_csv(output_dir / "phenotypic_distinctiveness.csv", index=False)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-    plot_map_scatter(ax1, activity_map, "Activity", metrics["pct_perturbations_active"], show_ntc=False)
-    plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", metrics["pct_perturbations_distinct"], show_ntc=False)
+    plot_map_scatter(ax1, activity_map, "Activity", metrics["pct_perturbations_active"])
+    plot_map_scatter(ax2, distinctiveness_map, "Distinctiveness", metrics["pct_perturbations_distinct"])
     fig.tight_layout()
     fig.savefig(output_dir / "map_activity_distinctiveness.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -84,8 +84,8 @@ def save_gene_eval(
     chad_entity_col = "complex_num" if "complex_num" in consistency_manual_map.columns else consistency_manual_map.columns[0]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-    plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", metrics["pct_complexes_significant_corum"], show_ntc=False)
-    plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", metrics["pct_complexes_significant_manual"], show_ntc=False)
+    plot_map_scatter(ax1, consistency_corum_map, "Consistency (CORUM)", metrics["pct_complexes_significant_corum"])
+    plot_map_scatter(ax2, consistency_manual_map, "Consistency (CHAD)", metrics["pct_complexes_significant_manual"])
     fig.tight_layout()
     fig.savefig(output_dir / "map_consistency.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
