@@ -106,3 +106,5 @@ ENV/
 
 
 configs/
+scratch/
+scripts/compare_dino_cp_map.py

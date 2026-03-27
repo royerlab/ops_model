@@ -37,6 +37,19 @@ import warnings
 
 warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
 
+# Maps experiment-specific column names → canonical internal names.
+# Add new entries here to support additional experiment types.
+COLUMN_ALIASES: dict[str, str] = {
+    "minibinder_perturbation": "gene_name",  # minibinder experiments
+    "AA_sequence": "sgRNA",                  # minibinder experiments
+}
+
+
+def normalize_link_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename experiment-specific column variants to canonical names."""
+    rename = {src: dst for src, dst in COLUMN_ALIASES.items() if src in df.columns}
+    return df.rename(columns=rename)
+
 
 class BaseDataset(Dataset):
 
@@ -509,6 +522,7 @@ class OpsDataManager:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
                 labels_tmp = pd.read_csv(OpsPaths(exp_name, well=w).links["training"])
+                labels_tmp = normalize_link_csv(labels_tmp)
 
                 # remove rows with NaN segmentation_id
                 labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
