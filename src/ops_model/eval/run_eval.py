@@ -82,6 +82,11 @@ def main() -> None:
         action="store_true",
         help="Save per-metric CSVs and plots alongside the summary CSV.",
     )
+    parser.add_argument(
+        "--distinctiveness-active-only",
+        action="store_true",
+        help="Compute distinctiveness over active genes only (default: all genes).",
+    )
     args = parser.parse_args()
 
     if not args.guide_embedding and not args.gene_embedding:
@@ -99,7 +104,10 @@ def main() -> None:
 
     if args.guide_embedding:
         adata_guide = ad.read_h5ad(args.guide_embedding)
-        guide_metrics, activity_map, distinctiveness_map = evaluate_guide_level(adata_guide)
+        guide_metrics, activity_map, distinctiveness_map = evaluate_guide_level(
+            adata_guide,
+            distinctiveness_active_only=args.distinctiveness_active_only,
+        )
         del adata_guide
         results.update(guide_metrics)
         results["guide_embedding_path"] = args.guide_embedding
