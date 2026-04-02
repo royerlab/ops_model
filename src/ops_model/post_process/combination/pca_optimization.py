@@ -1303,16 +1303,16 @@ def aggregate_channels(
 # CLI: mode handlers
 # =============================================================================
 
-def _discover_experiment_pairs(cp_override):
+def _discover_experiment_pairs(cp_override, include_cellpainting=False):
     """Common experiment discovery for SLURM modes. Returns (all_pairs, attr_config, storage_roots, feature_dir, maps_path)."""
     attr_config = load_attribution_config()
     storage_roots = get_storage_roots(attr_config)
     feature_dir = cp_override or attr_config.get("feature_dir", "dino_features")
     maps_path = get_channel_maps_path()
     if cp_override:
-        all_pairs = discover_cellprofiler_experiments(storage_roots)
+        all_pairs = discover_cellprofiler_experiments(storage_roots, include_cellpainting=include_cellpainting)
     else:
-        all_pairs = discover_dino_experiments(storage_roots, feature_dir)
+        all_pairs = discover_dino_experiments(storage_roots, feature_dir, include_cellpainting=include_cellpainting)
     return all_pairs, attr_config, storage_roots, feature_dir, maps_path
 
 
@@ -1474,7 +1474,8 @@ def _handle_downsampled(args, output_dir, cp_override):
             print(f"--clean: removing {per_signal_dir}")
             shutil.rmtree(per_signal_dir)
 
-    all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override)
+    include_cp = getattr(args, "include_cellpainting", False)
+    all_pairs, attr_config, storage_roots, feature_dir, maps_path = _discover_experiment_pairs(cp_override, include_cellpainting=include_cp)
     if not all_pairs:
         print("No experiment-channel pairs found!")
         return
@@ -1694,6 +1695,9 @@ def _build_parser():
                         help="SLURM memory for Phase signal job (default: 600GB). Phase ~50M cells needs more.")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Use CellProfiler morphological features instead of DINO embeddings.")
+    parser.add_argument("--include-cellpainting", action="store_true",
+                        help="Include Cell Painting channels (CP1_*, CP2_*) that are normally excluded. "
+                             "Output → with_cellpainting/ subdir.")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true",
                              help="Include only Phase (label-free brightfield) channels. Output → phase_only/.")
@@ -1716,6 +1720,11 @@ def main():
         print(f"Output: {output_dir}")
     else:
         output_dir = output_dir / "dino"
+
+    # Nest under cell-painting subdir if requested
+    if args.include_cellpainting:
+        output_dir = output_dir / "with_cellpainting"
+        print(f"Cell Painting channels included: output → {output_dir}")
 
     # Nest under channel-subset subdir
     if args.phase_only and args.downsampled:
