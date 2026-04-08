@@ -1061,6 +1061,13 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                     plots_dir, adata_level.n_obs, adata_level.n_vars, plt,
                 )
                 _logger.info(f"  Saved plots/{fname}")
+                # Save embedding coordinates as CSV
+                import pandas as pd
+                embed_df = pd.DataFrame(coords, columns=[f"{embed_name}1", f"{embed_name}2"])
+                embed_df.insert(0, "perturbation", perts.values if hasattr(perts, "values") else perts)
+                embed_csv_name = f"{level_name}_{embed_name.lower()}_coords.csv"
+                embed_df.to_csv(plots_dir / embed_csv_name, index=False)
+                _logger.info(f"  Saved plots/{embed_csv_name}")
         except Exception as err:
             _logger.warning(f"  {embed_name} plots failed: {err}")
 
@@ -1688,6 +1695,8 @@ def _build_parser():
                         help="Only run Phase 2 aggregation (skips PCA sweeps, reads existing per_signal/ h5ads).")
     parser.add_argument("--umap-only", action="store_true",
                         help="Only generate embedding plots from existing optimized h5ads.")
+    parser.add_argument("--direct", action="store_true",
+                        help="Use -o/--output-dir as the exact output path (skip automatic dino/all/… nesting).")
     parser.add_argument("--downsampled", action="store_true",
                         help="Equalise cells across signal groups by downsampling to the smallest group "
                              "(floor 750k). Default mode uses all cells per group. Output → downsampled/.")
@@ -1709,6 +1718,20 @@ def _build_parser():
 def main():
     args = _build_parser().parse_args()
     output_dir = Path(args.output_dir)
+
+    # --direct: use the given path as-is, skip all automatic nesting
+    if args.direct:
+        args.phase_filter = None
+        args.all_cells = True
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Direct mode: output → {output_dir}")
+        if args.umap_only:
+            _handle_umap_only(args, output_dir)
+        elif args.aggregate_only:
+            _handle_aggregate_only(args, output_dir)
+        else:
+            _handle_downsampled(args, output_dir, None)
+        return
 
     # Nest output under feature-type subdir: dino/ or cellprofiler/
     cp_override = None
