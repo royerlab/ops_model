@@ -38,6 +38,7 @@ Core extraction functions are in cp_extraction.py.
 AnnData processing functions are in evaluate_cp.py.
 """
 
+import os
 import yaml
 import argparse
 from pathlib import Path
@@ -46,7 +47,31 @@ import pandas as pd
 import submitit
 
 from ops_model.data import data_loader
-from ops_model.features.cp_extraction import extract_cp_features
+from ops_model.features.cp_extraction import (
+    extract_cp_features,
+    extract_cp_features_parallel,
+    extract_cp_features_bulk_read,
+)
+
+
+# Environment variables to forward from the launcher to SLURM worker jobs
+_OPS_ENV_VARS = ["OPS_OUTPUT_BASE_DIR", "OPS_FAST_OUTPUT_BASE_DIR", "OPS_CONFIGS_DIR"]
+
+
+def _build_slurm_setup(num_threads: int = 2) -> list[str]:
+    """Build slurm_setup commands including thread config and OPS env var forwarding."""
+    setup = [
+        f"export OMP_NUM_THREADS={num_threads}",
+        f"export MKL_NUM_THREADS={num_threads}",
+        f"export OPENBLAS_NUM_THREADS={num_threads}",
+        f"export NUMEXPR_NUM_THREADS={num_threads}",
+        "export SLURM_CPU_BIND=none",
+    ]
+    for var in _OPS_ENV_VARS:
+        val = os.environ.get(var)
+        if val is not None:
+            setup.append(f"export {var}={val}")
+    return setup
 
 
 def write_index_ranges_to_yaml(
@@ -107,93 +132,99 @@ def cp_features_worker_fcn(
     """
     Worker function for distributed CP feature extraction using submitit.
 
-    This function:
-    1. Extracts CP features for the specified index range
-    2. Saves results to a CSV file named with the job_id
+    Uses multiprocessing.Pool with shared initializer:
+    - Labels CSV read once in parallel (ThreadPool for NFS I/O)
+    - Worker processes inherit labels via fork (copy-on-write, zero copy)
+    - Each worker opens its own zarr handles (~0.1s)
 
     Args:
         experiment_dict: Dictionary mapping experiment names to FOV lists
         bounds: [start, end] index range to process
         job_id: Job ID for naming the output file
-        output_dir: Directory to save the output CSV file
+        output_dir: Directory to save the output parquet file
         out_channels: List of channel names (default: ["Phase2D", "mCherry"])
 
     Returns:
-        str: Path to the saved CSV file
-
-    Example:
-        >>> cp_features_worker_fcn(
-        ...     experiment_dict={"ops0031_20250424": ["A/1/0", "A/2/0"]},
-        ...     bounds=[0, 100],
-        ...     job_id=0,
-        ...     output_dir='./results/',
-        ...     out_channels=["Phase2D", "mCherry"]
-        ... )
-        './results/cp_features_job_0.csv'
+        str: Path to the saved parquet file
     """
-    import os
+    import time
 
-    print(f"Job {job_id}: Processing indices {bounds[0]} to {bounds[1]}")
+    t0 = time.perf_counter()
+    total_cells = bounds[1] - bounds[0]
+    num_workers = max(1, len(os.sched_getaffinity(0)) - 2)
 
-    # Extract features for this subset
-    results_df = extract_cp_features(
+    print(
+        f"Job {job_id}: Processing {total_cells} cells [{bounds[0]}:{bounds[1]}] "
+        f"with {num_workers} workers"
+    )
+
+    results_df = extract_cp_features_bulk_read(
         experiment_dict=experiment_dict,
         bounds=bounds,
         out_channels=out_channels,
+        num_workers=num_workers,
     )
 
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save to CSV
-    output_path = os.path.join(output_dir, f"cp_features_job_{job_id}.csv")
-    results_df.to_csv(output_path, index=False)
+    # Save to parquet (5-10x faster than CSV for numerical data)
+    output_path = os.path.join(output_dir, f"cp_features_job_{job_id}.parquet")
+    results_df.to_parquet(output_path, index=False)
 
-    print(f"Job {job_id}: Saved {len(results_df)} rows to {output_path}")
+    elapsed = time.perf_counter() - t0
+    throughput = len(results_df) / elapsed if elapsed > 0 else 0
+    print(
+        f"Job {job_id}: Saved {len(results_df)} rows to {output_path} "
+        f"in {elapsed:.1f}s ({throughput:.1f} cells/s)"
+    )
 
     return output_path
 
 
 def concatenate_results(output_dir: str, final_output_path: str):
     """
-    Concatenate all CSV files from individual jobs into one final file.
+    Concatenate all chunk files from individual jobs into one final CSV.
 
-    Call this after all array jobs have completed.
+    Reads parquet chunk files, concatenates, and writes the final output as CSV
+    for backward compatibility with the AnnData conversion step.
 
     Args:
-        output_dir: Directory containing individual job CSV files
-        final_output_path: Path to save the concatenated results
+        output_dir: Directory containing individual job parquet files
+        final_output_path: Path to save the concatenated CSV results
 
     Returns:
         pd.DataFrame: Concatenated results
-
-    Example:
-        >>> concatenate_results(
-        ...     output_dir='./results/',
-        ...     final_output_path='./results/cp_features_all.csv'
-        ... )
     """
     import glob
     import os
 
-    # Find all job CSV files
-    pattern = os.path.join(output_dir, "cp_features_job_*.csv")
-    csv_files = sorted(glob.glob(pattern))
+    # Find chunk files (parquet first, fall back to CSV for backward compat)
+    parquet_pattern = os.path.join(output_dir, "cp_features_job_*.parquet")
+    chunk_files = sorted(glob.glob(parquet_pattern))
 
-    if not csv_files:
-        raise ValueError(f"No CSV files found matching {pattern}")
+    if not chunk_files:
+        # Fall back to CSV for backward compatibility
+        csv_pattern = os.path.join(output_dir, "cp_features_job_*.csv")
+        chunk_files = sorted(glob.glob(csv_pattern))
+        read_fn = pd.read_csv
+        fmt = "CSV"
+    else:
+        read_fn = pd.read_parquet
+        fmt = "parquet"
 
-    print(f"Found {len(csv_files)} CSV files to concatenate")
+    if not chunk_files:
+        raise ValueError(f"No chunk files found in {output_dir}")
 
-    # Load and concatenate all dataframes
+    print(f"Found {len(chunk_files)} {fmt} files to concatenate")
+
     dfs = []
-    for csv_file in tqdm(csv_files, desc="Loading CSV files"):
-        df = pd.read_csv(csv_file)
-        dfs.append(df)
+    for f in tqdm(chunk_files, desc=f"Loading {fmt} files"):
+        dfs.append(read_fn(f))
 
     final_df = pd.concat(dfs, ignore_index=True)
 
-    # Save concatenated results
+    # Save as CSV for backward compatibility with evaluate_cp.process()
     final_df.to_csv(final_output_path, index=False)
 
     print(f"Saved {len(final_df)} total rows to {final_output_path}")
@@ -290,20 +321,18 @@ def cp_features_main(
     )
 
     # Step 2: Submit as a single SLURM array job with submitit
+    cpus = config.get("slurm_cpus_per_task", 32)
+    mem = config.get("slurm_mem_gb", 64)
     executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     executor.update_parameters(
-        timeout_min=30,
-        slurm_partition="cpu",  # Change to your partition name
-        slurm_array_parallelism=100,  # Max 100 concurrent jobs
-        cpus_per_task=2,
-        mem_gb=8,
-        slurm_setup=[
-            "export OMP_NUM_THREADS=2",
-            "export MKL_NUM_THREADS=2",
-            "export OPENBLAS_NUM_THREADS=2",
-            "export NUMEXPR_NUM_THREADS=2",
-            "export SLURM_CPU_BIND=none",
-        ],
+        timeout_min=config.get("slurm_timeout_min", 120),
+        slurm_partition=config.get("slurm_partition", "cpu"),
+        slurm_array_parallelism=100,
+        cpus_per_task=cpus,
+        mem_gb=mem,
+        # num_threads=1: parallelism comes from ProcessPoolExecutor, not numpy threading.
+        # Setting this to cpus would cause 30 workers × 32 OMP threads = 960 threads.
+        slurm_setup=_build_slurm_setup(num_threads=1),
     )
 
     # Load index ranges
@@ -340,17 +369,11 @@ def cp_features_main(
     concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
         timeout_min=120,
-        slurm_partition="cpu",
+        slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=1,
         mem_gb=128,
         slurm_additional_parameters={"dependency": f"afterany:{array_job_id}"},
-        slurm_setup=[
-            "export OMP_NUM_THREADS=2",
-            "export MKL_NUM_THREADS=2",
-            "export OPENBLAS_NUM_THREADS=2",
-            "export NUMEXPR_NUM_THREADS=2",
-            "export SLURM_CPU_BIND=none",
-        ],
+        slurm_setup=_build_slurm_setup(num_threads=2),
     )
 
     concat_job = concat_executor.submit(
@@ -367,17 +390,11 @@ def cp_features_main(
     anndata_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     anndata_executor.update_parameters(
         timeout_min=120,  # 2 hours for processing
-        slurm_partition="cpu",
+        slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=8,
         mem_gb=128,
         slurm_additional_parameters={"dependency": f"afterok:{concat_job.job_id}"},
-        slurm_setup=[
-            "export OMP_NUM_THREADS=8",
-            "export MKL_NUM_THREADS=8",
-            "export OPENBLAS_NUM_THREADS=8",
-            "export NUMEXPR_NUM_THREADS=8",
-            "export SLURM_CPU_BIND=none",
-        ],
+        slurm_setup=_build_slurm_setup(num_threads=8),
     )
 
     # Pass the config_path if processing section exists in config
