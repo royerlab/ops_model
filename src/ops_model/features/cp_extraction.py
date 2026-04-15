@@ -479,8 +479,15 @@ def load_labels_parallel(experiment_dict: dict) -> pd.DataFrame:
     return labels_df
 
 
-def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels):
-    """Pool initializer: store shared data and open per-process zarr handles."""
+def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels,
+                 gran_queue=None, result_store=None, result_lock=None):
+    """Pool initializer: store shared data and open per-process zarr handles.
+
+    CPU-only: no CUDA contexts. GPU granularity goes through gran_queue
+    to the dedicated GPU worker process.
+    """
+    zarr.config.set({"threading.max_workers": 4, "async.concurrency": 4})
+
     stores = {}
     for exp_name in experiment_dict:
         stores[exp_name] = zarr.open_group(
@@ -498,19 +505,32 @@ def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_c
     )
     _worker_state["int_label_lut"] = int_label_lut
     _worker_state["out_channels"] = out_channels
+    _worker_state["gran_queue"] = gran_queue
+    _worker_state["result_store"] = result_store
+    _worker_state["result_lock"] = result_lock
 
 
 def _process_cell_range(bounds):
     """Worker function: extract features for a range of cells using shared state."""
+    import os as _os
+    _pid = _os.getpid()
+    _t0 = time.perf_counter()
     dataset = _worker_state["dataset"]
     int_label_lut = _worker_state["int_label_lut"]
     out_channels = _worker_state["out_channels"]
 
+    n_cells = bounds[1] - bounds[0]
     subset = Subset(dataset, list(range(bounds[0], bounds[1])))
 
     object_measurements = get_core_measurements()
     shape_features_fcn = object_measurements.pop("sizeshape")
+    granularity_fcn = object_measurements.pop("granularity", None)
     colocalization_measurements = get_correlation_measurements()
+
+    # GPU granularity via dedicated worker process
+    gran_queue = _worker_state.get("gran_queue")
+    result_store = _worker_state.get("result_store")
+    _use_gpu_gran = gran_queue is not None
 
     channels = [(ch, i) for i, ch in enumerate(out_channels)]
     mask_configs = [
@@ -525,7 +545,14 @@ def _process_cell_range(bounds):
     ]
 
     results_list = []
-    for batch in subset:
+    gran_request_ids = []  # (request_id, cell_index, prefix) for collecting GPU results
+    _req_counter = [0]  # mutable counter for unique request IDs
+
+    for _ci, batch in enumerate(subset):
+        if _ci % 100 == 0:
+            _elapsed = time.perf_counter() - _t0
+            _rate = _ci / _elapsed if _elapsed > 0 else 0
+            print(f"    [pid {_pid}] {_ci}/{n_cells} cells ({_rate:.1f}/s, {_elapsed:.0f}s)", flush=True)
         if isinstance(batch["data"], torch.Tensor):
             data_np = batch["data"].detach().cpu().numpy()
         else:
@@ -563,6 +590,29 @@ def _process_cell_range(bounds):
                         for k, v in features.items()
                     }
                 )
+                if granularity_fcn is not None and _use_gpu_gran:
+                    # CPU: texture normalize + background removal
+                    # GPU worker only does the fast hot loop
+                    from ops_model.features.gpu_granularity import background_remove_cpu
+                    gran_img = (img - np.min(img)) / (np.max(img) - np.min(img) + 1e-8) * 2 - 1
+                    try:
+                        bg_removed = background_remove_cpu(gran_img, mask)
+                    except (ValueError, IndexError):
+                        bg_removed = gran_img
+                    req_id = f"{_pid}_{_req_counter[0]}"
+                    _req_counter[0] += 1
+                    gran_queue.put((req_id, mask, bg_removed))
+                    gran_request_ids.append((req_id, len(results_list), f"single_object_{ch_name}_{mk_name}"))
+                elif granularity_fcn is not None:
+                    # CPU fallback
+                    try:
+                        gran_result = granularity_fcn(mask, img)
+                        for feat_name, v in gran_result.items():
+                            key = f"single_object_{ch_name}_{mk_name}_{feat_name}"
+                            cell_features[key] = safe_item_conversion(v, key)
+                    except (ValueError, IndexError):
+                        pass
+
             for (ch_name_1, ch_idx_1), (ch_name_2, ch_idx_2) in channel_pairs:
                 coloc_features = colocalization_features(
                     data_np[ch_idx_1], data_np[ch_idx_2], mask,
@@ -587,6 +637,35 @@ def _process_cell_range(bounds):
         )
         results_list.append(cell_features)
 
+    # Collect GPU granularity results — poll result_store until all requests are fulfilled
+    if gran_request_ids and _use_gpu_gran:
+        _collect_t0 = time.perf_counter()
+        remaining = set(req_id for req_id, _, _ in gran_request_ids)
+        while remaining:
+            collected = []
+            for req_id in list(remaining):
+                if req_id in result_store:
+                    collected.append(req_id)
+            for req_id in collected:
+                remaining.discard(req_id)
+            if remaining:
+                time.sleep(0.05)  # brief sleep to avoid busy-wait
+
+        # Merge results into cell features
+        for req_id, cell_idx, prefix in gran_request_ids:
+            gran_result = result_store.get(req_id, {})
+            for feat_name, v in gran_result.items():
+                key = f"{prefix}_{feat_name}"
+                results_list[cell_idx][key] = safe_item_conversion(v, key)
+            # Clean up
+            if req_id in result_store:
+                del result_store[req_id]
+
+        _collect_t = time.perf_counter() - _collect_t0
+        print(f"    [pid {_pid}] collected {len(gran_request_ids)} gran results in {_collect_t:.1f}s", flush=True)
+
+    _total = time.perf_counter() - _t0
+    print(f"    [pid {_pid}] range done: {n_cells} cells in {_total:.1f}s ({n_cells/_total:.1f}/s)", flush=True)
     return pd.DataFrame(results_list)
 
 
@@ -621,13 +700,20 @@ def extract_cp_features_parallel(
         # When one process blocks on I/O, another runs on that core.
         num_workers = max(1, int(cpus * 1.5))
 
-    # Load labels ONCE in parallel (ThreadPool for NFS I/O)
-    labels_df = load_labels_parallel(experiment_dict)
-
-    # Build LUTs once
-    gene_labels = sorted(labels_df["gene_name"].unique())
-    label_int_lut = {gene: i for i, gene in enumerate(gene_labels)}
-    int_label_lut = {i: gene for i, gene in enumerate(gene_labels)}
+    # Load labels via OpsDataManager — same path as original extract_cp_features
+    # for identical cell ordering and filtering
+    dm = data_loader.OpsDataManager(
+        experiments=experiment_dict,
+        batch_size=1, data_split=(1, 0, 0),
+        out_channels=out_channels,
+        initial_yx_patch_size=(256, 256),
+        verbose=False,
+    )
+    dm.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
+    labels_df = dm.train_loader.dataset.labels_df
+    label_int_lut = dm.train_loader.dataset.label_int_lut
+    int_label_lut = dm.train_loader.dataset.int_label_lut
+    del dm  # don't keep zarr stores — workers open their own
 
     # Split bounds into sub-ranges
     total = bounds[1] - bounds[0]
@@ -638,14 +724,23 @@ def extract_cp_features_parallel(
         if bounds[0] + i * chunk < bounds[1]
     ]
 
-    # Process in parallel — workers inherit labels_df via fork (copy-on-write)
-    # Each worker opens its own zarr handles in the initializer
+    # Start GPU workers for granularity (shared queue, separate CUDA contexts)
+    from ops_model.features.gpu_worker import start_gpu_workers, stop_gpu_workers
+    gpu_procs, gran_queue, result_store, result_lock = start_gpu_workers(batch_size=500)
+    print(f"  {len(gpu_procs)} GPU workers started (auto-scaled to VRAM)", flush=True)
+
+    # CPU workers: no CUDA contexts, submit granularity to GPU workers via queue
     with Pool(
         processes=len(sub_bounds),
         initializer=_init_worker,
-        initargs=(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels),
+        initargs=(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels,
+                  gran_queue, result_store, result_lock),
     ) as pool:
         dfs = pool.map(_process_cell_range, sub_bounds)
+
+    # Shut down GPU workers
+    stop_gpu_workers(gpu_procs, gran_queue)
+    print(f"  GPU workers stopped", flush=True)
 
     return pd.concat(dfs, ignore_index=True)
 

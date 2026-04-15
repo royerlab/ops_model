@@ -65,6 +65,10 @@ def _build_slurm_setup(num_threads: int = 2) -> list[str]:
         f"export MKL_NUM_THREADS={num_threads}",
         f"export OPENBLAS_NUM_THREADS={num_threads}",
         f"export NUMEXPR_NUM_THREADS={num_threads}",
+        "export BLOSC_NTHREADS=1",
+        "export BLOSC2_NTHREADS=1",
+        "export ZARR__THREADING__MAX_WORKERS=1",
+        "export ZARR__ASYNC__CONCURRENCY=1",
         "export SLURM_CPU_BIND=none",
     ]
     for var in _OPS_ENV_VARS:
@@ -151,6 +155,7 @@ def cp_features_worker_fcn(
 
     t0 = time.perf_counter()
     total_cells = bounds[1] - bounds[0]
+    # 30 workers — CuPy pool capped at 1GB/worker in _init_worker
     num_workers = max(1, len(os.sched_getaffinity(0)) - 2)
 
     print(
@@ -158,7 +163,7 @@ def cp_features_worker_fcn(
         f"with {num_workers} workers"
     )
 
-    results_df = extract_cp_features_bulk_read(
+    results_df = extract_cp_features_parallel(
         experiment_dict=experiment_dict,
         bounds=bounds,
         out_channels=out_channels,
@@ -330,6 +335,7 @@ def cp_features_main(
         slurm_array_parallelism=100,
         cpus_per_task=cpus,
         mem_gb=mem,
+        slurm_additional_parameters={"gres": "gpu:1"},
         # num_threads=1: parallelism comes from ProcessPoolExecutor, not numpy threading.
         # Setting this to cpus would cause 30 workers × 32 OMP threads = 960 threads.
         slurm_setup=_build_slurm_setup(num_threads=1),
