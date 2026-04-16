@@ -210,7 +210,7 @@ def extract_dinov3_features(
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
 
-    return final_df
+    return None
 
 
 import argparse
