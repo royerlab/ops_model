@@ -11,24 +11,21 @@ plus a combined overview:
 
 Usage::
 
-    # Run locally for a single variant
-    python -m ops_model.post_process.combination.pca_titration \
-        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2
+    # Run locally for a single variant (default -o matches pca_optimization.py)
+    python -m ops_model.post_process.combination.pca_titration
 
     # Submit as SLURM jobs (one per reporter)
-    python -m ops_model.post_process.combination.pca_titration \
-        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2 \
-        --slurm
+    python -m ops_model.post_process.combination.pca_titration --slurm
 
     # Include minibinder geneKO subset analysis with comparison overlay plots
-    python -m ops_model.post_process.combination.pca_titration \
-        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2 \
-        --minibinder-subset
+    python -m ops_model.post_process.combination.pca_titration --minibinder-subset
 
     # Minibinder subset with SLURM submission
+    python -m ops_model.post_process.combination.pca_titration --minibinder-subset --slurm
+
+    # Override root (same as pca_optimization -o)
     python -m ops_model.post_process.combination.pca_titration \
-        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2 \
-        --minibinder-subset --slurm
+        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
 """
 
 import argparse
@@ -63,7 +60,31 @@ NULL_SIZE = 10_000               # smaller null for speed (per-reporter)
 METRICS = ("activity", "distinctiveness", "corum", "chad")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
+# Shared plot styling / labels (used by compare_pca_titration_versions and below)
+TITRATION_METRIC_COLORS = {
+    "activity": "steelblue",
+    "distinctiveness": "mediumseagreen",
+    "corum": "mediumpurple",
+    "chad": "darkorange",
+}
+TITRATION_RATIO_LABELS = {
+    "activity": "% Active",
+    "distinctiveness": "% Distinctive",
+    "corum": "% CORUM consistent",
+    "chad": "% CHAD consistent",
+}
+TITRATION_MAP_LABELS = {
+    "activity": "Activity mAP",
+    "distinctiveness": "Distinctiveness mAP",
+    "corum": "CORUM mAP",
+    "chad": "CHAD mAP",
+}
+SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
+
 MINIBINDER_TARGETS_CSV = Path("/hpc/projects/icd.fast.ops/configs/library/minibinder_geneKO_targets.csv")
+
+# Same default root as pca_optimization.py --output-dir
+DEFAULT_PCA_OPT_ROOT = "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3"
 
 
 def _format_cell_count(n: int) -> str:
@@ -453,6 +474,14 @@ _X_AXIS_VARIANTS = [
 ]
 
 
+def titration_x_axis_base_label(x_col: str) -> str:
+    """Human-readable x-axis title segment for a titration CSV column."""
+    for col, label, _ in _X_AXIS_VARIANTS:
+        if col == x_col:
+            return label
+    return x_col
+
+
 def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None):
     """Generate titration plots for one reporter across all scales and x-axis types.
 
@@ -464,26 +493,10 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
     reporter_dir = Path(reporter_dir)
     reporter_dir.mkdir(parents=True, exist_ok=True)
 
-    colors = {
-        "activity": "steelblue",
-        "distinctiveness": "mediumseagreen",
-        "corum": "mediumpurple",
-        "chad": "darkorange",
-    }
-    ratio_labels = {
-        "activity": "% Active",
-        "distinctiveness": "% Distinctive",
-        "corum": "% CORUM consistent",
-        "chad": "% CHAD consistent",
-    }
-    map_labels = {
-        "activity": "Activity mAP",
-        "distinctiveness": "Distinctiveness mAP",
-        "corum": "CORUM mAP",
-        "chad": "CHAD mAP",
-    }
-
-    _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
+    colors = TITRATION_METRIC_COLORS
+    ratio_labels = TITRATION_RATIO_LABELS
+    map_labels = TITRATION_MAP_LABELS
+    _scale_label = SCALE_LABEL_SHORT
 
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in df.columns:
@@ -549,25 +562,10 @@ def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_saf
     ``suffix`` distinguishes Option A (library) vs Option B (scores) filenames.
     """
     reporter_dir = Path(reporter_dir)
-    colors = {
-        "activity": "steelblue",
-        "distinctiveness": "mediumseagreen",
-        "corum": "mediumpurple",
-        "chad": "darkorange",
-    }
-    ratio_labels = {
-        "activity": "% Active",
-        "distinctiveness": "% Distinctive",
-        "corum": "% CORUM consistent",
-        "chad": "% CHAD consistent",
-    }
-    map_labels = {
-        "activity": "Activity mAP",
-        "distinctiveness": "Distinctiveness mAP",
-        "corum": "CORUM mAP",
-        "chad": "CHAD mAP",
-    }
-    _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
+    colors = TITRATION_METRIC_COLORS
+    ratio_labels = TITRATION_RATIO_LABELS
+    map_labels = TITRATION_MAP_LABELS
+    _scale_label = SCALE_LABEL_SHORT
 
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in df_full.columns or x_col not in df_subset.columns:
@@ -729,8 +727,10 @@ def _build_parser():
         description="Per-reporter cell-count titration analysis.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("-o", "--output-dir", type=str, required=True,
-                        help="Root output directory (same as pca_optimization -o)")
+    parser.add_argument(
+        "-o", "--output-dir", type=str, default=DEFAULT_PCA_OPT_ROOT,
+        help=f"Root output directory (same as pca_optimization -o; default: {DEFAULT_PCA_OPT_ROOT})",
+    )
     parser.add_argument("--norm-method", type=str, default="ntc",
                         help="Normalization method (default: ntc)")
     parser.add_argument("--slurm", action="store_true",
@@ -746,9 +746,21 @@ def _build_parser():
                         help="Look in downsampled/ subdir")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Look in cellprofiler/ subdir")
+    parser.add_argument(
+        "--include-cellpainting", action="store_true",
+        help="Look under with_cellpainting/ (same as pca_optimization --include-cellpainting)",
+    )
     parser.add_argument("--minibinder-subset", action="store_true",
                         help="Also run titration on the 20 minibinder geneKO targets "
                              "and produce comparison overlay plots")
+    parser.add_argument(
+        "--fixed-threshold", type=float, default=None,
+        help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/)",
+    )
+    parser.add_argument(
+        "--distance", type=str, default="cosine", choices=["cosine", "euclidean"],
+        help="Match pca_optimization --distance (default: cosine)",
+    )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -756,12 +768,15 @@ def _build_parser():
 
 
 def _resolve_output_dir(args) -> Path:
-    """Mirror the pca_optimization output dir resolution."""
+    """Mirror pca_optimization.main() output nesting (non --direct)."""
     output_dir = Path(args.output_dir)
     if args.cell_profiler:
         output_dir = output_dir / "cellprofiler"
     else:
         output_dir = output_dir / "dino"
+
+    if getattr(args, "include_cellpainting", False):
+        output_dir = output_dir / "with_cellpainting"
 
     if getattr(args, "phase_only", False) and args.downsampled:
         output_dir = output_dir / "phase_only_downsampled"
@@ -775,7 +790,20 @@ def _resolve_output_dir(args) -> Path:
         output_dir = output_dir / "downsampled"
     else:
         output_dir = output_dir / "all"
+
+    ft = getattr(args, "fixed_threshold", None)
+    if ft is not None:
+        output_dir = output_dir / f"fixed_{ft:.0%}"
+    else:
+        output_dir = output_dir / "consensus_sweep"
+
+    output_dir = output_dir / args.distance
     return output_dir
+
+
+def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
+    """Where ``pca_titration`` writes per-reporter outputs: ``<variant>/titration``."""
+    return _resolve_output_dir(args) / "titration"
 
 
 def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
