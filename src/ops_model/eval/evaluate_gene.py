@@ -27,7 +27,8 @@ def _load_gene_clusters() -> dict:
 
 
 def evaluate_gene_level(
-    adata: ad.AnnData, activity_map: pd.DataFrame | None = None,
+    adata: ad.AnnData,
+    activity_map: pd.DataFrame | None = None,
     distance: str = "cosine",
 ) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """Evaluate gene-level embeddings and return a flat dict of scalar metrics.
@@ -57,7 +58,7 @@ def evaluate_gene_level(
         Per-complex mAP results from ``phenotypic_consistency_manual_annotation``.
     """
     # 1. Validate
-    # debug: 
+    # debug:
     print("Validating gene-level AnnData...")
     print(adata.obs.keys())
 
@@ -83,7 +84,9 @@ def evaluate_gene_level(
 
     # 3. Phenotypic consistency -- manual annotation
     consistency_manual_map, consistency_manual_ratio = (
-        phenotypic_consistency_manual_annotation(adata, activity_map, plot_results=False, distance=distance)
+        phenotypic_consistency_manual_annotation(
+            adata, plot_results=False, distance=distance
+        )
     )
     pct_complexes_significant_manual = float(consistency_manual_ratio)
     mean_map_complexes_manual = float(
@@ -92,7 +95,9 @@ def evaluate_gene_level(
 
     # 4. Phenotypic consistency -- CORUM
     consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
-        adata, activity_map, plot_results=False, distance=distance,
+        adata,
+        plot_results=False,
+        distance=distance,
     )
     pct_complexes_significant_corum = float(consistency_corum_ratio)
     mean_map_complexes_corum = float(
@@ -115,9 +120,7 @@ def evaluate_gene_level(
             if gene not in perturbation_to_complex:
                 perturbation_to_complex[gene] = cluster_name
 
-    labels_all = [
-        perturbation_to_complex.get(p) for p in adata.obs["perturbation"]
-    ]
+    labels_all = [perturbation_to_complex.get(p) for p in adata.obs["perturbation"]]
     valid_mask = np.array([lbl is not None for lbl in labels_all])
     X = adata.X.toarray() if hasattr(adata.X, "toarray") else np.asarray(adata.X)
     X_labeled = X[valid_mask]
