@@ -115,6 +115,8 @@ from ops_utils.data.positive_controls import (
 
 logger = logging.getLogger(__name__)
 
+CHAD_ANNOTATION_PATH = None  # Set from CLI via --chad-annotation; None = use default
+
 DEFAULT_SWEEP_THRESHOLDS = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99]
 # CellProfiler features are hand-crafted and independent (not redundant like DINO embeddings),
 # so PCA is destructive at high thresholds. Optimal region is ~50% variance explained.
@@ -220,7 +222,7 @@ def _run_threshold_sweep(
             )
             _, chad_all = phenotypic_consistency_manual_annotation(
                 e_cp, all_active, plot_results=False, null_size=100_000,
-                cache_similarity=True, distance=distance,
+                cache_similarity=True, distance=distance, annotation_path=CHAD_ANNOTATION_PATH,
             )
         except Exception as e:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
@@ -781,6 +783,81 @@ def pca_sweep_pooled_signal(
 # Phase 2: Aggregation sub-steps (used by aggregate_channels)
 # =============================================================================
 
+def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger):
+    """Plot UMAP colored by CHAD cluster with gene labels."""
+    import seaborn as sns
+    from itertools import product
+
+    cats = [gene_to_cluster.get(g, "Uncategorized") for g in genes]
+    is_ntc = np.array([str(g).startswith("NTC") for g in genes])
+    unique_cats = sorted(set(c for c in cats if c != "Uncategorized"))
+
+    # 10 dark colors x 6 markers = 60 unique combos for 50+ clusters
+    colors_10 = sns.color_palette("dark", 10)
+    markers_6 = ["o", "s", "D", "^", "v", "P"]
+    combos = list(product(colors_10, markers_6))
+    cat_to_color = {cat: combos[i % len(combos)][0] for i, cat in enumerate(unique_cats)}
+    cat_to_marker = {cat: combos[i % len(combos)][1] for i, cat in enumerate(unique_cats)}
+
+    fig, ax = plt.subplots(figsize=(24, 13))
+    ax.set_aspect("equal")
+
+    # Uncategorized background
+    uncat_mask = np.array([c == "Uncategorized" for c in cats]) & ~is_ntc
+    if uncat_mask.any():
+        ax.scatter(umap_coords[uncat_mask, 0], umap_coords[uncat_mask, 1],
+                   c=[(0.75, 0.75, 0.75)], s=40, alpha=0.3, edgecolors="none", label="Uncategorized")
+
+    # Categorized genes — unique color+marker per cluster
+    for cat in unique_cats:
+        if cat == "OR controls":
+            continue  # Plotted separately with special marker
+        mask = np.array([c == cat for c in cats]) & ~is_ntc
+        if mask.any():
+            ax.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
+                       c=[cat_to_color[cat]], marker=cat_to_marker[cat],
+                       s=80, alpha=0.85, edgecolors="white", linewidths=0.4, label=cat)
+
+    # OR controls — bright red X, larger than NTCs
+    is_or = np.array([gene_to_cluster.get(g, "") == "OR controls" for g in genes])
+    if is_or.any():
+        ax.scatter(umap_coords[is_or, 0], umap_coords[is_or, 1],
+                   c="#FF0000", marker="X", s=225, alpha=0.7, edgecolors="#CC0000",
+                   linewidths=0.6, label="OR controls", zorder=11)
+
+    # NTCs
+    if is_ntc.any():
+        ax.scatter(umap_coords[is_ntc, 0], umap_coords[is_ntc, 1],
+                   c="#e08080", marker="X", s=100, alpha=0.5, edgecolors="#b05050",
+                   linewidths=0.4, label="NTC", zorder=10)
+
+    # Gene labels — only annotated genes, radial offset to avoid overlap
+    rng = np.random.RandomState(42)
+    for i, gene in enumerate(genes):
+        if str(gene).startswith("NTC"):
+            continue
+        if gene_to_cluster.get(gene, "Uncategorized") == "Uncategorized":
+            continue
+        angle = rng.uniform(0, 2 * np.pi)
+        radius = rng.uniform(30, 60)
+        dx = radius * np.cos(angle)
+        dy = radius * np.sin(angle)
+        color = cat_to_color.get(gene_to_cluster.get(gene, "Uncategorized"), "black")
+        ax.annotate(gene, xy=(umap_coords[i, 0], umap_coords[i, 1]),
+                    xytext=(dx, dy), textcoords="offset points",
+                    fontsize=10.5, alpha=0.85, ha="center", va="center",
+                    arrowprops=dict(arrowstyle="-", color=color, alpha=0.4, lw=0.6))
+
+    ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9, framealpha=0.9, ncol=1)
+    ax.set_title("Gene UMAP -- colored by CHAD cluster", fontsize=14, fontweight="bold")
+    ax.set_xlabel("UMAP 1")
+    ax.set_ylabel("UMAP 2")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved CHAD UMAP: {out_path}")
+
+
 def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of activity_map with all perturbations marked as active.
 
@@ -834,7 +911,7 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
         result["corum"] = float(corum_ratio)
 
         _, chad_ratio = phenotypic_consistency_manual_annotation(
-            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
+            e_norm, activity_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance, annotation_path=CHAD_ANNOTATION_PATH,
         )
         result["chad"] = float(chad_ratio)
 
@@ -852,7 +929,7 @@ def _score_single_reporter_metrics(g_raw, norm_method, _logger, null_size=100_00
         result["corum_all"] = float(corum_all)
 
         _, chad_all = phenotypic_consistency_manual_annotation(
-            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance,
+            e_norm, all_active_map, plot_results=False, null_size=null_size, cache_similarity=True, distance=distance, annotation_path=CHAD_ANNOTATION_PATH,
         )
         result["chad_all"] = float(chad_all)
 
@@ -1140,7 +1217,7 @@ def _score_consistency(adata_gene, activity_map, total_feats, plots_dir, metrics
         _logger.info(f"Running CHAD consistency ({label})...")
         consistency_manual_map, consistency_manual_ratio = phenotypic_consistency_manual_annotation(
             adata_gene, activity_map, plot_results=False, null_size=100_000,
-            cache_similarity=True, distance=distance,
+            cache_similarity=True, distance=distance, annotation_path=CHAD_ANNOTATION_PATH,
         )
         consistency_manual_map.to_csv(metrics_dir / f"phenotypic_consistency_manual{suffix}.csv", index=False)
         _logger.info(f"  Manual CHAD ({label}): {consistency_manual_ratio:.1%}")
@@ -1270,7 +1347,7 @@ def aggregate_channels(
                 adata_gene, all_active_map, plot_results=False, cache_similarity=True, distance=distance,
             )
             _, chad_ratio_all = phenotypic_consistency_manual_annotation(
-                adata_gene, all_active_map, plot_results=False, cache_similarity=True, distance=distance,
+                adata_gene, all_active_map, plot_results=False, cache_similarity=True, distance=distance, annotation_path=CHAD_ANNOTATION_PATH,
             )
             _logger.info(f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}")
         except Exception as e:
@@ -1297,6 +1374,29 @@ def aggregate_channels(
     if chad_map is not None:
         chad_entity_col = "complex_num" if "complex_num" in chad_map.columns else chad_map.columns[0]
         plot_metric_map_bar(chad_map, "Consistency (CHAD)", chad_entity_col, chad_ratio, plots_dir, plt, _logger)
+
+    # CHAD-colored UMAP if annotation provided and gene embeddings available
+    if CHAD_ANNOTATION_PATH and adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
+        try:
+            import yaml as _yaml
+            with open(CHAD_ANNOTATION_PATH) as f:
+                chad_clusters = _yaml.safe_load(f)
+            # Build gene → cluster name map
+            gene_to_cluster = {}
+            for cid, cdata in chad_clusters.items():
+                name = cdata.get("name", f"cluster_{cid}")
+                for gene in cdata.get("genes", []):
+                    gene_to_cluster[gene.strip()] = name
+
+            _plot_chad_umap(
+                adata_gene_embed.obsm["X_umap"],
+                adata_gene_embed.obs["perturbation"].values,
+                gene_to_cluster,
+                plots_dir / "umap_chad_clusters.png",
+                plt, _logger,
+            )
+        except Exception as e:
+            _logger.warning(f"  CHAD UMAP failed: {e}")
 
     elapsed = time.time() - t_start
     _logger.info(f"\nDone in {elapsed/60:.1f} minutes")
@@ -1487,6 +1587,31 @@ def _handle_downsampled(args, output_dir, cp_override):
         print("No experiment-channel pairs found!")
         return
 
+    exp_whitelist = getattr(args, "experiments", None)
+    if getattr(args, "match_v02", False):
+        v02_manifest = Path("/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.2/dino/all/consensus_sweep/cosine/downsampled_manifest.csv")
+        if not v02_manifest.exists():
+            print(f"ERROR: --match-v02 requires {v02_manifest}")
+            return
+        v02_df = pd.read_csv(v02_manifest)
+        allowed = set()
+        for exps_str in v02_df["experiments"].dropna():
+            allowed.update(e.strip() for e in exps_str.split(",") if e.strip())
+        before = len(all_pairs)
+        all_pairs = [(exp, ch) for exp, ch in all_pairs if exp.split("_")[0] in allowed]
+        print(f"--match-v02: {before} → {len(all_pairs)} pairs (matched {len(allowed)} experiments from v0.2)")
+        if not all_pairs:
+            print("ERROR: no experiment-channel pairs remain after --match-v02 filter.")
+            return
+    elif exp_whitelist:
+        allowed = {e.strip() for e in exp_whitelist.split(",") if e.strip()}
+        before = len(all_pairs)
+        all_pairs = [(exp, ch) for exp, ch in all_pairs if exp.split("_")[0] in allowed]
+        print(f"--experiments filter: {before} → {len(all_pairs)} pairs (allowed {len(allowed)} experiments)")
+        if not all_pairs:
+            print("ERROR: no experiment-channel pairs remain after --experiments filter.")
+            return
+
     from ops_utils.data.feature_metadata import FeatureMetadata
     fm = FeatureMetadata(metadata_path=maps_path)
     signal_groups = build_signal_groups(all_pairs, fm)
@@ -1547,6 +1672,11 @@ def _handle_downsampled(args, output_dir, cp_override):
             "experiments": ",".join(e.split("_")[0] for e, c in pairs),
         })
     print(f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells")
+
+    if getattr(args, "dry_run", False):
+        print("\n--dry-run: exiting before processing.")
+        return
+
     pd.DataFrame(manifest_rows).to_csv(ds_output_dir / "downsampled_manifest.csv", index=False)
 
     # Build common kwargs for signal-group jobs
@@ -1575,8 +1705,10 @@ def _handle_downsampled(args, output_dir, cp_override):
         print(result)
         return
 
-    # SLURM mode: one job per signal group — split Phase out for higher memory
-    phase_jobs = []
+    # SLURM mode: one job per signal group — split into high-memory (>4M cells)
+    # and standard-memory batches
+    HIGH_MEMORY_CELL_THRESHOLD = 4_000_000
+    high_mem_jobs = []
     other_jobs = []
     for signal, pairs in signal_groups.items():
         sig_safe = sanitize_signal_filename(signal)[:40]
@@ -1586,8 +1718,8 @@ def _handle_downsampled(args, output_dir, cp_override):
             "kwargs": _signal_job_kwargs(signal, pairs),
             "metadata": {"signal": signal, "n_experiments": len(pairs)},
         }
-        if signal == "Phase":
-            phase_jobs.append(job)
+        if cell_counts.get(signal, 0) > HIGH_MEMORY_CELL_THRESHOLD:
+            high_mem_jobs.append(job)
         else:
             other_jobs.append(job)
 
@@ -1602,7 +1734,7 @@ def _handle_downsampled(args, output_dir, cp_override):
     job_arrays = []
 
     if other_jobs:
-        print(f"\nSubmitting {len(other_jobs)} non-Phase signal-group SLURM jobs ({slurm_params.get('mem', '?')} each)...")
+        print(f"\nSubmitting {len(other_jobs)} standard-memory signal-group SLURM jobs ({slurm_params.get('mem', '?')} each)...")
         result_other = submit_parallel_jobs(
             jobs_to_submit=other_jobs, experiment="pca_ds_optimization",
             slurm_params=slurm_params, log_dir="pca_optimization",
@@ -1616,21 +1748,22 @@ def _handle_downsampled(args, output_dir, cp_override):
                 "slurm_params": slurm_params,
             })
 
-    if phase_jobs:
+    if high_mem_jobs:
         phase_memory = getattr(args, "phase_memory", "600GB")
-        phase_slurm_params = {**slurm_params, "mem": phase_memory, "timeout_min": 60}
-        print(f"\nSubmitting {len(phase_jobs)} Phase SLURM job(s) ({phase_memory} memory)...")
-        result_phase = submit_parallel_jobs(
-            jobs_to_submit=phase_jobs, experiment="pca_ds_optimization_phase",
-            slurm_params=phase_slurm_params, log_dir="pca_optimization",
-            manifest_prefix="pca_ds_phase_opt", wait_for_completion=False,
+        high_mem_slurm_params = {**slurm_params, "mem": phase_memory, "timeout_min": max(slurm_params.get("timeout_min", 60), 180)}
+        high_mem_names = [j["metadata"]["signal"] for j in high_mem_jobs]
+        print(f"\nSubmitting {len(high_mem_jobs)} high-memory SLURM job(s) ({phase_memory}, >4M cells): {', '.join(high_mem_names)}")
+        result_high = submit_parallel_jobs(
+            jobs_to_submit=high_mem_jobs, experiment="pca_ds_optimization_high_mem",
+            slurm_params=high_mem_slurm_params, log_dir="pca_optimization",
+            manifest_prefix="pca_ds_high_opt", wait_for_completion=False,
         )
-        if result_phase.get("submitted_jobs"):
+        if result_high.get("submitted_jobs"):
             job_arrays.append({
-                "submitted_jobs": result_phase["submitted_jobs"],
-                "base_job_id": result_phase["base_job_id"],
-                "label": "Phase",
-                "slurm_params": phase_slurm_params,
+                "submitted_jobs": result_high["submitted_jobs"],
+                "base_job_id": result_high["base_job_id"],
+                "label": "high_memory",
+                "slurm_params": high_mem_slurm_params,
             })
 
     # Wait for ALL arrays with unified progress monitoring
@@ -1664,7 +1797,7 @@ def _build_parser():
     )
     parser.add_argument(
         "-o", "--output-dir", type=str,
-        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
+        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3",
         help="Root output directory (feature-type and channel-subset subdirs are added automatically)",
     )
     parser.add_argument("--norm-method", type=str, default="ntc", choices=["ntc", "global"],
@@ -1685,6 +1818,8 @@ def _build_parser():
     parser.add_argument("--slurm-partition", type=str, default="cpu,gpu",
                         help="SLURM partition (default: cpu,gpu)")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Discover experiments and print the signal-group manifest, then exit without processing.")
     parser.add_argument("--slurm-agg-memory", type=str, default="500GB",
                         help="SLURM memory for aggregation job (default: 500GB)")
     parser.add_argument("--slurm-agg-time", type=int, default=60,
@@ -1707,6 +1842,21 @@ def _build_parser():
     parser.add_argument("--include-cellpainting", action="store_true",
                         help="Include Cell Painting channels (CP1_*, CP2_*) that are normally excluded. "
                              "Output → with_cellpainting/ subdir.")
+    parser.add_argument(
+        "--experiments", type=str, default=None,
+        help="Comma-separated experiment short names (e.g. ops0031,ops0035) to restrict to. "
+             "Only these experiments will be included in signal groups. Useful for A/B comparisons.",
+    )
+    parser.add_argument(
+        "--match-v02", action="store_true",
+        help="Restrict to the same experiments used in pca_optimized_v0.2 (reads v0.2 manifest). "
+             "Useful for controlled A/B comparison of features with identical experiment sets.",
+    )
+    parser.add_argument(
+        "--chad-annotation", type=str, default=None,
+        help="Path to custom CHAD annotation YAML for consistency scoring. "
+             "Defaults to chad_positive_controls_v4.yml.",
+    )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true",
                              help="Include only Phase (label-free brightfield) channels. Output → phase_only/.")
@@ -1716,7 +1866,9 @@ def _build_parser():
 
 
 def main():
+    global CHAD_ANNOTATION_PATH
     args = _build_parser().parse_args()
+    CHAD_ANNOTATION_PATH = args.chad_annotation
     output_dir = Path(args.output_dir)
 
     # --direct: use the given path as-is, skip all automatic nesting
