@@ -54,9 +54,9 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-DOWNSAMPLE_RATIO = 0.75          # multiply cell count by this each step
-MIN_CELLS = 5_000                # stop titrating below this
-NULL_SIZE = 10_000               # smaller null for speed (per-reporter)
+DOWNSAMPLE_RATIO = 0.75  # multiply cell count by this each step
+MIN_CELLS = 5_000  # stop titrating below this
+NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
 METRICS = ("activity", "distinctiveness", "corum", "chad")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
@@ -106,6 +106,7 @@ def _round_ticks(x_min: float, x_max: float, n: int = 7) -> list:
     (e.g. 50K, 100K, 500K, 1M) regardless of where the raw data falls.
     """
     import math
+
     positions = np.geomspace(x_min, x_max, n)
     ticks = []
     seen = set()
@@ -144,8 +145,12 @@ def _apply_x_scale(ax, x_values, scale: str, tick_fontsize: int = 12):
         raise ValueError(f"Unknown scale: {scale!r}")
 
     ax.set_xticks(ticks)
-    ax.set_xticklabels([_format_cell_count(t) for t in ticks],
-                       rotation=45, ha="right", fontsize=tick_fontsize)
+    ax.set_xticklabels(
+        [_format_cell_count(t) for t in ticks],
+        rotation=45,
+        ha="right",
+        fontsize=tick_fontsize,
+    )
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: _format_cell_count(int(v))))
     ax.xaxis.set_minor_formatter(NullFormatter())
     ax.grid(True, alpha=0.3)
@@ -155,10 +160,14 @@ def _apply_x_scale(ax, x_values, scale: str, tick_fontsize: int = 12):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _init_logger():
     import warnings
+
     warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     logging.getLogger("copairs").setLevel(logging.WARNING)
     return logging.getLogger(__name__)
 
@@ -176,8 +185,9 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
-def _subsample_and_aggregate(adata_cells: ad.AnnData, target_n_cells: int,
-                              rng: np.random.RandomState) -> ad.AnnData:
+def _subsample_and_aggregate(
+    adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState
+) -> ad.AnnData:
     """Subsample real cells from the cell-level h5ad, then re-aggregate to guide level.
 
     Randomly selects ``target_n_cells`` cells (without replacement), then
@@ -192,8 +202,13 @@ def _subsample_and_aggregate(adata_cells: ad.AnnData, target_n_cells: int,
         idx.sort()
         sub = adata_cells[idx].copy()
 
-    g = aggregate_to_level(sub, level="guide", method="mean",
-                           preserve_batch_info=False, subsample_controls=False)
+    g = aggregate_to_level(
+        sub,
+        level="guide",
+        method="mean",
+        preserve_batch_info=False,
+        subsample_controls=False,
+    )
     return g
 
 
@@ -208,13 +223,22 @@ def _ratio_and_mean_from_map(map_df):
     """Extract (ratio_significant, mean_mAP) from a map DataFrame."""
     if map_df is None or len(map_df) == 0:
         return math.nan, math.nan
-    ratio = float(map_df["below_corrected_p"].mean()) if "below_corrected_p" in map_df.columns else math.nan
-    mean_map = float(map_df["mean_average_precision"].mean()) if "mean_average_precision" in map_df.columns else math.nan
+    ratio = (
+        float(map_df["below_corrected_p"].mean())
+        if "below_corrected_p" in map_df.columns
+        else math.nan
+    )
+    mean_map = (
+        float(map_df["mean_average_precision"].mean())
+        if "mean_average_precision" in map_df.columns
+        else math.nan
+    )
     return ratio, mean_map
 
 
-def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine",
-                       subset_targets: Optional[set] = None) -> dict:
+def _score_all_metrics(
+    g_norm: ad.AnnData, _logger, distance="cosine", subset_targets: Optional[set] = None
+) -> dict:
     """Score all 4 metrics on a guide-level AnnData. Returns dict of ratios + mAPs.
 
     If ``subset_targets`` is provided, mAP is computed using ALL perturbations
@@ -228,23 +252,34 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine",
     )
 
     result = {
-        "activity_ratio": math.nan, "activity_map_mean": math.nan,
-        "distinctiveness_ratio": math.nan, "distinctiveness_map_mean": math.nan,
-        "corum_ratio": math.nan, "corum_map_mean": math.nan,
-        "chad_ratio": math.nan, "chad_map_mean": math.nan,
+        "activity_ratio": math.nan,
+        "activity_map_mean": math.nan,
+        "distinctiveness_ratio": math.nan,
+        "distinctiveness_map_mean": math.nan,
+        "corum_ratio": math.nan,
+        "corum_map_mean": math.nan,
+        "chad_ratio": math.nan,
+        "chad_map_mean": math.nan,
     }
 
     try:
         g_copairs = _prepare_for_copairs(g_norm.copy())
         activity_map, active_ratio = phenotypic_activity_assesment(
-            g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
+            g_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            distance=distance,
         )
         if subset_targets is not None:
             filt = _filter_map_to_targets(activity_map, subset_targets)
-            result["activity_ratio"], result["activity_map_mean"] = _ratio_and_mean_from_map(filt)
+            result["activity_ratio"], result["activity_map_mean"] = (
+                _ratio_and_mean_from_map(filt)
+            )
         else:
             result["activity_ratio"] = float(active_ratio)
-            result["activity_map_mean"] = float(activity_map["mean_average_precision"].mean())
+            result["activity_map_mean"] = float(
+                activity_map["mean_average_precision"].mean()
+            )
     except Exception as exc:
         _logger.warning(f"    Activity scoring failed: {exc}")
         return result
@@ -256,43 +291,69 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine",
 
     try:
         dist_map, dist_ratio = phenotypic_distinctivness(
-            g_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, distance=distance,
+            g_copairs,
+            all_active_map,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            distance=distance,
         )
         if subset_targets is not None:
             filt = _filter_map_to_targets(dist_map, subset_targets)
-            result["distinctiveness_ratio"], result["distinctiveness_map_mean"] = _ratio_and_mean_from_map(filt)
+            result["distinctiveness_ratio"], result["distinctiveness_map_mean"] = (
+                _ratio_and_mean_from_map(filt)
+            )
         else:
             result["distinctiveness_ratio"] = float(dist_ratio)
             if dist_map is not None and "mean_average_precision" in dist_map.columns:
-                result["distinctiveness_map_mean"] = float(dist_map["mean_average_precision"].mean())
+                result["distinctiveness_map_mean"] = float(
+                    dist_map["mean_average_precision"].mean()
+                )
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
 
     try:
-        e_norm = aggregate_to_level(g_copairs, "gene", preserve_batch_info=False, subsample_controls=False)
+        e_norm = aggregate_to_level(
+            g_copairs, "gene", preserve_batch_info=False, subsample_controls=False
+        )
         e_copairs = _prepare_for_copairs(e_norm)
 
         corum_map, corum_ratio = phenotypic_consistency_corum(
-            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True, distance=distance,
+            e_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            cache_similarity=True,
+            distance=distance,
         )
         if subset_targets is not None:
             filt = _filter_map_to_targets(corum_map, subset_targets)
-            result["corum_ratio"], result["corum_map_mean"] = _ratio_and_mean_from_map(filt)
+            result["corum_ratio"], result["corum_map_mean"] = _ratio_and_mean_from_map(
+                filt
+            )
         else:
             result["corum_ratio"] = float(corum_ratio)
             if corum_map is not None and "mean_average_precision" in corum_map.columns:
-                result["corum_map_mean"] = float(corum_map["mean_average_precision"].mean())
+                result["corum_map_mean"] = float(
+                    corum_map["mean_average_precision"].mean()
+                )
 
         chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
-            e_copairs, all_active_map, plot_results=False, null_size=NULL_SIZE, cache_similarity=True, distance=distance,
+            e_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            cache_similarity=True,
+            distance=distance,
         )
         if subset_targets is not None:
             filt = _filter_map_to_targets(chad_map, subset_targets)
-            result["chad_ratio"], result["chad_map_mean"] = _ratio_and_mean_from_map(filt)
+            result["chad_ratio"], result["chad_map_mean"] = _ratio_and_mean_from_map(
+                filt
+            )
         else:
             result["chad_ratio"] = float(chad_ratio)
             if chad_map is not None and "mean_average_precision" in chad_map.columns:
-                result["chad_map_mean"] = float(chad_map["mean_average_precision"].mean())
+                result["chad_map_mean"] = float(
+                    chad_map["mean_average_precision"].mean()
+                )
     except Exception as exc:
         _logger.warning(f"    Consistency scoring failed: {exc}")
 
@@ -302,6 +363,7 @@ def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine",
 # ---------------------------------------------------------------------------
 # Core titration function (one per reporter — pickle-friendly for submitit)
 # ---------------------------------------------------------------------------
+
 
 def _load_minibinder_targets() -> set:
     """Load the 20 minibinder geneKO target names from the library CSV."""
@@ -315,12 +377,15 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
     mask = adata.obs[pert_col].isin(targets) | adata.obs[pert_col].str.startswith("NTC")
     n_before = adata.n_obs
     adata_sub = adata[mask].copy()
-    _logger.info(f"  Subset to {len(targets)} targets + NTC: {n_before:,} → {adata_sub.n_obs:,} cells")
+    _logger.info(
+        f"  Subset to {len(targets)} targets + NTC: {n_before:,} → {adata_sub.n_obs:,} cells"
+    )
     return adata_sub
 
 
-def _run_titration_points(adata_cells, cell_targets, norm_method, signal, rng, _logger,
-                          subset_targets=None):
+def _run_titration_points(
+    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None
+):
     """Score all titration points for an adata, returning a DataFrame of results.
 
     If ``subset_targets`` is provided, scores are computed using all perturbations
@@ -340,7 +405,9 @@ def _run_titration_points(adata_cells, cell_targets, norm_method, signal, rng, _
         scores = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
         scores["n_cells"] = target
         scores["n_guides"] = g_sub.n_obs
-        pert_col = "perturbation" if "perturbation" in g_sub.obs.columns else "label_str"
+        pert_col = (
+            "perturbation" if "perturbation" in g_sub.obs.columns else "label_str"
+        )
         n_perts = g_sub.obs[pert_col].nunique()
         scores["n_perturbations"] = n_perts
         scores["cells_per_perturbation"] = target / n_perts if n_perts > 0 else target
@@ -392,7 +459,9 @@ def titrate_single_reporter(
     rng = np.random.RandomState(random_seed)
 
     adata_cells = ad.read_h5ad(cells_h5ad_path)
-    signal = adata_cells.obs.get("signal", pd.Series([cells_h5ad_path.stem.replace("_cells", "")])).iloc[0]
+    signal = adata_cells.obs.get(
+        "signal", pd.Series([cells_h5ad_path.stem.replace("_cells", "")])
+    ).iloc[0]
     if isinstance(signal, float):
         signal = cells_h5ad_path.stem.replace("_cells", "")
     total_cells = adata_cells.n_obs
@@ -403,6 +472,7 @@ def titrate_single_reporter(
     _logger.info(f"  Titration points: {cell_targets}")
 
     from ops_utils.data.feature_discovery import sanitize_signal_filename
+
     sig_safe = sanitize_signal_filename(signal)[:40]
 
     # Per-reporter subdir keeps CSVs and all scale/format variants together
@@ -410,15 +480,21 @@ def titrate_single_reporter(
     reporter_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Full titration ---
-    df_full = _run_titration_points(adata_cells.copy(), cell_targets, norm_method, signal,
-                                     np.random.RandomState(random_seed), _logger)
+    df_full = _run_titration_points(
+        adata_cells.copy(),
+        cell_targets,
+        norm_method,
+        signal,
+        np.random.RandomState(random_seed),
+        _logger,
+    )
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
     df_full.to_csv(csv_path, index=False)
     _logger.info(f"  Saved {csv_path}")
 
     # --- Minibinder subset titrations ---
-    df_library = None   # Option A: subset cells, score subset perturbations
-    df_scores = None    # Option B: all cells, score only subset perturbations
+    df_library = None  # Option A: subset cells, score subset perturbations
+    df_scores = None  # Option B: all cells, score only subset perturbations
     minibinder_dir = None
     if minibinder_subset:
         targets = _load_minibinder_targets()
@@ -430,37 +506,71 @@ def titrate_single_reporter(
         adata_sub = _subset_to_targets(adata_cells, targets, _logger)
         sub_targets = _build_titration_schedule(adata_sub.n_obs)
         _logger.info(f"  Subset titration points: {sub_targets}")
-        df_library = _run_titration_points(adata_sub, sub_targets, norm_method, signal,
-                                            np.random.RandomState(random_seed), _logger)
-        df_library.to_csv(minibinder_dir / f"{sig_safe}_titration_library.csv", index=False)
+        df_library = _run_titration_points(
+            adata_sub,
+            sub_targets,
+            norm_method,
+            signal,
+            np.random.RandomState(random_seed),
+            _logger,
+        )
+        df_library.to_csv(
+            minibinder_dir / f"{sig_safe}_titration_library.csv", index=False
+        )
 
         # Option B — subset scores: same full cells, but report only subset mAP/ratios
         _logger.info("  [Option B] Subset scores from full pool...")
-        df_scores = _run_titration_points(adata_cells.copy(), cell_targets, norm_method, signal,
-                                           np.random.RandomState(random_seed), _logger,
-                                           subset_targets=targets)
-        df_scores.to_csv(minibinder_dir / f"{sig_safe}_titration_scores.csv", index=False)
+        df_scores = _run_titration_points(
+            adata_cells.copy(),
+            cell_targets,
+            norm_method,
+            signal,
+            np.random.RandomState(random_seed),
+            _logger,
+            subset_targets=targets,
+        )
+        df_scores.to_csv(
+            minibinder_dir / f"{sig_safe}_titration_scores.csv", index=False
+        )
 
     # Plot — PNG + SVG for each scale
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         _plot_titration(df_full, signal, reporter_dir, sig_safe, plt)
         if minibinder_dir is not None:
             mb_metrics = ("activity", "distinctiveness")
-            _plot_titration(df_library, signal, minibinder_dir, sig_safe, plt,
-                            metrics=mb_metrics)
+            _plot_titration(
+                df_library, signal, minibinder_dir, sig_safe, plt, metrics=mb_metrics
+            )
             # Option A comparison: full vs subset library
             _plot_titration_comparison(
-                df_full, df_library, signal, minibinder_dir, sig_safe, plt,
-                label_a="All Perts", label_b="Minibinder Library",
-                metrics=mb_metrics)
+                df_full,
+                df_library,
+                signal,
+                minibinder_dir,
+                sig_safe,
+                plt,
+                label_a="All Perts",
+                label_b="Minibinder Library",
+                metrics=mb_metrics,
+            )
             # Option B comparison: full scores vs subset scores (same cells)
             _plot_titration_comparison(
-                df_full, df_scores, signal, minibinder_dir, sig_safe, plt,
-                label_a="All Perts", label_b="Minibinder Scores",
-                suffix="scores", metrics=mb_metrics)
+                df_full,
+                df_scores,
+                signal,
+                minibinder_dir,
+                sig_safe,
+                plt,
+                label_a="All Perts",
+                label_b="Minibinder Scores",
+                suffix="scores",
+                metrics=mb_metrics,
+            )
     except Exception as exc:
         _logger.warning(f"  Plotting failed: {exc}")
 
@@ -513,8 +623,15 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 col = f"{metric}_ratio"
                 if col in df.columns:
                     vals = df[col].values * 100
-                    ax.plot(x, vals, marker="o", color=colors[metric],
-                            label=ratio_labels[metric], linewidth=3.5, markersize=8)
+                    ax.plot(
+                        x,
+                        vals,
+                        marker="o",
+                        color=colors[metric],
+                        label=ratio_labels[metric],
+                        linewidth=3.5,
+                        markersize=8,
+                    )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("% Significant", fontsize=22)
             ax.set_title(f"{signal} — % Significant", fontsize=24)
@@ -527,8 +644,15 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 col = f"{metric}_map_mean"
                 if col in df.columns:
                     vals = df[col].values
-                    ax.plot(x, vals, marker="s", color=colors[metric],
-                            label=map_labels[metric], linewidth=3.5, markersize=8)
+                    ax.plot(
+                        x,
+                        vals,
+                        marker="s",
+                        color=colors[metric],
+                        label=map_labels[metric],
+                        linewidth=3.5,
+                        markersize=8,
+                    )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("Mean mAP", fontsize=22)
             ax.set_title(f"{signal} — Mean mAP", fontsize=24)
@@ -537,11 +661,20 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
 
             # Single legend below the plots
             handles, labels_list = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels_list, loc="lower center", ncol=4,
-                       fontsize=19, bbox_to_anchor=(0.5, -0.02))
+            fig.legend(
+                handles,
+                labels_list,
+                loc="lower center",
+                ncol=4,
+                fontsize=19,
+                bbox_to_anchor=(0.5, -0.02),
+            )
 
-            fig.suptitle(f"Cell Count Titration — {signal}  [{scale}]",
-                         fontsize=31, fontweight="bold")
+            fig.suptitle(
+                f"Cell Count Titration — {signal}  [{scale}]",
+                fontsize=31,
+                fontweight="bold",
+            )
             fig.tight_layout(rect=[0, 0.06, 1, 0.97])
 
             stem = reporter_dir / f"{sig_safe}_titration_{x_suffix}_{scale}"
@@ -550,10 +683,18 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
             plt.close(fig)
 
 
-def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_safe, plt,
-                               label_a="All Perts", label_b="Minibinder",
-                               suffix="library",
-                               metrics=("activity", "distinctiveness")):
+def _plot_titration_comparison(
+    df_full,
+    df_subset,
+    signal,
+    reporter_dir,
+    sig_safe,
+    plt,
+    label_a="All Perts",
+    label_b="Minibinder",
+    suffix="library",
+    metrics=("activity", "distinctiveness"),
+):
     """Overlay two titration curves to show the shift.
 
     Produces one figure per (scale × x-axis) combination with 2 panels.
@@ -584,15 +725,32 @@ def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_saf
                 col = f"{metric}_ratio"
                 c = colors[metric]
                 if col in df_full.columns:
-                    ax.plot(x_full, df_full[col].values * 100, marker="o", color=c,
-                            label=f"{ratio_labels[metric]} ({label_a})", linewidth=3.5, markersize=8)
+                    ax.plot(
+                        x_full,
+                        df_full[col].values * 100,
+                        marker="o",
+                        color=c,
+                        label=f"{ratio_labels[metric]} ({label_a})",
+                        linewidth=3.5,
+                        markersize=8,
+                    )
                 if col in df_subset.columns:
-                    ax.plot(x_sub, df_subset[col].values * 100, marker="^", color=c,
-                            label=f"{ratio_labels[metric]} ({label_b})", linewidth=3.5,
-                            markersize=8, linestyle="--", alpha=0.7)
+                    ax.plot(
+                        x_sub,
+                        df_subset[col].values * 100,
+                        marker="^",
+                        color=c,
+                        label=f"{ratio_labels[metric]} ({label_b})",
+                        linewidth=3.5,
+                        markersize=8,
+                        linestyle="--",
+                        alpha=0.7,
+                    )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("% Significant", fontsize=22)
-            ax.set_title(f"{signal} — % Significant: {label_a} vs {label_b}", fontsize=22)
+            ax.set_title(
+                f"{signal} — % Significant: {label_a} vs {label_b}", fontsize=22
+            )
             ax.tick_params(axis="y", labelsize=18)
             _apply_x_scale(ax, x_all, scale, tick_fontsize=18)
 
@@ -602,12 +760,27 @@ def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_saf
                 col = f"{metric}_map_mean"
                 c = colors[metric]
                 if col in df_full.columns:
-                    ax.plot(x_full, df_full[col].values, marker="s", color=c,
-                            label=f"{map_labels[metric]} ({label_a})", linewidth=3.5, markersize=8)
+                    ax.plot(
+                        x_full,
+                        df_full[col].values,
+                        marker="s",
+                        color=c,
+                        label=f"{map_labels[metric]} ({label_a})",
+                        linewidth=3.5,
+                        markersize=8,
+                    )
                 if col in df_subset.columns:
-                    ax.plot(x_sub, df_subset[col].values, marker="D", color=c,
-                            label=f"{map_labels[metric]} ({label_b})", linewidth=3.5,
-                            markersize=8, linestyle="--", alpha=0.7)
+                    ax.plot(
+                        x_sub,
+                        df_subset[col].values,
+                        marker="D",
+                        color=c,
+                        label=f"{map_labels[metric]} ({label_b})",
+                        linewidth=3.5,
+                        markersize=8,
+                        linestyle="--",
+                        alpha=0.7,
+                    )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("Mean mAP", fontsize=22)
             ax.set_title(f"{signal} — Mean mAP: {label_a} vs {label_b}", fontsize=22)
@@ -616,11 +789,20 @@ def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_saf
 
             # Single legend below the plots
             handles, labels_list = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels_list, loc="lower center", ncol=4,
-                       fontsize=14, bbox_to_anchor=(0.5, -0.02))
+            fig.legend(
+                handles,
+                labels_list,
+                loc="lower center",
+                ncol=4,
+                fontsize=14,
+                bbox_to_anchor=(0.5, -0.02),
+            )
 
-            fig.suptitle(f"Titration {suffix.title()} — {signal}  [{scale}]",
-                         fontsize=31, fontweight="bold")
+            fig.suptitle(
+                f"Titration {suffix.title()} — {signal}  [{scale}]",
+                fontsize=31,
+                fontweight="bold",
+            )
             fig.tight_layout(rect=[0, 0.06, 1, 0.97])
 
             stem = reporter_dir / f"{sig_safe}_comparison_{suffix}_{x_suffix}_{scale}"
@@ -629,8 +811,13 @@ def _plot_titration_comparison(df_full, df_subset, signal, reporter_dir, sig_saf
             plt.close(fig)
 
 
-def _plot_combined_titration(output_dir, plt, csv_glob="**/*_titration.csv",
-                             title_suffix=None, filename_prefix="titration_combined"):
+def _plot_combined_titration(
+    output_dir,
+    plt,
+    csv_glob="**/*_titration.csv",
+    title_suffix=None,
+    filename_prefix="titration_combined",
+):
     """Combine all per-reporter titration CSVs into one summary plot.
 
     Saves PNG + SVG for each scale (linear, log2, log10).
@@ -677,9 +864,16 @@ def _plot_combined_titration(output_dir, plt, csv_glob="**/*_titration.csv",
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
-                        ax.plot(sub[x_col], sub[ratio_col] * 100,
-                                marker="o", color=colors_cycle[i % len(colors_cycle)],
-                                label=sig[:25], linewidth=3, markersize=8, alpha=0.8)
+                        ax.plot(
+                            sub[x_col],
+                            sub[ratio_col] * 100,
+                            marker="o",
+                            color=colors_cycle[i % len(colors_cycle)],
+                            label=sig[:25],
+                            linewidth=3,
+                            markersize=8,
+                            alpha=0.8,
+                        )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("% Significant", fontsize=24)
                 ax.set_title(label, fontsize=26)
@@ -693,9 +887,16 @@ def _plot_combined_titration(output_dir, plt, csv_glob="**/*_titration.csv",
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
-                        ax.plot(sub[x_col], sub[map_col],
-                                marker="s", color=colors_cycle[i % len(colors_cycle)],
-                                label=sig[:25], linewidth=3, markersize=8, alpha=0.8)
+                        ax.plot(
+                            sub[x_col],
+                            sub[map_col],
+                            marker="s",
+                            color=colors_cycle[i % len(colors_cycle)],
+                            label=sig[:25],
+                            linewidth=3,
+                            markersize=8,
+                            alpha=0.8,
+                        )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("Mean mAP", fontsize=24)
                 ax.set_title(f"{label} mAP", fontsize=26)
@@ -704,12 +905,21 @@ def _plot_combined_titration(output_dir, plt, csv_glob="**/*_titration.csv",
 
             # Single legend at bottom
             handles, labels_list = axes[0, 0].get_legend_handles_labels()
-            fig.legend(handles, labels_list, loc="lower center", ncol=min(8, n_signals),
-                       fontsize=19, bbox_to_anchor=(0.5, -0.02))
+            fig.legend(
+                handles,
+                labels_list,
+                loc="lower center",
+                ncol=min(8, n_signals),
+                fontsize=19,
+                bbox_to_anchor=(0.5, -0.02),
+            )
 
             title_tag = f" — {title_suffix}" if title_suffix else ""
-            fig.suptitle(f"Cell Count Titration — All Reporters{title_tag}  [{scale}]",
-                         fontsize=34, fontweight="bold")
+            fig.suptitle(
+                f"Cell Count Titration — All Reporters{title_tag}  [{scale}]",
+                fontsize=34,
+                fontweight="bold",
+            )
             fig.tight_layout(rect=[0, 0.04, 1, 0.97])
 
             stem = Path(output_dir) / f"{filename_prefix}_{x_suffix}_{scale}"
@@ -721,6 +931,7 @@ def _plot_combined_titration(output_dir, plt, csv_glob="**/*_titration.csv",
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def _build_parser():
     parser = argparse.ArgumentParser(
@@ -736,8 +947,12 @@ def _build_parser():
     parser.add_argument("--slurm", action="store_true",
                         help="Submit one SLURM job per reporter")
     parser.add_argument("--slurm-memory", type=str, default="200GB")
-    parser.add_argument("--slurm-time", type=int, default=30,
-                        help="SLURM time limit per job in minutes (default: 30)")
+    parser.add_argument(
+        "--slurm-time",
+        type=int,
+        default=30,
+        help="SLURM time limit per job in minutes (default: 30)",
+    )
     parser.add_argument("--slurm-cpus", type=int, default=8)
     parser.add_argument("--slurm-partition", type=str, default="cpu,gpu")
     parser.add_argument("--replot", action="store_true",
@@ -809,10 +1024,16 @@ def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
 def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
     """Plot a single reporter from its CSV; returns sig_safe for progress reporting."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     df = pd.read_csv(csv_path)
-    signal = df["signal"].iloc[0] if "signal" in df.columns else csv_path.stem.replace("_titration", "")
+    signal = (
+        df["signal"].iloc[0]
+        if "signal" in df.columns
+        else csv_path.stem.replace("_titration", "")
+    )
     reporter_dir = csv_path.parent
     sig_safe = reporter_dir.name
     _plot_titration(df, signal, reporter_dir, sig_safe, plt)
@@ -827,19 +1048,35 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
 
         if mb_library_csv.exists():
             df_library = pd.read_csv(mb_library_csv)
-            _plot_titration(df_library, signal, mb_dir, sig_safe, plt,
-                            metrics=mb_metrics)
+            _plot_titration(
+                df_library, signal, mb_dir, sig_safe, plt, metrics=mb_metrics
+            )
             _plot_titration_comparison(
-                df, df_library, signal, mb_dir, sig_safe, plt,
-                label_a="All Perts", label_b="Minibinder Library",
-                metrics=mb_metrics)
+                df,
+                df_library,
+                signal,
+                mb_dir,
+                sig_safe,
+                plt,
+                label_a="All Perts",
+                label_b="Minibinder Library",
+                metrics=mb_metrics,
+            )
 
         if mb_scores_csv.exists():
             df_scores = pd.read_csv(mb_scores_csv)
             _plot_titration_comparison(
-                df, df_scores, signal, mb_dir, sig_safe, plt,
-                label_a="All Perts", label_b="Minibinder Scores",
-                suffix="scores", metrics=mb_metrics)
+                df,
+                df_scores,
+                signal,
+                mb_dir,
+                sig_safe,
+                plt,
+                label_a="All Perts",
+                label_b="Minibinder Scores",
+                suffix="scores",
+                metrics=mb_metrics,
+            )
 
     plt.close("all")
     return sig_safe
@@ -848,6 +1085,7 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
 def _replot(titration_dir: Path, minibinder_subset: bool = False):
     """Regenerate all per-reporter and combined plots from existing CSVs, in parallel."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -856,7 +1094,8 @@ def _replot(titration_dir: Path, minibinder_subset: bool = False):
 
     # Only glob top-level reporter CSVs, not minibinder subdirectory CSVs
     csv_files = sorted(
-        p for p in titration_dir.glob("*/*_titration.csv")
+        p
+        for p in titration_dir.glob("*/*_titration.csv")
         if "minibinder" not in p.parts
     )
     if not csv_files:
@@ -869,8 +1108,10 @@ def _replot(titration_dir: Path, minibinder_subset: bool = False):
     print(f"Replotting {len(csv_files)} {label} with {n_workers} workers...")
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        futures = {pool.submit(_replot_one, csv_path, minibinder_subset): csv_path
-                   for csv_path in csv_files}
+        futures = {
+            pool.submit(_replot_one, csv_path, minibinder_subset): csv_path
+            for csv_path in csv_files
+        }
         with tqdm(total=len(futures), unit="reporter") as pbar:
             for fut in as_completed(futures):
                 try:
@@ -889,15 +1130,27 @@ def _replot(titration_dir: Path, minibinder_subset: bool = False):
         mb_scores_csvs = sorted(mb_base.glob("**/*_titration_scores.csv"))
         if mb_library_csvs:
             print("Generating minibinder library combined plot...")
-            _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_library.csv",
-                                     title_suffix="Minibinder Library")
-            print(f"Saved {mb_base}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+            _plot_combined_titration(
+                mb_base,
+                plt,
+                csv_glob="**/*_titration_library.csv",
+                title_suffix="Minibinder Library",
+            )
+            print(
+                f"Saved {mb_base}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
+            )
         if mb_scores_csvs:
             print("Generating minibinder scores combined plot...")
-            _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_scores.csv",
-                                     title_suffix="Minibinder Scores",
-                                     filename_prefix="titration_scores_combined")
-            print(f"Saved {mb_base}/titration_scores_combined_{{linear,log2,log10}}.{{png,svg}}")
+            _plot_combined_titration(
+                mb_base,
+                plt,
+                csv_glob="**/*_titration_scores.csv",
+                title_suffix="Minibinder Scores",
+                filename_prefix="titration_scores_combined",
+            )
+            print(
+                f"Saved {mb_base}/titration_scores_combined_{{linear,log2,log10}}.{{png,svg}}"
+            )
 
 
 def main():
@@ -930,16 +1183,18 @@ def main():
         jobs = []
         for cf in cells_files:
             sig_safe = cf.stem.replace("_cells", "")[:40]
-            jobs.append({
-                "name": f"titr_{sig_safe}",
-                "func": titrate_single_reporter,
-                "kwargs": {
-                    "cells_h5ad_path": str(cf),
-                    "output_dir": str(titration_dir),
-                    "norm_method": args.norm_method,
-                    "minibinder_subset": args.minibinder_subset,
-                },
-            })
+            jobs.append(
+                {
+                    "name": f"titr_{sig_safe}",
+                    "func": titrate_single_reporter,
+                    "kwargs": {
+                        "cells_h5ad_path": str(cf),
+                        "output_dir": str(titration_dir),
+                        "norm_method": args.norm_method,
+                        "minibinder_subset": args.minibinder_subset,
+                    },
+                }
+            )
 
         print(f"\nSubmitting {len(jobs)} SLURM titration jobs...")
         slurm_params = {
@@ -965,21 +1220,35 @@ def main():
         # Generate combined plot from all CSVs
         print("Generating combined titration plot...")
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         _plot_combined_titration(titration_dir, plt)
-        print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+        print(
+            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
+        )
 
         if args.minibinder_subset:
             mb_base = titration_dir / "minibinder"
             if mb_base.exists():
                 print("Generating minibinder combined plots...")
-                _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_library.csv",
-                                         title_suffix="Minibinder Library")
-                _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_scores.csv",
-                                         title_suffix="Minibinder Scores",
-                                         filename_prefix="titration_scores_combined")
-                print(f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}")
+                _plot_combined_titration(
+                    mb_base,
+                    plt,
+                    csv_glob="**/*_titration_library.csv",
+                    title_suffix="Minibinder Library",
+                )
+                _plot_combined_titration(
+                    mb_base,
+                    plt,
+                    csv_glob="**/*_titration_scores.csv",
+                    title_suffix="Minibinder Scores",
+                    filename_prefix="titration_scores_combined",
+                )
+                print(
+                    f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}"
+                )
 
     else:
         print("\nRunning locally (sequential)...")
@@ -994,21 +1263,35 @@ def main():
 
         print("\nGenerating combined titration plot...")
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+
         _plot_combined_titration(titration_dir, plt)
-        print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+        print(
+            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
+        )
 
         if args.minibinder_subset:
             mb_base = titration_dir / "minibinder"
             if mb_base.exists():
                 print("Generating minibinder combined plots...")
-                _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_library.csv",
-                                         title_suffix="Minibinder Library")
-                _plot_combined_titration(mb_base, plt, csv_glob="**/*_titration_scores.csv",
-                                         title_suffix="Minibinder Scores",
-                                         filename_prefix="titration_scores_combined")
-                print(f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}")
+                _plot_combined_titration(
+                    mb_base,
+                    plt,
+                    csv_glob="**/*_titration_library.csv",
+                    title_suffix="Minibinder Library",
+                )
+                _plot_combined_titration(
+                    mb_base,
+                    plt,
+                    csv_glob="**/*_titration_scores.csv",
+                    title_suffix="Minibinder Scores",
+                    filename_prefix="titration_scores_combined",
+                )
+                print(
+                    f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}"
+                )
 
 
 if __name__ == "__main__":
