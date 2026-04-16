@@ -277,6 +277,7 @@ def cp_features_main(
         data_split=tuple(config["data_manager"]["data_split"]),
         out_channels=config["data_manager"]["out_channels"],
         initial_yx_patch_size=tuple(config["data_manager"]["initial_yx_patch_size"]),
+        link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
     )
     data_manager.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
