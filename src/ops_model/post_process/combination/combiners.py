@@ -114,20 +114,34 @@ class ComprehensiveCombiner:
 # PCA-optimized combiner — constants
 # =============================================================================
 
-_SWEEP_THRESHOLDS_DINO = [0.60, 0.70, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84, 0.88, 0.90, 0.95]
-_SWEEP_THRESHOLDS_CP   = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
-_MIN_PCS         = 10       # skip thresholds that yield fewer PCs than this
+_SWEEP_THRESHOLDS_DINO = [
+    0.60,
+    0.70,
+    0.74,
+    0.76,
+    0.78,
+    0.80,
+    0.82,
+    0.84,
+    0.88,
+    0.90,
+    0.95,
+]
+_SWEEP_THRESHOLDS_CP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
+_MIN_PCS = 10  # skip thresholds that yield fewer PCs than this
 _MIN_CELLS_FLOOR = 750_000  # floor for auto target_n_cells
-_PCA_FIT_CAP     = 5_000_000  # cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
+_PCA_FIT_CAP = 5_000_000  # cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
 
 
 # =============================================================================
 # PCA-optimized combiner — module-level helpers (must be picklable for SLURM)
 # =============================================================================
 
+
 def _prepare_cells_for_scoring(adata: "ad.AnnData") -> "ad.AnnData":
     """Strip obs to copairs-required columns and cast X to float64."""
     import numpy as np
+
     if "n_cells" not in adata.obs.columns:
         adata.obs["n_cells"] = 1
     keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata.obs.columns]
@@ -156,8 +170,14 @@ def _sweep_pca_thresholds(
     import pandas as pd
     import anndata as ad
     from ops_utils.analysis.pca import n_pcs_for_threshold
-    from ops_utils.analysis.map_scores import compute_auc_score, phenotypic_activity_assesment
-    from ops_model.features.anndata_utils import aggregate_to_level, normalize_guide_adata
+    from ops_utils.analysis.map_scores import (
+        compute_auc_score,
+        phenotypic_activity_assesment,
+    )
+    from ops_model.features.anndata_utils import (
+        aggregate_to_level,
+        normalize_guide_adata,
+    )
 
     best_auc_t, best_auc_r, best_auc_a, best_auc_n = None, -1.0, -1.0, 0
     sweep_rows = []
@@ -167,8 +187,12 @@ def _sweep_pca_thresholds(
         X_slice = X_pcs[:, :n_pcs].astype(np.float32)
         pc_names = [f"PC{j}" for j in range(n_pcs)]
 
-        adata_tmp = ad.AnnData(X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names))
-        guide_tmp = aggregate_to_level(adata_tmp, level="guide", method="mean", preserve_batch_info=False)
+        adata_tmp = ad.AnnData(
+            X=X_slice, obs=obs_df.copy(), var=pd.DataFrame(index=pc_names)
+        )
+        guide_tmp = aggregate_to_level(
+            adata_tmp, level="guide", method="mean", preserve_batch_info=False
+        )
         del adata_tmp
         guide_tmp.X = guide_tmp.X.astype(np.float32)
 
@@ -177,8 +201,12 @@ def _sweep_pca_thresholds(
         guide_norm = _prepare_cells_for_scoring(guide_norm)
 
         try:
-            activity_map, active_ratio = phenotypic_activity_assesment(  # distance default="cosine"
-                guide_norm, plot_results=False, null_size=100_000,
+            activity_map, active_ratio = (
+                phenotypic_activity_assesment(  # distance default="cosine"
+                    guide_norm,
+                    plot_results=False,
+                    null_size=100_000,
+                )
             )
             auc = compute_auc_score(activity_map)
         except Exception as e:
@@ -186,21 +214,37 @@ def _sweep_pca_thresholds(
             active_ratio, auc = 0.0, 0.0
         del guide_tmp, guide_norm
 
-        row = {"threshold": threshold, "n_pcs": n_pcs, "activity": active_ratio, "auc": auc}
+        row = {
+            "threshold": threshold,
+            "n_pcs": n_pcs,
+            "activity": active_ratio,
+            "auc": auc,
+        }
         sweep_rows.append(row)
 
         if n_pcs < _MIN_PCS:
-            _logger.info(f"  {threshold:.0%}: {n_pcs} PCs (< {_MIN_PCS}) — {active_ratio:.1%}, AUC={auc:.4f} [skipped]")
+            _logger.info(
+                f"  {threshold:.0%}: {n_pcs} PCs (< {_MIN_PCS}) — {active_ratio:.1%}, AUC={auc:.4f} [skipped]"
+            )
             continue
 
-        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — {active_ratio:.1%}, AUC={auc:.4f}")
+        _logger.info(
+            f"  {threshold:.0%}: {n_pcs} PCs — {active_ratio:.1%}, AUC={auc:.4f}"
+        )
         if auc > best_auc_a or (auc == best_auc_a and active_ratio > best_auc_r):
-            best_auc_t, best_auc_r, best_auc_a, best_auc_n = threshold, active_ratio, auc, n_pcs
+            best_auc_t, best_auc_r, best_auc_a, best_auc_n = (
+                threshold,
+                active_ratio,
+                auc,
+                n_pcs,
+            )
 
     if best_auc_t is None:
         return None
 
-    _logger.info(f"  Best (AUC): {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}")
+    _logger.info(
+        f"  Best (AUC): {best_auc_t:.0%} ({best_auc_n} PCs) → {best_auc_r:.1%}, AUC={best_auc_a:.4f}"
+    )
     return sweep_rows, best_auc_t, best_auc_n
 
 
@@ -214,6 +258,8 @@ def _process_signal_group(
     downsampling_config: Dict[str, Any],
     norm_method: str,
     random_seed: int = 42,
+    preserve_batch: bool = False,
+    no_pca: bool = False,
 ) -> str:
     """Phase 1: pool cells for one biological signal, fit PCA, select n_pcs, save h5ads.
 
@@ -233,13 +279,18 @@ def _process_signal_group(
     from pathlib import Path
 
     warnings.filterwarnings("ignore", category=FutureWarning)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     logging.getLogger("copairs").setLevel(logging.WARNING)
     _logger = logging.getLogger(__name__)
     t_start = time.time()
 
     from ops_utils.data.feature_discovery import (
-        find_cell_h5ad_path, load_cell_h5ad, get_channel_maps_path, sanitize_signal_filename,
+        find_cell_h5ad_path,
+        load_cell_h5ad,
+        get_channel_maps_path,
+        sanitize_signal_filename,
     )
     from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
     from ops_utils.analysis.normalization import zscore_normalize
@@ -256,6 +307,7 @@ def _process_signal_group(
 
     # --- Pre-scan cell counts (lightweight h5py read) ---
     import h5py
+
     exp_cell_counts = {}
     for exp, ch in exp_channel_pairs:
         cell_file = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
@@ -274,8 +326,10 @@ def _process_signal_group(
     downsampling_enabled = downsampling_config.get("enabled", False)
     if downsampling_enabled:
         raw_target = downsampling_config.get("target_n_cells", "auto")
-        actual_target = int(raw_target) if raw_target != "auto" else max(
-            min(exp_cell_counts.values()), _MIN_CELLS_FLOOR
+        actual_target = (
+            int(raw_target)
+            if raw_target != "auto"
+            else max(min(exp_cell_counts.values()), _MIN_CELLS_FLOOR)
         )
         actual_target = min(actual_target, n_cells_pooled)
     else:
@@ -304,7 +358,9 @@ def _process_signal_group(
         if n_vars_expected is None:
             n_vars_expected = adata.n_vars
         elif adata.n_vars != n_vars_expected:
-            _logger.info(f"  {exp}/{ch}: {adata.n_vars} features (vs {n_vars_expected}), will use shared features on concat")
+            _logger.info(
+                f"  {exp}/{ch}: {adata.n_vars} features (vs {n_vars_expected}), will use shared features on concat"
+            )
 
         # Ensure label_str exists
         if "label_str" not in adata.obs.columns and "perturbation" in adata.obs.columns:
@@ -320,7 +376,9 @@ def _process_signal_group(
                 idx.sort()
                 adata = adata[idx].copy()
 
-        keep_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in adata.obs.columns]
+        keep_cols = [
+            c for c in ["sgRNA", "perturbation", "label_str"] if c in adata.obs.columns
+        ]
         obs = adata.obs[keep_cols].copy()
         obs["experiment"] = exp.split("_")[0]
 
@@ -330,11 +388,15 @@ def _process_signal_group(
         # Per-experiment z-score before pooling (uses ops_utils backend)
         if normalize_before_pca:
             df_block = pd.DataFrame(X_block, columns=feature_cols)
-            df_norm = zscore_normalize(df_block, feature_cols=feature_cols, method="global")
+            df_norm = zscore_normalize(
+                df_block, feature_cols=feature_cols, method="global"
+            )
             X_block = df_norm[feature_cols].values.astype(np.float32)
 
         all_blocks.append(ad.AnnData(X=X_block, obs=obs, var=adata.var.copy()))
-        _logger.info(f"  {exp.split('_')[0]}/{ch}: {exp_cell_counts[(exp, ch)]:,} → {len(obs):,} cells")
+        _logger.info(
+            f"  {exp.split('_')[0]}/{ch}: {exp_cell_counts[(exp, ch)]:,} → {len(obs):,} cells"
+        )
         del adata, X_block
 
     if not all_blocks:
@@ -353,69 +415,101 @@ def _process_signal_group(
     _logger.info(f"  Pooled: {n_cells:,} cells, {n_feats} features")
 
     # Separate obs for scoring (no experiment column — copairs doesn't handle extra string cols)
-    score_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in adata_cells.obs.columns]
+    score_cols = [
+        c
+        for c in ["sgRNA", "perturbation", "label_str"]
+        if c in adata_cells.obs.columns
+    ]
     obs_for_scoring = adata_cells.obs[score_cols].copy()
     obs_full = adata_cells.obs[[c for c in adata_cells.obs.columns]].copy()
 
     X_raw = np.asarray(adata_cells.X, dtype=np.float32)
     del adata_cells
 
-    # --- Fit PCA on subsample, transform all cells in chunks ---
-    t_pca = time.time()
-    n_total = X_raw.shape[0]
-
-    if n_total > _PCA_FIT_CAP:
-        fit_idx = rng.choice(n_total, _PCA_FIT_CAP, replace=False)
-        fit_idx.sort()
-        _logger.info(f"  Fitting PCA on {_PCA_FIT_CAP:,}/{n_total:,} subsampled cells...")
-        _, cumvar, pca_model = fit_pca(X_raw[fit_idx])
-        del fit_idx
-        _logger.info(f"  Transforming all {n_total:,} cells in chunks...")
-        chunk_size = 2_000_000
-        X_pcs_chunks = []
-        for i in range(0, n_total, chunk_size):
-            chunk = np.asarray(X_raw[i:i + chunk_size], dtype=np.float64)
-            chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
-            X_pcs_chunks.append(pca_model.transform(chunk).astype(np.float32))
-            _logger.info(f"    Transformed chunk {i:,}-{min(i + chunk_size, n_total):,}")
-        X_pcs = np.vstack(X_pcs_chunks)
-        del X_pcs_chunks
+    if no_pca:
+        _logger.info(
+            f"  no_pca=True: skipping PCA, using {n_feats} raw features directly"
+        )
+        X_reduced = X_raw
+        del X_raw
+        pc_names = feature_names
+        n_pcs = n_feats
+        pca_components = None
+        peak_t = None
+        sweep_rows = []
     else:
-        _logger.info(f"  Fitting PCA on {n_total:,} x {X_raw.shape[1]} matrix...")
-        X_pcs, cumvar, pca_model = fit_pca(X_raw)
+        # --- Fit PCA on subsample, transform all cells in chunks ---
+        t_pca = time.time()
+        n_total = X_raw.shape[0]
 
-    _logger.info(f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components")
-    pca_components = pca_model.components_.copy()
-    del X_raw, pca_model
+        if n_total > _PCA_FIT_CAP:
+            fit_idx = rng.choice(n_total, _PCA_FIT_CAP, replace=False)
+            fit_idx.sort()
+            _logger.info(
+                f"  Fitting PCA on {_PCA_FIT_CAP:,}/{n_total:,} subsampled cells..."
+            )
+            _, cumvar, pca_model = fit_pca(X_raw[fit_idx])
+            del fit_idx
+            _logger.info(f"  Transforming all {n_total:,} cells in chunks...")
+            chunk_size = 2_000_000
+            X_pcs_chunks = []
+            for i in range(0, n_total, chunk_size):
+                chunk = np.asarray(X_raw[i : i + chunk_size], dtype=np.float64)
+                chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
+                X_pcs_chunks.append(pca_model.transform(chunk).astype(np.float32))
+                _logger.info(
+                    f"    Transformed chunk {i:,}-{min(i + chunk_size, n_total):,}"
+                )
+            X_pcs = np.vstack(X_pcs_chunks)
+            del X_pcs_chunks
+        else:
+            _logger.info(f"  Fitting PCA on {n_total:,} x {X_raw.shape[1]} matrix...")
+            X_pcs, cumvar, pca_model = fit_pca(X_raw)
 
-    # --- Select n_pcs: sweep or fixed ---
-    selection = pca_config.get("selection", "sweep")
+        _logger.info(
+            f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components"
+        )
+        pca_components = pca_model.components_.copy()
+        del X_raw, pca_model
 
-    if selection == "fixed":
-        cutoff = float(pca_config.get("variance_cutoff", 0.80))
-        n_pcs = n_pcs_for_threshold(cumvar, cutoff)
-        peak_t = cutoff
-        sweep_rows = [{"threshold": cutoff, "n_pcs": n_pcs, "activity": None, "auc": None}]
-        _logger.info(f"  Fixed cutoff {cutoff:.0%}: {n_pcs} PCs")
-    else:
-        thresholds = pca_config.get("_sweep_thresholds", _SWEEP_THRESHOLDS_DINO)
-        result = _sweep_pca_thresholds(X_pcs, cumvar, obs_for_scoring, thresholds, norm_method, _logger)
-        if result is None:
-            return f"FAILED: {signal} — no valid threshold found (all thresholds yield < {_MIN_PCS} PCs)"
-        sweep_rows, peak_t, n_pcs = result
+        # --- Select n_pcs: sweep or fixed ---
+        selection = pca_config.get("selection", "sweep")
+        if preserve_batch:
+            selection = "fixed"  # skip sweep when preserving batch info
 
-    # --- Build AnnData at selected n_pcs and aggregate ---
-    X_reduced = X_pcs[:, :n_pcs].astype(np.float32)
-    pc_names = [f"{signal}_PC{j}" for j in range(n_pcs)]
-    del X_pcs
+        if selection == "fixed":
+            cutoff = float(pca_config.get("variance_cutoff", 0.80))
+            n_pcs = n_pcs_for_threshold(cumvar, cutoff)
+            peak_t = cutoff
+            sweep_rows = [
+                {"threshold": cutoff, "n_pcs": n_pcs, "activity": None, "auc": None}
+            ]
+            _logger.info(f"  Fixed cutoff {cutoff:.0%}: {n_pcs} PCs")
+        else:
+            thresholds = pca_config.get("_sweep_thresholds", _SWEEP_THRESHOLDS_DINO)
+            result = _sweep_pca_thresholds(
+                X_pcs, cumvar, obs_for_scoring, thresholds, norm_method, _logger
+            )
+            if result is None:
+                return f"FAILED: {signal} — no valid threshold found (all thresholds yield < {_MIN_PCS} PCs)"
+            sweep_rows, peak_t, n_pcs = result
+
+        # --- Build AnnData at selected n_pcs and aggregate ---
+        X_reduced = X_pcs[:, :n_pcs].astype(np.float32)
+        pc_names = [f"{signal}_PC{j}" for j in range(n_pcs)]
+        del X_pcs
 
     # Compute n_experiments per sgRNA from obs_full before dropping the experiment column.
     # Injected directly into g.obs after guide aggregation (aggregate_to_level at guide level
     # does not carry arbitrary cell-obs columns through, so cell-level injection is lost).
     sgRNA_to_n_exp = obs_full.groupby("sgRNA")["experiment"].nunique()
 
-    # Drop experiment column before aggregation (copairs incompatible with extra string cols)
-    obs_for_agg = obs_full[[c for c in obs_full.columns if c != "experiment"]]
+    # Drop experiment column before aggregation unless preserving batch info
+    # (copairs is incompatible with extra string cols, but preserve_batch skips copairs scoring)
+    if preserve_batch:
+        obs_for_agg = obs_full
+    else:
+        obs_for_agg = obs_full[[c for c in obs_full.columns if c != "experiment"]]
     adata_reduced = ad.AnnData(
         X=X_reduced,
         obs=obs_for_agg,
@@ -423,8 +517,12 @@ def _process_signal_group(
     )
     del X_reduced
 
-    g = aggregate_to_level(adata_reduced, level="guide", method="mean", preserve_batch_info=False)
-    e = aggregate_to_level(adata_reduced, level="gene",  method="mean", preserve_batch_info=False)
+    g = aggregate_to_level(
+        adata_reduced, level="guide", method="mean", preserve_batch_info=preserve_batch
+    )
+    e = aggregate_to_level(
+        adata_reduced, level="gene", method="mean", preserve_batch_info=preserve_batch
+    )
     del adata_reduced
 
     g.X = g.X.astype(np.float32)
@@ -437,46 +535,76 @@ def _process_signal_group(
     e.uns["aggregation_method"] = "mean"
 
     uns = {
-        "signal":             signal,
-        "pca_threshold":      float(peak_t),
-        "n_pcs":              int(n_pcs),
-        "explained_variance": float(cumvar[n_pcs - 1]) if n_pcs <= len(cumvar) else 1.0,
-        "n_cells":            int(n_cells),
-        "n_cells_pooled":     int(n_cells_pooled),
-        "n_features_raw":     int(n_feats),
-        "pca_components":     pca_components[:n_pcs].tolist(),
-        "pca_feature_names":  feature_names,
-        "experiments":        ",".join(exp.split("_")[0] for exp, _ in exp_channel_pairs),
-        "exp_cell_counts":    {exp.split("_")[0]: int(cnt) for (exp, ch), cnt in exp_cell_counts.items()},
-        "channels":           list({ch for _, ch in exp_channel_pairs}),
-        "cell_type":          inferred_cell_type or "cell",
-        "embedding_type":     feature_dir,
+        "signal": signal,
+        "pca_applied": not no_pca,
+        "n_cells": int(n_cells),
+        "n_cells_pooled": int(n_cells_pooled),
+        "n_features_raw": int(n_feats),
+        "pca_feature_names": feature_names,
+        "experiments": ",".join(exp.split("_")[0] for exp, _ in exp_channel_pairs),
+        "exp_cell_counts": {
+            exp.split("_")[0]: int(cnt) for (exp, ch), cnt in exp_cell_counts.items()
+        },
+        "channels": list({ch for _, ch in exp_channel_pairs}),
+        "cell_type": inferred_cell_type or "cell",
+        "embedding_type": feature_dir,
     }
+    if no_pca:
+        uns["n_features"] = int(n_feats)
+    else:
+        uns.update(
+            {
+                "pca_threshold": float(peak_t),
+                "n_pcs": int(n_pcs),
+                "explained_variance": (
+                    float(cumvar[n_pcs - 1]) if n_pcs <= len(cumvar) else 1.0
+                ),
+                "pca_components": pca_components[:n_pcs].tolist(),
+            }
+        )
     for adata in [g, e]:
         adata.uns.update(uns)
 
-    from ops_model.post_process.anndata_processing.anndata_validator import AnndataValidator
+    from ops_model.post_process.anndata_processing.anndata_validator import (
+        AnndataValidator,
+    )
+
     _validator = AnndataValidator()
     for _adata, _level in [(g, "guide"), (e, "gene")]:
         _report = _validator.validate(_adata, level=_level, strict=False)
         if not _report.is_valid:
-            _logger.warning(f"  {signal} {_level}-level AnnData failed validation:\n{_report.summary()}")
+            _logger.warning(
+                f"  {signal} {_level}-level AnnData failed validation:\n{_report.summary()}"
+            )
         else:
-            _logger.info(f"  {signal} {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)")
+            _logger.info(
+                f"  {signal} {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)"
+            )
 
     file_prefix = sanitize_signal_filename(signal)
-    g.write_h5ad(per_channel_dir / f"{file_prefix}_guide.h5ad")
-    e.write_h5ad(per_channel_dir / f"{file_prefix}_gene.h5ad")
-    pd.DataFrame(sweep_rows).to_csv(per_channel_dir / f"{file_prefix}_sweep.csv", index=False)
+    output_suffix = ("_nopca" if no_pca else "") + ("_batch" if preserve_batch else "")
+    g.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_guide.h5ad")
+    e.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_gene.h5ad")
+    if sweep_rows:
+        pd.DataFrame(sweep_rows).to_csv(
+            per_channel_dir / f"{file_prefix}{output_suffix}_sweep.csv", index=False
+        )
 
     elapsed = time.time() - t_start
-    _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {n_pcs} PCs @ {peak_t:.0%}")
-    return f"SUCCESS: {signal} — {n_pcs} PCs @ {peak_t:.0%} ({n_cells:,}/{n_cells_pooled:,} cells)"
+    if no_pca:
+        _logger.info(
+            f"  Done: {signal} in {elapsed:.0f}s — {n_feats} raw features (no PCA)"
+        )
+        return f"SUCCESS: {signal} — {n_feats} raw features, no PCA ({n_cells:,}/{n_cells_pooled:,} cells)"
+    else:
+        _logger.info(f"  Done: {signal} in {elapsed:.0f}s — {n_pcs} PCs @ {peak_t:.0%}")
+        return f"SUCCESS: {signal} — {n_pcs} PCs @ {peak_t:.0%} ({n_cells:,}/{n_cells_pooled:,} cells)"
 
 
 # =============================================================================
 # PcaOptimizationCombiner
 # =============================================================================
+
 
 class PcaOptimizationCombiner:
     """Config-driven combiner that follows the pca_optimization two-phase pipeline.
@@ -505,7 +633,8 @@ class PcaOptimizationCombiner:
         Applies reporters filter to the result in both cases.
         """
         from ops_utils.data.feature_discovery import (
-            discover_dino_experiments, discover_cellprofiler_experiments,
+            discover_dino_experiments,
+            discover_cellprofiler_experiments,
         )
 
         if self.config.auto_discover:
@@ -518,8 +647,12 @@ class PcaOptimizationCombiner:
             if self.config.feature_type == "cellprofiler":
                 pairs = discover_cellprofiler_experiments(storage_roots)
             else:
-                pairs = discover_dino_experiments(storage_roots, self.config.feature_dir)
-            logger.info(f"Auto-discovered {len(pairs)} experiment-channel pairs from {self.config.base_dir}")
+                pairs = discover_dino_experiments(
+                    storage_roots, self.config.feature_dir
+                )
+            logger.info(
+                f"Auto-discovered {len(pairs)} experiment-channel pairs from {self.config.base_dir}"
+            )
         else:
             if not self.config.experiments_channels:
                 raise ValueError(
@@ -543,7 +676,10 @@ class PcaOptimizationCombiner:
         self, pairs: List[Tuple[str, str]]
     ) -> Dict[str, List[Tuple[str, str]]]:
         """Group (experiment, channel) pairs by biological signal label."""
-        from ops_utils.data.feature_discovery import get_channel_maps_path, build_signal_groups
+        from ops_utils.data.feature_discovery import (
+            get_channel_maps_path,
+            build_signal_groups,
+        )
         from ops_utils.data.feature_metadata import FeatureMetadata
 
         maps_path = get_channel_maps_path()
@@ -559,7 +695,10 @@ class PcaOptimizationCombiner:
     ) -> int:
         """Scan cell counts per signal group and return max(min_count, floor)."""
         import h5py
-        from ops_utils.data.feature_discovery import find_cell_h5ad_path, get_channel_maps_path
+        from ops_utils.data.feature_discovery import (
+            find_cell_h5ad_path,
+            get_channel_maps_path,
+        )
 
         maps_path = get_channel_maps_path()
         storage_roots = [Path(self.config.base_dir)]
@@ -570,7 +709,9 @@ class PcaOptimizationCombiner:
         for signal, pairs in signal_groups.items():
             group_total = 0
             for exp, ch in pairs:
-                cell_file = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+                cell_file = find_cell_h5ad_path(
+                    exp, ch, storage_roots, feature_dir, maps_path
+                )
                 if cell_file is not None:
                     try:
                         with h5py.File(cell_file, "r") as f:
@@ -626,6 +767,8 @@ class PcaOptimizationCombiner:
                 pca_config=pca_cfg,
                 downsampling_config=downsampling_config,
                 norm_method=norm_method,
+                preserve_batch=self.config.preserve_batch,
+                no_pca=self.config.no_pca,
             )
             logger.info(f"  {result}")
 
@@ -644,29 +787,33 @@ class PcaOptimizationCombiner:
         slurm = self.config.slurm
 
         slurm_params = {
-            "timeout_min":    slurm.get("time_minutes", 10),
-            "mem":            slurm.get("memory", "100GB"),
-            "cpus_per_task":  slurm.get("cpus", 16),
+            "timeout_min": slurm.get("time_minutes", 10),
+            "mem": slurm.get("memory", "100GB"),
+            "cpus_per_task": slurm.get("cpus", 16),
             "slurm_partition": slurm.get("partition", "cpu,gpu"),
         }
 
         jobs = []
         for signal, pairs in signal_groups.items():
             sig_safe = sanitize_signal_filename(signal)[:40]
-            jobs.append({
-                "name": f"pca_opt_{sig_safe}",
-                "func": _process_signal_group,
-                "kwargs": {
-                    "signal":             signal,
-                    "exp_channel_pairs":  pairs,
-                    "output_dir":         str(output_dir),
-                    "base_dir":           self.config.base_dir,
-                    "feature_dir":        self.config.feature_dir,
-                    "pca_config":         pca_cfg,
-                    "downsampling_config": downsampling_config,
-                    "norm_method":        norm_method,
-                },
-            })
+            jobs.append(
+                {
+                    "name": f"pca_opt_{sig_safe}",
+                    "func": _process_signal_group,
+                    "kwargs": {
+                        "signal": signal,
+                        "exp_channel_pairs": pairs,
+                        "output_dir": str(output_dir),
+                        "base_dir": self.config.base_dir,
+                        "feature_dir": self.config.feature_dir,
+                        "pca_config": pca_cfg,
+                        "downsampling_config": downsampling_config,
+                        "norm_method": norm_method,
+                        "preserve_batch": self.config.preserve_batch,
+                        "no_pca": self.config.no_pca,
+                    },
+                }
+            )
 
         logger.info(f"Submitting {len(jobs)} SLURM Phase 1 jobs...")
         result = submit_parallel_jobs(
@@ -696,10 +843,13 @@ class PcaOptimizationCombiner:
         if embedding_config.umap:
             try:
                 from umap import UMAP
+
                 nn = min(embedding_config.n_neighbors, n_obs - 1)
                 if nn >= 2:
                     logger.info(f"Computing UMAP ({n_obs} obs, n_neighbors={nn})...")
-                    coords = UMAP(n_components=2, n_neighbors=nn, random_state=42).fit_transform(X)
+                    coords = UMAP(
+                        n_components=2, n_neighbors=nn, random_state=42
+                    ).fit_transform(X)
                     adata.obsm["X_umap"] = coords.astype(np.float32)
                     logger.info("  UMAP complete.")
                 else:
@@ -712,12 +862,18 @@ class PcaOptimizationCombiner:
         if embedding_config.phate:
             try:
                 import phate
+
                 knn = min(15 if n_obs > 2000 else 10, n_obs - 1)
                 if knn >= 2:
                     logger.info(f"Computing PHATE ({n_obs} obs, knn={knn})...")
                     coords = phate.PHATE(
-                        n_components=2, knn=knn, decay=15, t="auto",
-                        n_jobs=-1, random_state=42, verbose=0,
+                        n_components=2,
+                        knn=knn,
+                        decay=15,
+                        t="auto",
+                        n_jobs=-1,
+                        random_state=42,
+                        verbose=0,
                     ).fit_transform(X)
                     adata.obsm["X_phate"] = coords.astype(np.float32)
                     logger.info("  PHATE complete.")
@@ -732,7 +888,9 @@ class PcaOptimizationCombiner:
         """Load per-signal guide h5ads, hconcat, NTC normalize, aggregate, embed."""
         import numpy as np
         from ops_model.features.anndata_utils import (
-            hconcat_by_perturbation, normalize_guide_adata, aggregate_to_level,
+            hconcat_by_perturbation,
+            normalize_guide_adata,
+            aggregate_to_level,
         )
 
         per_channel_dir = output_dir / "per_channel"
@@ -760,7 +918,9 @@ class PcaOptimizationCombiner:
 
         logger.info("Concatenating per-signal blocks horizontally...")
         cell_type = guide_blocks[0].uns.get("cell_type", "cell")
-        embedding_type = guide_blocks[0].uns.get("embedding_type", self.config.feature_type)
+        embedding_type = guide_blocks[0].uns.get(
+            "embedding_type", self.config.feature_type
+        )
 
         # Build pca_optimized_metadata before consuming guide_blocks
         biological_groups = {}
@@ -770,30 +930,34 @@ class PcaOptimizationCombiner:
             sig = g.uns["signal"]
             n_feat = g.n_vars
             biological_groups[sig] = {
-                "biological_signal":    sig,
-                "aggregation_type":     "pooled_pca",
-                "experiments":          g.uns.get("experiments", "").split(","),
-                "channels":             g.uns.get("channels", []),
+                "biological_signal": sig,
+                "aggregation_type": "pooled_pca",
+                "experiments": g.uns.get("experiments", "").split(","),
+                "channels": g.uns.get("channels", []),
                 "n_cells_per_experiment": g.uns.get("exp_cell_counts", {}),
-                "n_cells_total":        g.uns.get("n_cells_pooled", 0),
-                "n_cells_used":         g.uns.get("n_cells", 0),
-                "n_features_raw":       g.uns.get("n_features_raw", 0),
-                "n_pcs":                g.uns.get("n_pcs", n_feat),
-                "pca_threshold":        g.uns.get("pca_threshold", None),
-                "explained_variance":   g.uns.get("explained_variance", None),
-                "feature_range":        [offset, offset + n_feat],
-                "n_features":           n_feat,
+                "n_cells_total": g.uns.get("n_cells_pooled", 0),
+                "n_cells_used": g.uns.get("n_cells", 0),
+                "n_features_raw": g.uns.get("n_features_raw", 0),
+                "n_pcs": g.uns.get("n_pcs", n_feat),
+                "pca_threshold": g.uns.get("pca_threshold", None),
+                "explained_variance": g.uns.get("explained_variance", None),
+                "feature_range": [offset, offset + n_feat],
+                "n_features": n_feat,
             }
-            feature_slices[sig] = {"start": offset, "end": offset + n_feat, "n_features": n_feat}
+            feature_slices[sig] = {
+                "start": offset,
+                "end": offset + n_feat,
+                "n_features": n_feat,
+            }
             offset += n_feat
 
         pca_optimized_metadata = {
-            "strategy":              "pca_optimized",
-            "feature_type":          self.config.feature_type,
-            "aggregation_level":     "guide",
-            "n_biological_signals":  len(biological_groups),
-            "biological_groups":     biological_groups,
-            "feature_slices":        feature_slices,
+            "strategy": "pca_optimized",
+            "feature_type": self.config.feature_type,
+            "aggregation_level": "guide",
+            "n_biological_signals": len(biological_groups),
+            "biological_groups": biological_groups,
+            "feature_slices": feature_slices,
         }
 
         adata_guide = hconcat_by_perturbation(guide_blocks, "guide")
@@ -806,34 +970,46 @@ class PcaOptimizationCombiner:
 
         logger.info("Aggregating guide → gene...")
         adata_gene = aggregate_to_level(
-            adata_guide, "gene", preserve_batch_info=False, subsample_controls=False,
+            adata_guide,
+            "gene",
+            preserve_batch_info=False,
+            subsample_controls=False,
         )
         logger.info(f"  Guide: {adata_guide.n_obs} obs × {adata_guide.n_vars} features")
         logger.info(f"  Gene:  {adata_gene.n_obs} obs × {adata_gene.n_vars} features")
 
         # Stamp required metadata fields (inferred from per-signal intermediates)
         gene_metadata = {**pca_optimized_metadata, "aggregation_level": "gene"}
-        for adata, meta in [(adata_guide, pca_optimized_metadata), (adata_gene, gene_metadata)]:
+        for adata, meta in [
+            (adata_guide, pca_optimized_metadata),
+            (adata_gene, gene_metadata),
+        ]:
             adata.uns["cell_type"] = cell_type
             adata.uns["embedding_type"] = embedding_type
             adata.uns["comprehensive_metadata"] = meta
             adata.uns["aggregation_method"] = "mean"
 
         # Validate before returning
-        from ops_model.post_process.anndata_processing.anndata_validator import AnndataValidator
+        from ops_model.post_process.anndata_processing.anndata_validator import (
+            AnndataValidator,
+        )
+
         _validator = AnndataValidator()
         for _adata, _level in [(adata_guide, "guide"), (adata_gene, "gene")]:
             _report = _validator.validate(_adata, level=_level, strict=False)
             if not _report.is_valid:
-                logger.warning(f"Phase 2 {_level}-level AnnData failed validation:\n{_report.summary()}")
+                logger.warning(
+                    f"Phase 2 {_level}-level AnnData failed validation:\n{_report.summary()}"
+                )
             else:
-                logger.info(f"Phase 2 {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)")
+                logger.info(
+                    f"Phase 2 {_level}-level AnnData passed validation ({_report.get_warning_count()} warnings)"
+                )
 
         # Embeddings on gene level
-        embedding_config = (
-            self.config.embeddings.get("gene_level")
-            or self.config.embeddings.get("guide_level")
-        )
+        embedding_config = self.config.embeddings.get(
+            "gene_level"
+        ) or self.config.embeddings.get("guide_level")
         if embedding_config is not None and embedding_config.compute_embeddings:
             self._compute_embeddings(adata_gene, embedding_config)
 
@@ -858,7 +1034,9 @@ class PcaOptimizationCombiner:
             downsampling_config.get("enabled", False)
             and downsampling_config.get("target_n_cells", "auto") == "auto"
         ):
-            downsampling_config["target_n_cells"] = self._compute_auto_target(signal_groups)
+            downsampling_config["target_n_cells"] = self._compute_auto_target(
+                signal_groups
+            )
 
         # 3. Phase 1: PCA sweep per signal group
         slurm_enabled = self.config.slurm.get("enabled", False)
@@ -868,6 +1046,12 @@ class PcaOptimizationCombiner:
             self._run_phase1_local(signal_groups, output_dir, downsampling_config)
 
         # 4. Phase 2: aggregate, normalize, embed
+        if self.config.preserve_batch or self.config.no_pca:
+            logger.info(
+                f"Skipping Phase 2 aggregation (preserve_batch={self.config.preserve_batch}, no_pca={self.config.no_pca})."
+            )
+            return None, None
+
         logger.info("Starting Phase 2 aggregation...")
         adata_guide, adata_gene = self._run_phase2(output_dir)
 

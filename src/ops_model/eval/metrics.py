@@ -7,9 +7,7 @@ import anndata as ad
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-def mean_cosine_sim_within_groups(
-    adata: ad.AnnData, groups: list[list[int]]
-) -> float:
+def mean_cosine_sim_within_groups(adata: ad.AnnData, groups: list[list[int]]) -> float:
     """Compute mean pairwise cosine similarity within each group of embedding indices.
 
     Parameters

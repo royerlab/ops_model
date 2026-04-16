@@ -45,7 +45,9 @@ def load_cell_painting_labels(
     labels = []
     for exp_name, wells in experiments.items():
         # Cell painting CSVs are on fast_ops
-        base = Path(f"/hpc/projects/intracellular_dashboard/fast_ops/{exp_name}/3-assembly")
+        base = Path(
+            f"/hpc/projects/intracellular_dashboard/fast_ops/{exp_name}/3-assembly"
+        )
 
         for w in wells:
             well_safe = w.replace("/", "_")

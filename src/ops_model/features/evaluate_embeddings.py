@@ -376,7 +376,7 @@ def process_embedding_csv(
     csv_stem = save_path.stem
     marker = "_features_"
     if marker in csv_stem:
-        channel = csv_stem[csv_stem.index(marker) + len(marker):]
+        channel = csv_stem[csv_stem.index(marker) + len(marker) :]
     else:
         channel = "unknown"
 
@@ -394,6 +394,7 @@ def process_embedding_csv(
 
     # Use reporter name as filename suffix
     from ops_utils.data.feature_metadata import FeatureMetadata
+
     meta = FeatureMetadata()
     filename_suffix = meta.get_biological_signal(experiment, channel)
     print(f"Using reporter name for files: {filename_suffix}")
