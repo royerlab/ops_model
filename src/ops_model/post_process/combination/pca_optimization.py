@@ -2322,25 +2322,31 @@ def _handle_downsampled(args, output_dir, cp_override):
 
     if high_mem_jobs:
         phase_memory = getattr(args, "phase_memory", "600GB")
-        phase_slurm_params = {**slurm_params, "mem": phase_memory, "timeout_min": 60}
+        high_mem_slurm_params = {
+            **slurm_params,
+            "mem": phase_memory,
+            "timeout_min": max(slurm_params.get("timeout_min", 60), 360),
+        }
+        high_mem_names = [j["metadata"]["signal"] for j in high_mem_jobs]
         print(
-            f"\nSubmitting {len(phase_jobs)} Phase SLURM job(s) ({phase_memory} memory)..."
+            f"\nSubmitting {len(high_mem_jobs)} high-memory SLURM job(s) "
+            f"({phase_memory}, >4M cells): {', '.join(high_mem_names)}"
         )
-        result_phase = submit_parallel_jobs(
-            jobs_to_submit=phase_jobs,
-            experiment="pca_ds_optimization_phase",
-            slurm_params=phase_slurm_params,
+        result_high = submit_parallel_jobs(
+            jobs_to_submit=high_mem_jobs,
+            experiment="pca_ds_optimization_high_mem",
+            slurm_params=high_mem_slurm_params,
             log_dir="pca_optimization",
-            manifest_prefix="pca_ds_phase_opt",
+            manifest_prefix="pca_ds_high_opt",
             wait_for_completion=False,
         )
-        if result_phase.get("submitted_jobs"):
+        if result_high.get("submitted_jobs"):
             job_arrays.append(
                 {
-                    "submitted_jobs": result_phase["submitted_jobs"],
-                    "base_job_id": result_phase["base_job_id"],
-                    "label": "Phase",
-                    "slurm_params": phase_slurm_params,
+                    "submitted_jobs": result_high["submitted_jobs"],
+                    "base_job_id": result_high["base_job_id"],
+                    "label": "high_mem",
+                    "slurm_params": high_mem_slurm_params,
                 }
             )
 
