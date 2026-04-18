@@ -262,10 +262,12 @@ def _run_threshold_sweep(
             )
             _, chad_all = phenotypic_consistency_manual_annotation(
                 e_cp,
+                all_active,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
                 distance=distance,
+                annotation_path=CHAD_ANNOTATION_PATH,
             )
         except Exception as e:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
@@ -561,6 +563,7 @@ def pca_sweep_pooled_signal(
     fixed_threshold: Optional[float] = None,
     preserve_batch: bool = False,
     no_pca: bool = False,
+    zscore_per_experiment: bool = False,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -871,9 +874,8 @@ def pca_sweep_pooled_signal(
     ]
     obs_df = obs_df_full[score_cols].copy()
 
-    # Per-experiment z-score before PCA — controlled by pca.normalize_before_pca in the attribution config
-    # (replaces the former CellProfiler-specific hardcode; set normalize_before_pca: true in CP configs)
-    if attr_config.get("pca", {}).get("normalize_before_pca", False):
+    # Per-experiment z-score before PCA — via pca.normalize_before_pca config or --zscore-per-experiment
+    if attr_config.get("pca", {}).get("normalize_before_pca", False) or zscore_per_experiment:
         from sklearn.preprocessing import StandardScaler
 
         experiments = (
@@ -1077,6 +1079,84 @@ def pca_sweep_pooled_signal(
 # Phase 2: Aggregation sub-steps (used by aggregate_channels)
 # =============================================================================
 
+def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger):
+    """Plot UMAP colored by CHAD cluster with gene labels."""
+    import seaborn as sns
+    from itertools import product
+
+    cats = [gene_to_cluster.get(g, "Uncategorized") for g in genes]
+    is_ntc = np.array([str(g).startswith("NTC") for g in genes])
+    unique_cats = sorted(set(c for c in cats if c != "Uncategorized"))
+
+    # 10 dark colors x 6 markers = 60 unique combos for 50+ clusters
+    colors_10 = sns.color_palette("dark", 10)
+    markers_6 = ["o", "s", "D", "^", "v", "P"]
+    combos = list(product(colors_10, markers_6))
+    cat_to_color = {cat: combos[i % len(combos)][0] for i, cat in enumerate(unique_cats)}
+    cat_to_marker = {cat: combos[i % len(combos)][1] for i, cat in enumerate(unique_cats)}
+
+    fig, ax = plt.subplots(figsize=(24, 13))
+
+    # Uncategorized background
+    uncat_mask = np.array([c == "Uncategorized" for c in cats]) & ~is_ntc
+    if uncat_mask.any():
+        ax.scatter(umap_coords[uncat_mask, 0], umap_coords[uncat_mask, 1],
+                   c=[(0.85, 0.85, 0.85)], s=40, alpha=0.2, edgecolors="none", label="Uncategorized")
+
+    # Categorized genes — unique color+marker per cluster
+    for cat in unique_cats:
+        if cat == "OR controls":
+            continue  # Plotted separately with special marker
+        mask = np.array([c == cat for c in cats]) & ~is_ntc
+        if mask.any():
+            ax.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
+                       c=[cat_to_color[cat]], marker=cat_to_marker[cat],
+                       s=120, alpha=0.85, edgecolors="white", linewidths=0.3, label=cat)
+
+    # OR controls — bright red X, larger than NTCs
+    is_or = np.array([gene_to_cluster.get(g, "") == "OR controls" for g in genes])
+    if is_or.any():
+        ax.scatter(umap_coords[is_or, 0], umap_coords[is_or, 1],
+                   c="#FF0000", marker="X", s=225, alpha=0.7, edgecolors="#CC0000",
+                   linewidths=0.6, label="OR controls", zorder=11)
+
+    # NTCs
+    if is_ntc.any():
+        ax.scatter(umap_coords[is_ntc, 0], umap_coords[is_ntc, 1],
+                   c="#e08080", marker="X", s=160, alpha=0.4, edgecolors="#b05050",
+                   linewidths=0.3, label="NTC", zorder=10)
+
+    # Gene labels — only annotated genes, radial offset to avoid overlap
+    rng = np.random.RandomState(42)
+    for i, gene in enumerate(genes):
+        if str(gene).startswith("NTC"):
+            continue
+        if gene_to_cluster.get(gene, "Uncategorized") == "Uncategorized":
+            continue
+        angle = rng.uniform(0, 2 * np.pi)
+        radius = rng.uniform(30, 55)
+        dx = radius * np.cos(angle)
+        dy = radius * np.sin(angle)
+        color = "#FF0000" if gene_to_cluster.get(gene) == "OR controls" else cat_to_color.get(gene_to_cluster.get(gene, ""), "black")
+        ax.annotate(gene, xy=(umap_coords[i, 0], umap_coords[i, 1]),
+                    xytext=(dx, dy), textcoords="offset points",
+                    fontsize=11, alpha=0.75, ha="center", va="center",
+                    arrowprops=dict(arrowstyle="-", color=color, alpha=0.5, lw=0.5))
+
+    if len(unique_cats) > 30:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=12,
+                  framealpha=0.9, ncol=3, columnspacing=0.8, handletextpad=0.3)
+    else:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=12, framealpha=0.9, ncol=1)
+    ax.set_title("Gene UMAP -- colored by CHAD cluster", fontsize=32, fontweight="bold")
+    ax.set_xlabel("UMAP 1", fontsize=24)
+    ax.set_ylabel("UMAP 2", fontsize=24)
+    ax.tick_params(labelsize=18)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved CHAD UMAP: {out_path}")
+
 
 def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of activity_map with all perturbations marked as active.
@@ -1149,6 +1229,7 @@ def _score_single_reporter_metrics(
 
         _, corum_ratio = phenotypic_consistency_corum(
             e_norm,
+            activity_map,
             plot_results=False,
             null_size=null_size,
             cache_similarity=True,
@@ -1158,12 +1239,16 @@ def _score_single_reporter_metrics(
 
         _, chad_ratio = phenotypic_consistency_manual_annotation(
             e_norm,
+            activity_map,
             plot_results=False,
             null_size=null_size,
             cache_similarity=True,
             distance=distance,
+            annotation_path=CHAD_ANNOTATION_PATH,
         )
         result["chad"] = float(chad_ratio)
+
+        all_active_map = _make_all_active_map(activity_map)
 
         _, dist_all = phenotypic_distinctivness(
             g_norm,
@@ -1174,8 +1259,26 @@ def _score_single_reporter_metrics(
         )
         result["distinctiveness_all"] = float(dist_all)
 
-        result["corum_all"] = result["corum"]
-        result["chad_all"] = result["chad"]
+        _, corum_all = phenotypic_consistency_corum(
+            e_norm,
+            all_active_map,
+            plot_results=False,
+            null_size=null_size,
+            cache_similarity=True,
+            distance=distance,
+        )
+        result["corum_all"] = float(corum_all)
+
+        _, chad_all = phenotypic_consistency_manual_annotation(
+            e_norm,
+            all_active_map,
+            plot_results=False,
+            null_size=null_size,
+            cache_similarity=True,
+            distance=distance,
+            annotation_path=CHAD_ANNOTATION_PATH,
+        )
+        result["chad_all"] = float(chad_all)
 
     except Exception as exc:
         _logger.warning(f"  Per-reporter metrics scoring failed: {exc}")
@@ -1551,6 +1654,7 @@ def _score_consistency(
         _logger.info(f"Running CORUM consistency ({label})...")
         consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
             adata_gene,
+            activity_map,
             plot_results=False,
             null_size=100_000,
             cache_similarity=True,
@@ -1565,10 +1669,12 @@ def _score_consistency(
         consistency_manual_map, consistency_manual_ratio = (
             phenotypic_consistency_manual_annotation(
                 adata_gene,
+                activity_map,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
                 distance=distance,
+                annotation_path=CHAD_ANNOTATION_PATH,
             )
         )
         consistency_manual_map.to_csv(
@@ -1807,15 +1913,18 @@ def aggregate_channels(
             )
             _, corum_ratio_all = phenotypic_consistency_corum(
                 adata_gene,
+                all_active_map,
                 plot_results=False,
                 cache_similarity=True,
                 distance=distance,
             )
             _, chad_ratio_all = phenotypic_consistency_manual_annotation(
                 adata_gene,
+                all_active_map,
                 plot_results=False,
                 cache_similarity=True,
                 distance=distance,
+                annotation_path=CHAD_ANNOTATION_PATH,
             )
             _logger.info(
                 f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}"
@@ -1876,6 +1985,28 @@ def aggregate_channels(
             plt,
             _logger,
         )
+
+    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
+        try:
+            import yaml as _yaml
+            with open(_chad_path) as f:
+                chad_clusters = _yaml.safe_load(f)
+            gene_to_cluster = {}
+            for cid, cdata in chad_clusters.items():
+                name = cdata.get("name", f"cluster_{cid}")
+                for gene in cdata.get("genes", []):
+                    gene_to_cluster[gene.strip()] = name
+
+            _plot_chad_umap(
+                adata_gene_embed.obsm["X_umap"],
+                adata_gene_embed.obs["perturbation"].values,
+                gene_to_cluster,
+                plots_dir / "umap_chad_clusters.png",
+                plt, _logger,
+            )
+        except Exception as e:
+            _logger.warning(f"  CHAD UMAP failed: {e}")
 
     elapsed = time.time() - t_start
     _logger.info(f"\nDone in {elapsed/60:.1f} minutes")
@@ -2218,6 +2349,11 @@ def _handle_downsampled(args, output_dir, cp_override):
     print(
         f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells"
     )
+
+    if getattr(args, "dry_run", False):
+        print("\n--dry-run: exiting before processing.")
+        return
+
     pd.DataFrame(manifest_rows).to_csv(
         ds_output_dir / "downsampled_manifest.csv", index=False
     )
@@ -2247,6 +2383,8 @@ def _handle_downsampled(args, output_dir, cp_override):
             kwargs["preserve_batch"] = True
         if getattr(args, "no_pca", False):
             kwargs["no_pca"] = True
+        if getattr(args, "zscore_per_experiment", False):
+            kwargs["zscore_per_experiment"] = True
         return kwargs
 
     if not args.slurm:
@@ -2284,8 +2422,8 @@ def _handle_downsampled(args, output_dir, cp_override):
         else:
             other_jobs.append(job)
 
-    # Downsampled jobs need more time than per-channel
-    args.slurm_time = max(args.slurm_time, 30)
+    # Signal-group jobs need more time than per-channel (copairs scoring is slow)
+    args.slurm_time = max(args.slurm_time, 60)
 
     from ops_utils.hpc.slurm_batch_utils import (
         submit_parallel_jobs,
@@ -2493,6 +2631,47 @@ def _build_parser():
         action="store_true",
         help="Use CellProfiler morphological features instead of DINO embeddings.",
     )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Use -o/--output-dir as the exact output path (skip automatic dino/all/… nesting).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Discover experiments and print the signal-group manifest, then exit without processing.",
+    )
+    parser.add_argument(
+        "--include-cellpainting",
+        action="store_true",
+        help="Include Cell Painting channels (CP1_*, CP2_*) that are normally excluded. "
+             "Output → with_cellpainting/ subdir.",
+    )
+    parser.add_argument(
+        "--experiments",
+        type=str,
+        default=None,
+        help="Comma-separated experiment short names (e.g. ops0031,ops0035) to restrict to. "
+             "Only these experiments will be included in signal groups. Useful for A/B comparisons.",
+    )
+    parser.add_argument(
+        "--match-v02",
+        action="store_true",
+        help="Restrict to the same experiments used in pca_optimized_v0.2 (reads v0.2 manifest). "
+             "Useful for controlled A/B comparison of features with identical experiment sets.",
+    )
+    parser.add_argument(
+        "--chad-annotation",
+        type=str,
+        default=None,
+        help="Path to custom CHAD annotation YAML for consistency scoring. "
+             "Defaults to chad_positive_controls_v4.yml.",
+    )
+    parser.add_argument(
+        "--zscore-per-experiment", action="store_true",
+        help="Apply per-experiment z-score scaling to features before PCA. "
+             "Output → zscore_per_exp/ subdir.",
+    )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument(
         "--phase-only",
@@ -2554,6 +2733,11 @@ def main():
         print(f"Output: {output_dir}")
     else:
         output_dir = output_dir / "dino"
+
+    # Nest under zscore subdir if requested
+    if args.zscore_per_experiment:
+        output_dir = output_dir / "zscore_per_exp"
+        print(f"Per-experiment z-score scaling enabled: output → {output_dir}")
 
     # Nest under cell-painting subdir if requested
     if args.include_cellpainting:

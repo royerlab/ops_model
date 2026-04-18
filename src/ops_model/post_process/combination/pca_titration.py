@@ -319,6 +319,7 @@ def _score_all_metrics(
 
         corum_map, corum_ratio = phenotypic_consistency_corum(
             e_copairs,
+            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             cache_similarity=True,
@@ -338,6 +339,7 @@ def _score_all_metrics(
 
         chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
             e_copairs,
+            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             cache_similarity=True,
@@ -976,6 +978,8 @@ def _build_parser():
         "--distance", type=str, default="cosine", choices=["cosine", "euclidean"],
         help="Match pca_optimization --distance (default: cosine)",
     )
+    parser.add_argument("--zscore-per-experiment", action="store_true",
+                        help="Look in zscore_per_exp/ subdir")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -989,6 +993,9 @@ def _resolve_output_dir(args) -> Path:
         output_dir = output_dir / "cellprofiler"
     else:
         output_dir = output_dir / "dino"
+
+    if getattr(args, "zscore_per_experiment", False):
+        output_dir = output_dir / "zscore_per_exp"
 
     if getattr(args, "include_cellpainting", False):
         output_dir = output_dir / "with_cellpainting"
