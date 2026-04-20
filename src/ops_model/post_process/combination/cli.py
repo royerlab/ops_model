@@ -15,7 +15,7 @@ import anndata as ad
 
 from .config_handler import CombinationConfig, load_config
 from .file_validator import FileValidator
-from .combiners import ComprehensiveCombiner
+from .combiners import ComprehensiveCombiner, PcaOptimizationCombiner
 from ..anndata_processing.anndata_validator import AnndataValidator, IssueLevel
 
 # Initialize logger
@@ -109,14 +109,106 @@ def run_combination(config: CombinationConfig):
     """
     logger.info("--- Starting Combination Pipeline ---")
 
-    # 1. Validate and collect input files
+    # pca_optimized handles its own file discovery — skip the file validator entirely.
+    if config.concatenation_method == "pca_optimized":
+        combiner = PcaOptimizationCombiner(config)
+        adata_guide, adata_gene = combiner.combine()
+
+        if config.output_path:
+            output_dir = Path(config.output_path)
+            stem = config.output_filename or "combined"
+            validate_and_save(adata_guide, output_dir / f"{stem}_guide.h5ad", level="multi_experiment")
+            validate_and_save(adata_gene,  output_dir / f"{stem}_gene.h5ad",  level="multi_experiment")
+        else:
+            logger.warning("output_path is not set. Skipping save.")
+
+        logger.info("--- Combination Pipeline Finished ---")
+        return
+
+    # All other methods need the file validator.
     file_validator = FileValidator(config)
     valid_files = file_validator.validate_and_collect_files()
 
-    # The `comprehensive` method handles its own file loading.
     if config.concatenation_method == "comprehensive":
         combiner = ComprehensiveCombiner(config)
         adata_guide, adata_gene = combiner.combine()
+    elif config.concatenation_method == "vertical":
+        # Vertical concatenation - pool same biological signal across experiments
+        from ops_model.features.anndata_utils import _process_vertical_group
+
+        if not config.experiments or not config.channel:
+            logger.error(
+                "Vertical concatenation requires 'experiments' and 'channel' in config."
+            )
+            return
+
+        # Convert experiments to (experiment, channel) pairs
+        exp_channel_pairs = [(exp, config.channel) for exp in config.experiments]
+
+        # Determine feature directory
+        if config.feature_dir:
+            feature_dir = config.feature_dir
+        elif config.feature_type == "cellprofiler":
+            feature_dir = "cell-profiler"
+        else:
+            feature_dir = f"{config.feature_type}_features"
+
+        logger.info(
+            f"Running vertical concatenation for {len(config.experiments)} experiments"
+        )
+        logger.info(f"Channel: {config.channel}")
+        logger.info(f"Per-experiment mode: {config.aggregation_per_experiment}")
+        logger.info(f"Per-well mode: {config.aggregation_per_well}")
+
+        # Process to guide level
+        adata_guide = _process_vertical_group(
+            exp_channel_pairs=exp_channel_pairs,
+            feature_type=config.feature_type,
+            base_dir=Path(config.base_dir),
+            feature_dir=feature_dir,
+            target_level="guide",
+            join="inner",
+            verbose=True,
+            subsample_controls=False,
+            control_gene=config.control_subsampling.get("control_gene", "NTC"),
+            control_group_size=config.control_subsampling.get("group_size", 4),
+            random_seed=config.control_subsampling.get("random_seed"),
+            normalize_on_pooling=config.normalization.get("normalize_on_pooling", True),
+            normalize_on_controls=config.normalization.get(
+                "normalize_on_controls", False
+            ),
+            per_experiment=config.aggregation_per_experiment,
+            keep_shared_only=not config.aggregation_per_well,  # shared-only doesn't apply in per-well mode
+            per_well=config.aggregation_per_well,
+        )
+
+        # Aggregate to gene level.
+        # When per_well is active, group by [perturbation, well, experiment] so that
+        # each (gene, well, experiment) triple becomes one observation.
+        from ops_model.features.anndata_utils import aggregate_to_level
+
+        if config.aggregation_per_well:
+            gene_batch_cols = ["well", "experiment"]
+        elif config.aggregation_per_experiment:
+            gene_batch_cols = ["experiment"]
+        else:
+            gene_batch_cols = None
+
+        logger.info("Aggregating to gene level...")
+        adata_gene = aggregate_to_level(
+            adata_guide,
+            level="gene",
+            method="mean",
+            preserve_batch_info=False,
+            batch_cols=gene_batch_cols,
+            subsample_controls=config.control_subsampling.get("enabled", False),
+            control_gene=config.control_subsampling.get("control_gene", "NTC"),
+            control_group_size=config.control_subsampling.get("group_size", 4),
+            random_seed=config.control_subsampling.get("random_seed"),
+        )
+
+        logger.info(f"Guide-level: {adata_guide.shape}")
+        logger.info(f"Gene-level: {adata_gene.shape}")
     else:
         # For other methods, load all objects first
         if not valid_files:

@@ -32,7 +32,7 @@ import yaml
 from sklearn.decomposition import PCA
 import umap
 
-from ops_model.data.feature_metadata import FeatureMetadata
+from ops_utils.data.feature_metadata import FeatureMetadata
 
 
 def load_config(config_path: str) -> dict:

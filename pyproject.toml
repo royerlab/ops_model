@@ -24,6 +24,8 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "ops_utils",
+    "scikit-learn",
     "torch==2.7.1",
     "lightning==2.4.0",
     "byol-pytorch",
@@ -40,6 +42,7 @@ dependencies = [
     "tabulate",
     "pyarrow",
     "submitit",
+    "termcolor",
 ]
 
 # extras
@@ -63,9 +66,8 @@ dev = [
 homepage = "https://github.com/ahillsley/ops_model"
 repository = "https://github.com/ahillsley/ops_model"
 
-# same as console_scripts entry point
-# [project.scripts]
-# spam-cli = "spam:main_cli"
+[project.scripts]
+run_eval = "ops_model.eval.run_eval:main"
 
 # Entry points
 # https://peps.python.org/pep-0621/#entry-points

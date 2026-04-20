@@ -15,13 +15,12 @@ from monai.transforms import (
 )
 
 from ops_model.data import data_loader
-from ops_model.data.cell_painting_labels import load_cell_painting_labels
+
+REPO_DIR = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/dinov2"
+CHECKPOINT = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/channel_adaptive_dino_vitl16_pretrain_cells-ef7c17ff.pth"
 
 
-class DinoV3Model:
-    """
-    TODO: model.forward has the option to provide masks??
-    """
+class CellDinoModel:
 
     def __init__(self):
         super().__init__()
@@ -29,11 +28,12 @@ class DinoV3Model:
         self.model.cuda()
 
     def load_model(self):
-        repo_dir = "/hpc/projects/icd.ops/models/model_checkpoints/dinov3/dinov3"
-        checkpoint = "/hpc/projects/icd.ops/models/model_checkpoints/dinov3/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
-
         self.model = torch.hub.load(
-            repo_dir, "dinov3_vitl16", source="local", weights=checkpoint
+            REPO_DIR,
+            "channel_adaptive_dino_vitl16",
+            source="local",
+            pretrained_path=CHECKPOINT,
+            in_channels=1,
         )
         return
 
@@ -47,18 +47,18 @@ class DinoV3Model:
                 output = self.model(inputs.cuda())
         return output
 
-    def preprocess(self, x: np.ndarray, resize_size: int = 256) -> torch.Tensor:
-        """Important: images should have a mean of 1 and std of 1 before input to dinov3"""
+    def preprocess(self, x: torch.Tensor, resize_size: int = 224) -> torch.Tensor:
+        """Per-image z-score normalization (Cell-DINO training convention).
 
-        to_tensor = v2.ToImage()
+        Unlike DINOv3, Cell-DINO uses per-image z-score rather than global ImageNet
+        statistics. Input is expected to be a float tensor (our dataloader already
+        produces floats), so no uint8->float conversion is needed.
+        """
         resize = v2.Resize((resize_size, resize_size), antialias=True)
-        to_float = v2.ToDtype(torch.float32, scale=True)
-        # goal is to have output images with zero mean and unit variance
-        normalize = v2.Normalize(
-            mean=(0, 0, 0),  # mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225),
-        )
-        return v2.Compose([to_tensor, resize, to_float, normalize])(x.cuda())
+        x = resize(x.cuda().float())
+        mean = x.mean(dim=(-2, -1), keepdim=True)
+        std = x.std(dim=(-2, -1), keepdim=True)
+        return (x - mean) / (std + 1e-7)
 
     def _reshape_to_spatial(self, patches: torch.Tensor) -> torch.Tensor:
         """
@@ -81,24 +81,13 @@ class DinoV3Model:
         return spatial.permute(0, 3, 1, 2)
 
 
-def extract_dinov3_features(
+def extract_cell_dino_features(
     config: dict = None,
 ):
 
     print(
-        f"Extracting DINOv3 features for {list(config['data_manager']['experiments'].keys())}"
+        f"Extracting Cell-DINO features for {list(config['data_manager']['experiments'].keys())}"
     )
-
-    # Build labels_df from cell painting CSVs if configured
-    csv_source = config.get("csv_source", "standard")
-    labels_df = None
-    if csv_source == "cell_painting":
-        labels_df = load_cell_painting_labels(
-            experiments=config["data_manager"]["experiments"],
-            out_channels=config["data_manager"]["out_channels"],
-            cell_painting_channels=config.get("cell_painting_channels"),
-        )
-
     dm = data_loader.OpsDataManager(
         experiments=config["data_manager"]["experiments"],
         batch_size=config["data_manager"]["batch_size"],
@@ -110,7 +99,6 @@ def extract_dinov3_features(
         verbose=False,
     )
     dm.construct_dataloaders(
-        labels_df=labels_df,
         num_workers=config["data_manager"]["num_workers"],
         dataset_type=config["dataset_type"],
         basic_kwargs={
@@ -134,8 +122,8 @@ def extract_dinov3_features(
     test_loader = dm.test_loader
     print(f"Created dataset with {len(test_loader.dataset)} crops")
 
-    dino = DinoV3Model()
-    print("DINOv3 model loaded")
+    cell_dino = CellDinoModel()
+    print("Cell-DINO model loaded")
 
     # Setup output directory
     output_dir = Path(config["output_dir"])
@@ -149,8 +137,8 @@ def extract_dinov3_features(
 
     # Extract features from all batches
     for batch_idx, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
-        # Extract features using the DINOv3 model
-        features = dino.extract_features(batch)
+        # Extract features using the Cell-DINO model
+        features = cell_dino.extract_features(batch)
 
         # Convert to numpy and create dataframe with metadata
         features_np = features.cpu().numpy()
@@ -205,31 +193,29 @@ def extract_dinov3_features(
 
     # Save the final concatenated dataframe
     final_path = (
-        output_dir / f"dinov3_features_{config['data_manager']['out_channels'][0]}.csv"
+        output_dir
+        / f"cell_dino_features_{config['data_manager']['out_channels'][0]}.csv"
     )
     final_df.to_csv(final_path, index=False)
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
-
-    return None
 
 
 import argparse
 import copy
 
 
-def dinov3_main(config_paths: list):
-    """
-    Main orchestrator function for DinoV3 feature extraction.
+def cell_dino_main(config_paths: list[str]):
+    """Orchestrate Cell-DINO feature extraction via SLURM.
 
-    Spawns one SLURM job per config × channel via submit_parallel_jobs.
-    Each job runs extract_dinov3_features() independently.
+    For each config, reads out_channels and spawns one SLURM job per channel,
+    using submit_parallel_jobs.
 
     Args:
-        config_paths: List of paths to YAML configuration files
+        config_paths: List of paths to YAML configuration files.
 
     Returns:
-        Result dict from submit_parallel_jobs
+        Result dict from submit_parallel_jobs.
     """
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
@@ -255,10 +241,12 @@ def dinov3_main(config_paths: list):
         )
         print(f"  Channels: {out_channels}")
 
+        # Extract slurm params from the first config encountered
         if slurm_params is None:
             slurm_config = config.get("slurm", {})
             mem = slurm_config.get("mem", "64G")
             time_limit = slurm_config.get("time", "4:00:00")
+
             mem_gb = int(mem.rstrip("G")) if isinstance(mem, str) else int(mem)
             timeout_min = _parse_time(time_limit)
 
@@ -279,7 +267,7 @@ def dinov3_main(config_paths: list):
             jobs_to_submit.append(
                 {
                     "name": f"{config_stem}_{channel}",
-                    "func": extract_dinov3_features,
+                    "func": extract_cell_dino_features,
                     "kwargs": {"config": channel_config},
                     "metadata": {
                         "config": config_path,
@@ -289,21 +277,24 @@ def dinov3_main(config_paths: list):
                 }
             )
 
-    log_dir = "/hpc/projects/icd.fast.ops/models/logs/dinov3/slurm_logs"
+    log_dir = "/hpc/projects/icd.fast.ops/models/logs/cell_dino/slurm_logs"
 
-    print(f"\nSubmitting {len(jobs_to_submit)} DinoV3 job(s) via submit_parallel_jobs")
-    return submit_parallel_jobs(
+    print(
+        f"\nSubmitting {len(jobs_to_submit)} Cell-DINO job(s) via submit_parallel_jobs"
+    )
+    result = submit_parallel_jobs(
         jobs_to_submit=jobs_to_submit,
-        experiment="dinov3",
+        experiment="cell_dino",
         slurm_params=slurm_params,
         log_dir=log_dir,
         wait_for_completion=True,
     )
+    return result
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Extract DINOv3 features from OPS dataset based on config"
+        description="Extract Cell-DINO features from OPS dataset based on config"
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -326,4 +317,4 @@ if __name__ == "__main__":
             config_paths = [line.strip() for line in f if line.strip()]
     else:
         config_paths = [args.config_path]
-    dinov3_main(config_paths)
+    cell_dino_main(config_paths)
