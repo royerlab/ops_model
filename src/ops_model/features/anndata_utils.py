@@ -83,8 +83,7 @@ def _find_experiment_dir(
 
     searched = ", ".join(str(r) for r in roots)
     raise FileNotFoundError(
-        f"Experiment directory not found for {exp_short} "
-        f"(searched: {searched})"
+        f"Experiment directory not found for {exp_short} " f"(searched: {searched})"
     )
 
 
@@ -128,12 +127,16 @@ def _get_n_cells_from_cell_file(
         cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
     if not cell_file.exists():
         # Glob fallback
-        candidates = list(anndata_dir.glob(f"features_processed_*{clean_channel}*.h5ad"))
+        candidates = list(
+            anndata_dir.glob(f"features_processed_*{clean_channel}*.h5ad")
+        )
         cell_file = candidates[0] if candidates else None
 
     if cell_file is None or not cell_file.exists():
         if verbose:
-            print(f"      n_cells: cell-level file not found for {channel}, defaulting to 1")
+            print(
+                f"      n_cells: cell-level file not found for {channel}, defaulting to 1"
+            )
         return None  # caller will handle fallback
 
     try:
@@ -142,11 +145,15 @@ def _get_n_cells_from_cell_file(
         counts = adata_backed.obs[group_col].value_counts()
         adata_backed.file.close()
         if verbose:
-            print(f"      n_cells: computed from {cell_file.name} ({len(adata_backed)} cells)")
+            print(
+                f"      n_cells: computed from {cell_file.name} ({len(adata_backed)} cells)"
+            )
         return counts  # Series indexed by sgRNA/label_str
     except Exception as e:
         if verbose:
-            print(f"      n_cells: failed to read {cell_file.name} ({e}), defaulting to 1")
+            print(
+                f"      n_cells: failed to read {cell_file.name} ({e}), defaulting to 1"
+            )
         return None
 
 
@@ -771,7 +778,9 @@ def aggregate_to_level(
     # Precompute numpy stat functions for multi-agg mode
     _stat_funcs = {
         "mean": lambda d, ax: np.mean(d, axis=ax),
-        "std": lambda d, ax: np.std(d, axis=ax, ddof=1) if d.shape[ax] > 1 else np.zeros(d.shape[1 - ax]),
+        "std": lambda d, ax: (
+            np.std(d, axis=ax, ddof=1) if d.shape[ax] > 1 else np.zeros(d.shape[1 - ax])
+        ),
         "min": lambda d, ax: np.min(d, axis=ax),
         "max": lambda d, ax: np.max(d, axis=ax),
         "median": lambda d, ax: np.median(d, axis=ax),
@@ -1649,7 +1658,11 @@ def concatenate_features_by_channel(
             feature_dir = f"{feature_type}_features"
 
     # Initialize metadata manager
-    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+    meta = (
+        FeatureMetadata(metadata_path=metadata_path)
+        if metadata_path
+        else FeatureMetadata()
+    )
 
     # Determine file prefix based on aggregation level
     if aggregation_level == "guide":
@@ -2473,7 +2486,12 @@ def _process_vertical_group(
             if not agg_file.exists():
                 from ops_utils.data.feature_metadata import FeatureMetadata
                 from ops_utils.data.feature_metadata import FeatureMetadata
-                _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+
+                _meta = (
+                    FeatureMetadata(metadata_path=metadata_path)
+                    if metadata_path
+                    else FeatureMetadata()
+                )
                 reporter = _meta.get_biological_signal(exp_short, channel)
                 agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
             if agg_file.exists():
@@ -2486,7 +2504,10 @@ def _process_vertical_group(
                 if "embedding_type" not in adata_agg.uns:
                     adata_agg.uns["embedding_type"] = feature_dir or "unknown"
                 # Derive perturbation from label_str if missing
-                if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
+                if (
+                    "perturbation" not in adata_agg.obs.columns
+                    and "label_str" in adata_agg.obs.columns
+                ):
                     adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
                 # Compute real n_cells from cell-level file (backed mode — no X loaded)
                 if "n_cells" not in adata_agg.obs.columns:
@@ -2495,12 +2516,16 @@ def _process_vertical_group(
                         anndata_dir, channel, target_level, verbose
                     )
                     if counts is not None:
-                        adata_agg.obs["n_cells"] = adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                        adata_agg.obs["n_cells"] = (
+                            adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                        )
                     else:
                         adata_agg.obs["n_cells"] = 1
                 cell_counts[exp] = adata_agg.obs["n_cells"].sum()
                 if verbose:
-                    print(f"      Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features")
+                    print(
+                        f"      Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features"
+                    )
                 aggregated_list.append(adata_agg)
                 continue
 
@@ -2508,12 +2533,18 @@ def _process_vertical_group(
         from ops_utils.data.feature_metadata import FeatureMetadata
         from ops_utils.data.feature_metadata import FeatureMetadata
 
-        meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+        meta = (
+            FeatureMetadata(metadata_path=metadata_path)
+            if metadata_path
+            else FeatureMetadata()
+        )
         reporter = meta.get_biological_signal(exp_short, channel)
         cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
         if not cell_file.exists():
             if verbose:
-                print(f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'...")
+                print(
+                    f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'..."
+                )
             cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
         if not cell_file.exists():
@@ -2570,7 +2601,11 @@ def _process_vertical_group(
             if verbose:
                 print(f"      Normalizing cells from {exp}...")
             # Auto-detect control column: cell h5ads use "perturbation", older files use "label_str"
-            _ctrl_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+            _ctrl_col = (
+                "perturbation"
+                if "perturbation" in adata_cells.obs.columns
+                else "label_str"
+            )
             adata_cells = normalize_adata_zscore(
                 adata_cells,
                 normalize_on_controls=normalize_on_controls,
@@ -2804,7 +2839,12 @@ def _process_horizontal_group(
             # Try reporter name
             from ops_utils.data.feature_metadata import FeatureMetadata
             from ops_utils.data.feature_metadata import FeatureMetadata
-            _meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+
+            _meta = (
+                FeatureMetadata(metadata_path=metadata_path)
+                if metadata_path
+                else FeatureMetadata()
+            )
             reporter = _meta.get_biological_signal(exp_short, channel)
             agg_file = anndata_dir / f"{prefix}_{reporter}.h5ad"
         if agg_file.exists():
@@ -2817,7 +2857,10 @@ def _process_horizontal_group(
             if "embedding_type" not in adata_agg.uns:
                 adata_agg.uns["embedding_type"] = feature_dir or "unknown"
             # Derive perturbation from label_str if missing
-            if "perturbation" not in adata_agg.obs.columns and "label_str" in adata_agg.obs.columns:
+            if (
+                "perturbation" not in adata_agg.obs.columns
+                and "label_str" in adata_agg.obs.columns
+            ):
                 adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
             # Compute real n_cells from cell-level file (backed mode — no X loaded)
             if "n_cells" not in adata_agg.obs.columns:
@@ -2826,11 +2869,15 @@ def _process_horizontal_group(
                     anndata_dir, channel, target_level, verbose
                 )
                 if counts is not None:
-                    adata_agg.obs["n_cells"] = adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                    adata_agg.obs["n_cells"] = (
+                        adata_agg.obs[group_col].map(counts).fillna(1).astype(int)
+                    )
                 else:
                     adata_agg.obs["n_cells"] = 1
             if verbose:
-                print(f"    Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features")
+                print(
+                    f"    Loaded {len(adata_agg)} {target_level}s × {adata_agg.shape[1]} features"
+                )
             adata_agg.uns["horizontal_metadata"] = {
                 "experiment": exp,
                 "channel": channel,
@@ -2845,12 +2892,18 @@ def _process_horizontal_group(
     from ops_utils.data.feature_metadata import FeatureMetadata
     from ops_utils.data.feature_metadata import FeatureMetadata
 
-    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+    meta = (
+        FeatureMetadata(metadata_path=metadata_path)
+        if metadata_path
+        else FeatureMetadata()
+    )
     reporter = meta.get_biological_signal(exp_short, channel)
     cell_file = anndata_dir / f"features_processed_{reporter}.h5ad"
     if not cell_file.exists():
         if verbose:
-            print(f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'...")
+            print(
+                f"    Cell file not found as reporter name '{reporter}', trying channel name '{channel}'..."
+            )
         cell_file = anndata_dir / f"features_processed_{channel}.h5ad"
 
     if not cell_file.exists():
@@ -2906,7 +2959,9 @@ def _process_horizontal_group(
     if normalize_on_pooling:
         if verbose:
             print(f"    Normalizing cells from {exp}...")
-        _ctrl_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        _ctrl_col = (
+            "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        )
         adata_cells = normalize_adata_zscore(
             adata_cells,
             normalize_on_controls=normalize_on_controls,
@@ -3342,7 +3397,9 @@ def _run_leiden_clustering(
     """
     if "neighbors" not in adata.uns:
         if verbose:
-            print(f"No neighbors graph found. Running sc.pp.neighbors(n_neighbors={n_neighbors})...")
+            print(
+                f"No neighbors graph found. Running sc.pp.neighbors(n_neighbors={n_neighbors})..."
+            )
         sc.pp.neighbors(adata, n_neighbors=n_neighbors, random_state=random_state)
 
     if verbose:
@@ -3352,7 +3409,15 @@ def _run_leiden_clustering(
         key = f"leiden_{res}"
         if verbose:
             print(f"  Resolution {res}...")
-        sc.tl.leiden(adata, resolution=res, key_added=key, random_state=random_state, flavor="igraph", n_iterations=2, directed=False)
+        sc.tl.leiden(
+            adata,
+            resolution=res,
+            key_added=key,
+            random_state=random_state,
+            flavor="igraph",
+            n_iterations=2,
+            directed=False,
+        )
         if verbose:
             n_clusters = adata.obs[key].nunique()
             print(f"    → {n_clusters} clusters")
@@ -3542,14 +3607,20 @@ def concatenate_experiments_comprehensive(
         print("=" * 80)
 
     # Initialize metadata manager
-    meta = FeatureMetadata(metadata_path=metadata_path) if metadata_path else FeatureMetadata()
+    meta = (
+        FeatureMetadata(metadata_path=metadata_path)
+        if metadata_path
+        else FeatureMetadata()
+    )
 
     # Group by biological signal
     if signal_map is not None:
         # Caller provided pre-resolved grouping — use it directly
         biological_signals = signal_map
         if verbose:
-            print("\nUsing caller-provided signal map (bypassing FeatureMetadata lookup)")
+            print(
+                "\nUsing caller-provided signal map (bypassing FeatureMetadata lookup)"
+            )
             for bio_signal, pairs in biological_signals.items():
                 agg_type = "VERTICAL" if len(pairs) > 1 else "HORIZONTAL"
                 print(f"  [{agg_type}] {bio_signal}: {len(pairs)} source(s)")
@@ -4236,7 +4307,9 @@ def main():
 # =============================================================================
 
 
-def hconcat_by_perturbation(blocks: List[ad.AnnData], level: str = "guide") -> ad.AnnData:
+def hconcat_by_perturbation(
+    blocks: List[ad.AnnData], level: str = "guide"
+) -> ad.AnnData:
     """Horizontally concatenate AnnData blocks by matching on perturbation/sgRNA key.
 
     Aligns observations across blocks using the perturbation key (sgRNA for guide,
@@ -4254,7 +4327,11 @@ def hconcat_by_perturbation(blocks: List[ad.AnnData], level: str = "guide") -> a
     -------
     AnnData with horizontally concatenated features and unique var names.
     """
-    key = "sgRNA" if level == "guide" and "sgRNA" in blocks[0].obs.columns else "perturbation"
+    key = (
+        "sgRNA"
+        if level == "guide" and "sgRNA" in blocks[0].obs.columns
+        else "perturbation"
+    )
     common = set(blocks[0].obs[key].values)
     for b in blocks[1:]:
         common &= set(b.obs[key].values)
@@ -4306,7 +4383,10 @@ def split_ntc_for_embedding(
 
     if len(ntc_idx) < group_size:
         return aggregate_to_level(
-            adata_guide, "gene", preserve_batch_info=False, subsample_controls=False,
+            adata_guide,
+            "gene",
+            preserve_batch_info=False,
+            subsample_controls=False,
         )
 
     shuffled = ntc_idx.copy()
@@ -4314,9 +4394,11 @@ def split_ntc_for_embedding(
     new_pert = obs[pert_col].astype(str).copy()
     grp_num = 1
     for i in range(0, len(shuffled), group_size):
-        chunk = shuffled[i:i + group_size]
+        chunk = shuffled[i : i + group_size]
         if len(chunk) < group_size:
-            new_pert.iloc[chunk] = f"NTC_grp{grp_num - 1}" if grp_num > 1 else f"NTC_grp{grp_num}"
+            new_pert.iloc[chunk] = (
+                f"NTC_grp{grp_num - 1}" if grp_num > 1 else f"NTC_grp{grp_num}"
+            )
         else:
             new_pert.iloc[chunk] = f"NTC_grp{grp_num}"
             grp_num += 1
@@ -4324,7 +4406,10 @@ def split_ntc_for_embedding(
     adata_mod = adata_guide.copy()
     adata_mod.obs[pert_col] = new_pert
     return aggregate_to_level(
-        adata_mod, "gene", preserve_batch_info=False, subsample_controls=False,
+        adata_mod,
+        "gene",
+        preserve_batch_info=False,
+        subsample_controls=False,
     )
 
 
@@ -4354,7 +4439,10 @@ def normalize_guide_adata(
     for col in adata_guide.obs.columns:
         df[col] = adata_guide.obs[col].values
     df = zscore_normalize(
-        df, feature_cols, method=norm_method, perturbation_col="perturbation",
+        df,
+        feature_cols,
+        method=norm_method,
+        perturbation_col="perturbation",
     )
     adata_guide.X = df[feature_cols].values.astype(np.float32)
     return adata_guide

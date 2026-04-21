@@ -658,9 +658,9 @@ class AnndataSpec:
                     name="sgRNA",
                     dtype=str,
                     required=True,
-                    unique=True,
-                    description="Guide RNA identifier (must be unique)",
-                    suggestion="Add sgRNA column with unique guide identifiers",
+                    unique=False,
+                    description="Guide RNA identifier",
+                    suggestion="Add sgRNA column with guide identifiers",
                 ),
             ],
             "optional_fields": base["optional_fields"]

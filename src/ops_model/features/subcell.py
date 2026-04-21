@@ -65,6 +65,7 @@ def build_subcell_dataloader(config: dict, out_channels: list):
         out_channels=out_channels,
         initial_yx_patch_size=config["data_manager"]["initial_yx_patch_size"],
         final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
+        link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
     )
     dm.construct_dataloaders(
@@ -181,8 +182,6 @@ def extract_subcell_features(config: dict = None):
     final_df.to_csv(final_path, index=False)
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
-
-    return final_df
 
 
 def subcell_main(config_paths: list[str]):

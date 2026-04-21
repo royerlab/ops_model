@@ -27,6 +27,7 @@ def train(config_path):
         out_channels=config["data_manager"]["out_channels"],
         initial_yx_patch_size=tuple(config["data_manager"]["initial_yx_patch_size"]),
         final_yx_patch_size=tuple(config["data_manager"]["final_yx_patch_size"]),
+        link_csv_dir=config["data_manager"].get("link_csv_dir"),
     )
     data_manager.construct_dataloaders(
         num_workers=config["data_manager"]["num_workers"],

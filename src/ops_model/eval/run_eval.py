@@ -20,12 +20,8 @@ Both levels, merged into one output row::
         --guide_embedding /path/to/guide_embeddings.h5ad \\
         --gene_embedding /path/to/gene_embeddings.h5ad
 
-Save CSVs and plots alongside the metrics CSV::
-
-    uv run run_eval \\
-        --guide_embedding /path/to/guide_embeddings.h5ad \\
-        --gene_embedding /path/to/gene_embeddings.h5ad \\
-        --save-outputs
+All outputs (summary CSV, per-perturbation mAP CSVs, and plots) are always
+written to the same directory as the summary CSV.
 
 .. note::
     When both embeddings are provided, the ``activity_map`` from the guide-level
@@ -78,11 +74,6 @@ def main() -> None:
         help="Output CSV path. Defaults to <embedding_dir>/<timestamp>_eval.csv.",
     )
     parser.add_argument(
-        "--save-outputs",
-        action="store_true",
-        help="Save per-metric CSVs and plots alongside the summary CSV.",
-    )
-    parser.add_argument(
         "--distinctiveness-active-only",
         action="store_true",
         help="Compute distinctiveness over active genes only (default: all genes).",
@@ -111,18 +102,18 @@ def main() -> None:
         del adata_guide
         results.update(guide_metrics)
         results["guide_embedding_path"] = args.guide_embedding
-        if args.save_outputs:
-            save_guide_eval(activity_map, distinctiveness_map, guide_metrics, output_dir)
+        save_guide_eval(activity_map, distinctiveness_map, guide_metrics, output_dir)
 
     if args.gene_embedding:
         adata_gene = ad.read_h5ad(args.gene_embedding)
-        gene_metrics, consistency_corum_map, consistency_manual_map = evaluate_gene_level(
-            adata_gene, activity_map=activity_map
+        gene_metrics, consistency_corum_map, consistency_manual_map = (
+            evaluate_gene_level(adata_gene, activity_map=activity_map)
         )
         results.update(gene_metrics)
         results["gene_embedding_path"] = args.gene_embedding
-        if args.save_outputs:
-            save_gene_eval(consistency_corum_map, consistency_manual_map, gene_metrics, output_dir)
+        save_gene_eval(
+            consistency_corum_map, consistency_manual_map, gene_metrics, output_dir
+        )
 
     pd.DataFrame([results]).to_csv(output_path, index=False)
     print(f"Evaluation results written to {output_path}")

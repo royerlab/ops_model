@@ -44,14 +44,15 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-TOP_N_PER_PC = 20          # features shown in per-PC bar plots
-TOP_N_HEATMAP = 40         # features shown in heatmap (ranked by max |loading| across PCs)
-MIN_CHANNEL_FEATURES = 3   # skip channels with fewer features than this
+TOP_N_PER_PC = 20  # features shown in per-PC bar plots
+TOP_N_HEATMAP = 40  # features shown in heatmap (ranked by max |loading| across PCs)
+MIN_CHANNEL_FEATURES = 3  # skip channels with fewer features than this
 
 
 # ---------------------------------------------------------------------------
 # Feature name parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_cp_feature(name: str) -> dict:
     """Parse a CellProfiler feature name into components.
@@ -65,36 +66,41 @@ def parse_cp_feature(name: str) -> dict:
         # parts: [single, object, channel, compartment, category, ...]
         if len(parts) >= 5:
             return {
-                "channel":     parts[2],
+                "channel": parts[2],
                 "compartment": parts[3],
-                "category":    parts[4],
-                "stat":        "_".join(parts[5:]) if len(parts) > 5 else "",
+                "category": parts[4],
+                "stat": "_".join(parts[5:]) if len(parts) > 5 else "",
                 "raw": name,
             }
 
     # coloc_{channel_a}_{channel_b}_{stat}
     if parts[0] == "coloc" and len(parts) >= 3:
         return {
-            "channel":     f"coloc_{parts[1]}_{parts[2]}",
+            "channel": f"coloc_{parts[1]}_{parts[2]}",
             "compartment": "coloc",
-            "category":    "Colocalization",
-            "stat":        "_".join(parts[3:]),
+            "category": "Colocalization",
+            "stat": "_".join(parts[3:]),
             "raw": name,
         }
 
     # {compartment}_{feature} — shape/morphology, no specific channel
     if len(parts) >= 2 and parts[0] in ("cell", "nucleus", "cytoplasm"):
         return {
-            "channel":     "morphology",
+            "channel": "morphology",
             "compartment": parts[0],
-            "category":    parts[1] if len(parts) > 1 else "unknown",
-            "stat":        "_".join(parts[2:]),
+            "category": parts[1] if len(parts) > 1 else "unknown",
+            "stat": "_".join(parts[2:]),
             "raw": name,
         }
 
     # fallback
-    return {"channel": "other", "compartment": "unknown",
-            "category": "unknown", "stat": name, "raw": name}
+    return {
+        "channel": "other",
+        "compartment": "unknown",
+        "category": "unknown",
+        "stat": name,
+        "raw": name,
+    }
 
 
 def build_feature_table(feature_names: List[str]) -> pd.DataFrame:
@@ -110,21 +116,21 @@ def build_feature_table(feature_names: List[str]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _CATEGORY_PALETTE = {
-    "Intensity":          "#E65100",
-    "Texture":            "#6A1B9A",
+    "Intensity": "#E65100",
+    "Texture": "#6A1B9A",
     "RadialDistribution": "#1565C0",
-    "Granularity":        "#2E7D32",
-    "Colocalization":     "#F9A825",
-    "AreaShape":          "#558B2F",
-    "Area":               "#558B2F",
-    "Morphology":         "#558B2F",
-    "NormalizedMoment":   "#00838F",
-    "CentralMoment":      "#00838F",
-    "SpatialMoment":      "#00838F",
-    "HuMoment":           "#00838F",
-    "InertiaTensor":      "#00838F",
-    "other":              "#9E9E9E",
-    "unknown":            "#9E9E9E",
+    "Granularity": "#2E7D32",
+    "Colocalization": "#F9A825",
+    "AreaShape": "#558B2F",
+    "Area": "#558B2F",
+    "Morphology": "#558B2F",
+    "NormalizedMoment": "#00838F",
+    "CentralMoment": "#00838F",
+    "SpatialMoment": "#00838F",
+    "HuMoment": "#00838F",
+    "InertiaTensor": "#00838F",
+    "other": "#9E9E9E",
+    "unknown": "#9E9E9E",
 }
 
 
@@ -138,6 +144,7 @@ def _cat_colour(cat: str) -> str:
 # ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
+
 
 def analyze_pca_loadings(
     loadings: np.ndarray,
@@ -165,12 +172,15 @@ def analyze_pca_loadings(
         Number of top features to show per PC.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     n_pcs, n_feats = loadings.shape
     if n_feats != len(feature_names):
-        logger.warning(f"  Loadings shape mismatch: {n_feats} vs {len(feature_names)} features")
+        logger.warning(
+            f"  Loadings shape mismatch: {n_feats} vs {len(feature_names)} features"
+        )
         return
 
     # Cap to PCs that explain at least 2% variance
@@ -181,7 +191,9 @@ def analyze_pca_loadings(
             logger.warning(f"  No PCs explain ≥{MIN_VAR:.0%} variance — using top 3")
             keep = np.arange(min(3, n_pcs))
         if len(keep) < n_pcs:
-            logger.info(f"  Keeping {len(keep)}/{n_pcs} PCs with ≥{MIN_VAR:.0%} variance explained")
+            logger.info(
+                f"  Keeping {len(keep)}/{n_pcs} PCs with ≥{MIN_VAR:.0%} variance explained"
+            )
         loadings = loadings[keep]
         explained_variance_ratio = explained_variance_ratio[keep]
         n_pcs = len(keep)
@@ -200,17 +212,23 @@ def analyze_pca_loadings(
         order = np.argsort(abs_loadings[pc_i])[::-1][:top_n]
         for rank, feat_idx in enumerate(order):
             info = feat_df.iloc[feat_idx]
-            rows.append({
-                "pc": pc_i,
-                "rank": rank + 1,
-                "feature": feature_names[feat_idx],
-                "loading": float(loadings[pc_i, feat_idx]),
-                "abs_loading": float(abs_loadings[pc_i, feat_idx]),
-                "channel": info["channel"],
-                "compartment": info["compartment"],
-                "category": info["category"],
-                "var_explained": float(explained_variance_ratio[pc_i]) if pc_i < len(explained_variance_ratio) else 0.0,
-            })
+            rows.append(
+                {
+                    "pc": pc_i,
+                    "rank": rank + 1,
+                    "feature": feature_names[feat_idx],
+                    "loading": float(loadings[pc_i, feat_idx]),
+                    "abs_loading": float(abs_loadings[pc_i, feat_idx]),
+                    "channel": info["channel"],
+                    "compartment": info["compartment"],
+                    "category": info["category"],
+                    "var_explained": (
+                        float(explained_variance_ratio[pc_i])
+                        if pc_i < len(explained_variance_ratio)
+                        else 0.0
+                    ),
+                }
+            )
     top_df = pd.DataFrame(rows)
     top_df.to_csv(loadings_dir / f"{file_prefix}_top_features.csv", index=False)
 
@@ -219,27 +237,45 @@ def analyze_pca_loadings(
     # ------------------------------------------------------------------
     max_abs = abs_loadings.max(axis=0)
     top_feat_idx = np.argsort(max_abs)[::-1][:TOP_N_HEATMAP]
-    heatmap_data = loadings[:, top_feat_idx]   # (n_pcs, TOP_N_HEATMAP)
+    heatmap_data = loadings[:, top_feat_idx]  # (n_pcs, TOP_N_HEATMAP)
     heatmap_labels = [feature_names[i] for i in top_feat_idx]
 
     fig_h = max(5, n_pcs * 0.3 + 1)
     fig_w = max(10, TOP_N_HEATMAP * 0.22 + 2)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    im = ax.imshow(heatmap_data, aspect="auto", cmap="RdBu_r",
-                   vmin=-abs_loadings.max(), vmax=abs_loadings.max())
+    im = ax.imshow(
+        heatmap_data,
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-abs_loadings.max(),
+        vmax=abs_loadings.max(),
+    )
     ax.set_xticks(range(len(heatmap_labels)))
     ax.set_xticklabels(heatmap_labels, rotation=90, fontsize=5)
     ax.set_yticks(range(n_pcs))
     ax.set_yticklabels(
-        [f"PC{i} ({explained_variance_ratio[i]:.1%})" if i < len(explained_variance_ratio) else f"PC{i}"
-         for i in range(n_pcs)],
+        [
+            (
+                f"PC{i} ({explained_variance_ratio[i]:.1%})"
+                if i < len(explained_variance_ratio)
+                else f"PC{i}"
+            )
+            for i in range(n_pcs)
+        ],
         fontsize=7,
     )
     plt.colorbar(im, ax=ax, label="Loading", shrink=0.6)
-    ax.set_title(f"{file_prefix} — PCA loadings heatmap (top {TOP_N_HEATMAP} features)",
-                 fontsize=10, fontweight="bold")
+    ax.set_title(
+        f"{file_prefix} — PCA loadings heatmap (top {TOP_N_HEATMAP} features)",
+        fontsize=10,
+        fontweight="bold",
+    )
     fig.tight_layout()
-    fig.savefig(loadings_dir / f"{file_prefix}_loadings_heatmap.png", dpi=160, bbox_inches="tight")
+    fig.savefig(
+        loadings_dir / f"{file_prefix}_loadings_heatmap.png",
+        dpi=160,
+        bbox_inches="tight",
+    )
     plt.close(fig)
     logger.info(f"  Saved loadings/loadings_heatmap.png")
 
@@ -256,7 +292,7 @@ def analyze_pca_loadings(
         ch_dir = loadings_dir / channel
         ch_dir.mkdir(exist_ok=True)
 
-        ch_abs = abs_loadings[:, ch_feat_idx]     # (n_pcs, n_ch_feats)
+        ch_abs = abs_loadings[:, ch_feat_idx]  # (n_pcs, n_ch_feats)
         ch_loadings = loadings[:, ch_feat_idx]
         ch_names = [feature_names[i] for i in ch_feat_idx]
         ch_feat_info = feat_df.iloc[ch_feat_idx]
@@ -265,7 +301,8 @@ def analyze_pca_loadings(
         n_cols = 4
         n_rows_grid = int(np.ceil(n_pcs / n_cols))
         fig, axes = plt.subplots(
-            n_rows_grid, n_cols,
+            n_rows_grid,
+            n_cols,
             figsize=(n_cols * 4.5, n_rows_grid * 3.2),
             gridspec_kw={"hspace": 0.55, "wspace": 0.45},
         )
@@ -275,8 +312,9 @@ def analyze_pca_loadings(
             ax = axes_flat[pc_i]
             # Top features for this PC from this channel, sorted by |loading|
             order = np.argsort(ch_abs[pc_i])[::-1][:top_n]
-            feat_labels = [ch_names[j].replace(f"single_object_{channel}_", "")
-                           for j in order]
+            feat_labels = [
+                ch_names[j].replace(f"single_object_{channel}_", "") for j in order
+            ]
             values = [ch_loadings[pc_i, j] for j in order]
             colours = ["#E65100" if v > 0 else "#1565C0" for v in values]
 
@@ -288,8 +326,11 @@ def analyze_pca_loadings(
             ax.axvline(0, color="black", lw=0.7)
             ax.tick_params(axis="x", labelsize=6)
 
-            var_str = (f" — {explained_variance_ratio[pc_i]:.1%} var"
-                       if pc_i < len(explained_variance_ratio) else "")
+            var_str = (
+                f" — {explained_variance_ratio[pc_i]:.1%} var"
+                if pc_i < len(explained_variance_ratio)
+                else ""
+            )
             ax.set_title(f"PC{pc_i}{var_str}", fontsize=8, fontweight="bold")
             ax.set_xlabel("Loading", fontsize=6.5)
 
@@ -297,9 +338,15 @@ def analyze_pca_loadings(
         for ax in axes_flat[n_pcs:]:
             ax.set_visible(False)
 
-        fig.suptitle(f"{file_prefix} — {channel} ({len(ch_feat_idx)} features, top {top_n} per PC)",
-                     fontsize=11, fontweight="bold", y=1.01)
-        fig.savefig(ch_dir / f"{channel}_loading_profile.png", dpi=160, bbox_inches="tight")
+        fig.suptitle(
+            f"{file_prefix} — {channel} ({len(ch_feat_idx)} features, top {top_n} per PC)",
+            fontsize=11,
+            fontweight="bold",
+            y=1.01,
+        )
+        fig.savefig(
+            ch_dir / f"{channel}_loading_profile.png", dpi=160, bbox_inches="tight"
+        )
         plt.close(fig)
 
         # Per-channel top features CSV
@@ -309,17 +356,24 @@ def analyze_pca_loadings(
             for rank, local_i in enumerate(order):
                 feat_i = ch_feat_idx[local_i]
                 info = feat_df.iloc[feat_i]
-                ch_rows.append({
-                    "pc": pc_i, "rank": rank + 1,
-                    "feature": feature_names[feat_i],
-                    "loading": float(loadings[pc_i, feat_i]),
-                    "abs_loading": float(abs_loadings[pc_i, feat_i]),
-                    "compartment": info["compartment"],
-                    "category": info["category"],
-                })
-        pd.DataFrame(ch_rows).to_csv(ch_dir / f"{channel}_top_features.csv", index=False)
+                ch_rows.append(
+                    {
+                        "pc": pc_i,
+                        "rank": rank + 1,
+                        "feature": feature_names[feat_i],
+                        "loading": float(loadings[pc_i, feat_i]),
+                        "abs_loading": float(abs_loadings[pc_i, feat_i]),
+                        "compartment": info["compartment"],
+                        "category": info["category"],
+                    }
+                )
+        pd.DataFrame(ch_rows).to_csv(
+            ch_dir / f"{channel}_top_features.csv", index=False
+        )
 
-    logger.info(f"  Saved loadings/ with {len([c for c in channels if (loadings_dir / c).exists()])} channel subdirs")
+    logger.info(
+        f"  Saved loadings/ with {len([c for c in channels if (loadings_dir / c).exists()])} channel subdirs"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +382,9 @@ def analyze_pca_loadings(
 # Cross-signal summary
 # ---------------------------------------------------------------------------
 
+
 def _plot_cross_signal_summary(
-    signal_loadings: dict,   # signal -> {"loadings": ndarray, "feature_names": list, "var_ratio": ndarray}
+    signal_loadings: dict,  # signal -> {"loadings": ndarray, "feature_names": list, "var_ratio": ndarray}
     output_dir: Path,
 ) -> None:
     """Summarise PC→feature-category mapping across all signals.
@@ -345,6 +400,7 @@ def _plot_cross_signal_summary(
       loadings/summary_cross_signal.csv    — raw category fractions per signal per PC
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.cm import get_cmap
@@ -357,13 +413,15 @@ def _plot_cross_signal_summary(
 
     # Collect all category/compartment fractions per (signal, pc)
     records = []
-    feature_weight_accumulator = {}  # feature_name -> array over signals of mean |loading|
+    feature_weight_accumulator = (
+        {}
+    )  # feature_name -> array over signals of mean |loading|
 
     # Find max n_pcs across signals
     max_pcs = max(d["loadings"].shape[0] for d in signal_loadings.values())
 
     for signal, data in signal_loadings.items():
-        L = np.abs(data["loadings"])          # (n_pcs, n_feats)
+        L = np.abs(data["loadings"])  # (n_pcs, n_feats)
         feat_df = build_feature_table(data["feature_names"])
         n_pcs_s = L.shape[0]
 
@@ -372,16 +430,30 @@ def _plot_cross_signal_summary(
             for cat in feat_df["category"].unique():
                 mask = feat_df["category"] == cat
                 frac = L[pc_i, mask.values].sum() / total
-                records.append({"signal": signal, "pc": pc_i,
-                                 "dim": "category", "label": cat, "fraction": frac})
+                records.append(
+                    {
+                        "signal": signal,
+                        "pc": pc_i,
+                        "dim": "category",
+                        "label": cat,
+                        "fraction": frac,
+                    }
+                )
             for comp in feat_df["compartment"].unique():
                 mask = feat_df["compartment"] == comp
                 frac = L[pc_i, mask.values].sum() / total
-                records.append({"signal": signal, "pc": pc_i,
-                                 "dim": "compartment", "label": comp, "fraction": frac})
+                records.append(
+                    {
+                        "signal": signal,
+                        "pc": pc_i,
+                        "dim": "compartment",
+                        "label": comp,
+                        "fraction": frac,
+                    }
+                )
 
         # Accumulate per-feature mean |loading| across PCs (max across PCs = importance)
-        feat_importance = L.max(axis=0)   # (n_feats,)
+        feat_importance = L.max(axis=0)  # (n_feats,)
         for feat_name, imp in zip(data["feature_names"], feat_importance):
             if feat_name not in feature_weight_accumulator:
                 feature_weight_accumulator[feat_name] = []
@@ -405,7 +477,9 @@ def _plot_cross_signal_summary(
         colours = [get_cmap("tab20")(i / max(n_cats, 1)) for i in range(n_cats)]
 
         fig, (ax_main, ax_std) = plt.subplots(
-            2, 1, figsize=(max(8, n_pcs_plot * 0.7), 8),
+            2,
+            1,
+            figsize=(max(8, n_pcs_plot * 0.7), 8),
             gridspec_kw={"height_ratios": [3, 1], "hspace": 0.35},
         )
 
@@ -413,45 +487,71 @@ def _plot_cross_signal_summary(
         bottom = np.zeros(n_pcs_plot)
         for i, col in enumerate(pivot.columns):
             vals = pivot[col].values
-            ax_main.bar(range(n_pcs_plot), vals, bottom=bottom,
-                        color=colours[i], label=col, width=0.75, alpha=0.88)
+            ax_main.bar(
+                range(n_pcs_plot),
+                vals,
+                bottom=bottom,
+                color=colours[i],
+                label=col,
+                width=0.75,
+                alpha=0.88,
+            )
             bottom += vals
 
         ax_main.set_xticks(range(n_pcs_plot))
         ax_main.set_xticklabels([f"PC{i}" for i in pivot.index], fontsize=8)
         ax_main.set_ylabel("Mean fraction of |loading|", fontsize=9)
         ax_main.set_title(title, fontsize=11, fontweight="bold")
-        ax_main.legend(fontsize=7, bbox_to_anchor=(1.01, 1), loc="upper left", framealpha=0.8)
+        ax_main.legend(
+            fontsize=7, bbox_to_anchor=(1.01, 1), loc="upper left", framealpha=0.8
+        )
         ax_main.set_ylim(0, 1)
 
         # Consistency bar — std across signals per PC (lower = more consistent)
-        std_per_pc = sub.groupby(["pc", "label"])["fraction"].std().unstack(fill_value=0)
+        std_per_pc = (
+            sub.groupby(["pc", "label"])["fraction"].std().unstack(fill_value=0)
+        )
         std_per_pc = std_per_pc.reindex(pivot.index, fill_value=0)
         mean_std = std_per_pc.mean(axis=1)
         consistency = 1.0 - (mean_std / mean_std.max().clip(1e-6))
-        ax_std.bar(range(n_pcs_plot), consistency.values,
-                   color="#2E7D32", alpha=0.7, width=0.75)
+        ax_std.bar(
+            range(n_pcs_plot),
+            consistency.values,
+            color="#2E7D32",
+            alpha=0.7,
+            width=0.75,
+        )
         ax_std.set_xticks(range(n_pcs_plot))
         ax_std.set_xticklabels([f"PC{i}" for i in pivot.index], fontsize=8)
         ax_std.set_ylabel("Consistency\n(1 − norm.std)", fontsize=8)
         ax_std.set_ylim(0, 1)
         ax_std.axhline(0.7, color="grey", lw=0.8, ls="--", alpha=0.6)
-        ax_std.set_title("Cross-signal consistency (higher = same theme across reporters)",
-                          fontsize=8)
+        ax_std.set_title(
+            "Cross-signal consistency (higher = same theme across reporters)",
+            fontsize=8,
+        )
 
         fig.tight_layout()
         fig.savefig(loadings_dir / fname, dpi=160, bbox_inches="tight")
         plt.close(fig)
         logger.info(f"  Saved loadings/{fname}")
 
-    _stacked_bar_summary("category",    "summary_pc_categories.png",
-                          f"PC → Feature Category ({len(signal_loadings)} signals)")
-    _stacked_bar_summary("compartment", "summary_pc_compartments.png",
-                          f"PC → Compartment ({len(signal_loadings)} signals)")
+    _stacked_bar_summary(
+        "category",
+        "summary_pc_categories.png",
+        f"PC → Feature Category ({len(signal_loadings)} signals)",
+    )
+    _stacked_bar_summary(
+        "compartment",
+        "summary_pc_compartments.png",
+        f"PC → Compartment ({len(signal_loadings)} signals)",
+    )
 
     # Cross-signal top feature heatmap — mean |loading| across signals
     mean_importance = {f: np.mean(v) for f, v in feature_weight_accumulator.items()}
-    top_feats = sorted(mean_importance, key=mean_importance.get, reverse=True)[:TOP_N_HEATMAP]
+    top_feats = sorted(mean_importance, key=mean_importance.get, reverse=True)[
+        :TOP_N_HEATMAP
+    ]
 
     # Build PC × top_feature matrix (mean |loading| across signals that have the feature)
     heatmap = np.zeros((max_pcs, len(top_feats)))
@@ -478,32 +578,43 @@ def _plot_cross_signal_summary(
     ax.set_yticks(range(max_pcs))
     ax.set_yticklabels([f"PC{i}" for i in range(max_pcs)], fontsize=7)
     plt.colorbar(im, ax=ax, label="Mean |loading| across signals", shrink=0.6)
-    ax.set_title(f"Mean |loading| per PC across {n_signals} signals — top {len(top_feats)} features",
-                 fontsize=10, fontweight="bold")
+    ax.set_title(
+        f"Mean |loading| per PC across {n_signals} signals — top {len(top_feats)} features",
+        fontsize=10,
+        fontweight="bold",
+    )
     fig.tight_layout()
-    fig.savefig(loadings_dir / "summary_pc_top_features.png", dpi=160, bbox_inches="tight")
+    fig.savefig(
+        loadings_dir / "summary_pc_top_features.png", dpi=160, bbox_inches="tight"
+    )
     plt.close(fig)
     logger.info(f"  Saved loadings/summary_pc_top_features.png")
 
 
 # ---------------------------------------------------------------------------
 
+
 def main():
     import argparse
     import anndata as ad
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     parser = argparse.ArgumentParser(
         description="PCA loadings analysis from existing per-channel/signal h5ads"
     )
     parser.add_argument(
-        "-o", "--output-dir", type=str,
+        "-o",
+        "--output-dir",
+        type=str,
         default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized/cellprofiler",
         help="Feature-type output dir (e.g. .../pca_optimized/cellprofiler)",
     )
     parser.add_argument(
-        "--downsampled", action="store_true",
+        "--downsampled",
+        action="store_true",
         help="Read from per_signal/ instead of per_channel/",
     )
     args = parser.parse_args()
@@ -524,10 +635,12 @@ def main():
     for gf in guide_files:
         file_prefix = gf.stem.replace("_guide", "")
         g = ad.read_h5ad(gf)
-        components  = g.uns.get("pca_components")
-        feat_names  = g.uns.get("pca_feature_names")
+        components = g.uns.get("pca_components")
+        feat_names = g.uns.get("pca_feature_names")
         if components is None or feat_names is None:
-            logger.warning(f"  {file_prefix}: no loadings in uns — re-run sweep to populate")
+            logger.warning(
+                f"  {file_prefix}: no loadings in uns — re-run sweep to populate"
+            )
             n_skip += 1
             continue
         var_ratio = g.uns.get("pca", {}).get("variance_ratio")
@@ -544,7 +657,9 @@ def main():
                 file_prefix=file_prefix,
             )
             signal_loadings[file_prefix] = {
-                "loadings": L, "feature_names": feat_names, "var_ratio": vr,
+                "loadings": L,
+                "feature_names": feat_names,
+                "var_ratio": vr,
             }
             n_done += 1
         except Exception as e:

@@ -106,6 +106,7 @@ def extract_dinov3_features(
         out_channels=config["data_manager"]["out_channels"],
         initial_yx_patch_size=config["data_manager"]["initial_yx_patch_size"],
         final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
+        link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
     )
     dm.construct_dataloaders(
@@ -210,120 +211,119 @@ def extract_dinov3_features(
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
 
-    return final_df
+    return None
 
 
 import argparse
-import submitit
 import copy
 
 
-def dinov3_main(config_path: str):
+def dinov3_main(config_paths: list):
     """
     Main orchestrator function for DinoV3 feature extraction.
 
-    Spawns one SLURM job per channel specified in the config.
+    Spawns one SLURM job per config × channel via submit_parallel_jobs.
     Each job runs extract_dinov3_features() independently.
 
     Args:
-        config_path: Path to YAML configuration file
+        config_paths: List of paths to YAML configuration files
 
     Returns:
-        List of submitit Job objects
+        Result dict from submit_parallel_jobs
     """
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    def _parse_time(t) -> int:
+        if isinstance(t, int):
+            return t
+        parts = t.split(":")
+        return int(parts[0]) * 60 + int(parts[1])  # HH:MM[:SS] → minutes
 
-    # Extract channels and experiment info
-    out_channels = config["data_manager"]["out_channels"]
-    experiments = list(config["data_manager"]["experiments"].keys())
-    output_dir = Path(config["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
+    jobs_to_submit = []
+    slurm_params = None
 
-    # Get SLURM parameters from config (with defaults)
-    slurm_config = config.get("slurm", {})
-    partition = slurm_config.get("partition", "gpu")
-    gres = slurm_config.get("gres", "gpu:1")
-    cpus_per_task = slurm_config.get("cpus_per_task", 20)
-    mem = slurm_config.get("mem", "64G")
-    time_limit = slurm_config.get("time", "4:00:00")
-    constraint = slurm_config.get("constraint", "h100|h200|a100|a40")
+    for config_path in config_paths:
+        config_stem = Path(config_path).stem
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
 
-    # Parse memory (remove 'G' suffix if present and convert to int)
-    if isinstance(mem, str):
-        mem_gb = int(mem.rstrip("G"))
-    else:
-        mem_gb = int(mem)
+        out_channels = config["data_manager"]["out_channels"]
+        experiments = list(config["data_manager"]["experiments"].keys())
 
-    # Parse time limit to minutes
-    if isinstance(time_limit, int):
-        # Already in minutes
-        timeout_min = time_limit
-    elif isinstance(time_limit, str):
-        time_parts = time_limit.split(":")
-        if len(time_parts) == 3:  # HH:MM:SS
-            timeout_min = int(time_parts[0]) * 60 + int(time_parts[1])
-        elif len(time_parts) == 2:  # MM:SS
-            timeout_min = int(time_parts[0])
-        else:
-            timeout_min = 240  # Default 4 hours
-    else:
-        timeout_min = 240  # Default 4 hours
-
-    print(f"Spawning {len(out_channels)} DinoV3 jobs for experiment(s): {experiments}")
-    print(f"Channels: {out_channels}")
-    print(f"Output directory: {output_dir}")
-
-    # Setup submitit executor — local slurm_logs/slurm_dino_inference/{experiment} directory
-    log_dir = Path("slurm_logs") / "slurm_dino_inference" / experiments[0]
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    executor = submitit.AutoExecutor(folder=log_dir)
-
-    jobs = []
-
-    for channel in out_channels:
-        # Create a modified config for this channel
-        channel_config = copy.deepcopy(config)
-        channel_config["data_manager"]["out_channels"] = [channel]
-
-        # Update executor parameters for each job
-        executor.update_parameters(
-            timeout_min=timeout_min,
-            slurm_partition=partition,
-            slurm_gres=gres,
-            cpus_per_task=cpus_per_task,
-            mem_gb=mem_gb,
-            slurm_constraint=constraint,
-            slurm_job_name=f"dino_{experiments[0].split('_')[0]}_{channel}",
+        print(
+            f"Config {config_stem}: {len(out_channels)} channel(s) for experiment(s) {experiments}"
         )
+        print(f"  Channels: {out_channels}")
 
-        # Submit job
-        job = executor.submit(extract_dinov3_features, config=channel_config)
-        jobs.append(job)
+        if slurm_params is None:
+            slurm_config = config.get("slurm", {})
+            mem = slurm_config.get("mem", "64G")
+            time_limit = slurm_config.get("time", "4:00:00")
+            mem_gb = int(mem.rstrip("G")) if isinstance(mem, str) else int(mem)
+            timeout_min = _parse_time(time_limit)
 
-        print(f"Submitted job {job.job_id} for channel {channel}")
+            slurm_params = {
+                "slurm_partition": slurm_config.get("partition", "gpu"),
+                "slurm_gres": slurm_config.get("gres", "gpu:1"),
+                "cpus_per_task": slurm_config.get("cpus_per_task", 20),
+                "mem_gb": mem_gb,
+                "timeout_min": timeout_min,
+            }
+            constraint = slurm_config.get("constraint")
+            if constraint:
+                slurm_params["slurm_constraint"] = constraint
 
-    print(f"\nAll {len(jobs)} jobs submitted. Check status with 'squeue -u $USER'")
-    print(f"Job IDs: {[job.job_id for job in jobs]}")
+        for channel in out_channels:
+            channel_config = copy.deepcopy(config)
+            channel_config["data_manager"]["out_channels"] = [channel]
+            jobs_to_submit.append(
+                {
+                    "name": f"{config_stem}_{channel}",
+                    "func": extract_dinov3_features,
+                    "kwargs": {"config": channel_config},
+                    "metadata": {
+                        "config": config_path,
+                        "channel": channel,
+                        "experiments": experiments,
+                    },
+                }
+            )
 
-    return jobs
+    log_dir = "/hpc/projects/icd.fast.ops/models/logs/dinov3/slurm_logs"
+
+    print(f"\nSubmitting {len(jobs_to_submit)} DinoV3 job(s) via submit_parallel_jobs")
+    return submit_parallel_jobs(
+        jobs_to_submit=jobs_to_submit,
+        experiment="dinov3",
+        slurm_params=slurm_params,
+        log_dir=log_dir,
+        wait_for_completion=True,
+    )
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Extract DINOv3 features from OPS dataset based on config"
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "--config_path",
         type=str,
-        required=True,
-        help="Path to the YAML config file",
+        help="Path to a single YAML config file",
+    )
+    group.add_argument(
+        "--config_list",
+        type=str,
+        help="Path to .txt file with one config path per line",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    dinov3_main(config_path=args.config_path)
+    if args.config_list:
+        with open(args.config_list) as f:
+            config_paths = [line.strip() for line in f if line.strip()]
+    else:
+        config_paths = [args.config_path]
+    dinov3_main(config_paths)

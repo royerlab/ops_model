@@ -95,6 +95,7 @@ def extract_cell_dino_features(
         out_channels=config["data_manager"]["out_channels"],
         initial_yx_patch_size=config["data_manager"]["initial_yx_patch_size"],
         final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
+        link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
     )
     dm.construct_dataloaders(
@@ -199,8 +200,6 @@ def extract_cell_dino_features(
     print(f"Saved final concatenated features to {final_path}")
     print(f"Final dataframe shape: {final_df.shape}")
 
-    return final_df
-
 
 import argparse
 import copy
@@ -278,9 +277,11 @@ def cell_dino_main(config_paths: list[str]):
                 }
             )
 
-    log_dir = "/hpc/projects/intracellular_dashboard/ops/models/logs/cell_dino/slurm_logs"
+    log_dir = "/hpc/projects/icd.fast.ops/models/logs/cell_dino/slurm_logs"
 
-    print(f"\nSubmitting {len(jobs_to_submit)} Cell-DINO job(s) via submit_parallel_jobs")
+    print(
+        f"\nSubmitting {len(jobs_to_submit)} Cell-DINO job(s) via submit_parallel_jobs"
+    )
     result = submit_parallel_jobs(
         jobs_to_submit=jobs_to_submit,
         experiment="cell_dino",

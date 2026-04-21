@@ -1,5 +1,6 @@
 import ast
 import random
+from pathlib import Path
 from typing import Callable, List, Literal, Optional
 
 import zarr
@@ -10,7 +11,6 @@ from iohub import open_ome_zarr
 from monai.transforms import (
     CenterSpatialCropd,
     Compose,
-    RandAffined,
     RandFlipd,
     RandRotate90d,
     SpatialPadd,
@@ -171,7 +171,7 @@ class BaseDataset(Dataset):
 
         if self.out_channels == "random":
             channel_names = [random.choice(all_channel_names)]
-        if self.out_channels == "all":
+        elif self.out_channels == "all":
             channel_names = all_channel_names
         else:
             channel_names = self.out_channels
@@ -491,6 +491,7 @@ class OpsDataManager:
         batch_size: int = 32,
         out_channels: List[str] | Literal["random"] = "random",
         verbose: bool = False,
+        link_csv_dir: str | None = None,
     ):
         self.experiments = experiments
         self.data_split = data_split
@@ -502,6 +503,9 @@ class OpsDataManager:
         self.out_channels = out_channels
         self.verbose = verbose
         self.collate_fcn = None
+        self.link_csv_dir = Path(link_csv_dir) if link_csv_dir is not None else None
+        if self.link_csv_dir is not None and len(self.experiments) > 1:
+            raise ValueError("link_csv_dir can only be used with a single experiment")
 
         self.train_loader = None
         self.val_loader = None
@@ -529,7 +533,13 @@ class OpsDataManager:
             for w in wells:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
-                labels_tmp = pd.read_csv(OpsPaths(exp_name, well=w).links["training"])
+                if self.link_csv_dir is not None:
+                    well_prefix = w[0] + w[2]
+                    csv_path = self.link_csv_dir / f"{well_prefix}_linked_pheno_iss.csv"
+                else:
+                    csv_path = OpsPaths(exp_name, well=w).links["training"]
+                print(f"Reading link CSV from {csv_path}")
+                labels_tmp = pd.read_csv(csv_path)
                 labels_tmp = normalize_link_csv(labels_tmp)
 
                 # remove rows with NaN segmentation_id

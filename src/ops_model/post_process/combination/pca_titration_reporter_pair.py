@@ -66,7 +66,10 @@ logger = logging.getLogger(__name__)
 # Combination helper
 # ---------------------------------------------------------------------------
 
-def _combine_reporters(adata_a: ad.AnnData, adata_b: ad.AnnData) -> Optional[ad.AnnData]:
+
+def _combine_reporters(
+    adata_a: ad.AnnData, adata_b: ad.AnnData
+) -> Optional[ad.AnnData]:
     """Inner join two guide-level adatas on sgRNA key and concatenate features.
 
     Both adatas must already be normalized. Rows are aligned by sgRNA (the
@@ -79,15 +82,20 @@ def _combine_reporters(adata_a: ad.AnnData, adata_b: ad.AnnData) -> Optional[ad.
     import scipy.sparse as sp
 
     # Choose join key: sgRNA if available (exact guide), else gene-level perturbation
-    key = "sgRNA" if "sgRNA" in adata_a.obs.columns and "sgRNA" in adata_b.obs.columns \
-          else "perturbation"
+    key = (
+        "sgRNA"
+        if "sgRNA" in adata_a.obs.columns and "sgRNA" in adata_b.obs.columns
+        else "perturbation"
+    )
 
     keys_a = set(adata_a.obs[key])
     keys_b = set(adata_b.obs[key])
     common = sorted(keys_a & keys_b)
 
     if len(common) < 2:
-        logger.warning(f"    Only {len(common)} shared {key}s — skipping combined scoring")
+        logger.warning(
+            f"    Only {len(common)} shared {key}s — skipping combined scoring"
+        )
         return None
 
     logger.info(f"    Combining on {key}: {len(common)} shared guides")
@@ -106,7 +114,9 @@ def _combine_reporters(adata_a: ad.AnnData, adata_b: ad.AnnData) -> Optional[ad.
 
     X_combined = np.hstack([_to_dense(sub_a.X), _to_dense(sub_b.X)]).astype(np.float32)
 
-    keep_cols = [c for c in ["perturbation", "sgRNA", "n_cells"] if c in sub_a.obs.columns]
+    keep_cols = [
+        c for c in ["perturbation", "sgRNA", "n_cells"] if c in sub_a.obs.columns
+    ]
     combined = ad.AnnData(X=X_combined, obs=sub_a.obs[keep_cols].copy())
     return combined
 
@@ -114,6 +124,7 @@ def _combine_reporters(adata_a: ad.AnnData, adata_b: ad.AnnData) -> Optional[ad.
 # ---------------------------------------------------------------------------
 # Core titration function
 # ---------------------------------------------------------------------------
+
 
 def titrate_pair(
     cells_a_path: Path,
@@ -195,7 +206,9 @@ def titrate_pair(
         # Combine and score
         g_combined = _combine_reporters(g_a, g_b)
         if g_combined is not None:
-            scores_combined = _score_all_metrics(_prepare_for_copairs(g_combined.copy()), _logger)
+            scores_combined = _score_all_metrics(
+                _prepare_for_copairs(g_combined.copy()), _logger
+            )
             _logger.info(
                 f"  Combined ({len(set(g_combined.obs['perturbation']))} guides): "
                 f"act={scores_combined['activity_ratio']:.1%} "
@@ -225,23 +238,23 @@ def titrate_pair(
 # Visual style for the three reporters
 _REPORTER_STYLES = [
     # (suffix to match in reporter label, color, linestyle, marker, lw)
-    (0, "#2166ac", "-",  "o", 2.5),   # reporter A alone
-    (1, "#d6604d", "--", "s", 2.5),   # reporter B alone
-    (2, "#4dac26", "-",  "^", 3.5),   # combined
+    (0, "#2166ac", "-", "o", 2.5),  # reporter A alone
+    (1, "#d6604d", "--", "s", 2.5),  # reporter B alone
+    (2, "#4dac26", "-", "^", 3.5),  # combined
 ]
 
 _METRIC_TITLES = {
-    "activity":        "Activity",
+    "activity": "Activity",
     "distinctiveness": "Distinctiveness",
-    "corum":           "CORUM Consistency",
-    "chad":            "CHAD Consistency",
+    "corum": "CORUM Consistency",
+    "chad": "CHAD Consistency",
 }
 
 _RATIO_YLABELS = {
-    "activity":        "% Active",
+    "activity": "% Active",
     "distinctiveness": "% Distinctive",
-    "corum":           "% CORUM Consistent",
-    "chad":            "% CHAD Consistent",
+    "corum": "% CORUM Consistent",
+    "chad": "% CHAD Consistent",
 }
 
 
@@ -257,20 +270,21 @@ def _plot_pair_comparison(
     (A alone, B alone, A+B combined).
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     reporter_labels = [name_a, name_b, f"{name_a}+{name_b}"]
-    colors     = ["#2166ac", "#d6604d", "#4dac26"]
-    linestyles = ["-",        "--",       "-"]
-    markers    = ["o",        "s",        "^"]
-    linewidths = [2.5,        2.5,        3.5]
+    colors = ["#2166ac", "#d6604d", "#4dac26"]
+    linestyles = ["-", "--", "-"]
+    markers = ["o", "s", "^"]
+    linewidths = [2.5, 2.5, 3.5]
 
     x_all = df["n_cells"].unique()
 
     for metric in METRICS:
-        ratio_col   = f"{metric}_ratio"
-        map_col     = f"{metric}_map_mean"
+        ratio_col = f"{metric}_ratio"
+        map_col = f"{metric}_map_mean"
         metric_title = _METRIC_TITLES[metric]
         ratio_ylabel = _RATIO_YLABELS[metric]
 
@@ -285,21 +299,31 @@ def _plot_pair_comparison(
 
                 if ratio_col in sub.columns:
                     ax_ratio.plot(
-                        x, sub[ratio_col].values * 100,
-                        color=color, linestyle=ls, marker=marker,
-                        linewidth=lw, markersize=8, label=rep_label,
+                        x,
+                        sub[ratio_col].values * 100,
+                        color=color,
+                        linestyle=ls,
+                        marker=marker,
+                        linewidth=lw,
+                        markersize=8,
+                        label=rep_label,
                     )
 
                 if map_col in sub.columns:
                     ax_map.plot(
-                        x, sub[map_col].values,
-                        color=color, linestyle=ls, marker=marker,
-                        linewidth=lw, markersize=8, label=rep_label,
+                        x,
+                        sub[map_col].values,
+                        color=color,
+                        linestyle=ls,
+                        marker=marker,
+                        linewidth=lw,
+                        markersize=8,
+                        label=rep_label,
                     )
 
             for ax, ylabel, title_suffix in [
                 (ax_ratio, f"{ratio_ylabel} (%)", "% Significant"),
-                (ax_map,   "Mean mAP",            "Mean mAP"),
+                (ax_map, "Mean mAP", "Mean mAP"),
             ]:
                 ax.set_xlabel(f"Cells per Reporter ({scale})", fontsize=18)
                 ax.set_ylabel(ylabel, fontsize=18)
@@ -310,7 +334,8 @@ def _plot_pair_comparison(
 
             fig.suptitle(
                 f"{metric_title}: {name_a} vs {name_b} vs Combined  [{scale}]",
-                fontsize=22, fontweight="bold",
+                fontsize=22,
+                fontweight="bold",
             )
             fig.tight_layout()
 
@@ -325,6 +350,7 @@ def _plot_pair_comparison(
 # SLURM job function (top-level so submitit can pickle it)
 # ---------------------------------------------------------------------------
 
+
 def run_pair_titration_job(
     reporter_a: str,
     reporter_b: str,
@@ -336,6 +362,7 @@ def run_pair_titration_job(
 ) -> str:
     """Run the full pair titration + plotting as a single SLURM job."""
     import traceback
+
     _init_logger()
     try:
         path_a = Path(reporter_a)
@@ -357,40 +384,74 @@ def run_pair_titration_job(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Titration comparison: reporter A alone vs B alone vs A+B combined.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--reporter-a", default=None,
-                        help="Path to reporter A *_cells.h5ad")
-    parser.add_argument("--reporter-b", default=None,
-                        help="Path to reporter B *_cells.h5ad")
-    parser.add_argument("--name-a", default=None,
-                        help="Display name for reporter A (default: stem of filename)")
-    parser.add_argument("--name-b", default=None,
-                        help="Display name for reporter B (default: stem of filename)")
-    parser.add_argument("--all-pairs-with", default=None, metavar="REFERENCE_H5AD",
-                        help="Submit one SLURM job per reporter paired with this reference "
-                             "(e.g. Phase_cells.h5ad). Discovers all *_cells.h5ad in --per-signal-dir.")
-    parser.add_argument("--per-signal-dir", default=None,
-                        help="Directory containing *_cells.h5ad files for --all-pairs-with mode.")
-    parser.add_argument("-o", "--output-dir", required=True,
-                        help="Output directory for CSVs and plots")
-    parser.add_argument("--norm-method", default="ntc", choices=["ntc", "global"],
-                        help="Normalization method (default: ntc)")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for downsampling (default: 42)")
-    parser.add_argument("--replot", action="store_true",
-                        help="Regenerate plots from existing titration_pair.csv without recomputing")
-    parser.add_argument("--slurm", action="store_true",
-                        help="Submit as a single SLURM job")
+    parser.add_argument(
+        "--reporter-a", default=None, help="Path to reporter A *_cells.h5ad"
+    )
+    parser.add_argument(
+        "--reporter-b", default=None, help="Path to reporter B *_cells.h5ad"
+    )
+    parser.add_argument(
+        "--name-a",
+        default=None,
+        help="Display name for reporter A (default: stem of filename)",
+    )
+    parser.add_argument(
+        "--name-b",
+        default=None,
+        help="Display name for reporter B (default: stem of filename)",
+    )
+    parser.add_argument(
+        "--all-pairs-with",
+        default=None,
+        metavar="REFERENCE_H5AD",
+        help="Submit one SLURM job per reporter paired with this reference "
+        "(e.g. Phase_cells.h5ad). Discovers all *_cells.h5ad in --per-signal-dir.",
+    )
+    parser.add_argument(
+        "--per-signal-dir",
+        default=None,
+        help="Directory containing *_cells.h5ad files for --all-pairs-with mode.",
+    )
+    parser.add_argument(
+        "-o", "--output-dir", required=True, help="Output directory for CSVs and plots"
+    )
+    parser.add_argument(
+        "--norm-method",
+        default="ntc",
+        choices=["ntc", "global"],
+        help="Normalization method (default: ntc)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for downsampling (default: 42)",
+    )
+    parser.add_argument(
+        "--replot",
+        action="store_true",
+        help="Regenerate plots from existing titration_pair.csv without recomputing",
+    )
+    parser.add_argument(
+        "--slurm", action="store_true", help="Submit as a single SLURM job"
+    )
     parser.add_argument("--slurm-memory", type=str, default="200GB")
-    parser.add_argument("--slurm-time", type=int, default=60,
-                        help="SLURM time limit in minutes (default: 60)")
+    parser.add_argument(
+        "--slurm-time",
+        type=int,
+        default=60,
+        help="SLURM time limit in minutes (default: 60)",
+    )
     parser.add_argument("--slurm-cpus", type=int, default=8)
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="Skip confirmation prompt")
+    parser.add_argument(
+        "--yes", "-y", action="store_true", help="Skip confirmation prompt"
+    )
     args = parser.parse_args()
 
     _init_logger()
@@ -408,10 +469,12 @@ def main():
         ref_path = Path(args.all_pairs_with)
         ref_name = args.name_a or ref_path.stem.replace("_cells", "")
 
-        per_signal_dir = Path(args.per_signal_dir) if args.per_signal_dir \
-                         else ref_path.parent
+        per_signal_dir = (
+            Path(args.per_signal_dir) if args.per_signal_dir else ref_path.parent
+        )
         other_files = sorted(
-            f for f in per_signal_dir.glob("*_cells.h5ad")
+            f
+            for f in per_signal_dir.glob("*_cells.h5ad")
             if "_sub" not in f.name and f.resolve() != ref_path.resolve()
         )
 
@@ -427,26 +490,30 @@ def main():
             other_name = other.stem.replace("_cells", "")
             safe = sanitize_signal_filename(other_name)[:35]
             pair_out = output_dir / safe
-            jobs.append({
-                "name": f"titr_{ref_name[:10]}_{safe[:20]}",
-                "func": run_pair_titration_job,
-                "kwargs": {
-                    "reporter_a": str(ref_path),
-                    "reporter_b": str(other),
-                    "name_a": ref_name,
-                    "name_b": other_name,
-                    "output_dir": str(pair_out),
-                    "norm_method": args.norm_method,
-                    "seed": args.seed,
-                },
-            })
+            jobs.append(
+                {
+                    "name": f"titr_{ref_name[:10]}_{safe[:20]}",
+                    "func": run_pair_titration_job,
+                    "kwargs": {
+                        "reporter_a": str(ref_path),
+                        "reporter_b": str(other),
+                        "name_a": ref_name,
+                        "name_b": other_name,
+                        "output_dir": str(pair_out),
+                        "norm_method": args.norm_method,
+                        "seed": args.seed,
+                    },
+                }
+            )
 
         if not args.yes:
             print(f"\nPhase-pairs SLURM submission:")
             print(f"  Reference:   {ref_name}  ({ref_path.name})")
             print(f"  Partners:    {len(jobs)} reporters from {per_signal_dir}")
             print(f"  Output root: {output_dir}")
-            print(f"  Memory: {args.slurm_memory}  |  Time: {args.slurm_time} min  |  CPUs: {args.slurm_cpus}")
+            print(
+                f"  Memory: {args.slurm_memory}  |  Time: {args.slurm_time} min  |  CPUs: {args.slurm_cpus}"
+            )
             if input("\nSubmit? [y/N] ").strip().lower() != "y":
                 print("Cancelled.")
                 return
@@ -498,26 +565,30 @@ def main():
             "cpus_per_task": args.slurm_cpus,
             "slurm_partition": "cpu,gpu",
         }
-        jobs = [{
-            "name": f"titr_pair_{name_a}_{name_b}",
-            "func": run_pair_titration_job,
-            "kwargs": {
-                "reporter_a": str(path_a),
-                "reporter_b": str(path_b),
-                "name_a": name_a,
-                "name_b": name_b,
-                "output_dir": str(output_dir),
-                "norm_method": args.norm_method,
-                "seed": args.seed,
-            },
-        }]
+        jobs = [
+            {
+                "name": f"titr_pair_{name_a}_{name_b}",
+                "func": run_pair_titration_job,
+                "kwargs": {
+                    "reporter_a": str(path_a),
+                    "reporter_b": str(path_b),
+                    "name_a": name_a,
+                    "name_b": name_b,
+                    "output_dir": str(output_dir),
+                    "norm_method": args.norm_method,
+                    "seed": args.seed,
+                },
+            }
+        ]
 
         if not args.yes:
             print(f"\nPair Titration SLURM Job:")
             print(f"  Reporter A: {name_a}  ({path_a.name})")
             print(f"  Reporter B: {name_b}  ({path_b.name})")
             print(f"  Output:     {output_dir}")
-            print(f"  Memory:     {args.slurm_memory}  |  Time: {args.slurm_time} min  |  CPUs: {args.slurm_cpus}")
+            print(
+                f"  Memory:     {args.slurm_memory}  |  Time: {args.slurm_time} min  |  CPUs: {args.slurm_cpus}"
+            )
             if input("\nSubmit? [y/N] ").strip().lower() != "y":
                 print("Cancelled.")
                 return
