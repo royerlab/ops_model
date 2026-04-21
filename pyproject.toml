@@ -47,6 +47,7 @@ dependencies = [
 # extras
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]
+models = ["transformers<4.40"]
 test = ["pytest>=6.0", "pytest-cov"]
 dev = [
     "ipykernel",
