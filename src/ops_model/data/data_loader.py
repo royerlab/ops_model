@@ -451,9 +451,17 @@ class CellProfileDataset(BaseDataset):
         nuc_mask = np.expand_dims(nuc_mask, axis=0)
         sc_mask = cell_mask == ci.segmentation_id
 
+        # cell_seg and nuclear_seg zarr arrays can differ by a few pixels at FOV
+        # boundaries due to independent segmentation pipelines. Clip to the smaller
+        # extent so downstream mask multiplication doesn't broadcast-error.
+        min_h = min(nuc_mask.shape[1], sc_mask.shape[1])
+        min_w = min(nuc_mask.shape[2], sc_mask.shape[2])
+        nuc_mask = nuc_mask[:, :min_h, :min_w]
+        sc_mask = sc_mask[:, :min_h, :min_w]
+
         # ensure that all output masks as binary
         if self.cell_masks:
-            data = data * sc_mask
+            data = data[:, :min_h, :min_w]
             nuc_mask = (nuc_mask * sc_mask) > 0
 
         cyto_mask = sc_mask & (nuc_mask == 0)

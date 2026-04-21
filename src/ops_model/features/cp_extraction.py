@@ -187,7 +187,7 @@ def single_object_features(
                     f"{prefix}_{feat_name}": v for feat_name, v in features.items()
                 }
                 results.update(features_prefixed)
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, UnboundLocalError):
         # Mask is empty or invalid - generate NaN features
         return _generate_feature_names_with_nan(measurements, prefix, "single_object")
 
