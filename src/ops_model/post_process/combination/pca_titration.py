@@ -186,17 +186,36 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
 
 
 def _subsample_and_aggregate(
-    adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState
+    adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState,
+    min_exp: bool = False,
 ) -> ad.AnnData:
     """Subsample real cells from the cell-level h5ad, then re-aggregate to guide level.
 
-    Randomly selects ``target_n_cells`` cells (without replacement), then
-    aggregates to guide-level means.  All perturbations with at least one
-    sampled cell are preserved.
+    If ``min_exp`` is True, selects the fewest experiments (ranked by cell count,
+    descending) whose combined cells reach ``target_n_cells``, then randomly
+    samples from just those. Otherwise samples uniformly across all cells.
     """
     n_total = adata_cells.n_obs
     if n_total <= target_n_cells:
         sub = adata_cells
+    elif min_exp and "experiment" in adata_cells.obs.columns:
+        # Pick fewest experiments to reach target, largest first
+        exp_counts = adata_cells.obs["experiment"].value_counts()
+        kept_exps = []
+        running = 0
+        for exp_id, count in exp_counts.items():
+            kept_exps.append(exp_id)
+            running += count
+            if running >= target_n_cells:
+                break
+        mask = adata_cells.obs["experiment"].isin(kept_exps).values
+        pool_idx = np.where(mask)[0]
+        if len(pool_idx) <= target_n_cells:
+            idx = pool_idx
+        else:
+            idx = rng.choice(pool_idx, target_n_cells, replace=False)
+        idx.sort()
+        sub = adata_cells[idx].copy()
     else:
         idx = rng.choice(n_total, target_n_cells, replace=False)
         idx.sort()
@@ -284,15 +303,9 @@ def _score_all_metrics(
         _logger.warning(f"    Activity scoring failed: {exc}")
         return result
 
-    # Use all-active map for the remaining 3 metrics so they score ALL
-    # genes/perturbations, not just the active subset.
-    all_active_map = activity_map.copy()
-    all_active_map["below_corrected_p"] = True
-
     try:
         dist_map, dist_ratio = phenotypic_distinctivness(
             g_copairs,
-            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             distance=distance,
@@ -319,7 +332,6 @@ def _score_all_metrics(
 
         corum_map, corum_ratio = phenotypic_consistency_corum(
             e_copairs,
-            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             cache_similarity=True,
@@ -339,7 +351,6 @@ def _score_all_metrics(
 
         chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
             e_copairs,
-            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             cache_similarity=True,
@@ -386,7 +397,8 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
 
 
 def _run_titration_points(
-    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None
+    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
+    min_exp=False,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
@@ -402,7 +414,7 @@ def _run_titration_points(
         _logger.info(f"  Scoring at {target:,} cells...")
         t_step = time.time()
 
-        g_sub = _subsample_and_aggregate(adata_cells, target, rng)
+        g_sub = _subsample_and_aggregate(adata_cells, target, rng, min_exp=min_exp)
         g_norm = normalize_guide_adata(g_sub, norm_method)
         scores = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
         scores["n_cells"] = target
@@ -442,6 +454,7 @@ def titrate_single_reporter(
     norm_method: str = "ntc",
     random_seed: int = 42,
     minibinder_subset: bool = False,
+    min_exp: bool = False,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -489,6 +502,7 @@ def titrate_single_reporter(
         signal,
         np.random.RandomState(random_seed),
         _logger,
+        min_exp=min_exp,
     )
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
     df_full.to_csv(csv_path, index=False)
@@ -980,6 +994,10 @@ def _build_parser():
     )
     parser.add_argument("--zscore-per-experiment", action="store_true",
                         help="Look in zscore_per_exp/ subdir")
+    parser.add_argument("--min-exp-titration", action="store_true",
+                        help="At each titration level, draw cells from the fewest "
+                             "experiments needed (largest first) instead of sampling "
+                             "across all experiments. Output → titration_min_exp/")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -1165,7 +1183,8 @@ def main():
     _logger = _init_logger()
 
     variant_dir = _resolve_output_dir(args)
-    titration_dir = variant_dir / "titration"
+    titration_subdir = "titration_min_exp" if args.min_exp_titration else "titration"
+    titration_dir = variant_dir / titration_subdir
 
     if args.replot:
         titration_dir.mkdir(parents=True, exist_ok=True)
@@ -1199,6 +1218,7 @@ def main():
                         "output_dir": str(titration_dir),
                         "norm_method": args.norm_method,
                         "minibinder_subset": args.minibinder_subset,
+                        "min_exp": args.min_exp_titration,
                     },
                 }
             )
@@ -1265,6 +1285,7 @@ def main():
                 output_dir=str(titration_dir),
                 norm_method=args.norm_method,
                 minibinder_subset=args.minibinder_subset,
+                min_exp=args.min_exp_titration,
             )
             print(f"  {result}")
 

@@ -245,24 +245,14 @@ def _run_threshold_sweep(
             r, a = _score_activity_per_threshold(guide_norm, distance=distance)
             g_cp = _prepare_for_copairs(guide_norm.copy())
             e_cp = _prepare_for_copairs(gene_norm.copy())
-            activity_map, _ = phenotypic_activity_assesment(
-                g_cp,
-                plot_results=False,
-                null_size=100_000,
-                distance=distance,
-            )
-            all_active = activity_map.copy()
-            all_active["below_corrected_p"] = True
             _, dist_all = phenotypic_distinctivness(
                 g_cp,
-                all_active,
                 plot_results=False,
                 null_size=100_000,
                 distance=distance,
             )
             _, chad_all = phenotypic_consistency_manual_annotation(
                 e_cp,
-                all_active,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
@@ -1089,13 +1079,25 @@ def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger)
     unique_cats = sorted(set(c for c in cats if c != "Uncategorized"))
 
     # 10 dark colors x 6 markers = 60 unique combos for 50+ clusters
-    colors_10 = sns.color_palette("dark", 10)
-    markers_6 = ["o", "s", "D", "^", "v", "P"]
-    combos = list(product(colors_10, markers_6))
+    # 20 colors x 10 markers = 200 unique combos
+    colors_20 = sns.color_palette("dark", 10) + sns.color_palette("Set1", 9) + sns.color_palette("Set2", 1)
+    markers_10 = ["o", "s", "D", "^", "v", "P", "p", "h", "*", "X"]
+    combos = list(product(colors_20, markers_10))
     cat_to_color = {cat: combos[i % len(combos)][0] for i, cat in enumerate(unique_cats)}
     cat_to_marker = {cat: combos[i % len(combos)][1] for i, cat in enumerate(unique_cats)}
 
-    fig, ax = plt.subplots(figsize=(24, 13))
+    # Square UMAP on left, legend fills right
+    fig = plt.figure(figsize=(30, 12))
+    ax = fig.add_axes([0.04, 0.04, 0.50, 0.94])  # [left, bottom, width, height]
+    ax.set_box_aspect(0.7)
+
+    # Pin axis limits to full UMAP extent so every plot has identical framing
+    x_min, x_max = umap_coords[:, 0].min(), umap_coords[:, 0].max()
+    y_min, y_max = umap_coords[:, 1].min(), umap_coords[:, 1].max()
+    x_pad = (x_max - x_min) * 0.05
+    y_pad = (y_max - y_min) * 0.05
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
 
     # Uncategorized background
     uncat_mask = np.array([c == "Uncategorized" for c in cats]) & ~is_ntc
@@ -1109,21 +1111,23 @@ def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger)
             continue  # Plotted separately with special marker
         mask = np.array([c == cat for c in cats]) & ~is_ntc
         if mask.any():
+            # Truncate long labels for legend readability
+            label = cat if len(cat) <= 60 else cat[:57] + "..."
             ax.scatter(umap_coords[mask, 0], umap_coords[mask, 1],
                        c=[cat_to_color[cat]], marker=cat_to_marker[cat],
-                       s=120, alpha=0.85, edgecolors="white", linewidths=0.3, label=cat)
+                       s=150, alpha=0.85, edgecolors="white", linewidths=0.3, label=label)
 
     # OR controls — bright red X, larger than NTCs
     is_or = np.array([gene_to_cluster.get(g, "") == "OR controls" for g in genes])
     if is_or.any():
         ax.scatter(umap_coords[is_or, 0], umap_coords[is_or, 1],
-                   c="#FF0000", marker="X", s=225, alpha=0.7, edgecolors="#CC0000",
+                   c="#FF0000", marker="X", s=285, alpha=0.7, edgecolors="#CC0000",
                    linewidths=0.6, label="OR controls", zorder=11)
 
     # NTCs
     if is_ntc.any():
         ax.scatter(umap_coords[is_ntc, 0], umap_coords[is_ntc, 1],
-                   c="#e08080", marker="X", s=160, alpha=0.4, edgecolors="#b05050",
+                   c="#e08080", marker="X", s=195, alpha=0.4, edgecolors="#b05050",
                    linewidths=0.3, label="NTC", zorder=10)
 
     # Gene labels — only annotated genes, radial offset to avoid overlap
@@ -1134,39 +1138,29 @@ def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger)
         if gene_to_cluster.get(gene, "Uncategorized") == "Uncategorized":
             continue
         angle = rng.uniform(0, 2 * np.pi)
-        radius = rng.uniform(30, 55)
+        radius = rng.uniform(40, 80)
         dx = radius * np.cos(angle)
         dy = radius * np.sin(angle)
         color = "#FF0000" if gene_to_cluster.get(gene) == "OR controls" else cat_to_color.get(gene_to_cluster.get(gene, ""), "black")
         ax.annotate(gene, xy=(umap_coords[i, 0], umap_coords[i, 1]),
                     xytext=(dx, dy), textcoords="offset points",
-                    fontsize=11, alpha=0.75, ha="center", va="center",
+                    fontsize=14, alpha=0.75, ha="center", va="center",
                     arrowprops=dict(arrowstyle="-", color=color, alpha=0.5, lw=0.5))
 
-    if len(unique_cats) > 30:
-        ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=12,
-                  framealpha=0.9, ncol=3, columnspacing=0.8, handletextpad=0.3)
-    else:
-        ax.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=12, framealpha=0.9, ncol=1)
+    # Use 1 column by default; only split to 2 if too many items to fit vertically
+    # At fontsize 13 with labelspacing 0.4, ~40 rows fit in 18in figure
+    ncol = 2 if len(unique_cats) > 40 else 1
+    ax.legend(bbox_to_anchor=(1.02, 1.0), loc="upper left", fontsize=16,
+              framealpha=0.9, ncol=ncol, columnspacing=0.6, handletextpad=0.3,
+              labelspacing=0.4)
     ax.set_title("Gene UMAP -- colored by CHAD cluster", fontsize=32, fontweight="bold")
     ax.set_xlabel("UMAP 1", fontsize=24)
     ax.set_ylabel("UMAP 2", fontsize=24)
     ax.tick_params(labelsize=18)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    # Fixed axes position so legend size doesn't distort UMAP aspect across plots
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)
     _logger.info(f"  Saved CHAD UMAP: {out_path}")
-
-
-def _make_all_active_map(activity_map: pd.DataFrame) -> pd.DataFrame:
-    """Return a copy of activity_map with all perturbations marked as active.
-
-    Used to compute unfiltered metrics (distinctiveness, CORUM, CHAD) on all
-    genes rather than only the active subset.
-    """
-    fake = activity_map.copy()
-    fake["below_corrected_p"] = True
-    return fake
 
 
 def _score_single_reporter_metrics(
@@ -1215,12 +1209,12 @@ def _score_single_reporter_metrics(
 
         _, dist_ratio = phenotypic_distinctivness(
             g_norm,
-            activity_map,
             plot_results=False,
             null_size=null_size,
             distance=distance,
         )
         result["distinctiveness"] = float(dist_ratio)
+        result["distinctiveness_all"] = result["distinctiveness"]
 
         e_norm = aggregate_to_level(
             g_norm, "gene", preserve_batch_info=False, subsample_controls=False
@@ -1229,17 +1223,16 @@ def _score_single_reporter_metrics(
 
         _, corum_ratio = phenotypic_consistency_corum(
             e_norm,
-            activity_map,
             plot_results=False,
             null_size=null_size,
             cache_similarity=True,
             distance=distance,
         )
         result["corum"] = float(corum_ratio)
+        result["corum_all"] = result["corum"]
 
         _, chad_ratio = phenotypic_consistency_manual_annotation(
             e_norm,
-            activity_map,
             plot_results=False,
             null_size=null_size,
             cache_similarity=True,
@@ -1247,38 +1240,7 @@ def _score_single_reporter_metrics(
             annotation_path=CHAD_ANNOTATION_PATH,
         )
         result["chad"] = float(chad_ratio)
-
-        all_active_map = _make_all_active_map(activity_map)
-
-        _, dist_all = phenotypic_distinctivness(
-            g_norm,
-            all_active_map,
-            plot_results=False,
-            null_size=null_size,
-            distance=distance,
-        )
-        result["distinctiveness_all"] = float(dist_all)
-
-        _, corum_all = phenotypic_consistency_corum(
-            e_norm,
-            all_active_map,
-            plot_results=False,
-            null_size=null_size,
-            cache_similarity=True,
-            distance=distance,
-        )
-        result["corum_all"] = float(corum_all)
-
-        _, chad_all = phenotypic_consistency_manual_annotation(
-            e_norm,
-            all_active_map,
-            plot_results=False,
-            null_size=null_size,
-            cache_similarity=True,
-            distance=distance,
-            annotation_path=CHAD_ANNOTATION_PATH,
-        )
-        result["chad_all"] = float(chad_all)
+        result["chad_all"] = result["chad"]
 
     except Exception as exc:
         _logger.warning(f"  Per-reporter metrics scoring failed: {exc}")
@@ -1589,7 +1551,6 @@ def _score_distinctiveness(
         _logger.info(f"Running distinctiveness ({label})...")
         distinctiveness_map, distinctive_ratio = phenotypic_distinctivness(
             adata_guide,
-            activity_map,
             plot_results=False,
             null_size=100_000,
             distance=distance,
@@ -1654,7 +1615,6 @@ def _score_consistency(
         _logger.info(f"Running CORUM consistency ({label})...")
         consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
             adata_gene,
-            activity_map,
             plot_results=False,
             null_size=100_000,
             cache_similarity=True,
@@ -1669,7 +1629,6 @@ def _score_consistency(
         consistency_manual_map, consistency_manual_ratio = (
             phenotypic_consistency_manual_annotation(
                 adata_gene,
-                activity_map,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
@@ -1849,35 +1808,6 @@ def aggregate_channels(
         distance=distance,
     )
 
-    # Step 7b: All-geneKOs versions (same metrics but unfiltered)
-    all_active_map_agg = (
-        _make_all_active_map(activity_map) if activity_map is not None else None
-    )
-    if all_active_map_agg is not None:
-        _score_distinctiveness(
-            adata_guide,
-            all_active_map_agg,
-            r,
-            total_feats,
-            plots_dir,
-            metrics_dir,
-            plt,
-            _logger,
-            distance=distance,
-            suffix="_all_genes",
-        )
-        _score_consistency(
-            adata_gene,
-            all_active_map_agg,
-            total_feats,
-            plots_dir,
-            metrics_dir,
-            plt,
-            _logger,
-            distance=distance,
-            suffix="_all_genes",
-        )
-
     # Per-reporter bar chart with all 4 aggregate baselines (active-only)
     plot_channel_peaks_bar(
         report_rows,
@@ -1891,46 +1821,38 @@ def aggregate_channels(
     )
 
     # Per-reporter bar chart — unfiltered (all genes, not just active)
-    # Compute unfiltered aggregate baselines using all-active map
-    all_active_map = (
-        _make_all_active_map(activity_map) if activity_map is not None else None
-    )
     dist_ratio_all, corum_ratio_all, chad_ratio_all = None, None, None
-    if all_active_map is not None:
-        try:
-            from ops_utils.analysis.map_scores import (
-                phenotypic_distinctivness,
-                phenotypic_consistency_corum,
-                phenotypic_consistency_manual_annotation,
-            )
+    try:
+        from ops_utils.analysis.map_scores import (
+            phenotypic_distinctivness,
+            phenotypic_consistency_corum,
+            phenotypic_consistency_manual_annotation,
+        )
 
-            _, dist_ratio_all = phenotypic_distinctivness(
-                adata_guide,
-                all_active_map,
-                plot_results=False,
-                null_size=100_000,
-                distance=distance,
-            )
-            _, corum_ratio_all = phenotypic_consistency_corum(
-                adata_gene,
-                all_active_map,
-                plot_results=False,
-                cache_similarity=True,
-                distance=distance,
-            )
-            _, chad_ratio_all = phenotypic_consistency_manual_annotation(
-                adata_gene,
-                all_active_map,
-                plot_results=False,
-                cache_similarity=True,
-                distance=distance,
-                annotation_path=CHAD_ANNOTATION_PATH,
-            )
-            _logger.info(
-                f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}"
-            )
-        except Exception as e:
-            _logger.warning(f"  Unfiltered aggregate baselines failed: {e}")
+        _, dist_ratio_all = phenotypic_distinctivness(
+            adata_guide,
+            plot_results=False,
+            null_size=100_000,
+            distance=distance,
+        )
+        _, corum_ratio_all = phenotypic_consistency_corum(
+            adata_gene,
+            plot_results=False,
+            cache_similarity=True,
+            distance=distance,
+        )
+        _, chad_ratio_all = phenotypic_consistency_manual_annotation(
+            adata_gene,
+            plot_results=False,
+            cache_similarity=True,
+            distance=distance,
+            annotation_path=CHAD_ANNOTATION_PATH,
+        )
+        _logger.info(
+            f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}"
+        )
+    except Exception as e:
+        _logger.warning(f"  Unfiltered aggregate baselines failed: {e}")
 
     # Build report rows remapped to the _all columns for the unfiltered plot
     unfiltered_rows = []
@@ -2133,6 +2055,57 @@ def _submit_phase1_slurm(
         print(f"\nWarning: {len(result['failed'])} {unit_label} failed")
         for name in result["failed"]:
             print(f"  - {name}")
+
+
+def _handle_chad_umap_only(args, output_dir):
+    """Only regenerate the CHAD-colored UMAP from existing gene embeddings."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import yaml as _yaml
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _logger = logging.getLogger(__name__)
+
+    embed_path = output_dir / "gene_embedding_pca_optimized.h5ad"
+    if not embed_path.exists():
+        print(f"ERROR: {embed_path} not found. Run --aggregate-only first.")
+        return
+
+    _logger.info(f"Loading {embed_path}...")
+    adata = ad.read_h5ad(embed_path)
+    if "X_umap" not in adata.obsm:
+        print("ERROR: No X_umap in gene embedding.")
+        return
+
+    chad_path = args.chad_annotation or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    with open(chad_path) as f:
+        chad_clusters = _yaml.safe_load(f)
+
+    # Optional cluster range filter
+    if args.chad_cluster_range:
+        lo, hi = map(int, args.chad_cluster_range.split("-"))
+        chad_clusters = {k: v for k, v in chad_clusters.items() if isinstance(k, int) and lo <= k <= hi}
+        _logger.info(f"Filtered to clusters {lo}-{hi} ({len(chad_clusters)} clusters)")
+
+    gene_to_cluster = {}
+    for cid, cdata in chad_clusters.items():
+        name = cdata.get("name", f"cluster_{cid}")
+        for gene in cdata.get("genes", []):
+            gene_to_cluster[gene.strip()] = name
+
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    out_name = args.chad_umap_output or "umap_chad_clusters.png"
+    out_path = plots_dir / out_name
+
+    _plot_chad_umap(
+        adata.obsm["X_umap"],
+        adata.obs["perturbation"].values,
+        gene_to_cluster,
+        out_path,
+        plt, _logger,
+    )
 
 
 def _handle_umap_only(args, output_dir):
@@ -2531,7 +2504,7 @@ def _build_parser():
         "-o",
         "--output-dir",
         type=str,
-        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
+        default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3",
         help="Root output directory (feature-type and channel-subset subdirs are added automatically)",
     )
     parser.add_argument(
@@ -2668,6 +2641,18 @@ def _build_parser():
              "Defaults to chad_positive_controls_v4.yml.",
     )
     parser.add_argument(
+        "--chad-umap-only", action="store_true",
+        help="Only regenerate the CHAD-colored UMAP from existing gene_embedding_pca_optimized.h5ad.",
+    )
+    parser.add_argument(
+        "--chad-umap-output", type=str, default=None,
+        help="Output filename for CHAD UMAP (saved under plots/).",
+    )
+    parser.add_argument(
+        "--chad-cluster-range", type=str, default=None,
+        help="Filter CHAD clusters to a range by integer key (e.g. '1-76' or '100-162').",
+    )
+    parser.add_argument(
         "--zscore-per-experiment", action="store_true",
         help="Apply per-experiment z-score scaling to features before PCA. "
              "Output → zscore_per_exp/ subdir.",
@@ -2711,7 +2696,9 @@ def main():
         args.all_cells = True
         output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Direct mode: output → {output_dir}")
-        if args.umap_only:
+        if args.chad_umap_only:
+            _handle_chad_umap_only(args, output_dir)
+        elif args.umap_only:
             _handle_umap_only(args, output_dir)
         elif args.aggregate_only:
             _handle_aggregate_only(args, output_dir)
@@ -2796,7 +2783,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Dispatch to mode handler
-    if args.umap_only:
+    if args.chad_umap_only:
+        _handle_chad_umap_only(args, output_dir)
+    elif args.umap_only:
         _handle_umap_only(args, output_dir)
     elif args.aggregate_only:
         _handle_aggregate_only(args, output_dir)
