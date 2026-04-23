@@ -47,6 +47,7 @@ import pandas as pd
 import submitit
 
 from ops_model.data import data_loader
+from ops_model.data.cell_painting_labels import load_cell_painting_labels
 from ops_model.features.cp_extraction import (
     extract_cp_features,
     extract_cp_features_parallel,
@@ -132,6 +133,8 @@ def cp_features_worker_fcn(
     job_id: int,
     output_dir: str,
     out_channels: list[str] = None,
+    csv_source: str = None,
+    cell_painting_channels: list[str] = None,
 ):
     """
     Worker function for distributed CP feature extraction using submitit.
@@ -163,11 +166,20 @@ def cp_features_worker_fcn(
         f"with {num_workers} workers"
     )
 
+    labels_df = None
+    if csv_source == "cell_painting":
+        labels_df = load_cell_painting_labels(
+            experiments=experiment_dict,
+            out_channels=out_channels,
+            cell_painting_channels=cell_painting_channels,
+        )
+
     results_df = extract_cp_features_parallel(
         experiment_dict=experiment_dict,
         bounds=bounds,
         out_channels=out_channels,
         num_workers=num_workers,
+        labels_df=labels_df,
     )
 
     # Create output directory if it doesn't exist
@@ -306,6 +318,15 @@ def cp_features_main(
     output_dir = output_csv.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    csv_source = config.get("csv_source", "standard")
+    labels_df = None
+    if csv_source == "cell_painting":
+        labels_df = load_cell_painting_labels(
+            experiments=config["data_manager"]["experiments"],
+            out_channels=config["data_manager"]["out_channels"],
+            cell_painting_channels=config.get("cell_painting_channels"),
+        )
+
     # Get total dataset size
     data_manager = data_loader.OpsDataManager(
         experiments=config["data_manager"]["experiments"],
@@ -316,7 +337,7 @@ def cp_features_main(
         link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
     )
-    data_manager.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
+    data_manager.construct_dataloaders(labels_df=labels_df, num_workers=0, dataset_type="cell_profile")
     total_size = len(data_manager.train_loader.dataset)
 
     # Create YAML with index ranges (e.g., 100 samples per job)
@@ -356,12 +377,13 @@ def cp_features_main(
     # Submit as single array job using map_array
     array_jobs = executor.map_array(
         cp_features_worker_fcn,
-        [config["data_manager"]["experiments"]]
-        * num_jobs,  # Same experiment_dict for all jobs
+        [config["data_manager"]["experiments"]] * num_jobs,
         list(index_ranges.values()),  # Different bounds for each job
         list(index_ranges.keys()),  # Job IDs: 0, 1, 2, ...
-        [output_dir_chunks] * num_jobs,  # Same output directory for all jobs
-        [out_channels] * num_jobs,  # Same channels for all jobs
+        [output_dir_chunks] * num_jobs,
+        [out_channels] * num_jobs,
+        [csv_source] * num_jobs,
+        [config.get("cell_painting_channels")] * num_jobs,
     )
 
     # Get the array job ID (all tasks share the same base job_id)

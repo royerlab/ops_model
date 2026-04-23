@@ -15,6 +15,7 @@ from monai.transforms import (
 )
 
 from ops_model.data import data_loader
+from ops_model.data.cell_painting_labels import load_cell_painting_labels
 
 REPO_DIR = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/dinov2"
 CHECKPOINT = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/channel_adaptive_dino_vitl16_pretrain_cells-ef7c17ff.pth"
@@ -88,6 +89,16 @@ def extract_cell_dino_features(
     print(
         f"Extracting Cell-DINO features for {list(config['data_manager']['experiments'].keys())}"
     )
+
+    csv_source = config.get("csv_source", "standard")
+    labels_df = None
+    if csv_source == "cell_painting":
+        labels_df = load_cell_painting_labels(
+            experiments=config["data_manager"]["experiments"],
+            out_channels=config["data_manager"]["out_channels"],
+            cell_painting_channels=config.get("cell_painting_channels"),
+        )
+
     dm = data_loader.OpsDataManager(
         experiments=config["data_manager"]["experiments"],
         batch_size=config["data_manager"]["batch_size"],
@@ -99,6 +110,7 @@ def extract_cell_dino_features(
         verbose=False,
     )
     dm.construct_dataloaders(
+        labels_df=labels_df,
         num_workers=config["data_manager"]["num_workers"],
         dataset_type=config["dataset_type"],
         basic_kwargs={

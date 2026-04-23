@@ -674,6 +674,7 @@ def extract_cp_features_parallel(
     bounds: list[int],
     out_channels: list[str] = None,
     num_workers: int = None,
+    labels_df=None,
 ):
     """
     Extract CellProfiler features using multiprocessing.Pool with shared state.
@@ -700,20 +701,23 @@ def extract_cp_features_parallel(
         # When one process blocks on I/O, another runs on that core.
         num_workers = max(1, int(cpus * 1.5))
 
-    # Load labels via OpsDataManager — same path as original extract_cp_features
-    # for identical cell ordering and filtering
-    dm = data_loader.OpsDataManager(
-        experiments=experiment_dict,
-        batch_size=1, data_split=(1, 0, 0),
-        out_channels=out_channels,
-        initial_yx_patch_size=(256, 256),
-        verbose=False,
-    )
-    dm.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
-    labels_df = dm.train_loader.dataset.labels_df
-    label_int_lut = dm.train_loader.dataset.label_int_lut
-    int_label_lut = dm.train_loader.dataset.int_label_lut
-    del dm  # don't keep zarr stores — workers open their own
+    if labels_df is None:
+        dm = data_loader.OpsDataManager(
+            experiments=experiment_dict,
+            batch_size=1, data_split=(1, 0, 0),
+            out_channels=out_channels,
+            initial_yx_patch_size=(256, 256),
+            verbose=False,
+        )
+        dm.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
+        labels_df = dm.train_loader.dataset.labels_df
+        label_int_lut = dm.train_loader.dataset.label_int_lut
+        int_label_lut = dm.train_loader.dataset.int_label_lut
+        del dm  # don't keep zarr stores — workers open their own
+    else:
+        gene_labels = sorted(labels_df["gene_name"].unique())
+        label_int_lut = {gene: i for i, gene in enumerate(gene_labels)}
+        int_label_lut = {i: gene for i, gene in enumerate(gene_labels)}
 
     # Split bounds into sub-ranges
     total = bounds[1] - bounds[0]
@@ -937,6 +941,7 @@ def extract_cp_features_bulk_read(
     bounds: list[int],
     out_channels: list[str] = None,
     num_workers: int = None,
+    labels_df=None,
 ):
     """
     Bulk-read architecture: read all needed zarr chunks into RAM, then compute.
@@ -959,8 +964,8 @@ def extract_cp_features_bulk_read(
 
     t0 = time.perf_counter()
 
-    # Load labels
-    labels_df = load_labels_parallel(experiment_dict)
+    if labels_df is None:
+        labels_df = load_labels_parallel(experiment_dict)
     gene_labels = sorted(labels_df["gene_name"].unique())
     label_int_lut = {gene: i for i, gene in enumerate(gene_labels)}
     int_label_lut = {i: gene for i, gene in enumerate(gene_labels)}
