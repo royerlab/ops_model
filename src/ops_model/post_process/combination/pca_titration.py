@@ -1032,7 +1032,15 @@ def _plot_combined_titration(
 
     signals = combined["signal"].unique()
     n_signals = len(signals)
-    colors_cycle = plt.cm.tab20(np.linspace(0, 1, max(n_signals, 2)))
+    # Pair a 20-color cycle with a 9-marker cycle. gcd(20, 9) = 1 → 180 unique
+    # (color, marker) pairs before any repeat, so every reporter (up to 180)
+    # gets a unique combo. Critically, markers cycle every reporter — not every
+    # 20 — so adjacent reporters in the legend are easy to distinguish.
+    _COLOR_CYCLE = plt.cm.tab20(np.linspace(0, 1, 20))
+    _MARKER_CYCLE = ["o", "s", "D", "^", "v", "P", "X", "*", "h"]
+    def _style_for(i):
+        return _COLOR_CYCLE[i % len(_COLOR_CYCLE)], _MARKER_CYCLE[i % len(_MARKER_CYCLE)]
+    colors_cycle = _COLOR_CYCLE  # keep for back-compat with any other refs
 
     metric_info = [
         ("activity", "% Active", "steelblue"),
@@ -1065,19 +1073,19 @@ def _plot_combined_titration(
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
                         sem_col = f"{ratio_col}_sem"
-                        c = colors_cycle[i % len(colors_cycle)]
+                        c, mk = _style_for(i)
                         if sem_col in sub.columns and sub[sem_col].notna().any():
                             ax.errorbar(
                                 sub[x_col], sub[ratio_col] * 100, yerr=sub[sem_col] * 100,
-                                marker="o", color=c, label=sig[:25],
-                                linewidth=3, markersize=8, alpha=0.8,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
                                 capsize=3, elinewidth=1.2,
                             )
                         else:
                             ax.plot(
                                 sub[x_col], sub[ratio_col] * 100,
-                                marker="o", color=c, label=sig[:25],
-                                linewidth=3, markersize=8, alpha=0.8,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
                             )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("% Significant", fontsize=24)
@@ -1093,19 +1101,19 @@ def _plot_combined_titration(
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
                         sem_col = f"{map_col}_sem"
-                        c = colors_cycle[i % len(colors_cycle)]
+                        c, mk = _style_for(i)
                         if sem_col in sub.columns and sub[sem_col].notna().any():
                             ax.errorbar(
                                 sub[x_col], sub[map_col], yerr=sub[sem_col],
-                                marker="s", color=c, label=sig[:25],
-                                linewidth=3, markersize=8, alpha=0.8,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
                                 capsize=3, elinewidth=1.2,
                             )
                         else:
                             ax.plot(
                                 sub[x_col], sub[map_col],
-                                marker="s", color=c, label=sig[:25],
-                                linewidth=3, markersize=8, alpha=0.8,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
                             )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("Mean mAP", fontsize=24)
@@ -1212,14 +1220,16 @@ def _build_parser():
                         help="At each titration level, draw cells from the fewest "
                              "experiments needed (largest first) instead of sampling "
                              "across all experiments. Output → titration_min_exp/")
-    parser.add_argument("--per-ko-min-titration", action="store_true",
-                        help="Titrate by cells-per-geneKO. Schedule starts at MIN non-NTC "
-                             "cells/KO so every KO hits target fully. "
+    parser.add_argument("--per-ko-min-titration", "--per-gene-min-titration",
+                        dest="per_ko_min_titration", action="store_true",
+                        help="Titrate by cells-per-geneKO (aliased as --per-gene-min-titration). "
+                             "Schedule starts at MIN non-NTC cells/KO so every KO hits target fully. "
                              "Output → titration_geneKO_min/")
-    parser.add_argument("--per-ko-max-titration", action="store_true",
-                        help="Titrate by cells-per-geneKO. Schedule starts at MAX non-NTC "
-                             "cells/KO — large KOs keep gaining cells, small KOs cap out. "
-                             "Output → titration_geneKO_max/")
+    parser.add_argument("--per-ko-max-titration", "--per-gene-max-titration",
+                        dest="per_ko_max_titration", action="store_true",
+                        help="Titrate by cells-per-geneKO (aliased as --per-gene-max-titration). "
+                             "Schedule starts at MAX non-NTC cells/KO — large KOs keep gaining cells, "
+                             "small KOs cap out. Output → titration_geneKO_max/")
     parser.add_argument("--per-guide-min-titration", action="store_true",
                         help="Titrate by cells-per-sgRNA (every guide, incl. each NTC sgRNA, "
                              "gets the same budget). Schedule starts at MIN non-NTC cells/guide. "
