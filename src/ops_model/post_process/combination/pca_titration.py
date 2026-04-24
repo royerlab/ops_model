@@ -185,6 +185,55 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
+def _subsample_per_ko_and_aggregate(
+    adata_cells: ad.AnnData, cells_per_ko: int, rng: np.random.RandomState,
+) -> ad.AnnData:
+    """Subsample up to ``cells_per_ko`` cells per perturbation, then aggregate to guide level."""
+    pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+    perts = adata_cells.obs[pert_col].values
+    kept_idx = []
+    for p in np.unique(perts):
+        p_idx = np.where(perts == p)[0]
+        if len(p_idx) <= cells_per_ko:
+            kept_idx.extend(p_idx)
+        else:
+            kept_idx.extend(rng.choice(p_idx, cells_per_ko, replace=False))
+    kept_idx = np.sort(np.asarray(kept_idx))
+    sub = adata_cells[kept_idx].copy()
+    return aggregate_to_level(
+        sub, level="guide", method="mean",
+        preserve_batch_info=False, subsample_controls=False,
+    )
+
+
+def _subsample_per_guide_and_aggregate(
+    adata_cells: ad.AnnData, cells_per_guide: int, rng: np.random.RandomState,
+) -> ad.AnnData:
+    """Subsample up to ``cells_per_guide`` cells per sgRNA, then aggregate to guide level.
+
+    Unlike ``_subsample_per_ko_and_aggregate`` (which pools cells at the perturbation
+    level, so NTC shares one budget across its ~8 sgRNAs while gene KOs split across
+    ~4 sgRNAs), this samples directly at sgRNA level so every guide — NTC or KO —
+    gets the same cell budget.
+    """
+    if "sgRNA" not in adata_cells.obs.columns:
+        raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
+    sgrnas = adata_cells.obs["sgRNA"].values
+    kept_idx = []
+    for s in np.unique(sgrnas):
+        s_idx = np.where(sgrnas == s)[0]
+        if len(s_idx) <= cells_per_guide:
+            kept_idx.extend(s_idx)
+        else:
+            kept_idx.extend(rng.choice(s_idx, cells_per_guide, replace=False))
+    kept_idx = np.sort(np.asarray(kept_idx))
+    sub = adata_cells[kept_idx].copy()
+    return aggregate_to_level(
+        sub, level="guide", method="mean",
+        preserve_batch_info=False, subsample_controls=False,
+    )
+
+
 def _subsample_and_aggregate(
     adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState,
     min_exp: bool = False,
@@ -398,12 +447,14 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
 
 def _run_titration_points(
     adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
-    min_exp=False,
+    min_exp=False, per_ko=False, per_guide=False,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
     If ``subset_targets`` is provided, scores are computed using all perturbations
     but reported only for the subset (Option B).
+    If ``per_ko`` is True, ``cell_targets`` are interpreted as cells-per-perturbation.
+    If ``per_guide`` is True, ``cell_targets`` are interpreted as cells-per-sgRNA.
     """
     # Drop signal col if present (not needed for scoring, can interfere with aggregation)
     if "signal" in adata_cells.obs.columns:
@@ -411,20 +462,53 @@ def _run_titration_points(
 
     rows = []
     for target in cell_targets:
-        _logger.info(f"  Scoring at {target:,} cells...")
+        if per_guide:
+            unit = "cells/guide"
+        elif per_ko:
+            unit = "cells/KO"
+        else:
+            unit = "cells"
+        _logger.info(f"  Scoring at {target:,} {unit}...")
         t_step = time.time()
 
-        g_sub = _subsample_and_aggregate(adata_cells, target, rng, min_exp=min_exp)
+        if per_guide:
+            g_sub = _subsample_per_guide_and_aggregate(adata_cells, target, rng)
+        elif per_ko:
+            g_sub = _subsample_per_ko_and_aggregate(adata_cells, target, rng)
+        else:
+            g_sub = _subsample_and_aggregate(adata_cells, target, rng, min_exp=min_exp)
         g_norm = normalize_guide_adata(g_sub, norm_method)
         scores = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
-        scores["n_cells"] = target
-        scores["n_guides"] = g_sub.n_obs
         pert_col = (
             "perturbation" if "perturbation" in g_sub.obs.columns else "label_str"
         )
         n_perts = g_sub.obs[pert_col].nunique()
+        if per_guide or per_ko:
+            # total cells from guide n_cells sum
+            total_cells = int(g_sub.obs.get("n_cells", pd.Series([0])).sum()) if "n_cells" in g_sub.obs.columns else target * g_sub.n_obs
+            scores["n_cells"] = total_cells
+            if per_guide:
+                # cells_per_perturbation varies across perts (NTC has ~8 guides, KOs ~4)
+                # Report mean over non-NTC perts so x-axis reflects what gene KOs actually get
+                scores["cells_per_guide"] = target
+                if "n_cells" in g_sub.obs.columns:
+                    cpp = g_sub.obs.groupby(pert_col)["n_cells"].sum()
+                    non_ntc = ~cpp.index.astype(str).str.startswith("NTC")
+                    scores["cells_per_perturbation"] = float(
+                        cpp[non_ntc].mean() if non_ntc.any() else cpp.mean()
+                    )
+                else:
+                    scores["cells_per_perturbation"] = total_cells / n_perts if n_perts > 0 else target
+            else:
+                # per_ko: cells_per_guide = cells_per_pert / mean guides-per-pert
+                scores["cells_per_perturbation"] = target
+                scores["cells_per_guide"] = total_cells / g_sub.n_obs if g_sub.n_obs > 0 else target
+        else:
+            scores["n_cells"] = target
+            scores["cells_per_perturbation"] = target / n_perts if n_perts > 0 else target
+            scores["cells_per_guide"] = target / g_sub.n_obs if g_sub.n_obs > 0 else target
+        scores["n_guides"] = g_sub.n_obs
         scores["n_perturbations"] = n_perts
-        scores["cells_per_perturbation"] = target / n_perts if n_perts > 0 else target
         scores["signal"] = signal
         rows.append(scores)
 
@@ -448,6 +532,18 @@ def _build_titration_schedule(total_cells: int) -> list:
     return cell_targets
 
 
+def _build_per_ko_schedule(max_cells_per_ko: int, min_cells_per_ko: int = 1) -> list:
+    """Build cells-per-KO schedule: max, max*0.75, ... >= min."""
+    targets = []
+    n = max_cells_per_ko
+    while n >= min_cells_per_ko:
+        targets.append(int(n))
+        n = int(n * DOWNSAMPLE_RATIO)
+    if not targets:
+        targets = [max_cells_per_ko]
+    return targets
+
+
 def titrate_single_reporter(
     cells_h5ad_path: str,
     output_dir: str,
@@ -455,6 +551,10 @@ def titrate_single_reporter(
     random_seed: int = 42,
     minibinder_subset: bool = False,
     min_exp: bool = False,
+    per_ko: bool = False,
+    per_ko_max: bool = False,
+    per_guide: bool = False,
+    per_guide_max: bool = False,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -483,8 +583,45 @@ def titrate_single_reporter(
 
     _logger.info(f"Titrating {signal}: {total_cells:,} cells, {adata_cells.n_vars} PCs")
 
-    cell_targets = _build_titration_schedule(total_cells)
-    _logger.info(f"  Titration points: {cell_targets}")
+    if per_guide or per_guide_max:
+        if "sgRNA" not in adata_cells.obs.columns:
+            raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
+        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        sg_counts = adata_cells.obs.groupby("sgRNA").size()
+        sg_to_pert = adata_cells.obs.groupby("sgRNA")[pert_col].first()
+        non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
+        non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
+        if per_guide_max:
+            # Clip to p90 non-NTC so one outlier guide doesn't stretch the schedule
+            pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
+            start_per_guide = int(np.percentile(pool.values, 90))
+            mode_label = "max (p90)"
+        else:
+            start_per_guide = int(non_ntc_counts.min()) if len(non_ntc_counts) else int(sg_counts.min())
+            mode_label = "min"
+        cell_targets = _build_per_ko_schedule(start_per_guide)
+        _logger.info(f"  Per-guide titration points ({mode_label} non-NTC = {start_per_guide:,} cells/guide): {cell_targets}")
+        per_guide = True
+    elif per_ko or per_ko_max:
+        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        counts = adata_cells.obs[pert_col].value_counts()
+        non_ntc_counts = counts[~counts.index.astype(str).str.startswith("NTC")]
+        if per_ko_max:
+            # Clip to p90 non-NTC so one outlier KO doesn't stretch the schedule
+            pool = non_ntc_counts if len(non_ntc_counts) else counts
+            start_per_ko = int(np.percentile(pool.values, 90))
+            mode_label = "max (p90)"
+        else:
+            # Start at MIN non-NTC count — every KO fully hits target at every point
+            start_per_ko = int(non_ntc_counts.min()) if len(non_ntc_counts) else int(counts.min())
+            mode_label = "min"
+        cell_targets = _build_per_ko_schedule(start_per_ko)
+        _logger.info(f"  Per-KO titration points ({mode_label} non-NTC = {start_per_ko:,} cells/KO): {cell_targets}")
+        # _run_titration_points uses per_ko flag; per_ko_max uses same sampling code path
+        per_ko = True
+    else:
+        cell_targets = _build_titration_schedule(total_cells)
+        _logger.info(f"  Titration points: {cell_targets}")
 
     from ops_utils.data.feature_discovery import sanitize_signal_filename
 
@@ -503,6 +640,8 @@ def titrate_single_reporter(
         np.random.RandomState(random_seed),
         _logger,
         min_exp=min_exp,
+        per_ko=per_ko,
+        per_guide=per_guide,
     )
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
     df_full.to_csv(csv_path, index=False)
@@ -597,6 +736,7 @@ def titrate_single_reporter(
 _X_AXIS_VARIANTS = [
     ("n_cells", "Total Cells", "totalcells"),
     ("cells_per_perturbation", "Cells / Perturbation", "perpert"),
+    ("cells_per_guide", "Cells / Guide", "perguide"),
 ]
 
 
@@ -975,8 +1115,12 @@ def _build_parser():
                         help="Regenerate all plots from existing CSVs without recomputing scores")
     parser.add_argument("--downsampled", action="store_true",
                         help="Look in downsampled/ subdir")
+    parser.add_argument("--downsample-per-guide", action="store_true",
+                        help="Look in downsampled_per_guide/ subdir (matches pca_optimization --downsample-per-guide)")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Look in cellprofiler/ subdir")
+    parser.add_argument("--cell-dino", action="store_true",
+                        help="Look in cell_dino/ subdir (matches pca_optimization --cell-dino)")
     parser.add_argument(
         "--include-cellpainting", action="store_true",
         help="Look under with_cellpainting/ (same as pca_optimization --include-cellpainting)",
@@ -985,19 +1129,40 @@ def _build_parser():
                         help="Also run titration on the 20 minibinder geneKO targets "
                              "and produce comparison overlay plots")
     parser.add_argument(
-        "--fixed-threshold", type=float, default=None,
-        help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/)",
+        "--fixed-threshold", type=float, default=0.80,
+        help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/). "
+             "Default: 0.80. Pass --fixed-threshold 0 to disable and use consensus_sweep/.",
     )
     parser.add_argument(
         "--distance", type=str, default="cosine", choices=["cosine", "euclidean"],
         help="Match pca_optimization --distance (default: cosine)",
     )
-    parser.add_argument("--zscore-per-experiment", action="store_true",
-                        help="Look in zscore_per_exp/ subdir")
+    parser.add_argument("--zscore-per-experiment", dest="zscore_per_experiment",
+                        action="store_true", default=True,
+                        help="Look in zscore_per_exp/ subdir (default: True)")
+    parser.add_argument("--no-zscore-per-experiment", dest="zscore_per_experiment",
+                        action="store_false",
+                        help="Disable zscore_per_exp/ subdir lookup")
     parser.add_argument("--min-exp-titration", action="store_true",
                         help="At each titration level, draw cells from the fewest "
                              "experiments needed (largest first) instead of sampling "
                              "across all experiments. Output → titration_min_exp/")
+    parser.add_argument("--per-ko-min-titration", action="store_true",
+                        help="Titrate by cells-per-geneKO. Schedule starts at MIN non-NTC "
+                             "cells/KO so every KO hits target fully. "
+                             "Output → titration_geneKO_min/")
+    parser.add_argument("--per-ko-max-titration", action="store_true",
+                        help="Titrate by cells-per-geneKO. Schedule starts at MAX non-NTC "
+                             "cells/KO — large KOs keep gaining cells, small KOs cap out. "
+                             "Output → titration_geneKO_max/")
+    parser.add_argument("--per-guide-min-titration", action="store_true",
+                        help="Titrate by cells-per-sgRNA (every guide, incl. each NTC sgRNA, "
+                             "gets the same budget). Schedule starts at MIN non-NTC cells/guide. "
+                             "Output → titration_guide_min/")
+    parser.add_argument("--per-guide-max-titration", action="store_true",
+                        help="Titrate by cells-per-sgRNA. Schedule starts at MAX non-NTC "
+                             "cells/guide — large guides keep gaining, small guides cap out. "
+                             "Output → titration_per_guide/")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -1009,6 +1174,8 @@ def _resolve_output_dir(args) -> Path:
     output_dir = Path(args.output_dir)
     if args.cell_profiler:
         output_dir = output_dir / "cellprofiler"
+    elif getattr(args, "cell_dino", False):
+        output_dir = output_dir / "cell_dino"
     else:
         output_dir = output_dir / "dino"
 
@@ -1018,21 +1185,23 @@ def _resolve_output_dir(args) -> Path:
     if getattr(args, "include_cellpainting", False):
         output_dir = output_dir / "with_cellpainting"
 
-    if getattr(args, "phase_only", False) and args.downsampled:
-        output_dir = output_dir / "phase_only_downsampled"
-    elif getattr(args, "no_phase", False) and args.downsampled:
-        output_dir = output_dir / "no_phase_downsampled"
+    ds_suffix = "_per_guide" if getattr(args, "downsample_per_guide", False) else ""
+    ds_on = args.downsampled or getattr(args, "downsample_per_guide", False)
+    if getattr(args, "phase_only", False) and ds_on:
+        output_dir = output_dir / f"phase_only_downsampled{ds_suffix}"
+    elif getattr(args, "no_phase", False) and ds_on:
+        output_dir = output_dir / f"no_phase_downsampled{ds_suffix}"
     elif getattr(args, "phase_only", False):
         output_dir = output_dir / "phase_only"
     elif getattr(args, "no_phase", False):
         output_dir = output_dir / "no_phase"
-    elif args.downsampled:
-        output_dir = output_dir / "downsampled"
+    elif ds_on:
+        output_dir = output_dir / f"downsampled{ds_suffix}"
     else:
         output_dir = output_dir / "all"
 
     ft = getattr(args, "fixed_threshold", None)
-    if ft is not None:
+    if ft is not None and ft > 0:
         output_dir = output_dir / f"fixed_{ft:.0%}"
     else:
         output_dir = output_dir / "consensus_sweep"
@@ -1107,8 +1276,9 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
     return sig_safe
 
 
-def _replot(titration_dir: Path, minibinder_subset: bool = False):
+def _replot(titration_dir, minibinder_subset: bool = False):
     """Regenerate all per-reporter and combined plots from existing CSVs, in parallel."""
+    titration_dir = Path(titration_dir)
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1183,12 +1353,49 @@ def main():
     _logger = _init_logger()
 
     variant_dir = _resolve_output_dir(args)
-    titration_subdir = "titration_min_exp" if args.min_exp_titration else "titration"
+    if args.per_guide_max_titration:
+        titration_subdir = "titration_per_guide"
+    elif args.per_guide_min_titration:
+        titration_subdir = "titration_guide_min"
+    elif args.per_ko_max_titration:
+        titration_subdir = "titration_geneKO_max"
+    elif args.per_ko_min_titration:
+        titration_subdir = "titration_geneKO_min"
+    elif args.min_exp_titration:
+        titration_subdir = "titration_min_exp"
+    else:
+        titration_subdir = "titration"
     titration_dir = variant_dir / titration_subdir
 
     if args.replot:
         titration_dir.mkdir(parents=True, exist_ok=True)
-        _replot(titration_dir, minibinder_subset=args.minibinder_subset)
+        if args.slurm:
+            from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+            print(f"Submitting replot as a single SLURM job ({titration_dir})...")
+            jobs = [{
+                "name": f"titr_replot_{titration_dir.parent.name}",
+                "func": _replot,
+                "kwargs": {
+                    "titration_dir": str(titration_dir),
+                    "minibinder_subset": args.minibinder_subset,
+                },
+            }]
+            slurm_params = {
+                "timeout_min": args.slurm_time,
+                "mem": args.slurm_memory,
+                "cpus_per_task": args.slurm_cpus,
+                "slurm_partition": args.slurm_partition,
+            }
+            submit_parallel_jobs(
+                jobs_to_submit=jobs,
+                experiment="pca_titration",
+                slurm_params=slurm_params,
+                log_dir="pca_optimization",
+                manifest_prefix="pca_titration_replot",
+                wait_for_completion=True,
+            )
+        else:
+            _replot(titration_dir, minibinder_subset=args.minibinder_subset)
         return
 
     per_signal_dir = variant_dir / "per_signal"
@@ -1219,6 +1426,10 @@ def main():
                         "norm_method": args.norm_method,
                         "minibinder_subset": args.minibinder_subset,
                         "min_exp": args.min_exp_titration,
+                        "per_ko": args.per_ko_min_titration,
+                        "per_ko_max": args.per_ko_max_titration,
+                        "per_guide": args.per_guide_min_titration,
+                        "per_guide_max": args.per_guide_max_titration,
                     },
                 }
             )
@@ -1286,6 +1497,10 @@ def main():
                 norm_method=args.norm_method,
                 minibinder_subset=args.minibinder_subset,
                 min_exp=args.min_exp_titration,
+                per_ko=args.per_ko_min_titration,
+                per_ko_max=args.per_ko_max_titration,
+                per_guide=args.per_guide_min_titration,
+                per_guide_max=args.per_guide_max_titration,
             )
             print(f"  {result}")
 

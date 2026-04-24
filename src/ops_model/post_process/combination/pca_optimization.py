@@ -140,6 +140,16 @@ DEFAULT_SWEEP_THRESHOLDS_CP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0
 MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
 PCA_FIT_CAP = 5_000_000  # Cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
 
+# Dud sgRNAs known to produce off-target/toxic phenotypes — filtered out by default.
+# Source: cell_dino_final.yml cell_filters.
+DUD_GUIDES = frozenset({
+    "TCCCATGACTTGTTGTCATG",
+    "GCAGGCAAATTCTGAACTTG",
+    "GGGTGGTATCATAGCCACCC",
+    "CACATCCCCAATGGGGAGTT",
+    "TATTCAAAGTTGATGTTGGA",
+})
+
 
 # =============================================================================
 # Scoring helper (specific to this sweep — wraps copairs for per-threshold use)
@@ -554,6 +564,9 @@ def pca_sweep_pooled_signal(
     preserve_batch: bool = False,
     no_pca: bool = False,
     zscore_per_experiment: bool = False,
+    exclude_dud_guides: bool = True,
+    downsample_per_guide: bool = False,
+    cells_per_guide: int = 250,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -615,6 +628,45 @@ def pca_sweep_pooled_signal(
     if n_cells_pooled == 0:
         return f"FAILED: {signal} — no cell data found for any experiment"
 
+    # --- Guide-max pre-scan (optional) ---
+    # When downsample_per_guide=True, cap each sgRNA at a fixed cells_per_guide.
+    # Requires a pre-scan of obs (no X loaded) so we can compute per-experiment
+    # fractions (cap / pooled_count) to achieve the global cap.
+    pooled_sg_counts: Dict[str, int] = {}
+    cells_per_guide_cap: Optional[int] = None
+    if downsample_per_guide:
+        _logger.info(
+            f"  [per-guide] Pre-scanning sgRNA counts (cap = {cells_per_guide} cells/guide)..."
+        )
+        for exp, ch in exp_channel_pairs:
+            if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
+                continue
+            path = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+            if path is None:
+                continue
+            try:
+                adata_backed = ad.read_h5ad(path, backed="r")
+                obs = adata_backed.obs
+                if "sgRNA" in obs.columns:
+                    if exclude_dud_guides:
+                        obs = obs[~obs["sgRNA"].isin(DUD_GUIDES)]
+                    vc = obs["sgRNA"].value_counts()
+                    for s, c in vc.items():
+                        pooled_sg_counts[s] = pooled_sg_counts.get(s, 0) + int(c)
+                adata_backed.file.close()
+            except Exception as exc:
+                _logger.warning(f"  [per-guide] Pre-scan failed for {exp}/{ch}: {exc}")
+
+        if pooled_sg_counts:
+            cells_per_guide_cap = int(cells_per_guide)
+            _logger.info(
+                f"  [per-guide] {len(pooled_sg_counts):,} sgRNAs in pool — "
+                f"capping each at {cells_per_guide_cap:,} cells"
+            )
+        else:
+            _logger.warning("  [per-guide] No sgRNA info found — falling back to proportional sampling")
+            downsample_per_guide = False
+
     # When downsampling and >2 experiments contribute to a signal group, use
     # the fewest experiments needed to reach target_n_cells (starting from the
     # largest).  Spreading a fixed cell budget across many batches lets batch
@@ -624,7 +676,7 @@ def pca_sweep_pooled_signal(
     # These were manually selected as the highest-quality Phase experiments.
     _PHASE_PREFERRED_ORDER = ("ops0094", "ops0100")
 
-    if len(exp_cell_counts) > 2 and n_cells_pooled > target_n_cells:
+    if not downsample_per_guide and len(exp_cell_counts) > 2 and n_cells_pooled > target_n_cells:
         if signal == "Phase":
             _logger.warning(
                 "  ⚠ HARDCODED EXPERIMENT ORDER FOR PHASE: %s — update pca_optimization.py to change",
@@ -669,97 +721,6 @@ def pca_sweep_pooled_signal(
         f"  Total pooled: {n_cells_pooled:,} cells ({len(exp_cell_counts)} experiments), target: {actual_target:,}"
     )
 
-    # --- Pass 2a (CellProfiler only): Deduplicate, normalize, and intersect features ---
-    # CellProfiler feature names embed the channel name (e.g. single_object_SEC61B_cell_Area).
-    # Different experiments may use different channel name formatting for the same reporter,
-    # causing spurious feature mismatches.  We:
-    #   1. Deduplicate: keep only the highest-feature h5ad per (experiment_short, signal).
-    #   2. Normalize: strip channel name from single_object_* features.
-    #   3. Intersect all remaining experiments to get common features.
-    is_cellprofiler = feature_dir_override and "cell-profiler" in feature_dir_override
-    common_var_names = None
-    # Maps normalized feature name -> original feature name (per experiment, populated during load)
-    _cp_norm_to_raw: Dict[Tuple[str, str], Dict[str, str]] = {}
-    if is_cellprofiler:
-        _logger.info("  CellProfiler mode: pre-scanning feature names...")
-
-        # Step 1: Scan all experiments and collect raw + normalized feature names
-        _exp_var_raw: Dict[Tuple[str, str], List[str]] = {}
-        for exp, ch in exp_channel_pairs:
-            if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
-                continue
-            adata_tmp = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
-            if adata_tmp is not None:
-                _exp_var_raw[(exp, ch)] = list(adata_tmp.var_names)
-                del adata_tmp
-
-        # Step 2: Deduplicate — keep only the h5ad with the most features per experiment
-        _best_per_exp: Dict[str, Tuple[str, str]] = (
-            {}
-        )  # exp_short -> (exp, ch) with most features
-        for (exp, ch), var_list in _exp_var_raw.items():
-            exp_short = exp.split("_")[0]
-            prev = _best_per_exp.get(exp_short)
-            if prev is None or len(var_list) > len(_exp_var_raw[prev]):
-                _best_per_exp[exp_short] = (exp, ch)
-        # Drop duplicates
-        dedup_keys = set(_best_per_exp.values())
-        for key in list(_exp_var_raw.keys()):
-            if key not in dedup_keys:
-                _logger.info(
-                    f"  Dedup: dropping {key[0].split('_')[0]}/{key[1]} "
-                    f"({len(_exp_var_raw[key])} feat) — keeping "
-                    f"{_best_per_exp[key[0].split('_')[0]][1]} "
-                    f"({len(_exp_var_raw[_best_per_exp[key[0].split('_')[0]]])} feat)"
-                )
-                del _exp_var_raw[key]
-                if key in exp_cell_counts:
-                    del exp_cell_counts[key]
-
-        if not _exp_var_raw:
-            return f"FAILED: {signal} — no CellProfiler experiments after deduplication"
-
-        # Step 3: Normalize channel names in feature names
-        def _normalize_cp_var(var_name: str, channel: str) -> str:
-            """Replace channel name in single_object features with __CHANNEL__."""
-            if not var_name.startswith("single_object_"):
-                return var_name
-            rest = var_name[len("single_object_") :]
-            # Try exact channel, then stripped (no underscores/hyphens)
-            for ch_variant in [channel, channel.replace("_", "").replace("-", "")]:
-                if rest.startswith(ch_variant):
-                    return "single_object___CHANNEL__" + rest[len(ch_variant) :]
-            return var_name
-
-        _exp_var_norm: Dict[Tuple[str, str], set] = {}
-        for (exp, ch), raw_list in _exp_var_raw.items():
-            norm_set = set()
-            norm_map = {}  # normalized -> raw
-            for v in raw_list:
-                nv = _normalize_cp_var(v, ch)
-                norm_set.add(nv)
-                norm_map[nv] = v
-            _exp_var_norm[(exp, ch)] = norm_set
-            _cp_norm_to_raw[(exp, ch)] = norm_map
-
-        # Step 4: Intersect all normalized feature sets
-        common_var_norm = set.intersection(*_exp_var_norm.values())
-        sizes = {len(v) for v in _exp_var_norm.values()}
-        if len(sizes) > 1:
-            _logger.warning(f"  CellProfiler normalized feature counts vary: {sizes}")
-        _logger.info(
-            f"  CellProfiler: {len(_exp_var_norm)} experiments, "
-            f"{len(common_var_norm)} common features (after dedup + normalization)"
-        )
-
-        # common_var_names holds normalized names; Pass 2b uses _cp_norm_to_raw
-        # to map back to raw names per experiment.
-        common_var_names = common_var_norm  # set of normalized names
-
-        # Recalculate pooled count after dropping
-        n_cells_pooled = sum(exp_cell_counts.values())
-        actual_target = min(target_n_cells, n_cells_pooled)
-
     # --- Pass 2b: Load one experiment at a time, subsample, collect raw arrays ---
     X_blocks = []  # list of np arrays
     obs_blocks = []  # list of DataFrames
@@ -776,24 +737,18 @@ def pca_sweep_pooled_signal(
         if adata is None:
             continue
 
-        # CellProfiler: subset to common normalized features using per-exp raw name mapping
-        if is_cellprofiler and common_var_names is not None:
-            norm_to_raw = _cp_norm_to_raw.get((exp, ch), {})
-            # Map normalized common names back to this experiment's raw names
-            raw_cols = [
-                norm_to_raw[nv] for nv in sorted(common_var_names) if nv in norm_to_raw
-            ]
-            if not raw_cols:
-                _logger.warning(
-                    f"  SKIPPING {exp.split('_')[0]}/{ch}: no common features after normalization"
+        # Filter out dud sgRNAs (off-target / toxic) — enabled by default
+        if exclude_dud_guides and "sgRNA" in adata.obs.columns:
+            n_before = adata.n_obs
+            keep = ~adata.obs["sgRNA"].isin(DUD_GUIDES)
+            n_dropped = int((~keep).sum())
+            if n_dropped > 0:
+                adata = adata[keep].copy()
+                _logger.info(
+                    f"  {exp.split('_')[0]}/{ch}: dropped {n_dropped:,} dud-guide cells "
+                    f"({n_before:,} → {adata.n_obs:,})"
                 )
-                del adata
-                continue
-            adata = adata[:, raw_cols].copy()
-            # Rename to normalized names so all experiments share identical var_names
-            adata.var_names = pd.Index(
-                [nv for nv in sorted(common_var_names) if nv in norm_to_raw]
-            )
+
         if n_vars_expected is None:
             n_vars_expected = adata.n_vars
             var_names = list(adata.var_names)
@@ -804,14 +759,33 @@ def pca_sweep_pooled_signal(
             del adata
             continue
 
-        # Proportional subsample: each experiment contributes proportionally to its cell count
-        fraction = adata.n_obs / n_cells_pooled
-        n_take = max(1, int(round(fraction * actual_target)))
-        n_take = min(n_take, adata.n_obs)
-        if n_take < adata.n_obs:
-            idx = rng.choice(adata.n_obs, n_take, replace=False)
-            idx.sort()
-            adata = adata[idx].copy()
+        if downsample_per_guide and cells_per_guide_cap is not None and "sgRNA" in adata.obs.columns:
+            # Per-sgRNA cap: each sgRNA contributes (cap / pooled_count) of its cells
+            # from each experiment, so global total per sgRNA ≈ cells_per_guide_cap.
+            sgrnas = adata.obs["sgRNA"].values
+            keep_mask = np.zeros(adata.n_obs, dtype=bool)
+            for s in np.unique(sgrnas):
+                s_idx = np.where(sgrnas == s)[0]
+                pooled = pooled_sg_counts.get(s, len(s_idx))
+                if pooled <= cells_per_guide_cap:
+                    keep_mask[s_idx] = True
+                else:
+                    frac = cells_per_guide_cap / pooled
+                    n_take_s = max(1, int(round(frac * len(s_idx))))
+                    picked = rng.choice(s_idx, n_take_s, replace=False)
+                    keep_mask[picked] = True
+            n_take = int(keep_mask.sum())
+            if n_take < adata.n_obs:
+                adata = adata[keep_mask].copy()
+        else:
+            # Proportional subsample: each experiment contributes proportionally to its cell count
+            fraction = adata.n_obs / n_cells_pooled
+            n_take = max(1, int(round(fraction * actual_target)))
+            n_take = min(n_take, adata.n_obs)
+            if n_take < adata.n_obs:
+                idx = rng.choice(adata.n_obs, n_take, replace=False)
+                idx.sort()
+                adata = adata[idx].copy()
 
         # Ensure label_str exists (CellProfiler uses 'perturbation' instead)
         if "label_str" not in adata.obs.columns and "perturbation" in adata.obs.columns:
@@ -1943,13 +1917,13 @@ def aggregate_channels(
 # =============================================================================
 
 
-def _discover_experiment_pairs(cp_override):
+def _discover_experiment_pairs(cp_override, include_cellpainting: bool = False):
     """Common experiment discovery for SLURM modes. Returns (all_pairs, attr_config, storage_roots, feature_dir, maps_path)."""
     attr_config = load_attribution_config()
     storage_roots = get_storage_roots(attr_config)
     feature_dir = cp_override or attr_config.get("feature_dir", "dino_features")
     maps_path = get_channel_maps_path()
-    if cp_override:
+    if cp_override == "cell-profiler":
         all_pairs = discover_cellprofiler_experiments(storage_roots, include_cellpainting=include_cellpainting)
     else:
         all_pairs = discover_dino_experiments(storage_roots, feature_dir, include_cellpainting=include_cellpainting)
@@ -2210,7 +2184,7 @@ def _handle_downsampled(args, output_dir, cp_override):
             shutil.rmtree(per_signal_dir)
 
     all_pairs, attr_config, storage_roots, feature_dir, maps_path = (
-        _discover_experiment_pairs(cp_override)
+        _discover_experiment_pairs(cp_override, include_cellpainting=getattr(args, "include_cellpainting", False))
     )
     if not all_pairs:
         print("No experiment-channel pairs found!")
@@ -2262,8 +2236,9 @@ def _handle_downsampled(args, output_dir, cp_override):
 
     mode_label = (
         "CellProfiler"
-        if cp_override
-        else ("Downsampled" if args.downsampled else "All-Cells")
+        if cp_override == "cell-profiler"
+        else ("Cell-DINO" if cp_override == "cell_dino_features"
+              else ("Downsampled" if args.downsampled else "All-Cells"))
     )
     print(
         f"\n{mode_label} PCA Optimization: {len(all_pairs)} channels -> {n_signals} signal groups"
@@ -2276,7 +2251,32 @@ def _handle_downsampled(args, output_dir, cp_override):
         signal_groups, storage_roots, feature_dir, maps_path
     )
 
-    if args.downsampled:
+    if getattr(args, "downsample_per_guide", False):
+        # Per-guide cap happens inside pca_sweep_pooled_signal — outer target is
+        # just the total cell count (so target_n_cells doesn't artificially trim).
+        per_signal_target = dict(cell_counts)
+        cap = int(getattr(args, "cells_per_guide", 250))
+        # Quick pre-scan: count unique sgRNAs per signal (backed-mode obs reads only)
+        print(f"\nPre-scanning unique sgRNAs per signal (for post-cap estimate)...")
+        sgrna_counts: Dict[str, int] = {}
+        for signal, pairs in signal_groups.items():
+            seen = set()
+            for exp, ch in pairs:
+                path = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+                if path is None:
+                    continue
+                try:
+                    a = ad.read_h5ad(path, backed="r")
+                    if "sgRNA" in a.obs.columns:
+                        seen.update(a.obs["sgRNA"].astype(str).unique())
+                    a.file.close()
+                except Exception:
+                    pass
+            sgrna_counts[signal] = len(seen)
+        print(f"\nSignal group manifest (per-sgRNA cap = {cap:,} cells/guide applied inside each job):")
+        print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'sgRNAs':>7} {'-> Expected':>15}")
+        print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*7} {'-'*15}")
+    elif args.downsampled:
         # Equalise: all groups target the smallest group (floor 750k)
         MIN_CELLS_FLOOR = 750_000
         global_target = max(min(cell_counts.values()), MIN_CELLS_FLOOR)
@@ -2305,7 +2305,11 @@ def _handle_downsampled(args, output_dir, cp_override):
         pairs = signal_groups[signal]
         n_cells = cell_counts[signal]
         t = per_signal_target[signal]
-        if args.downsampled:
+        if getattr(args, "downsample_per_guide", False):
+            n_sg = sgrna_counts.get(signal, 0)
+            expected = min(n_cells, n_sg * int(getattr(args, "cells_per_guide", 250)))
+            print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} {n_sg:>7,} -> {expected:>12,}")
+        elif args.downsampled:
             print(f"  {signal:<45} {len(pairs):>5} {n_cells:>10,} -> {t:>15,}")
         else:
             pca_note = f" (passthrough PCA)" if n_cells > PCA_FIT_CAP else ""
@@ -2319,9 +2323,19 @@ def _handle_downsampled(args, output_dir, cp_override):
                 "experiments": ",".join(e.split("_")[0] for e, c in pairs),
             }
         )
-    print(
-        f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells"
-    )
+    if getattr(args, "downsample_per_guide", False):
+        total_expected = sum(
+            min(cell_counts[s], sgrna_counts.get(s, 0) * int(getattr(args, "cells_per_guide", 250)))
+            for s in cell_counts
+        )
+        print(
+            f"\n  Total: {n_signals} signal groups, "
+            f"{sum(cell_counts.values()):,} cells → {total_expected:,} expected after cap"
+        )
+    else:
+        print(
+            f"\n  Total: {n_signals} signal groups, {sum(cell_counts.values()):,} total cells"
+        )
 
     if getattr(args, "dry_run", False):
         print("\n--dry-run: exiting before processing.")
@@ -2349,8 +2363,9 @@ def _handle_downsampled(args, output_dir, cp_override):
         )
         if cp_override:
             kwargs["feature_dir_override"] = cp_override
-            kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
-        if args.fixed_threshold is not None:
+            if cp_override == "cell-profiler":
+                kwargs["sweep_thresholds"] = DEFAULT_SWEEP_THRESHOLDS_CP
+        if args.fixed_threshold is not None and args.fixed_threshold > 0:
             kwargs["fixed_threshold"] = args.fixed_threshold
         if getattr(args, "preserve_batch", False):
             kwargs["preserve_batch"] = True
@@ -2358,6 +2373,11 @@ def _handle_downsampled(args, output_dir, cp_override):
             kwargs["no_pca"] = True
         if getattr(args, "zscore_per_experiment", False):
             kwargs["zscore_per_experiment"] = True
+        if not getattr(args, "exclude_dud_guides", True):
+            kwargs["exclude_dud_guides"] = False
+        if getattr(args, "downsample_per_guide", False):
+            kwargs["downsample_per_guide"] = True
+            kwargs["cells_per_guide"] = int(getattr(args, "cells_per_guide", 250))
         return kwargs
 
     if not args.slurm:
@@ -2524,9 +2544,9 @@ def _build_parser():
     parser.add_argument(
         "--fixed-threshold",
         type=float,
-        default=None,
-        help="Skip the variance sweep and use a single fixed PCA threshold (e.g. 0.80). "
-        "Useful for direct cosine vs euclidean comparison at a known threshold.",
+        default=0.80,
+        help="Skip the variance sweep and use a single fixed PCA threshold (default: 0.80). "
+        "Pass --fixed-threshold 0 to disable and run the full consensus sweep instead.",
     )
     parser.add_argument(
         "--slurm",
@@ -2594,6 +2614,20 @@ def _build_parser():
         "(floor 750k). Default mode uses all cells per group. Output → downsampled/.",
     )
     parser.add_argument(
+        "--downsample-per-guide",
+        dest="downsample_per_guide",
+        action="store_true",
+        help="Cap each sgRNA at --cells-per-guide cells (pooled across experiments). "
+             "Replaces proportional-per-experiment downsampling with a global per-sgRNA cap. "
+             "Implies --downsampled. Output → downsampled_per_guide/.",
+    )
+    parser.add_argument(
+        "--cells-per-guide",
+        type=int,
+        default=250,
+        help="Per-sgRNA cell cap used with --downsample-per-guide (default: 250).",
+    )
+    parser.add_argument(
         "--phase-memory",
         type=str,
         default="600GB",
@@ -2603,6 +2637,22 @@ def _build_parser():
         "--cell-profiler",
         action="store_true",
         help="Use CellProfiler morphological features instead of DINO embeddings.",
+    )
+    parser.add_argument(
+        "--cell-dino",
+        action="store_true",
+        help="Use cell-level DINO features (feature_dir=cell_dino_features) instead of default DINO. "
+             "Output → cell_dino/ subdir.",
+    )
+    parser.add_argument(
+        "--exclude-dud-guides", dest="exclude_dud_guides",
+        action="store_true", default=True,
+        help="Filter out known dud sgRNAs (default: True). See DUD_GUIDES constant.",
+    )
+    parser.add_argument(
+        "--no-exclude-dud-guides", dest="exclude_dud_guides",
+        action="store_false",
+        help="Keep dud sgRNAs in the cell pool.",
     )
     parser.add_argument(
         "--direct",
@@ -2653,9 +2703,15 @@ def _build_parser():
         help="Filter CHAD clusters to a range by integer key (e.g. '1-76' or '100-162').",
     )
     parser.add_argument(
-        "--zscore-per-experiment", action="store_true",
+        "--zscore-per-experiment", dest="zscore_per_experiment",
+        action="store_true", default=True,
         help="Apply per-experiment z-score scaling to features before PCA. "
-             "Output → zscore_per_exp/ subdir.",
+             "Output → zscore_per_exp/ subdir. Default: True.",
+    )
+    parser.add_argument(
+        "--no-zscore-per-experiment", dest="zscore_per_experiment",
+        action="store_false",
+        help="Disable per-experiment z-score scaling.",
     )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument(
@@ -2706,8 +2762,10 @@ def main():
             _handle_downsampled(args, output_dir, None)
         return
 
-    # Nest output under feature-type subdir: dino/ or cellprofiler/
+    # Nest output under feature-type subdir: dino/, cellprofiler/, or cell_dino/
     cp_override = None
+    if args.cell_profiler and args.cell_dino:
+        raise ValueError("--cell-profiler and --cell-dino are mutually exclusive")
     if args.cell_profiler:
         cp_override = "cell-profiler"
         output_dir = output_dir / "cellprofiler"
@@ -2717,6 +2775,11 @@ def main():
         print(
             f"PCA sweep thresholds: {DEFAULT_SWEEP_THRESHOLDS_CP} (lower range — CP features are independent)"
         )
+        print(f"Output: {output_dir}")
+    elif args.cell_dino:
+        cp_override = "cell_dino_features"
+        output_dir = output_dir / "cell_dino"
+        print(f"Cell-DINO mode: features from 3-assembly/cell_dino_features/")
         print(f"Output: {output_dir}")
     else:
         output_dir = output_dir / "dino"
@@ -2731,13 +2794,18 @@ def main():
         output_dir = output_dir / "with_cellpainting"
         print(f"Cell Painting channels included: output → {output_dir}")
 
+    # --downsample-per-guide implies --downsampled
+    if args.downsample_per_guide:
+        args.downsampled = True
+    _ds_suffix = "_per_guide" if args.downsample_per_guide else ""
+
     # Nest under channel-subset subdir
     if args.phase_only and args.downsampled:
-        output_dir = output_dir / "phase_only_downsampled"
+        output_dir = output_dir / f"phase_only_downsampled{_ds_suffix}"
         args.phase_filter = "phase_only"
         print(f"Phase-only downsampled mode: output → {output_dir}")
     elif args.no_phase and args.downsampled:
-        output_dir = output_dir / "no_phase_downsampled"
+        output_dir = output_dir / f"no_phase_downsampled{_ds_suffix}"
         args.phase_filter = "no_phase"
         print(f"No-phase downsampled mode: output → {output_dir}")
     elif args.phase_only:
@@ -2749,7 +2817,7 @@ def main():
         args.phase_filter = "no_phase"
         print(f"No-phase mode: output → {output_dir}")
     elif args.downsampled:
-        output_dir = output_dir / "downsampled"
+        output_dir = output_dir / f"downsampled{_ds_suffix}"
         args.phase_filter = None
         print(f"Downsampled mode: output → {output_dir}")
     else:
@@ -2768,7 +2836,7 @@ def main():
     elif args.preserve_batch:
         output_dir = output_dir / "batch"
         print(f"Preserve-batch mode — output → {output_dir}")
-    elif args.fixed_threshold is not None:
+    elif args.fixed_threshold is not None and args.fixed_threshold > 0:
         thresh_tag = f"fixed_{args.fixed_threshold:.0%}"
         output_dir = output_dir / thresh_tag
         print(f"Fixed threshold: {args.fixed_threshold:.0%} — output → {output_dir}")
