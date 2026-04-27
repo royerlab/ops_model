@@ -1178,9 +1178,9 @@ def _build_parser():
     parser.add_argument(
         "--phase-slurm-time",
         type=int,
-        default=120,
-        help="SLURM time limit for the Phase reporter job in minutes (default: 120). "
-             "Phase has ~60M cells so needs more time than other reporters.",
+        default=240,
+        help="SLURM time limit for the Phase reporter job in minutes (default: 240). "
+             "Phase has ~60M cells so needs far more time than other reporters.",
     )
     parser.add_argument("--slurm-cpus", type=int, default=8)
     parser.add_argument("--slurm-partition", type=str, default="cpu,gpu")
