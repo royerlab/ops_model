@@ -30,7 +30,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_LEIDEN_RESOLUTIONS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0)
+DEFAULT_LEIDEN_RESOLUTIONS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 50.0, 100.0)
 DEFAULT_ENRICHR_LIBRARIES = (
     "GO_Biological_Process_2025",
     "GO_Cellular_Component_2025",
@@ -441,7 +441,6 @@ def _run_cluster_enrichment(
     libraries: Tuple[str, ...] = DEFAULT_ENRICHR_LIBRARIES,
     max_workers: int = 6,
     min_genes: int = 5,
-    adj_pvalue_cutoff: float = 0.25,
     top_n_terms: int = 10,
     _logger=logger,
 ) -> Dict[str, Dict]:
@@ -449,9 +448,9 @@ def _run_cluster_enrichment(
 
     Returns ``{cluster_id: {top1, terms}}`` where ``top1`` is the single best
     record (used for the legend label) and ``terms`` is a list of up to
-    ``top_n_terms`` records used for the bar chart. Each record has fields:
+    ``top_n_terms`` records ranked by combined_score. Each record has fields:
     ``term, library, adj_pvalue, combined_score, overlap, n_genes``. Clusters
-    with no significant term get ``{"top1": None, "terms": []}``. Empty dict
+    with no results get ``{"top1": None, "terms": []}``. Empty dict
     if maayanlab-bioinformatics isn't installed.
     """
     speedenrich = _try_import_speedenrich()
@@ -485,12 +484,10 @@ def _run_cluster_enrichment(
             df = speedenrich(userlist=genes, libraries=libs, background=background_genes)
             if df is None or df.empty:
                 return cluster_id, empty
-            df = df[df["adj pvalue"] < adj_pvalue_cutoff]
-            if df.empty:
-                return cluster_id, empty
+            # rank by adj p-value (most significant first); combined score shown as bar
             top_overall = df.nsmallest(top_n_terms, "adj pvalue").reset_index(drop=True)
             terms_overall = [_record(r, len(genes)) for _, r in top_overall.iterrows()]
-            # Per-library top-N (so the bar panels can be split by ontology)
+            # Per-library top-N by adj p-value
             by_library: Dict[str, List[Dict]] = {}
             if "library" in df.columns:
                 for lib in libs:
@@ -691,47 +688,41 @@ def _save_leiden_html(
     for c in unique:
         terms = (enrichment.get(c) or {}).get("terms") or []
         if terms:
-            terms = terms[::-1]  # reverse so smallest p (most significant) ends up on top
+            terms = terms[::-1]  # least significant at bottom, most significant on top
             term_names = [t["term"] for t in terms]
-            scores = [t.get("combined_score") or 0 for t in terms]
             adj_ps = [t["adj_pvalue"] for t in terms]
+            raw_scores = [t.get("combined_score") for t in terms]
+            bar_x = [-np.log10(max(p, 1e-300)) for p in adj_ps]
             hover = [
-                f"<b>{name}</b><br>combined score: {sc:.1f}<br>adj p: {p:.2e}<br>library: {t.get('library','')}"
-                for name, sc, p, t in zip(term_names, scores, adj_ps, terms)
+                f"<b>{n}</b><br>-log10(p): {x:.2f}<br>adj p: {p:.2e}"
+                + (f"<br>combined score: {s:.1f}" if s is not None and not np.isnan(s) else "")
+                + f"<br>library: {t.get('library','')}"
+                for n, x, p, s, t in zip(term_names, bar_x, adj_ps, raw_scores, terms)
             ]
             bar = go.Bar(
-                x=scores, y=term_names,
-                orientation="h",
-                marker=dict(color=scores, colorscale="Viridis", showscale=False),
-                text=[f"{sc:.1f}" for sc in scores],
-                textposition="outside",
-                hovertext=hover,
-                hoverinfo="text",
-                name=c,
-                visible=False,
-                showlegend=False,
+                x=bar_x, y=term_names, orientation="h",
+                marker=dict(color=bar_x, colorscale="Viridis", showscale=False),
+                text=[f"p={p:.1e}" for p in adj_ps],
+                textposition="inside", insidetextanchor="start",
+                hovertext=hover, hoverinfo="text",
+                name=c, visible=False, showlegend=False,
                 xaxis="x2", yaxis="y2",
             )
             cluster_has_bars.append(c)
         else:
             bar = go.Bar(
-                x=[0], y=[f"({c}: no significant terms)"],
-                orientation="h",
-                marker=dict(color="lightgray"),
-                hoverinfo="skip",
-                visible=False, showlegend=False,
-                xaxis="x2", yaxis="y2",
+                x=[0], y=[f"({c}: no terms)"], orientation="h",
+                marker=dict(color="lightgray"), hoverinfo="skip",
+                visible=False, showlegend=False, xaxis="x2", yaxis="y2",
             )
         bar_traces.append(bar)
 
-    # Default: show first cluster's bar chart
     if bar_traces:
         bar_traces[0].visible = True
 
     n_scatter = len(scatter_traces)
     n_bars = len(bar_traces)
 
-    # Dropdown: each button toggles visibility of one bar trace, scatter traces always visible
     buttons = []
     for i, c in enumerate(unique):
         vis = [True] * n_scatter + [False] * n_bars
@@ -778,7 +769,7 @@ def _save_leiden_html(
         ),
         # right bar panel
         xaxis2=dict(
-            domain=[0.74, 0.97], title="Combined score (Enrichr)",
+            domain=[0.74, 0.97], title="-log10(adj p)",
             showgrid=True, gridcolor="rgba(180,180,180,0.18)",
             zeroline=False, showline=True, linecolor="rgba(80,80,80,0.4)",
             anchor="y2",
@@ -786,7 +777,7 @@ def _save_leiden_html(
         yaxis2=dict(
             domain=[0.00, 0.78], automargin=True,
             anchor="x2", showgrid=False,
-            tickfont=dict(size=10),
+            tickfont=dict(size=13),
         ),
         legend=dict(
             x=0.56, y=1.00, xanchor="left", yanchor="top",
@@ -805,7 +796,7 @@ def _save_leiden_html(
                 text="Top GO terms (select cluster ↓)",
                 xref="paper", yref="paper",
                 x=0.74, y=1.05, xanchor="left", yanchor="bottom",
-                showarrow=False, font=dict(size=12, color="#444"),
+                showarrow=False, font=dict(size=18, color="#444"),
             ),
         ],
         margin=dict(l=60, r=40, t=90, b=60),
@@ -1111,39 +1102,38 @@ def _save_one_interactive(
         for cid in sorted(clusters.keys(), key=lambda s: int(s.split("_")[1])):
             rec = clusters[cid] or {}
             by_lib = rec.get("by_library") or {}
+            all_terms = rec.get("terms") or []
             for lib_idx, lib in enumerate(libs_present):
-                terms = (by_lib.get(lib) or [])[::-1]
-                ax_x = "x1" if lib_idx == 0 else f"x{lib_idx + 2}"
-                ax_y = "y1" if lib_idx == 0 else f"y{lib_idx + 2}"
-                # libs_present[0] still uses x2/y2 (axis indexing starts at 2 for the first bar panel)
+                terms = by_lib.get(lib) or [t for t in all_terms if t.get("library") == lib]
+                terms = terms[::-1]
                 ax_x = f"x{lib_idx + 2}"
                 ax_y = f"y{lib_idx + 2}"
                 if terms:
                     term_names = [t["term"][:60] for t in terms]
-                    scores = [t.get("combined_score") or 0 for t in terms]
                     adj_ps = [t["adj_pvalue"] for t in terms]
+                    raw_scores = [t.get("combined_score") for t in terms]
+                    bar_x = [-np.log10(max(p, 1e-300)) for p in adj_ps]
                     hovs = [
-                        f"<b>{t['term']}</b><br>combined score: {s:.1f}<br>adj p: {p:.2e}<br>library: {lib}"
-                        for s, p, t in zip(scores, adj_ps, terms)
+                        f"<b>{t['term']}</b><br>-log10(p): {x:.2f}<br>adj p: {p:.2e}"
+                        + (f"<br>combined score: {s:.1f}" if s is not None and not np.isnan(s) else "")
+                        + f"<br>library: {lib}"
+                        for x, p, s, t in zip(bar_x, adj_ps, raw_scores, terms)
                     ]
                     bar = go.Bar(
-                        x=scores, y=term_names,
-                        orientation="h",
-                        marker=dict(color=scores, colorscale="Viridis", showscale=False),
+                        x=bar_x, y=term_names, orientation="h",
+                        marker=dict(color=bar_x, colorscale="Viridis", showscale=False),
+                        text=[f"p={p:.1e}" for p in adj_ps],
+                        textposition="inside", insidetextanchor="start",
                         hovertext=hovs, hoverinfo="text",
                         name=f"{cid}/{lib}",
-                        visible=False, showlegend=False,
-                        xaxis=ax_x, yaxis=ax_y,
+                        visible=False, showlegend=False, xaxis=ax_x, yaxis=ax_y,
                     )
                 else:
                     bar = go.Bar(
-                        x=[0], y=["(no significant terms)"],
-                        orientation="h",
-                        marker=dict(color="lightgray"),
-                        hoverinfo="skip",
+                        x=[0], y=["(no terms)"], orientation="h",
+                        marker=dict(color="lightgray"), hoverinfo="skip",
                         name=f"{cid}/{lib}",
-                        visible=False, showlegend=False,
-                        xaxis=ax_x, yaxis=ax_y,
+                        visible=False, showlegend=False, xaxis=ax_x, yaxis=ax_y,
                     )
                 bar_traces.append(bar)
                 bar_keys.append((res_col, cid, lib))
@@ -1393,11 +1383,13 @@ def _save_one_interactive(
         height=900,
         width=1700 if n_panels > 0 else 1300,
         legend=dict(
-            x=0.56 if n_panels > 0 else 1.02,
+            # Shifted ~40px left of the previous 0.56 paper-coord anchor so
+            # the legend sits closer to the UMAP and farther from the bar panels.
+            x=0.535 if n_panels > 0 else 1.02,
             y=0.78,
             xanchor="left", yanchor="top",
             itemsizing="constant", tracegroupgap=4,
-            bgcolor="rgba(255,255,255,0.9)", bordercolor="lightgray", borderwidth=0,
+            bgcolor="rgba(255,255,255,0.55)", bordercolor="lightgray", borderwidth=0,
             font=dict(size=10),
         ),
         margin=dict(l=60, r=20 if n_panels > 0 else 260, t=140, b=60),
@@ -1432,7 +1424,7 @@ def _save_one_interactive(
         )
         # Bar panels: stacked vertically on the right (~22% wide)
         bar_x_domain = [0.78, 0.97]
-        gap = 0.025
+        gap = 0.055  # extra room so titles don't overlap adjacent panels
         total = 1.0
         panel_h = (total - gap * (n_panels - 1)) / n_panels
         for lib_idx, lib in enumerate(libs_present):
@@ -1443,7 +1435,7 @@ def _save_one_interactive(
             layout_dict[ax_x] = dict(
                 domain=bar_x_domain,
                 anchor=f"y{lib_idx + 2}",
-                title=("Combined score" if lib_idx == n_panels - 1 else None),
+                title=("-log10(adj p)" if lib_idx == n_panels - 1 else None),
                 showgrid=True, gridcolor="rgba(180,180,180,0.18)",
                 zeroline=False, showline=True, linecolor="rgba(80,80,80,0.4)",
                 tickfont=dict(size=8),
@@ -1452,16 +1444,16 @@ def _save_one_interactive(
                 domain=[y_bot, y_top],
                 anchor=f"x{lib_idx + 2}",
                 automargin=True, showgrid=False,
-                tickfont=dict(size=7),
+                tickfont=dict(size=9),
             )
-            # Pretty library label above each panel
+            # Title sits just above each panel (gap gives enough clearance)
             pretty = lib.replace("_2025", "").replace("_2026", "").replace("_2022", "").replace("_", " ")
             annotations.append(dict(
                 text=f"<b>{pretty}</b>",
                 xref="paper", yref="paper",
-                x=bar_x_domain[0], y=min(1.0, y_top + 0.005),
+                x=bar_x_domain[0], y=y_top + 0.008,
                 xanchor="left", yanchor="bottom",
-                showarrow=False, font=dict(size=9, color="#555"),
+                showarrow=False, font=dict(size=14, color="#555"),
             ))
     else:
         layout_dict["xaxis_title"] = f"{axis_label} 1"
@@ -1521,7 +1513,8 @@ def _save_one_interactive(
   var plotW = figWidth - 80;
   var plotH = figHeight - 200;  // approximate (margin t≈140, b≈60)
   // Panel sits under the legend (legend is at y=0.78 down to ~0.40 worst case).
-  var panelLeft = 60 + plotW * 0.56;
+  // Shift gene-list panel 40px left (closer to UMAP) to match the legend.
+  var panelLeft = 60 + plotW * 0.56 - 60;
   var panelTop = 200 + plotH * 0.50;       // rough: below legend bottom
   var panelHeight = plotH * 0.45;
 
@@ -1536,11 +1529,11 @@ def _save_one_interactive(
     'position:absolute;' +
     ' left:' + panelLeft + 'px; top:' + panelTop + 'px;' +
     ' width:200px; height:' + panelHeight + 'px;' +
-    ' overflow-y:auto; background:rgba(255,255,255,0.94);' +
-    ' border:1px solid #aaa; border-radius:3px;' +
+    ' overflow-y:auto; background:rgba(255,255,255,0.55);' +
+    ' border:1px solid rgba(170,170,170,0.6); border-radius:3px;' +
     ' font-family:Menlo, Consolas, monospace; font-size:9px;' +
     ' line-height:1.25; padding:6px 8px; z-index:50;' +
-    ' box-shadow:0 1px 4px rgba(0,0,0,0.06);';
+    ' box-shadow:0 1px 4px rgba(0,0,0,0.04);';
   var header = document.createElement('div');
   header.style.cssText = 'font-weight:bold; font-family:sans-serif; font-size:11px; color:#444; margin-bottom:4px;';
   header.textContent = 'Genes in selected category';
@@ -1606,14 +1599,23 @@ def _save_one_interactive(
   }}
 
   gd.on('plotly_buttonclicked', function(event) {{
-    if (!event || !event.menu) return;
-    var menuIdx = event.menu._index;
-    var btnLabel = event.button && event.button.label;
-    if (menuIdx === 0) {{
+    if (!event || !event.button) return;
+    var btnLabel = event.button.label;
+    var menuX = (event.menu || {{}}).x;
+    // Color-mode dropdown sits at x≈0 — reset gene list when mode switches
+    if (menuX === undefined || menuX < 0.1) {{
       body.innerHTML = GENE_LIST_PLACEHOLDER;
       return;
     }}
-    var modeLabel = _modeForMenu(menuIdx);
+    // Picker dropdown clicked — find the currently visible picker mode
+    // (only one picker is visible at a time; visibility is toggled by the
+    // color-mode button via relayout so gd.layout reflects the current state)
+    var modeLabel = null;
+    Object.keys(pickerMenuIdxForMode).forEach(function(ml) {{
+      var idx = pickerMenuIdxForMode[ml];
+      var menus = gd.layout.updatemenus || [];
+      if (menus[idx] && menus[idx].visible !== false) modeLabel = ml;
+    }});
     if (!modeLabel) return;
     _setGeneList(modeLabel, btnLabel);
   }});
