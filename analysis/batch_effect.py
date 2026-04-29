@@ -29,10 +29,10 @@ def zscore_adata(adata: ad.AnnData) -> ad.AnnData:
 EXPERIMENTS = [
     'ops0031_20250424', 'ops0032_20250428', 'ops0035_20250501', 'ops0036_20250505', 'ops0037_20250506',
     'ops0038_20250514', 'ops0041_20250519', 'ops0042_20250520', 'ops0043_20250605', 'ops0045_20250603',
-    'ops0047_20250612', 'ops0048_20250616', 'ops0049_20250626', 'ops0051_20250623', 'ops0052_20250702',
+    'ops0047_20250612', 'ops0048_20250616', 'ops0049_20250626', 'ops0051_20250623', 'ops0052_20250702', 'ops0053_20250709',
     'ops0054_20250710', 'ops0055_20250715', 'ops0056_20250721', 'ops0057_20250722', 'ops0058_20250805',
-    'ops0059_20250804', 'ops0063_20250731', 'ops0064_20250811', 'ops0065_20250812', 'ops0068_20250901',
-    'ops0069_20250902', 'ops0070_20250908', 'ops0071_20250828', 'ops0076_20250917', 'ops0078_20250923',
+    'ops0059_20250804', 'ops0062_20250729', 'ops0063_20250731', 'ops0064_20250811', 'ops0065_20250812', 'ops0066_20250820', 'ops0067_20250826', 'ops0068_20250901',
+    'ops0069_20250902', 'ops0070_20250908', 'ops0071_20250828', 'ops0072_20250904', 'ops0076_20250917', 'ops0078_20250923',
     'ops0081_20250924', 'ops0084_20251022', 'ops0085_20251118', 'ops0086_20250922', 'ops0089_20251119',
     'ops0090_20251120', 'ops0091_20251117', 'ops0092_20251027', 'ops0094_20251217', 'ops0097_20251023',
     'ops0100_20251218', 'ops0101_20251211', 'ops0102_20251210', 'ops0103_20251216', 'ops0104_20251215',
@@ -43,7 +43,7 @@ EXPERIMENTS = [
     'ops0132_20260316', 'ops0134_20260317', 'ops0135_20260318', 'ops0137_20260323', 'ops0139_20260325',
     'ops0140_20260331', 'ops0142_20260401', 'ops0143_20260407', 'ops0144_20260406', 'ops0146_20260402',
 ]
-
+print(f"Loading {len(EXPERIMENTS)} experiments...")
 adatas = [
     zscore_adata(ad.read_h5ad(f'/hpc/projects/icd.fast.ops/{exp}/3-assembly/dino_features/anndata_objects/guide_bulked_Phase.h5ad'))
     for exp in tqdm(EXPERIMENTS, desc='Loading')
@@ -209,7 +209,32 @@ exp_means /= np.linalg.norm(exp_means, axis=1, keepdims=True) + 1e-10
 sim_matrix = pd.DataFrame(exp_means @ exp_means.T, index=experiments_unique, columns=experiments_unique)
 
 fig, ax = plt.subplots(figsize=(20, 15))
-sns.heatmap(sim_matrix, vmin=0, vmax=1, cmap='RdBu_r', annot=False, fmt='.2f', ax=ax)
+sns.heatmap(sim_matrix, vmin=0, vmax=1, cmap='Reds', annot=False, fmt='.2f', ax=ax)
 ax.set_title('Mean embedding cosine similarity between experiments')
+fig.tight_layout()
+# %% UMAP of NTC guides coloured by experiment
+# Project all NTC guide embeddings into 2D with UMAP to reveal whether any
+# experiment's NTCs occupy a distinct region — a sign of residual batch structure
+# that per-feature z-scoring did not remove.
+import umap
+
+X_ntc = X_norm[ntc_mask]
+exp_ntc = experiments[ntc_mask]
+
+reducer = umap.UMAP(n_components=2, random_state=42, metric='cosine')
+embedding = reducer.fit_transform(X_ntc)
+
+palette = sns.color_palette('husl', n_colors=n_exp)
+exp_to_idx = {e: i for i, e in enumerate(experiments_unique)}
+
+fig, ax = plt.subplots(figsize=(14, 10))
+for exp in experiments_unique:
+    mask_exp = exp_ntc == exp
+    ax.scatter(embedding[mask_exp, 0], embedding[mask_exp, 1],
+               s=10, alpha=0.6, label=exp, color=palette[exp_to_idx[exp]])
+ax.set_title('UMAP of NTC guides coloured by experiment')
+ax.set_xlabel('UMAP 1')
+ax.set_ylabel('UMAP 2')
+ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=6, ncol=2, markerscale=2)
 fig.tight_layout()
 # %%
