@@ -260,6 +260,7 @@ def _process_signal_group(
     random_seed: int = 42,
     preserve_batch: bool = False,
     no_pca: bool = False,
+    cell_filter: Optional[Any] = None,
 ) -> str:
     """Phase 1: pool cells for one biological signal, fit PCA, select n_pcs, save h5ads.
 
@@ -351,6 +352,14 @@ def _process_signal_group(
         adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
         if adata is None:
             continue
+
+        if cell_filter is not None:
+            n_before = adata.n_obs
+            adata = cell_filter(adata)
+            if adata.n_obs == 0:
+                _logger.warning(f"  {exp}/{ch}: all cells removed by filter, skipping")
+                continue
+            _logger.info(f"  {exp}/{ch}: {n_before} → {adata.n_obs} cells after filtering")
 
         if inferred_cell_type is None:
             inferred_cell_type = adata.uns.get("cell_type", "cell")
@@ -752,6 +761,7 @@ class PcaOptimizationCombiner:
         signal_groups: Dict[str, List[Tuple[str, str]]],
         output_dir: Path,
         downsampling_config: Dict[str, Any],
+        cell_filter: Optional[Any] = None,
     ) -> None:
         """Run Phase 1 sequentially in the calling process."""
         pca_cfg = self._build_pca_config()
@@ -769,6 +779,7 @@ class PcaOptimizationCombiner:
                 norm_method=norm_method,
                 preserve_batch=self.config.preserve_batch,
                 no_pca=self.config.no_pca,
+                cell_filter=cell_filter,
             )
             logger.info(f"  {result}")
 
@@ -777,6 +788,7 @@ class PcaOptimizationCombiner:
         signal_groups: Dict[str, List[Tuple[str, str]]],
         output_dir: Path,
         downsampling_config: Dict[str, Any],
+        cell_filter: Optional[Any] = None,
     ) -> None:
         """Submit Phase 1 as parallel SLURM jobs and wait for completion."""
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -811,6 +823,7 @@ class PcaOptimizationCombiner:
                         "norm_method": norm_method,
                         "preserve_batch": self.config.preserve_batch,
                         "no_pca": self.config.no_pca,
+                        "cell_filter": cell_filter,
                     },
                 }
             )
@@ -1039,11 +1052,15 @@ class PcaOptimizationCombiner:
             )
 
         # 3. Phase 1: PCA sweep per signal group
+        from .cell_filters import build_cell_filter
+
+        cell_filter = build_cell_filter(self.config.cell_filters)
+
         slurm_enabled = self.config.slurm.get("enabled", False)
         if slurm_enabled:
-            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config)
+            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config, cell_filter)
         else:
-            self._run_phase1_local(signal_groups, output_dir, downsampling_config)
+            self._run_phase1_local(signal_groups, output_dir, downsampling_config, cell_filter)
 
         # 4. Phase 2: aggregate, normalize, embed
         if self.config.preserve_batch or self.config.no_pca:
