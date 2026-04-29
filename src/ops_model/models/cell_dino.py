@@ -15,7 +15,7 @@ from monai.transforms import (
 )
 
 from ops_model.data import data_loader
-from ops_model.data.cell_painting_labels import load_cell_painting_labels
+from ops_model.data.labels import load_immunostaining_labels, SOURCE_FILENAME_TEMPLATES
 
 REPO_DIR = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/dinov2"
 CHECKPOINT = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/channel_adaptive_dino_vitl16_pretrain_cells-ef7c17ff.pth"
@@ -92,11 +92,12 @@ def extract_cell_dino_features(
 
     csv_source = config.get("csv_source", "standard")
     labels_df = None
-    if csv_source == "cell_painting":
-        labels_df = load_cell_painting_labels(
+    if csv_source in ("cell_painting", "four_i", "immunostaining"):
+        filename_template = config.get("filename_template") or SOURCE_FILENAME_TEMPLATES.get(csv_source)
+        labels_df = load_immunostaining_labels(
             experiments=config["data_manager"]["experiments"],
-            out_channels=config["data_manager"]["out_channels"],
-            cell_painting_channels=config.get("cell_painting_channels"),
+            filename_template=filename_template,
+            base_path=config.get("base_path"),
         )
 
     dm = data_loader.OpsDataManager(

@@ -47,7 +47,7 @@ import pandas as pd
 import submitit
 
 from ops_model.data import data_loader
-from ops_model.data.cell_painting_labels import load_cell_painting_labels
+from ops_model.data.labels import load_immunostaining_labels, SOURCE_FILENAME_TEMPLATES
 from ops_model.features.cp_extraction import (
     extract_cp_features,
     extract_cp_features_parallel,
@@ -134,7 +134,8 @@ def cp_features_worker_fcn(
     output_dir: str,
     out_channels: list[str] = None,
     csv_source: str = None,
-    cell_painting_channels: list[str] = None,
+    filename_template: str = None,
+    base_path: str = None,
 ):
     """
     Worker function for distributed CP feature extraction using submitit.
@@ -167,11 +168,11 @@ def cp_features_worker_fcn(
     )
 
     labels_df = None
-    if csv_source == "cell_painting":
-        labels_df = load_cell_painting_labels(
+    if csv_source in ("cell_painting", "four_i", "immunostaining"):
+        labels_df = load_immunostaining_labels(
             experiments=experiment_dict,
-            out_channels=out_channels,
-            cell_painting_channels=cell_painting_channels,
+            filename_template=filename_template,
+            base_path=base_path,
         )
 
     results_df = extract_cp_features_parallel(
@@ -319,12 +320,14 @@ def cp_features_main(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     csv_source = config.get("csv_source", "standard")
+    filename_template = config.get("filename_template") or SOURCE_FILENAME_TEMPLATES.get(csv_source)
+    base_path = config.get("base_path")
     labels_df = None
-    if csv_source == "cell_painting":
-        labels_df = load_cell_painting_labels(
+    if csv_source in ("cell_painting", "four_i", "immunostaining"):
+        labels_df = load_immunostaining_labels(
             experiments=config["data_manager"]["experiments"],
-            out_channels=config["data_manager"]["out_channels"],
-            cell_painting_channels=config.get("cell_painting_channels"),
+            filename_template=filename_template,
+            base_path=base_path,
         )
 
     # Get total dataset size
@@ -383,7 +386,8 @@ def cp_features_main(
         [output_dir_chunks] * num_jobs,
         [out_channels] * num_jobs,
         [csv_source] * num_jobs,
-        [config.get("cell_painting_channels")] * num_jobs,
+        [filename_template] * num_jobs,
+        [base_path] * num_jobs,
     )
 
     # Get the array job ID (all tasks share the same base job_id)
