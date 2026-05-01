@@ -261,6 +261,7 @@ def _process_signal_group(
     preserve_batch: bool = False,
     no_pca: bool = False,
     cell_filter: Optional[Any] = None,
+    save_cell_level: bool = False,
 ) -> str:
     """Phase 1: pool cells for one biological signal, fit PCA, select n_pcs, save h5ads.
 
@@ -526,6 +527,13 @@ def _process_signal_group(
     )
     del X_reduced
 
+    if save_cell_level:
+        adata_cell = ad.AnnData(
+            X=adata_reduced.X,
+            obs=obs_full.copy(),
+            var=adata_reduced.var.copy(),
+        )
+
     g = aggregate_to_level(
         adata_reduced, level="guide", method="mean", preserve_batch_info=preserve_batch
     )
@@ -574,6 +582,9 @@ def _process_signal_group(
     for adata in [g, e]:
         adata.uns.update(uns)
 
+    if save_cell_level:
+        adata_cell.uns.update(uns)
+
     from ops_model.post_process.anndata_processing.anndata_validator import (
         AnndataValidator,
     )
@@ -594,6 +605,11 @@ def _process_signal_group(
     output_suffix = ("_nopca" if no_pca else "") + ("_batch" if preserve_batch else "")
     g.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_guide.h5ad")
     e.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_gene.h5ad")
+    if save_cell_level:
+        adata_cell.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_cell.h5ad")
+        _logger.info(
+            f"  {signal}: saved cell-level AnnData ({adata_cell.n_obs:,} cells × {adata_cell.n_vars} features)"
+        )
     if sweep_rows:
         pd.DataFrame(sweep_rows).to_csv(
             per_channel_dir / f"{file_prefix}{output_suffix}_sweep.csv", index=False
@@ -762,6 +778,7 @@ class PcaOptimizationCombiner:
         output_dir: Path,
         downsampling_config: Dict[str, Any],
         cell_filter: Optional[Any] = None,
+        save_cell_level: bool = False,
     ) -> None:
         """Run Phase 1 sequentially in the calling process."""
         pca_cfg = self._build_pca_config()
@@ -780,6 +797,7 @@ class PcaOptimizationCombiner:
                 preserve_batch=self.config.preserve_batch,
                 no_pca=self.config.no_pca,
                 cell_filter=cell_filter,
+                save_cell_level=save_cell_level,
             )
             logger.info(f"  {result}")
 
@@ -789,6 +807,7 @@ class PcaOptimizationCombiner:
         output_dir: Path,
         downsampling_config: Dict[str, Any],
         cell_filter: Optional[Any] = None,
+        save_cell_level: bool = False,
     ) -> None:
         """Submit Phase 1 as parallel SLURM jobs and wait for completion."""
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -824,6 +843,7 @@ class PcaOptimizationCombiner:
                         "preserve_batch": self.config.preserve_batch,
                         "no_pca": self.config.no_pca,
                         "cell_filter": cell_filter,
+                        "save_cell_level": save_cell_level,
                     },
                 }
             )
@@ -1055,12 +1075,13 @@ class PcaOptimizationCombiner:
         from .cell_filters import build_cell_filter
 
         cell_filter = build_cell_filter(self.config.cell_filters)
+        save_cell_level = self.config.save_cell_level
 
         slurm_enabled = self.config.slurm.get("enabled", False)
         if slurm_enabled:
-            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config, cell_filter)
+            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config, cell_filter, save_cell_level)
         else:
-            self._run_phase1_local(signal_groups, output_dir, downsampling_config, cell_filter)
+            self._run_phase1_local(signal_groups, output_dir, downsampling_config, cell_filter, save_cell_level)
 
         # 4. Phase 2: aggregate, normalize, embed
         if self.config.preserve_batch or self.config.no_pca:

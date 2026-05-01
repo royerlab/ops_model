@@ -75,6 +75,7 @@ class CombinationConfig:
     output_filename: Optional[str] = None
     preserve_batch: bool = False
     no_pca: bool = False
+    save_cell_level: bool = False
 
     # Cell-level filters applied after loading, before PCA/aggregation
     cell_filters: List[Dict[str, Any]] = field(default_factory=list)
