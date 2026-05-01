@@ -1,6 +1,7 @@
 # %%
 from tqdm import tqdm
 from pathlib import Path
+import re
 import time
 from contextlib import contextmanager
 
@@ -152,14 +153,15 @@ def create_adata_object(
             col for col in features.columns if col not in NONFEATURE_COLUMNS
         ]
 
-        # Extract unique channels from feature column names
+        # Extract unique channels from feature column names.
+        # Anchor on the compartment mask to capture multi-part channel names like
+        # CP1_nuclei_Hoechst rather than just CP1.
         channels_in_data = set()
         for col in feature_cols:
             if col.startswith("single_object_"):
-                parts = col.split("_", 3)
-                if len(parts) >= 3:
-                    channel = parts[2]
-                    channels_in_data.add(channel)
+                m = re.match(r"single_object_(.+?)_(?:cell|nucleus|cytoplasm)_", col)
+                if m:
+                    channels_in_data.add(m.group(1))
 
         print(f"Detected channels: {sorted(channels_in_data)}")
 
@@ -509,10 +511,10 @@ def process(save_path: str, config_path: str = None):
             embedding_type=embedding_type,
         )
 
-    # Check if we have multiple channels/reporters to split by
+    # Always split by reporter when channel_mapping is present (even single channel)
     has_multiple_channels = (
         "channel_mapping" in features_adata.uns
-        and len(features_adata.uns["channel_mapping"]) > 1
+        and len(features_adata.uns["channel_mapping"]) >= 1
     )
 
     # Read aggregation configuration (same as DinoV3)
