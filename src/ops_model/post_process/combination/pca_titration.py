@@ -185,18 +185,86 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
+def _subsample_per_ko_and_aggregate(
+    adata_cells: ad.AnnData, cells_per_ko: int, rng: np.random.RandomState,
+) -> ad.AnnData:
+    """Subsample up to ``cells_per_ko`` cells per perturbation, then aggregate to guide level."""
+    pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+    perts = adata_cells.obs[pert_col].values
+    kept_idx = []
+    for p in np.unique(perts):
+        p_idx = np.where(perts == p)[0]
+        if len(p_idx) <= cells_per_ko:
+            kept_idx.extend(p_idx)
+        else:
+            kept_idx.extend(rng.choice(p_idx, cells_per_ko, replace=False))
+    kept_idx = np.sort(np.asarray(kept_idx))
+    sub = adata_cells[kept_idx].copy()
+    return aggregate_to_level(
+        sub, level="guide", method="mean",
+        preserve_batch_info=False, subsample_controls=False,
+    )
+
+
+def _subsample_per_guide_and_aggregate(
+    adata_cells: ad.AnnData, cells_per_guide: int, rng: np.random.RandomState,
+) -> ad.AnnData:
+    """Subsample up to ``cells_per_guide`` cells per sgRNA, then aggregate to guide level.
+
+    Unlike ``_subsample_per_ko_and_aggregate`` (which pools cells at the perturbation
+    level, so NTC shares one budget across its ~8 sgRNAs while gene KOs split across
+    ~4 sgRNAs), this samples directly at sgRNA level so every guide — NTC or KO —
+    gets the same cell budget.
+    """
+    if "sgRNA" not in adata_cells.obs.columns:
+        raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
+    sgrnas = adata_cells.obs["sgRNA"].values
+    kept_idx = []
+    for s in np.unique(sgrnas):
+        s_idx = np.where(sgrnas == s)[0]
+        if len(s_idx) <= cells_per_guide:
+            kept_idx.extend(s_idx)
+        else:
+            kept_idx.extend(rng.choice(s_idx, cells_per_guide, replace=False))
+    kept_idx = np.sort(np.asarray(kept_idx))
+    sub = adata_cells[kept_idx].copy()
+    return aggregate_to_level(
+        sub, level="guide", method="mean",
+        preserve_batch_info=False, subsample_controls=False,
+    )
+
+
 def _subsample_and_aggregate(
-    adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState
+    adata_cells: ad.AnnData, target_n_cells: int, rng: np.random.RandomState,
+    min_exp: bool = False,
 ) -> ad.AnnData:
     """Subsample real cells from the cell-level h5ad, then re-aggregate to guide level.
 
-    Randomly selects ``target_n_cells`` cells (without replacement), then
-    aggregates to guide-level means.  All perturbations with at least one
-    sampled cell are preserved.
+    If ``min_exp`` is True, selects the fewest experiments (ranked by cell count,
+    descending) whose combined cells reach ``target_n_cells``, then randomly
+    samples from just those. Otherwise samples uniformly across all cells.
     """
     n_total = adata_cells.n_obs
     if n_total <= target_n_cells:
         sub = adata_cells
+    elif min_exp and "experiment" in adata_cells.obs.columns:
+        # Pick fewest experiments to reach target, largest first
+        exp_counts = adata_cells.obs["experiment"].value_counts()
+        kept_exps = []
+        running = 0
+        for exp_id, count in exp_counts.items():
+            kept_exps.append(exp_id)
+            running += count
+            if running >= target_n_cells:
+                break
+        mask = adata_cells.obs["experiment"].isin(kept_exps).values
+        pool_idx = np.where(mask)[0]
+        if len(pool_idx) <= target_n_cells:
+            idx = pool_idx
+        else:
+            idx = rng.choice(pool_idx, target_n_cells, replace=False)
+        idx.sort()
+        sub = adata_cells[idx].copy()
     else:
         idx = rng.choice(n_total, target_n_cells, replace=False)
         idx.sort()
@@ -284,15 +352,9 @@ def _score_all_metrics(
         _logger.warning(f"    Activity scoring failed: {exc}")
         return result
 
-    # Use all-active map for the remaining 3 metrics so they score ALL
-    # genes/perturbations, not just the active subset.
-    all_active_map = activity_map.copy()
-    all_active_map["below_corrected_p"] = True
-
     try:
         dist_map, dist_ratio = phenotypic_distinctivness(
             g_copairs,
-            all_active_map,
             plot_results=False,
             null_size=NULL_SIZE,
             distance=distance,
@@ -384,39 +446,122 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
 
 
 def _run_titration_points(
-    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None
+    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
+    min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
     If ``subset_targets`` is provided, scores are computed using all perturbations
     but reported only for the subset (Option B).
+    If ``per_ko`` is True, ``cell_targets`` are interpreted as cells-per-perturbation.
+    If ``per_guide`` is True, ``cell_targets`` are interpreted as cells-per-sgRNA.
+    If ``n_bootstraps`` > 1, runs N independent draws per titration point (different
+    seeds) and writes mean + SEM columns for every metric.
     """
     # Drop signal col if present (not needed for scoring, can interfere with aggregation)
     if "signal" in adata_cells.obs.columns:
         adata_cells.obs = adata_cells.obs.drop(columns=["signal"])
 
+    base_seed = int(rng.randint(0, 2**31 - 1))
+    metric_cols = [
+        "activity_ratio", "activity_map_mean",
+        "distinctiveness_ratio", "distinctiveness_map_mean",
+        "corum_ratio", "corum_map_mean",
+        "chad_ratio", "chad_map_mean",
+    ]
+
     rows = []
     for target in cell_targets:
-        _logger.info(f"  Scoring at {target:,} cells...")
+        if per_guide:
+            unit = "cells/guide"
+        elif per_ko:
+            unit = "cells/KO"
+        else:
+            unit = "cells"
+        _logger.info(f"  Scoring at {target:,} {unit} ({n_bootstraps} draw{'s' if n_bootstraps > 1 else ''})...")
         t_step = time.time()
 
-        g_sub = _subsample_and_aggregate(adata_cells, target, rng)
-        g_norm = normalize_guide_adata(g_sub, norm_method)
-        scores = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
-        scores["n_cells"] = target
-        scores["n_guides"] = g_sub.n_obs
+        draw_rows = []
+        g_sub_last = None
+        for b in range(n_bootstraps):
+            draw_rng = np.random.RandomState(base_seed + b * 9973 + target)
+            if per_guide:
+                g_sub = _subsample_per_guide_and_aggregate(adata_cells, target, draw_rng)
+            elif per_ko:
+                g_sub = _subsample_per_ko_and_aggregate(adata_cells, target, draw_rng)
+            else:
+                g_sub = _subsample_and_aggregate(adata_cells, target, draw_rng, min_exp=min_exp)
+            g_norm = normalize_guide_adata(g_sub, norm_method)
+            scores_b = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
+            draw_rows.append(scores_b)
+            g_sub_last = g_sub
+
+        # Aggregate across draws: mean for the metric value, SEM = std / sqrt(N),
+        # and STD. Also save the raw per-draw values as a pipe-separated string
+        # so downstream code can recompute alternative error bars if desired.
+        g_sub = g_sub_last
+        scores = {}
+        for k in metric_cols:
+            vals = np.array([r.get(k, float("nan")) for r in draw_rows], dtype=float)
+            finite = vals[np.isfinite(vals)]
+            if len(finite) == 0:
+                scores[k] = float("nan")
+                scores[f"{k}_sem"] = float("nan")
+                scores[f"{k}_std"] = float("nan")
+            else:
+                scores[k] = float(np.mean(finite))
+                if len(finite) > 1:
+                    std = float(np.std(finite, ddof=1))
+                    scores[f"{k}_std"] = std
+                    scores[f"{k}_sem"] = std / np.sqrt(len(finite))
+                else:
+                    scores[f"{k}_std"] = 0.0
+                    scores[f"{k}_sem"] = 0.0
+            if n_bootstraps > 1:
+                # Raw draws (pipe-separated so CSV parsers handle it cleanly)
+                scores[f"{k}_draws"] = "|".join(
+                    "nan" if not np.isfinite(v) else f"{v:.6g}" for v in vals
+                )
+        scores["n_bootstraps"] = n_bootstraps
+
         pert_col = (
             "perturbation" if "perturbation" in g_sub.obs.columns else "label_str"
         )
         n_perts = g_sub.obs[pert_col].nunique()
+        if per_guide or per_ko:
+            # total cells from guide n_cells sum
+            total_cells = int(g_sub.obs.get("n_cells", pd.Series([0])).sum()) if "n_cells" in g_sub.obs.columns else target * g_sub.n_obs
+            scores["n_cells"] = total_cells
+            if per_guide:
+                # cells_per_perturbation varies across perts (NTC has ~8 guides, KOs ~4)
+                # Report mean over non-NTC perts so x-axis reflects what gene KOs actually get
+                scores["cells_per_guide"] = target
+                if "n_cells" in g_sub.obs.columns:
+                    cpp = g_sub.obs.groupby(pert_col)["n_cells"].sum()
+                    non_ntc = ~cpp.index.astype(str).str.startswith("NTC")
+                    scores["cells_per_perturbation"] = float(
+                        cpp[non_ntc].mean() if non_ntc.any() else cpp.mean()
+                    )
+                else:
+                    scores["cells_per_perturbation"] = total_cells / n_perts if n_perts > 0 else target
+            else:
+                # per_ko: cells_per_guide = cells_per_pert / mean guides-per-pert
+                scores["cells_per_perturbation"] = target
+                scores["cells_per_guide"] = total_cells / g_sub.n_obs if g_sub.n_obs > 0 else target
+        else:
+            scores["n_cells"] = target
+            scores["cells_per_perturbation"] = target / n_perts if n_perts > 0 else target
+            scores["cells_per_guide"] = target / g_sub.n_obs if g_sub.n_obs > 0 else target
+        scores["n_guides"] = g_sub.n_obs
         scores["n_perturbations"] = n_perts
-        scores["cells_per_perturbation"] = target / n_perts if n_perts > 0 else target
         scores["signal"] = signal
         rows.append(scores)
 
         _logger.info(
-            f"    act={scores['activity_ratio']:.1%} dist={scores['distinctiveness_ratio']:.1%} "
-            f"corum={scores['corum_ratio']:.1%} chad={scores['chad_ratio']:.1%} "
+            f"    act={scores['activity_ratio']:.1%}±{scores.get('activity_ratio_sem', 0):.1%} "
+            f"dist={scores['distinctiveness_ratio']:.1%}±{scores.get('distinctiveness_ratio_sem', 0):.1%} "
+            f"corum={scores['corum_ratio']:.1%}±{scores.get('corum_ratio_sem', 0):.1%} "
+            f"chad={scores['chad_ratio']:.1%}±{scores.get('chad_ratio_sem', 0):.1%} "
             f"({time.time() - t_step:.0f}s)"
         )
     return pd.DataFrame(rows)
@@ -434,12 +579,30 @@ def _build_titration_schedule(total_cells: int) -> list:
     return cell_targets
 
 
+def _build_per_ko_schedule(max_cells_per_ko: int, min_cells_per_ko: int = 1) -> list:
+    """Build cells-per-KO schedule: max, max*0.75, ... >= min."""
+    targets = []
+    n = max_cells_per_ko
+    while n >= min_cells_per_ko:
+        targets.append(int(n))
+        n = int(n * DOWNSAMPLE_RATIO)
+    if not targets:
+        targets = [max_cells_per_ko]
+    return targets
+
+
 def titrate_single_reporter(
     cells_h5ad_path: str,
     output_dir: str,
     norm_method: str = "ntc",
     random_seed: int = 42,
     minibinder_subset: bool = False,
+    min_exp: bool = False,
+    per_ko: bool = False,
+    per_ko_max: bool = False,
+    per_guide: bool = False,
+    per_guide_max: bool = False,
+    n_bootstraps: int = 1,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -468,8 +631,45 @@ def titrate_single_reporter(
 
     _logger.info(f"Titrating {signal}: {total_cells:,} cells, {adata_cells.n_vars} PCs")
 
-    cell_targets = _build_titration_schedule(total_cells)
-    _logger.info(f"  Titration points: {cell_targets}")
+    if per_guide or per_guide_max:
+        if "sgRNA" not in adata_cells.obs.columns:
+            raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
+        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        sg_counts = adata_cells.obs.groupby("sgRNA").size()
+        sg_to_pert = adata_cells.obs.groupby("sgRNA")[pert_col].first()
+        non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
+        non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
+        if per_guide_max:
+            # Clip to p90 non-NTC so one outlier guide doesn't stretch the schedule
+            pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
+            start_per_guide = int(np.percentile(pool.values, 90))
+            mode_label = "max (p90)"
+        else:
+            start_per_guide = int(non_ntc_counts.min()) if len(non_ntc_counts) else int(sg_counts.min())
+            mode_label = "min"
+        cell_targets = _build_per_ko_schedule(start_per_guide)
+        _logger.info(f"  Per-guide titration points ({mode_label} non-NTC = {start_per_guide:,} cells/guide): {cell_targets}")
+        per_guide = True
+    elif per_ko or per_ko_max:
+        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
+        counts = adata_cells.obs[pert_col].value_counts()
+        non_ntc_counts = counts[~counts.index.astype(str).str.startswith("NTC")]
+        if per_ko_max:
+            # Clip to p90 non-NTC so one outlier KO doesn't stretch the schedule
+            pool = non_ntc_counts if len(non_ntc_counts) else counts
+            start_per_ko = int(np.percentile(pool.values, 90))
+            mode_label = "max (p90)"
+        else:
+            # Start at MIN non-NTC count — every KO fully hits target at every point
+            start_per_ko = int(non_ntc_counts.min()) if len(non_ntc_counts) else int(counts.min())
+            mode_label = "min"
+        cell_targets = _build_per_ko_schedule(start_per_ko)
+        _logger.info(f"  Per-KO titration points ({mode_label} non-NTC = {start_per_ko:,} cells/KO): {cell_targets}")
+        # _run_titration_points uses per_ko flag; per_ko_max uses same sampling code path
+        per_ko = True
+    else:
+        cell_targets = _build_titration_schedule(total_cells)
+        _logger.info(f"  Titration points: {cell_targets}")
 
     from ops_utils.data.feature_discovery import sanitize_signal_filename
 
@@ -487,6 +687,10 @@ def titrate_single_reporter(
         signal,
         np.random.RandomState(random_seed),
         _logger,
+        min_exp=min_exp,
+        per_ko=per_ko,
+        per_guide=per_guide,
+        n_bootstraps=n_bootstraps,
     )
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
     df_full.to_csv(csv_path, index=False)
@@ -581,6 +785,7 @@ def titrate_single_reporter(
 _X_AXIS_VARIANTS = [
     ("n_cells", "Total Cells", "totalcells"),
     ("cells_per_perturbation", "Cells / Perturbation", "perpert"),
+    ("cells_per_guide", "Cells / Guide", "perguide"),
 ]
 
 
@@ -623,15 +828,19 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 col = f"{metric}_ratio"
                 if col in df.columns:
                     vals = df[col].values * 100
-                    ax.plot(
-                        x,
-                        vals,
-                        marker="o",
-                        color=colors[metric],
-                        label=ratio_labels[metric],
-                        linewidth=3.5,
-                        markersize=8,
-                    )
+                    sem_col = f"{col}_sem"
+                    if sem_col in df.columns:
+                        sem = df[sem_col].values * 100
+                        ax.errorbar(
+                            x, vals, yerr=sem, marker="o", color=colors[metric],
+                            label=ratio_labels[metric], linewidth=3.5, markersize=8,
+                            capsize=4, elinewidth=1.5,
+                        )
+                    else:
+                        ax.plot(
+                            x, vals, marker="o", color=colors[metric],
+                            label=ratio_labels[metric], linewidth=3.5, markersize=8,
+                        )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("% Significant", fontsize=22)
             ax.set_title(f"{signal} — % Significant", fontsize=24)
@@ -644,15 +853,19 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 col = f"{metric}_map_mean"
                 if col in df.columns:
                     vals = df[col].values
-                    ax.plot(
-                        x,
-                        vals,
-                        marker="s",
-                        color=colors[metric],
-                        label=map_labels[metric],
-                        linewidth=3.5,
-                        markersize=8,
-                    )
+                    sem_col = f"{col}_sem"
+                    if sem_col in df.columns:
+                        sem = df[sem_col].values
+                        ax.errorbar(
+                            x, vals, yerr=sem, marker="s", color=colors[metric],
+                            label=map_labels[metric], linewidth=3.5, markersize=8,
+                            capsize=4, elinewidth=1.5,
+                        )
+                    else:
+                        ax.plot(
+                            x, vals, marker="s", color=colors[metric],
+                            label=map_labels[metric], linewidth=3.5, markersize=8,
+                        )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("Mean mAP", fontsize=22)
             ax.set_title(f"{signal} — Mean mAP", fontsize=24)
@@ -681,6 +894,19 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
             fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
             fig.savefig(f"{stem}.svg", bbox_inches="tight")
             plt.close(fig)
+
+
+def _plot_series(ax, x, df, col, scale_y=1.0, **kwargs):
+    """Plot a metric as line or errorbar depending on presence of `{col}_sem`."""
+    if col not in df.columns:
+        return
+    vals = df[col].values * scale_y
+    sem_col = f"{col}_sem"
+    if sem_col in df.columns and df[sem_col].notna().any():
+        ax.errorbar(x, vals, yerr=df[sem_col].values * scale_y,
+                    capsize=4, elinewidth=1.5, **kwargs)
+    else:
+        ax.plot(x, vals, **kwargs)
 
 
 def _plot_titration_comparison(
@@ -724,28 +950,13 @@ def _plot_titration_comparison(
             for metric in metrics:
                 col = f"{metric}_ratio"
                 c = colors[metric]
-                if col in df_full.columns:
-                    ax.plot(
-                        x_full,
-                        df_full[col].values * 100,
-                        marker="o",
-                        color=c,
-                        label=f"{ratio_labels[metric]} ({label_a})",
-                        linewidth=3.5,
-                        markersize=8,
-                    )
-                if col in df_subset.columns:
-                    ax.plot(
-                        x_sub,
-                        df_subset[col].values * 100,
-                        marker="^",
-                        color=c,
-                        label=f"{ratio_labels[metric]} ({label_b})",
-                        linewidth=3.5,
-                        markersize=8,
-                        linestyle="--",
-                        alpha=0.7,
-                    )
+                _plot_series(ax, x_full, df_full, col, scale_y=100,
+                             marker="o", color=c, linewidth=3.5, markersize=8,
+                             label=f"{ratio_labels[metric]} ({label_a})")
+                _plot_series(ax, x_sub, df_subset, col, scale_y=100,
+                             marker="^", color=c, linewidth=3.5, markersize=8,
+                             linestyle="--", alpha=0.7,
+                             label=f"{ratio_labels[metric]} ({label_b})")
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("% Significant", fontsize=22)
             ax.set_title(
@@ -759,28 +970,13 @@ def _plot_titration_comparison(
             for metric in metrics:
                 col = f"{metric}_map_mean"
                 c = colors[metric]
-                if col in df_full.columns:
-                    ax.plot(
-                        x_full,
-                        df_full[col].values,
-                        marker="s",
-                        color=c,
-                        label=f"{map_labels[metric]} ({label_a})",
-                        linewidth=3.5,
-                        markersize=8,
-                    )
-                if col in df_subset.columns:
-                    ax.plot(
-                        x_sub,
-                        df_subset[col].values,
-                        marker="D",
-                        color=c,
-                        label=f"{map_labels[metric]} ({label_b})",
-                        linewidth=3.5,
-                        markersize=8,
-                        linestyle="--",
-                        alpha=0.7,
-                    )
+                _plot_series(ax, x_full, df_full, col,
+                             marker="s", color=c, linewidth=3.5, markersize=8,
+                             label=f"{map_labels[metric]} ({label_a})")
+                _plot_series(ax, x_sub, df_subset, col,
+                             marker="D", color=c, linewidth=3.5, markersize=8,
+                             linestyle="--", alpha=0.7,
+                             label=f"{map_labels[metric]} ({label_b})")
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("Mean mAP", fontsize=22)
             ax.set_title(f"{signal} — Mean mAP: {label_a} vs {label_b}", fontsize=22)
@@ -830,9 +1026,21 @@ def _plot_combined_titration(
     all_dfs = [pd.read_csv(f) for f in csv_files]
     combined = pd.concat(all_dfs, ignore_index=True)
 
+    # Export the combined DataFrame as CSV next to the plots
+    combined_csv = Path(output_dir) / f"{filename_prefix}.csv"
+    combined.to_csv(combined_csv, index=False)
+
     signals = combined["signal"].unique()
     n_signals = len(signals)
-    colors_cycle = plt.cm.tab20(np.linspace(0, 1, max(n_signals, 2)))
+    # Pair a 20-color cycle with a 9-marker cycle. gcd(20, 9) = 1 → 180 unique
+    # (color, marker) pairs before any repeat, so every reporter (up to 180)
+    # gets a unique combo. Critically, markers cycle every reporter — not every
+    # 20 — so adjacent reporters in the legend are easy to distinguish.
+    _COLOR_CYCLE = plt.cm.tab20(np.linspace(0, 1, 20))
+    _MARKER_CYCLE = ["o", "s", "D", "^", "v", "P", "X", "*", "h"]
+    def _style_for(i):
+        return _COLOR_CYCLE[i % len(_COLOR_CYCLE)], _MARKER_CYCLE[i % len(_MARKER_CYCLE)]
+    colors_cycle = _COLOR_CYCLE  # keep for back-compat with any other refs
 
     metric_info = [
         ("activity", "% Active", "steelblue"),
@@ -864,16 +1072,21 @@ def _plot_combined_titration(
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
-                        ax.plot(
-                            sub[x_col],
-                            sub[ratio_col] * 100,
-                            marker="o",
-                            color=colors_cycle[i % len(colors_cycle)],
-                            label=sig[:25],
-                            linewidth=3,
-                            markersize=8,
-                            alpha=0.8,
-                        )
+                        sem_col = f"{ratio_col}_sem"
+                        c, mk = _style_for(i)
+                        if sem_col in sub.columns and sub[sem_col].notna().any():
+                            ax.errorbar(
+                                sub[x_col], sub[ratio_col] * 100, yerr=sub[sem_col] * 100,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
+                                capsize=3, elinewidth=1.2,
+                            )
+                        else:
+                            ax.plot(
+                                sub[x_col], sub[ratio_col] * 100,
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
+                            )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("% Significant", fontsize=24)
                 ax.set_title(label, fontsize=26)
@@ -887,23 +1100,40 @@ def _plot_combined_titration(
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
-                        ax.plot(
-                            sub[x_col],
-                            sub[map_col],
-                            marker="s",
-                            color=colors_cycle[i % len(colors_cycle)],
-                            label=sig[:25],
-                            linewidth=3,
-                            markersize=8,
-                            alpha=0.8,
-                        )
+                        sem_col = f"{map_col}_sem"
+                        c, mk = _style_for(i)
+                        if sem_col in sub.columns and sub[sem_col].notna().any():
+                            ax.errorbar(
+                                sub[x_col], sub[map_col], yerr=sub[sem_col],
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
+                                capsize=3, elinewidth=1.2,
+                            )
+                        else:
+                            ax.plot(
+                                sub[x_col], sub[map_col],
+                                marker=mk, color=c, label=sig[:25],
+                                linewidth=3, markersize=9, alpha=0.8,
+                            )
                 ax.set_xlabel(xlabel, fontsize=24)
                 ax.set_ylabel("Mean mAP", fontsize=24)
                 ax.set_title(f"{label} mAP", fontsize=26)
                 ax.tick_params(axis="y", labelsize=19)
                 _style_combined_axis(ax)
 
-            # Single legend at bottom
+            # Reserve space at the bottom for the legend so it never overlaps x-axes
+            title_tag = f" — {title_suffix}" if title_suffix else ""
+            fig.suptitle(
+                f"Cell Count Titration — All Reporters{title_tag}  [{scale}]",
+                fontsize=34,
+                fontweight="bold",
+            )
+            # Bigger bottom margin so multi-row legend sits below axis labels.
+            # n_signals ~44 → ncol=8 → ~6 rows of legend entries.
+            n_legend_rows = max(1, int(np.ceil(n_signals / min(8, n_signals))))
+            legend_frac = min(0.22, 0.025 * n_legend_rows + 0.04)
+            fig.tight_layout(rect=[0, legend_frac, 1, 0.97])
+
             handles, labels_list = axes[0, 0].get_legend_handles_labels()
             fig.legend(
                 handles,
@@ -911,16 +1141,8 @@ def _plot_combined_titration(
                 loc="lower center",
                 ncol=min(8, n_signals),
                 fontsize=19,
-                bbox_to_anchor=(0.5, -0.02),
+                bbox_to_anchor=(0.5, 0.005),
             )
-
-            title_tag = f" — {title_suffix}" if title_suffix else ""
-            fig.suptitle(
-                f"Cell Count Titration — All Reporters{title_tag}  [{scale}]",
-                fontsize=34,
-                fontweight="bold",
-            )
-            fig.tight_layout(rect=[0, 0.04, 1, 0.97])
 
             stem = Path(output_dir) / f"{filename_prefix}_{x_suffix}_{scale}"
             fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
@@ -953,14 +1175,25 @@ def _build_parser():
         default=30,
         help="SLURM time limit per job in minutes (default: 30)",
     )
+    parser.add_argument(
+        "--phase-slurm-time",
+        type=int,
+        default=240,
+        help="SLURM time limit for the Phase reporter job in minutes (default: 240). "
+             "Phase has ~60M cells so needs far more time than other reporters.",
+    )
     parser.add_argument("--slurm-cpus", type=int, default=8)
     parser.add_argument("--slurm-partition", type=str, default="cpu,gpu")
     parser.add_argument("--replot", action="store_true",
                         help="Regenerate all plots from existing CSVs without recomputing scores")
     parser.add_argument("--downsampled", action="store_true",
                         help="Look in downsampled/ subdir")
+    parser.add_argument("--downsample-per-guide", action="store_true",
+                        help="Look in downsampled_per_guide/ subdir (matches pca_optimization --downsample-per-guide)")
     parser.add_argument("--cell-profiler", action="store_true",
                         help="Look in cellprofiler/ subdir")
+    parser.add_argument("--cell-dino", action="store_true",
+                        help="Look in cell_dino/ subdir (matches pca_optimization --cell-dino)")
     parser.add_argument(
         "--include-cellpainting", action="store_true",
         help="Look under with_cellpainting/ (same as pca_optimization --include-cellpainting)",
@@ -969,13 +1202,45 @@ def _build_parser():
                         help="Also run titration on the 20 minibinder geneKO targets "
                              "and produce comparison overlay plots")
     parser.add_argument(
-        "--fixed-threshold", type=float, default=None,
-        help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/)",
+        "--fixed-threshold", type=float, default=0.80,
+        help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/). "
+             "Default: 0.80. Pass --fixed-threshold 0 to disable and use consensus_sweep/.",
     )
     parser.add_argument(
         "--distance", type=str, default="cosine", choices=["cosine", "euclidean"],
         help="Match pca_optimization --distance (default: cosine)",
     )
+    parser.add_argument("--zscore-per-experiment", dest="zscore_per_experiment",
+                        action="store_true", default=True,
+                        help="Look in zscore_per_exp/ subdir (default: True)")
+    parser.add_argument("--no-zscore-per-experiment", dest="zscore_per_experiment",
+                        action="store_false",
+                        help="Disable zscore_per_exp/ subdir lookup")
+    parser.add_argument("--min-exp-titration", action="store_true",
+                        help="At each titration level, draw cells from the fewest "
+                             "experiments needed (largest first) instead of sampling "
+                             "across all experiments. Output → titration_min_exp/")
+    parser.add_argument("--per-ko-min-titration", "--per-gene-min-titration",
+                        dest="per_ko_min_titration", action="store_true",
+                        help="Titrate by cells-per-geneKO (aliased as --per-gene-min-titration). "
+                             "Schedule starts at MIN non-NTC cells/KO so every KO hits target fully. "
+                             "Output → titration_geneKO_min/")
+    parser.add_argument("--per-ko-max-titration", "--per-gene-max-titration",
+                        dest="per_ko_max_titration", action="store_true",
+                        help="Titrate by cells-per-geneKO (aliased as --per-gene-max-titration). "
+                             "Schedule starts at MAX non-NTC cells/KO — large KOs keep gaining cells, "
+                             "small KOs cap out. Output → titration_geneKO_max/")
+    parser.add_argument("--per-guide-min-titration", action="store_true",
+                        help="Titrate by cells-per-sgRNA (every guide, incl. each NTC sgRNA, "
+                             "gets the same budget). Schedule starts at MIN non-NTC cells/guide. "
+                             "Output → titration_guide_min/")
+    parser.add_argument("--bootstrap", type=int, default=1, metavar="N",
+                        help="Run N bootstrap draws per titration point (default: 1 = no bootstrap). "
+                             "Adds {metric}_sem columns and error bars on plots.")
+    parser.add_argument("--per-guide-max-titration", action="store_true",
+                        help="Titrate by cells-per-sgRNA. Schedule starts at MAX non-NTC "
+                             "cells/guide — large guides keep gaining, small guides cap out. "
+                             "Output → titration_per_guide/")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -987,27 +1252,34 @@ def _resolve_output_dir(args) -> Path:
     output_dir = Path(args.output_dir)
     if args.cell_profiler:
         output_dir = output_dir / "cellprofiler"
+    elif getattr(args, "cell_dino", False):
+        output_dir = output_dir / "cell_dino"
     else:
         output_dir = output_dir / "dino"
+
+    if getattr(args, "zscore_per_experiment", False):
+        output_dir = output_dir / "zscore_per_exp"
 
     if getattr(args, "include_cellpainting", False):
         output_dir = output_dir / "with_cellpainting"
 
-    if getattr(args, "phase_only", False) and args.downsampled:
-        output_dir = output_dir / "phase_only_downsampled"
-    elif getattr(args, "no_phase", False) and args.downsampled:
-        output_dir = output_dir / "no_phase_downsampled"
+    ds_suffix = "_per_guide" if getattr(args, "downsample_per_guide", False) else ""
+    ds_on = args.downsampled or getattr(args, "downsample_per_guide", False)
+    if getattr(args, "phase_only", False) and ds_on:
+        output_dir = output_dir / f"phase_only_downsampled{ds_suffix}"
+    elif getattr(args, "no_phase", False) and ds_on:
+        output_dir = output_dir / f"no_phase_downsampled{ds_suffix}"
     elif getattr(args, "phase_only", False):
         output_dir = output_dir / "phase_only"
     elif getattr(args, "no_phase", False):
         output_dir = output_dir / "no_phase"
-    elif args.downsampled:
-        output_dir = output_dir / "downsampled"
+    elif ds_on:
+        output_dir = output_dir / f"downsampled{ds_suffix}"
     else:
         output_dir = output_dir / "all"
 
     ft = getattr(args, "fixed_threshold", None)
-    if ft is not None:
+    if ft is not None and ft > 0:
         output_dir = output_dir / f"fixed_{ft:.0%}"
     else:
         output_dir = output_dir / "consensus_sweep"
@@ -1082,8 +1354,9 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
     return sig_safe
 
 
-def _replot(titration_dir: Path, minibinder_subset: bool = False):
+def _replot(titration_dir, minibinder_subset: bool = False):
     """Regenerate all per-reporter and combined plots from existing CSVs, in parallel."""
+    titration_dir = Path(titration_dir)
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1154,15 +1427,64 @@ def _replot(titration_dir: Path, minibinder_subset: bool = False):
 
 
 def main():
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()
     _logger = _init_logger()
 
+    # Auto-scale SLURM time when the user kept the default and is bootstrapping.
+    # Explicit --slurm-time overrides are respected as-is (treated as total).
+    if args.bootstrap > 1 and args.slurm_time == parser.get_default("slurm_time"):
+        scaled = args.slurm_time * args.bootstrap
+        print(
+            f"[bootstrap={args.bootstrap}] Auto-scaling --slurm-time from "
+            f"{args.slurm_time}min → {scaled}min (pass --slurm-time to override)"
+        )
+        args.slurm_time = scaled
+
     variant_dir = _resolve_output_dir(args)
-    titration_dir = variant_dir / "titration"
+    if args.per_guide_max_titration:
+        titration_subdir = "titration_per_guide"
+    elif args.per_guide_min_titration:
+        titration_subdir = "titration_guide_min"
+    elif args.per_ko_max_titration:
+        titration_subdir = "titration_geneKO_max"
+    elif args.per_ko_min_titration:
+        titration_subdir = "titration_geneKO_min"
+    elif args.min_exp_titration:
+        titration_subdir = "titration_min_exp"
+    else:
+        titration_subdir = "titration"
+    titration_dir = variant_dir / titration_subdir
 
     if args.replot:
         titration_dir.mkdir(parents=True, exist_ok=True)
-        _replot(titration_dir, minibinder_subset=args.minibinder_subset)
+        if args.slurm:
+            from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+            print(f"Submitting replot as a single SLURM job ({titration_dir})...")
+            jobs = [{
+                "name": f"titr_replot_{titration_dir.parent.name}",
+                "func": _replot,
+                "kwargs": {
+                    "titration_dir": str(titration_dir),
+                    "minibinder_subset": args.minibinder_subset,
+                },
+            }]
+            slurm_params = {
+                "timeout_min": args.slurm_time,
+                "mem": args.slurm_memory,
+                "cpus_per_task": args.slurm_cpus,
+                "slurm_partition": args.slurm_partition,
+            }
+            submit_parallel_jobs(
+                jobs_to_submit=jobs,
+                experiment="pca_titration",
+                slurm_params=slurm_params,
+                log_dir="pca_optimization",
+                manifest_prefix="pca_titration_replot",
+                wait_for_completion=True,
+            )
+        else:
+            _replot(titration_dir, minibinder_subset=args.minibinder_subset)
         return
 
     per_signal_dir = variant_dir / "per_signal"
@@ -1180,42 +1502,72 @@ def main():
     if args.slurm:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-        jobs = []
-        for cf in cells_files:
+        def _make_job(cf):
             sig_safe = cf.stem.replace("_cells", "")[:40]
-            jobs.append(
-                {
-                    "name": f"titr_{sig_safe}",
-                    "func": titrate_single_reporter,
-                    "kwargs": {
-                        "cells_h5ad_path": str(cf),
-                        "output_dir": str(titration_dir),
-                        "norm_method": args.norm_method,
-                        "minibinder_subset": args.minibinder_subset,
-                    },
-                }
-            )
+            return {
+                "name": f"titr_{sig_safe}",
+                "func": titrate_single_reporter,
+                "kwargs": {
+                    "cells_h5ad_path": str(cf),
+                    "output_dir": str(titration_dir),
+                    "norm_method": args.norm_method,
+                    "minibinder_subset": args.minibinder_subset,
+                    "min_exp": args.min_exp_titration,
+                    "per_ko": args.per_ko_min_titration,
+                    "per_ko_max": args.per_ko_max_titration,
+                    "per_guide": args.per_guide_min_titration,
+                    "per_guide_max": args.per_guide_max_titration,
+                    "n_bootstraps": int(args.bootstrap),
+                },
+            }
 
-        print(f"\nSubmitting {len(jobs)} SLURM titration jobs...")
-        slurm_params = {
-            "timeout_min": args.slurm_time,
+        phase_files = [cf for cf in cells_files if cf.stem.lower().startswith("phase")]
+        other_files = [cf for cf in cells_files if cf not in phase_files]
+        regular_jobs = [_make_job(cf) for cf in other_files]
+        phase_jobs = [_make_job(cf) for cf in phase_files]
+
+        # Auto-scale phase time by bootstrap when user kept the default
+        phase_time = args.phase_slurm_time
+        if args.bootstrap > 1 and phase_time == parser.get_default("phase_slurm_time"):
+            phase_time = phase_time * args.bootstrap
+            print(f"[bootstrap={args.bootstrap}] Auto-scaling --phase-slurm-time → {phase_time}min")
+
+        base_slurm_params = {
             "mem": args.slurm_memory,
             "cpus_per_task": args.slurm_cpus,
             "slurm_partition": args.slurm_partition,
         }
-        result = submit_parallel_jobs(
-            jobs_to_submit=jobs,
-            experiment="pca_titration",
-            slurm_params=slurm_params,
-            log_dir="pca_optimization",
-            manifest_prefix="pca_titration",
-            wait_for_completion=True,
-        )
+        all_failed = []
 
-        if result.get("failed"):
-            print(f"\n{len(result['failed'])} jobs failed")
+        if regular_jobs:
+            print(f"\nSubmitting {len(regular_jobs)} SLURM titration jobs ({args.slurm_time}min each)...")
+            result = submit_parallel_jobs(
+                jobs_to_submit=regular_jobs,
+                experiment="pca_titration",
+                slurm_params={**base_slurm_params, "timeout_min": args.slurm_time},
+                log_dir="pca_optimization",
+                manifest_prefix="pca_titration",
+                wait_for_completion=True,
+            )
+            all_failed.extend(result.get("failed", []))
+
+        if phase_jobs:
+            print(f"\nSubmitting {len(phase_jobs)} Phase titration job(s) ({phase_time}min)...")
+            result = submit_parallel_jobs(
+                jobs_to_submit=phase_jobs,
+                experiment="pca_titration_phase",
+                slurm_params={**base_slurm_params, "timeout_min": phase_time},
+                log_dir="pca_optimization",
+                manifest_prefix="pca_titration_phase",
+                wait_for_completion=True,
+            )
+            all_failed.extend(result.get("failed", []))
+
+        total_jobs = len(regular_jobs) + len(phase_jobs)
+        if all_failed:
+            print(f"\n{len(all_failed)} jobs failed")
         else:
-            print(f"\nAll {len(jobs)} titration jobs complete")
+            print(f"\nAll {total_jobs} titration jobs complete")
 
         # Generate combined plot from all CSVs
         print("Generating combined titration plot...")
@@ -1258,6 +1610,12 @@ def main():
                 output_dir=str(titration_dir),
                 norm_method=args.norm_method,
                 minibinder_subset=args.minibinder_subset,
+                min_exp=args.min_exp_titration,
+                per_ko=args.per_ko_min_titration,
+                per_ko_max=args.per_ko_max_titration,
+                per_guide=args.per_guide_min_titration,
+                per_guide_max=args.per_guide_max_titration,
+                n_bootstraps=int(args.bootstrap),
             )
             print(f"  {result}")
 
