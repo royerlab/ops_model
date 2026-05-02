@@ -866,6 +866,52 @@ class PcaOptimizationCombiner:
     # Phase 2
     # ------------------------------------------------------------------
 
+    def _join_gene_panel_metadata(
+        self,
+        adata: "ad.AnnData",
+        panel_csv: Path = Path(
+            "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
+        ),
+        join_col: str = "perturbation",
+    ) -> None:
+        """Annotate ``adata.obs`` in-place with per-gene metadata from the
+        annotated_gene_panel CSV, joined on ``obs[join_col]`` (gene name) ==
+        CSV ``Gene.name``. R-style column names (e.g. ``Priority..smaller.is.higher.``)
+        are normalized to underscores. Rows whose perturbation isn't in the
+        panel (e.g. NTCs, off-panel genes) get NaN."""
+        import pandas as pd
+
+        if not panel_csv.exists():
+            logger.warning(f"  Gene panel CSV not found: {panel_csv} — skipping")
+            return
+        if join_col not in adata.obs.columns:
+            logger.warning(f"  adata.obs missing '{join_col}' — skipping panel metadata join")
+            return
+        panel = pd.read_csv(panel_csv)
+        if "Gene.name" not in panel.columns:
+            logger.warning("  Gene panel CSV missing 'Gene.name' — skipping")
+            return
+        # Drop the unnamed row-index column the CSV carries.
+        panel = panel.drop(columns=[c for c in panel.columns if c.startswith("Unnamed:")])
+        panel = panel.drop_duplicates(subset=["Gene.name"])
+        panel.columns = [
+            c.replace("..", "_").replace(".", "_").rstrip("_")
+            for c in panel.columns
+        ]
+        panel = panel.set_index("Gene_name")
+        keys = adata.obs[join_col].astype(str).values
+        aligned = panel.reindex(keys)
+        aligned.index = adata.obs.index
+        n_matched = int(aligned.notna().any(axis=1).sum())
+        logger.info(
+            f"  Joined gene panel ({len(panel)} genes × {len(panel.columns)} cols): "
+            f"{n_matched}/{len(adata.obs)} obs rows matched on '{join_col}'"
+        )
+        for col in aligned.columns:
+            if col in adata.obs.columns:
+                logger.debug(f"  panel column '{col}' already in obs — overwriting")
+            adata.obs[col] = aligned[col].values
+
     def _compute_embeddings(self, adata: "ad.AnnData", embedding_config) -> None:
         """Compute UMAP and/or PHATE directly (not via scanpy) and store in obsm."""
         import numpy as np
@@ -1045,6 +1091,14 @@ class PcaOptimizationCombiner:
         ) or self.config.embeddings.get("guide_level")
         if embedding_config is not None and embedding_config.compute_embeddings:
             self._compute_embeddings(adata_gene, embedding_config)
+
+        # Annotate obs with per-gene panel metadata (Funk/Ramezani/Replogle map
+        # coords, CORUM/REACT/GO membership, Gene_Category, NCBI_ID, …) on both
+        # levels. Guide-level joins via the guide's target gene in obs["perturbation"].
+        logger.info("Joining annotated_gene_panel metadata into obs...")
+        for _adata, _level in [(adata_guide, "guide"), (adata_gene, "gene")]:
+            logger.info(f"  ({_level} level)")
+            self._join_gene_panel_metadata(_adata)
 
         return adata_guide, adata_gene
 
