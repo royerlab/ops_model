@@ -7,7 +7,8 @@ Three additions on top of ``_compute_and_plot_embeddings``:
    and by direct CHAD cluster name.
 2. ``save_leiden_overlays`` — runs scanpy Leiden at several resolutions and
    saves per-resolution static PNGs plus a CSV of (gene, cluster) per
-   resolution. One subdir ``plots/leiden/`` per aggregate.
+   resolution. Outputs land under ``plots/leiden/{level}/{png|csv}/`` so
+   guide/gene live in their own folders and PNGs/CSVs are split.
 3. ``save_interactive_html`` — Plotly HTML (one per level x embedding) with
    hover showing perturbation, all 4 mAP metrics, super-category, CHAD
    cluster, CORUM complex, and a dropdown to switch the color overlay
@@ -30,7 +31,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_LEIDEN_RESOLUTIONS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 50.0, 100.0)
+DEFAULT_LEIDEN_RESOLUTIONS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 30.0, 50.0, 100.0)
 DEFAULT_ENRICHR_LIBRARIES = (
     "GO_Biological_Process_2025",
     "GO_Cellular_Component_2025",
@@ -160,6 +161,180 @@ def _build_corum_map() -> Dict[str, str]:
 # =============================================================================
 # Leiden clustering at multiple resolutions
 # =============================================================================
+
+
+_LIBRARY_OBS_COL = {
+    "GO_Biological_Process_2025": "go_bp_term",
+    "GO_Cellular_Component_2025": "go_cc_term",
+    "Reactome_2022": "reactome_term",
+    "KEGG_2026": "kegg_term",
+}
+
+# Significance threshold for surfacing an Enrichr term as the "top" term in obs.
+# Terms with adj_pvalue > this are treated as not significant → NaN in obs.
+# Standard BH-FDR cutoff.
+ENRICHMENT_ADJ_P_THRESHOLD = 0.05
+
+
+def _significant_term(rec: Optional[Dict], thresh: float = ENRICHMENT_ADJ_P_THRESHOLD) -> Optional[str]:
+    """Return the term string if its adj_pvalue is below ``thresh``, else None."""
+    if not rec:
+        return None
+    term = str(rec.get("term", "") or "")
+    if not term:
+        return None
+    p = rec.get("adj_pvalue")
+    try:
+        if p is None or float(p) > thresh:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return term
+
+
+def _apply_enrichment_to_adata(
+    adata,
+    leiden_results: Dict[str, np.ndarray],
+    enrichment_per_res: Dict[str, Dict[str, Dict]],
+    canonical_resolution: str = "leiden_r4",
+    _logger=logger,
+) -> None:
+    """For each gene, attach the top enriched term per ontology library at the
+    gene's cluster (at ``canonical_resolution``) as obs columns.
+
+    Adds: go_bp_term, go_cc_term, reactome_term, kegg_term. Genes whose
+    cluster has no enrichment record get an empty string.
+    """
+    if canonical_resolution not in leiden_results:
+        # Fall back to any available resolution (prefer mid-range)
+        candidates = [r for r in ("leiden_r4", "leiden_r3", "leiden_r5", "leiden_r2") if r in leiden_results]
+        if not candidates:
+            return
+        canonical_resolution = candidates[0]
+    if canonical_resolution not in enrichment_per_res:
+        return
+
+    cluster_labels = np.asarray(leiden_results[canonical_resolution]).astype(str)
+    if len(cluster_labels) != adata.n_obs:
+        return
+
+    enrich = enrichment_per_res[canonical_resolution]
+    # Build per-library cluster_id -> top_term lookup (only terms with
+    # adj_pvalue <= ENRICHMENT_ADJ_P_THRESHOLD survive; rest become "")
+    lib_lookup: Dict[str, Dict[str, str]] = {lib: {} for lib in _LIBRARY_OBS_COL}
+    # Best-across-libraries cluster_id -> (term, library) lookup (lowest adj p-value)
+    top_lookup: Dict[str, Tuple[str, str]] = {}
+    for cid, rec in (enrich or {}).items():
+        by_lib = (rec or {}).get("by_library") or {}
+        for lib, terms in by_lib.items():
+            if lib in lib_lookup and terms:
+                term = _significant_term(terms[0])
+                if term:
+                    lib_lookup[lib][str(cid)] = term
+        top1 = (rec or {}).get("top1") or {}
+        term = _significant_term(top1)
+        if term:
+            top_lookup[str(cid)] = (term, str(top1.get("library", "")))
+
+    # Enrichment keys are stored as "cluster_{label}" — match that convention.
+    cluster_keys = [f"cluster_{c}" for c in cluster_labels]
+    for lib, col_name in _LIBRARY_OBS_COL.items():
+        terms_per_gene = [lib_lookup[lib].get(c) for c in cluster_keys]
+        adata.obs[col_name] = pd.Categorical(terms_per_gene)
+        n_assigned = sum(1 for t in terms_per_gene if t)
+        _logger.info(
+            f"  Annotated {n_assigned}/{adata.n_obs} genes with {col_name} "
+            f"(from {canonical_resolution}, adj_p<={ENRICHMENT_ADJ_P_THRESHOLD})"
+        )
+
+    # Single best-across-libraries term per gene's cluster (lowest adj p-value)
+    top_pairs = [top_lookup.get(c) for c in cluster_keys]
+    top_terms = [p[0] if p else None for p in top_pairs]
+    top_libs = [p[1] if p else None for p in top_pairs]
+    adata.obs["top_ontology"] = pd.Categorical(top_terms)
+    adata.obs["top_ontology_library"] = pd.Categorical(top_libs)
+    n_assigned = sum(1 for t in top_terms if t)
+    _logger.info(
+        f"  Annotated {n_assigned}/{adata.n_obs} genes with top_ontology "
+        f"(best adj-p across {len(_LIBRARY_OBS_COL)} libraries, from {canonical_resolution})"
+    )
+
+    # Per-resolution top_ontology (term only) for every resolution we have
+    # enrichment for — lets users pick the granularity for downstream views.
+    for res_col, res_enrich in enrichment_per_res.items():
+        if res_col not in leiden_results:
+            continue
+        labels = np.asarray(leiden_results[res_col]).astype(str)
+        if len(labels) != adata.n_obs:
+            continue
+        res_top: Dict[str, str] = {}
+        for cid, rec in (res_enrich or {}).items():
+            term = _significant_term((rec or {}).get("top1"))
+            if term:
+                res_top[str(cid)] = term
+        terms = [res_top.get(f"cluster_{l}") for l in labels]
+        # Strip "leiden_" prefix; trailing dot stays for "r0.5" etc.
+        suffix = res_col.replace("leiden_", "")
+        col_name = f"top_ontology_{suffix}"
+        adata.obs[col_name] = pd.Categorical(terms)
+        n_assigned = sum(1 for t in terms if t)
+        _logger.info(
+            f"  Annotated {n_assigned}/{adata.n_obs} genes with {col_name}"
+        )
+
+
+def _apply_overlay_maps_to_adata(
+    adata,
+    overlay_maps: Dict[str, Dict[str, str]],
+    _logger=logger,
+) -> None:
+    """Add CHAD cluster, CORUM complex, and super-category as obs columns.
+
+    Uses ``perturbation`` to look up annotations; missing genes get NaN.
+    Stored as categoricals so downstream viewers handle them naturally.
+    """
+    pert_col = "perturbation" if "perturbation" in adata.obs.columns else None
+    if pert_col is None:
+        return
+    perts = adata.obs[pert_col].astype(str).values
+    col_map = [
+        ("chad_cluster", overlay_maps.get("chad") or {}),
+        ("corum_complex", overlay_maps.get("corum") or {}),
+        ("supercategory", overlay_maps.get("super") or {}),
+    ]
+    for col_name, lookup in col_map:
+        if not lookup:
+            continue
+        labels = pd.Series([lookup.get(p) for p in perts], index=adata.obs.index)
+        adata.obs[col_name] = pd.Categorical(labels)
+        n_assigned = labels.notna().sum()
+        _logger.info(f"  Annotated {n_assigned}/{adata.n_obs} genes with {col_name}")
+
+
+def _apply_leiden_to_adata(
+    adata,
+    leiden_results: Dict[str, np.ndarray],
+    _logger=logger,
+    n_neighbors: int = 15,
+) -> None:
+    """Apply cached leiden labels back onto adata.obs and ensure the neighbors
+    graph (obsp.connectivities, obsp.distances, uns.neighbors) is populated.
+
+    Used on cache hit so the in-memory adata matches what a fresh run produces,
+    which lets downstream callers persist these fields to h5ad.
+    """
+    if "neighbors" not in adata.uns:
+        try:
+            import scanpy as sc
+
+            knn = min(n_neighbors, max(2, adata.n_obs - 1))
+            sc.pp.neighbors(adata, n_neighbors=knn, use_rep="X_pca")
+        except Exception as exc:
+            _logger.warning("  sc.pp.neighbors (cache replay) failed: %s", exc)
+    for col, labels in leiden_results.items():
+        if len(labels) != adata.n_obs:
+            continue
+        adata.obs[col] = pd.Categorical(np.asarray(labels).astype(str))
 
 
 def run_leiden_clustering(
@@ -387,7 +562,7 @@ def save_supercluster_overlays(
                     coords, perts, super_map,
                     title=f"{level_name.capitalize()} {embed_label.upper()} — super-category",
                     out_path=out, plt=plt,
-                    label_genes=(level_name == "gene"),
+                    label_genes=False,
                     use_markers=False,
                 )
                 _logger.info("  Saved %s", out.name)
@@ -401,7 +576,7 @@ def save_supercluster_overlays(
                     coords, perts, chad_map,
                     title=f"{level_name.capitalize()} {embed_label.upper()} — CHAD cluster",
                     out_path=out, plt=plt,
-                    label_genes=True,
+                    label_genes=False,
                     use_markers=True,
                 )
                 _logger.info("  Saved %s", out.name)
@@ -541,8 +716,12 @@ def save_leiden_overlays(
     _logger=logger,
     enrichment_per_res: Optional[Dict[str, Dict[str, Dict]]] = None,
 ) -> None:
-    """Static PNGs + per-resolution interactive HTMLs (gene level) +
-    a CSV gene-list per resolution, all under ``plots/leiden/``.
+    """Static PNGs (gene level) + per-resolution cluster/enrichment CSVs.
+
+    Layout:
+      ``plots/leiden/gene/png/{embed}_{col}.png`` (this function),
+      ``plots/leiden/gene/csv/{col}_{clusters,enrichment}.csv``
+      (delegated to ``save_leiden_csvs``).
 
     Static PNGs no longer use offset gene labels (use the HTMLs to identify
     dots by hover).
@@ -550,7 +729,8 @@ def save_leiden_overlays(
     if adata_gene_embed is None or not leiden_results:
         return
     sub_dir = Path(plots_dir) / "leiden"
-    sub_dir.mkdir(parents=True, exist_ok=True)
+    png_dir = sub_dir / "gene" / "png"
+    png_dir.mkdir(parents=True, exist_ok=True)
 
     perts = (
         adata_gene_embed.obs["perturbation"].values
@@ -576,7 +756,7 @@ def save_leiden_overlays(
                     cid, enrichment.get(cid)
                 )
 
-            png_out = sub_dir / f"gene_{embed_label}_{col}.png"
+            png_out = png_dir / f"{embed_label}_{col}.png"
             try:
                 _plot_categorical_overlay(
                     coords, perts, gene_to_cluster_enriched,
@@ -584,17 +764,54 @@ def save_leiden_overlays(
                     out_path=png_out, plt=plt,
                     label_genes=False, use_markers=True,
                 )
-                _logger.info("  Saved leiden/%s", png_out.name)
+                _logger.info("  Saved leiden/gene/png/%s", png_out.name)
             except Exception as exc:
                 _logger.warning("  Leiden overlay failed (%s): %s", png_out.name, exc)
 
-    # CSVs: gene→cluster + enrichment per resolution
+    save_leiden_csvs(
+        adata_gene_embed, leiden_results, sub_dir, "gene",
+        enrichment_per_res=enrichment_per_res, _logger=_logger,
+    )
+
+
+def save_leiden_csvs(
+    adata,
+    leiden_results: Dict[str, np.ndarray],
+    sub_dir: Path,
+    level_name: str,
+    enrichment_per_res: Optional[Dict[str, Dict[str, Dict]]] = None,
+    _logger=logger,
+) -> None:
+    """Write per-resolution cluster + enrichment CSVs for any level.
+
+    Output files: ``{sub_dir}/{level_name}/csv/{col}_clusters.csv`` (one row
+    per obs, with perturbation/sgRNA + cluster) and
+    ``{sub_dir}/{level_name}/csv/{col}_enrichment.csv``. Guide-level CSVs
+    include the sgRNA (obs index) alongside the target gene so guide →
+    cluster assignments are recoverable.
+    """
+    if adata is None or not leiden_results:
+        return
+    csv_dir = Path(sub_dir) / level_name / "csv"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    enrichment_per_res = enrichment_per_res or {}
+
+    perts = (
+        adata.obs["perturbation"].astype(str).values
+        if "perturbation" in adata.obs.columns
+        else adata.obs_names.values
+    )
+    # sgRNA column for guide level (obs.index typically holds the guide id).
+    extra_cols: Dict[str, np.ndarray] = {}
+    if level_name == "guide":
+        extra_cols["sgRNA"] = adata.obs_names.values
+
     for col, labels in leiden_results.items():
-        rows = pd.DataFrame({
-            "perturbation": perts,
-            "cluster": labels,
-        }).sort_values(["cluster", "perturbation"])
-        rows.to_csv(sub_dir / f"gene_{col}_clusters.csv", index=False)
+        df = pd.DataFrame({**extra_cols, "perturbation": perts, "cluster": labels})
+        sort_cols = ["cluster"] + (["perturbation", "sgRNA"] if "sgRNA" in df.columns
+                                   else ["perturbation"])
+        df = df.sort_values(sort_cols)
+        df.to_csv(csv_dir / f"{col}_clusters.csv", index=False)
 
         enrich_rows = []
         for cid, rec in (enrichment_per_res.get(col) or {}).items():
@@ -607,8 +824,12 @@ def save_leiden_overlays(
                 })
         if enrich_rows:
             pd.DataFrame(enrich_rows).to_csv(
-                sub_dir / f"gene_{col}_enrichment.csv", index=False,
+                csv_dir / f"{col}_enrichment.csv", index=False,
             )
+    _logger.info(
+        "  Saved %s leiden CSVs (%d resolutions) to %s",
+        level_name, len(leiden_results), csv_dir,
+    )
 
 
 def _save_leiden_html(
@@ -890,10 +1111,16 @@ def save_interactive_html(
     plots_dir: Path,
     _logger=logger,
     enrichment_per_res: Optional[Dict[str, Dict[str, Dict]]] = None,
+    leiden_guide_results: Optional[Dict[str, np.ndarray]] = None,
+    enrichment_guide_per_res: Optional[Dict[str, Dict[str, Dict]]] = None,
 ) -> None:
     """Plotly HTML per (level, embedding). Hover shows all metadata; a dropdown
     switches the color overlay between super-category, CHAD cluster, CORUM
     complex, and each Leiden resolution.
+
+    Guide-level Leiden + GO enrichment (computed in ``save_extra_overlays``
+    using each guide's target-gene identity, deduplicated per cluster) is
+    threaded through ``leiden_guide_results`` / ``enrichment_guide_per_res``.
     """
     try:
         import plotly.graph_objects as go
@@ -903,6 +1130,15 @@ def save_interactive_html(
 
     plots_dir = Path(plots_dir)
     activity_lookup = _build_activity_lookup(activity_map, dist_map, corum_map, chad_map)
+
+    leiden_by_level: Dict[str, Dict[str, np.ndarray]] = {
+        "gene": leiden_results or {},
+        "guide": leiden_guide_results or {},
+    }
+    enrichment_by_level: Dict[str, Optional[Dict[str, Dict[str, Dict]]]] = {
+        "gene": enrichment_per_res,
+        "guide": enrichment_guide_per_res,
+    }
 
     levels = []
     if adata_guide is not None:
@@ -921,8 +1157,8 @@ def save_interactive_html(
             if "n_cells" in ad_obj.obs.columns
             else None
         )
-        # Leiden was computed at gene level; for guide level just leave it empty.
-        leiden_for_level = leiden_results if level_name == "gene" else {}
+        leiden_for_level = leiden_by_level.get(level_name) or {}
+        enrichment_for_level = enrichment_by_level.get(level_name)
         hover_df = _build_hover_records(
             perts, activity_lookup, overlay_maps, leiden_for_level, n_cells=n_cells,
         )
@@ -938,7 +1174,8 @@ def save_interactive_html(
                     title=f"{level_name.capitalize()} {embed_label.upper()} — interactive",
                     out_path=out, go=go,
                     embed_label=embed_label,
-                    enrichment_per_res=enrichment_per_res if level_name == "gene" else None,
+                    enrichment_per_res=enrichment_for_level,
+                    level_name=level_name,
                 )
                 _logger.info("  Saved %s", out.name)
             except Exception as exc:
@@ -954,6 +1191,7 @@ def _save_one_interactive(
     go,
     embed_label: str = "umap",
     enrichment_per_res: Optional[Dict[str, Dict[str, Dict]]] = None,
+    level_name: str = "gene",
 ) -> None:
     """Plotly figure with two-panel layout:
       * Left: scatter, recolored by the active color mode (Super-category /
@@ -1095,51 +1333,82 @@ def _save_one_interactive(
         libs_present += sorted(L for L in seen_libs if L not in priority)
     n_panels = len(libs_present)
 
-    bar_traces: List = []
-    bar_keys: List[Tuple[str, str, str]] = []  # parallel: (res_col, cluster_id, lib)
-    for res_col in sorted(enrichment_per_res.keys()):
-        clusters = enrichment_per_res[res_col] or {}
-        for cid in sorted(clusters.keys(), key=lambda s: int(s.split("_")[1])):
-            rec = clusters[cid] or {}
+    # Pre-compute per-(resolution, cluster, library) bar payloads as a JS lookup.
+    # Only n_libs bar traces (one per ontology) are baked into the figure; their
+    # data is restyled in JS on cluster select. Keeps trace count constant in
+    # cluster count, avoiding the O(clusters²) HTML payload growth that came
+    # from one trace per (cluster × library).
+    def _bar_payload_for_terms(terms: List[Dict], lib: str) -> Dict:
+        if not terms:
+            return {"x": [0], "y": ["(no terms)"], "text": [""], "hovertext": [""], "marker_color": [0]}
+        terms = terms[::-1]
+        term_names = [t["term"][:60] for t in terms]
+        adj_ps = [t["adj_pvalue"] for t in terms]
+        raw_scores = [t.get("combined_score") for t in terms]
+        bar_x = [-np.log10(max(p, 1e-300)) for p in adj_ps]
+        hovs = [
+            f"<b>{t['term']}</b><br>-log10(p): {x:.2f}<br>adj p: {p:.2e}"
+            + (f"<br>combined score: {s:.1f}" if s is not None and not np.isnan(s) else "")
+            + f"<br>library: {lib}"
+            for x, p, s, t in zip(bar_x, adj_ps, raw_scores, terms)
+        ]
+        return {
+            "x": bar_x, "y": term_names,
+            "text": [f"p={p:.1e}" for p in adj_ps],
+            "hovertext": hovs, "marker_color": bar_x,
+        }
+
+    bar_data_by_mode_cluster: Dict[str, Dict[str, List[Dict]]] = {}
+    for res_col, clusters in enrichment_per_res.items():
+        clusters = clusters or {}
+        by_cluster: Dict[str, List[Dict]] = {}
+        for cid, rec in clusters.items():
+            rec = rec or {}
             by_lib = rec.get("by_library") or {}
             all_terms = rec.get("terms") or []
-            for lib_idx, lib in enumerate(libs_present):
+            per_lib_data: List[Dict] = []
+            for lib in libs_present:
                 terms = by_lib.get(lib) or [t for t in all_terms if t.get("library") == lib]
-                terms = terms[::-1]
-                ax_x = f"x{lib_idx + 2}"
-                ax_y = f"y{lib_idx + 2}"
-                if terms:
-                    term_names = [t["term"][:60] for t in terms]
-                    adj_ps = [t["adj_pvalue"] for t in terms]
-                    raw_scores = [t.get("combined_score") for t in terms]
-                    bar_x = [-np.log10(max(p, 1e-300)) for p in adj_ps]
-                    hovs = [
-                        f"<b>{t['term']}</b><br>-log10(p): {x:.2f}<br>adj p: {p:.2e}"
-                        + (f"<br>combined score: {s:.1f}" if s is not None and not np.isnan(s) else "")
-                        + f"<br>library: {lib}"
-                        for x, p, s, t in zip(bar_x, adj_ps, raw_scores, terms)
-                    ]
-                    bar = go.Bar(
-                        x=bar_x, y=term_names, orientation="h",
-                        marker=dict(color=bar_x, colorscale="Viridis", showscale=False),
-                        text=[f"p={p:.1e}" for p in adj_ps],
-                        textposition="inside", insidetextanchor="start",
-                        hovertext=hovs, hoverinfo="text",
-                        name=f"{cid}/{lib}",
-                        visible=False, showlegend=False, xaxis=ax_x, yaxis=ax_y,
-                    )
-                else:
-                    bar = go.Bar(
-                        x=[0], y=["(no terms)"], orientation="h",
-                        marker=dict(color="lightgray"), hoverinfo="skip",
-                        name=f"{cid}/{lib}",
-                        visible=False, showlegend=False, xaxis=ax_x, yaxis=ax_y,
-                    )
-                bar_traces.append(bar)
-                bar_keys.append((res_col, cid, lib))
+                per_lib_data.append(_bar_payload_for_terms(terms, lib))
+            by_cluster[cid] = per_lib_data
+        bar_data_by_mode_cluster[res_col] = by_cluster
 
-    n_bars = len(bar_traces)
-    bar_offset = n_scatter  # first bar trace index in the global trace list
+    # First cluster id per leiden resolution — used to seed bar traces and as
+    # the default when entering a leiden color mode.
+    first_cluster_by_mode: Dict[str, str] = {}
+    for res_col in sorted(enrichment_per_res.keys()):
+        clusters = enrichment_per_res[res_col] or {}
+        if clusters:
+            cids = sorted(clusters.keys(), key=lambda s: int(s.split("_")[1]))
+            first_cluster_by_mode[res_col] = cids[0]
+
+    seed_mode = next(iter(sorted(first_cluster_by_mode.keys())), None)
+    seed_cid = first_cluster_by_mode.get(seed_mode) if seed_mode else None
+    seed_per_lib = (
+        bar_data_by_mode_cluster[seed_mode][seed_cid]
+        if seed_mode and seed_cid else None
+    )
+
+    bar_traces: List = []
+    for lib_idx, lib in enumerate(libs_present):
+        d = (
+            seed_per_lib[lib_idx]
+            if seed_per_lib
+            else {"x": [0], "y": ["(no terms)"], "text": [""], "hovertext": [""], "marker_color": [0]}
+        )
+        bar_traces.append(go.Bar(
+            x=d["x"], y=d["y"], orientation="h",
+            marker=dict(color=d["marker_color"], colorscale="Viridis", cmin=0, showscale=False),
+            text=d["text"],
+            textposition="inside", insidetextanchor="start",
+            hovertext=d["hovertext"], hoverinfo="text",
+            name=lib,
+            visible=False, showlegend=False,
+            xaxis=f"x{lib_idx + 2}", yaxis=f"y{lib_idx + 2}",
+        ))
+
+    n_bars = len(bar_traces)  # == n_panels (one trace per library)
+    bar_offset = n_scatter
 
     all_traces = [t for _, _, traces in scatter_groups for t in traces]
     if ntc_overlay_trace is not None:
@@ -1148,16 +1417,13 @@ def _save_one_interactive(
     fig = go.Figure(data=all_traces)
 
     # ---- Helpers used by buttons ----
-    def _bar_visibility_for(res_col: Optional[str], cid: Optional[str]) -> List[bool]:
-        """Return a length-n_bars array, all False except bars matching (res_col, cid)
-        across every ontology library."""
-        vis = [False] * n_bars
-        if res_col is None or cid is None:
-            return vis
-        for i, (rc, c, l) in enumerate(bar_keys):
-            if rc == res_col and c == cid:
-                vis[i] = True
-        return vis
+    def _bar_visibility_for(res_col: Optional[str], cid: Optional[str] = None) -> List[bool]:
+        """Bar visibility now depends only on whether we're in a leiden color
+        mode — the n_libs bar traces stay visible while their DATA is restyled
+        in JS on cluster select. ``cid`` is accepted for call-site symmetry but
+        ignored."""
+        is_leiden = res_col is not None and res_col in enrichment_per_res
+        return [is_leiden] * n_bars
 
     def _scatter_visibility_for(mode_label: str) -> List[bool]:
         vis = [False] * n_scatter
@@ -1238,6 +1504,29 @@ def _save_one_interactive(
         for cat in scatter_categories[mode_label]:
             cat_to_genes[str(cat)] = _format_gene_list(_genes_in(mode_col, str(cat)))
         gene_list_map[mode_label] = cat_to_genes
+
+    # Gene → category map per color mode. Categories are stored truncated to
+    # match the trace-name truncation used by ``click_button_map`` so the JS
+    # search box can reuse the click code path.
+    def _trace_cat(c) -> str:
+        s = str(c)
+        return s if len(s) <= 50 else s[:47] + "..."
+
+    gene_to_category_by_mode: Dict[str, Dict[str, str]] = {}
+    for mode_label, mode_col, _traces in scatter_groups:
+        if mode_col not in hover_df_main.columns:
+            continue
+        col_vals = hover_df_main[mode_col].astype(str).fillna("Uncategorized")
+        perts_col = hover_df_main["perturbation"].astype(str)
+        g_to_cat: Dict[str, str] = {}
+        for p, c in zip(perts_col.values, col_vals.values):
+            g_to_cat[p] = _trace_cat(c)
+        gene_to_category_by_mode[mode_label] = g_to_cat
+
+    # Sorted unique gene/perturbation list for autocomplete suggestions.
+    autocomplete_genes = sorted(
+        {str(p) for p in hover_df_main["perturbation"].astype(str).values}
+    )
 
     annotations_pre: List[Dict] = []  # gene list lives in the HTML overlay (post_script)
 
@@ -1488,13 +1777,56 @@ def _save_one_interactive(
             button_map[cat_name] = j + 1  # +1 because button 0 is "Show all"
         click_button_map[mode_label] = button_map
 
+    # mode_label → mode_col so JS can resolve the active leiden resolution from
+    # the visible picker dropdown.
+    mode_col_by_label: Dict[str, str] = {ml: mc for ml, mc, _ in scatter_groups}
+
     import json as _json
+    # Gene search is enabled at every level — guide-level hover_df_main also
+    # carries the per-row target gene name in the "perturbation" column, so the
+    # autocomplete + click-to-pick wiring works identically. (At guide level,
+    # selecting a gene jumps to one of its guides' categories — the last one
+    # encountered when building gene_to_category_by_mode.)
+    show_gene_search = True
     post_script = f"""
 (function() {{
   var pickerMenuIdxForMode = {_json.dumps(picker_menu_idx_for_mode)};
   var clickButtonMap = {_json.dumps(click_button_map)};
   var geneListMap = {_json.dumps(gene_list_map)};
   var GENE_LIST_PLACEHOLDER = {_json.dumps(GENE_LIST_PLACEHOLDER)};
+  var barDataByModeCluster = {_json.dumps(bar_data_by_mode_cluster)};
+  var firstClusterByMode = {_json.dumps(first_cluster_by_mode)};
+  var modeColByLabel = {_json.dumps(mode_col_by_label)};
+  var geneToCategoryByMode = {_json.dumps(gene_to_category_by_mode)};
+  var autocompleteGenes = {_json.dumps(autocomplete_genes)};
+  var SHOW_GENE_SEARCH = {_json.dumps(show_gene_search)};
+  var nScatter = {n_scatter};
+  var nLibs = {n_panels};
+  var barTraceIndices = [];
+  for (var __i = 0; __i < nLibs; __i++) {{ barTraceIndices.push(nScatter + __i); }}
+
+  function _updateBars(modeCol, clusterId) {{
+    if (!modeCol || !clusterId || nLibs === 0) return;
+    var modeData = barDataByModeCluster[modeCol];
+    if (!modeData) return;
+    var clusterData = modeData[clusterId];
+    if (!clusterData) return;
+    var update = {{x: [], y: [], text: [], hovertext: [], 'marker.color': []}};
+    for (var i = 0; i < clusterData.length; i++) {{
+      update.x.push(clusterData[i].x);
+      update.y.push(clusterData[i].y);
+      update.text.push(clusterData[i].text);
+      update.hovertext.push(clusterData[i].hovertext);
+      update['marker.color'].push(clusterData[i].marker_color);
+    }}
+    Plotly.restyle(gd, update, barTraceIndices);
+  }}
+
+  function _clusterIdFromLabel(btnLabel) {{
+    if (!btnLabel) return null;
+    var m = btnLabel.match(/^(cluster_\\d+)/);
+    return m ? m[1] : null;
+  }}
 
   var gds = document.getElementsByClassName('plotly-graph-div');
   if (gds.length === 0) return;
@@ -1509,12 +1841,18 @@ def _save_one_interactive(
   var figHeight = (gd.layout && gd.layout.height) || 900;
   // Plot domain assumed: scatter x in [0, 0.50] of plot area; legend at x≈0.56;
   // bar panels at x in [0.78, 0.97]. Margin: l=60 (left), r=20 (right when bar
-  // panels exist). Plot area width = figWidth - 60 - 20 = figWidth - 80.
-  var plotW = figWidth - 80;
+  // panels exist) or r=260 (when not — guide level, no GO panels).
+  var hasBars = nLibs > 0;
+  var plotW = figWidth - 60 - (hasBars ? 20 : 260);
   var plotH = figHeight - 200;  // approximate (margin t≈140, b≈60)
   // Panel sits under the legend (legend is at y=0.78 down to ~0.40 worst case).
-  // Shift gene-list panel 40px left (closer to UMAP) to match the legend.
-  var panelLeft = 60 + plotW * 0.56 - 60;
+  // Gene level: between legend and bar panels (in the gutter).
+  // Guide level: no bar panels, scatter takes the whole plot area, so push the
+  // panel into the right margin (where the legend lives at paper x≈1.02) so it
+  // doesn't overlap the UMAP.
+  var panelLeft = hasBars
+    ? 60 + plotW * 0.56 - 60
+    : figWidth - 220;
   var panelTop = 200 + plotH * 0.50;       // rough: below legend bottom
   var panelHeight = plotH * 0.45;
 
@@ -1543,6 +1881,51 @@ def _save_one_interactive(
   panel.appendChild(header);
   panel.appendChild(body);
   parent.appendChild(panel);
+
+  // ---- Gene search box (gene-level only) -------------------------------
+  var searchInput = null;
+  var searchSuggest = null;
+  var searchStatus = null;
+  if (SHOW_GENE_SEARCH && autocompleteGenes.length > 0) {{
+    var searchBox = document.createElement('div');
+    var searchTop = Math.max(panelTop - 92, 100);
+    searchBox.id = 'gene-search-box';
+    searchBox.style.cssText =
+      'position:absolute;' +
+      ' left:' + panelLeft + 'px; top:' + searchTop + 'px;' +
+      ' width:200px; z-index:55;' +
+      ' font-family:sans-serif;';
+    var searchHeader = document.createElement('div');
+    searchHeader.style.cssText = 'font-weight:bold; font-size:11px; color:#444; margin-bottom:4px;';
+    searchHeader.textContent = 'Search gene';
+    searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.autocomplete = 'off';
+    searchInput.spellcheck = false;
+    searchInput.placeholder = 'e.g. MYC, TP53...';
+    searchInput.style.cssText =
+      'width:100%; box-sizing:border-box; padding:4px 6px;' +
+      ' font-size:11px; border:1px solid #aaa; border-radius:3px;' +
+      ' background:rgba(255,255,255,0.95);';
+    searchSuggest = document.createElement('div');
+    searchSuggest.id = 'gene-search-suggest';
+    searchSuggest.style.cssText =
+      'position:absolute; left:0; right:0; top:100%;' +
+      ' background:rgba(255,255,255,0.98);' +
+      ' border:1px solid #aaa; border-top:none; border-radius:0 0 3px 3px;' +
+      ' max-height:180px; overflow-y:auto; font-size:11px;' +
+      ' display:none; z-index:56; box-shadow:0 2px 6px rgba(0,0,0,0.08);';
+    searchStatus = document.createElement('div');
+    searchStatus.style.cssText = 'font-size:10px; color:#666; margin-top:3px; min-height:14px;';
+    var inputWrap = document.createElement('div');
+    inputWrap.style.cssText = 'position:relative;';
+    inputWrap.appendChild(searchInput);
+    inputWrap.appendChild(searchSuggest);
+    searchBox.appendChild(searchHeader);
+    searchBox.appendChild(inputWrap);
+    searchBox.appendChild(searchStatus);
+    parent.appendChild(searchBox);
+  }}
 
   function _setGeneList(modeLabel, btnLabel) {{
     if (!btnLabel || /^Show all/.test(btnLabel)) {{
@@ -1598,13 +1981,198 @@ def _save_one_interactive(
     return found;
   }}
 
+  function _activeModeLabel() {{
+    var modeLabel = null;
+    Object.keys(pickerMenuIdxForMode).forEach(function(ml) {{
+      var idx = pickerMenuIdxForMode[ml];
+      var menus = (gd.layout && gd.layout.updatemenus) || [];
+      if (menus[idx] && menus[idx].visible !== false) modeLabel = ml;
+    }});
+    return modeLabel;
+  }}
+
+  // Apply the same picker-button as a click on the plot would, given a mode
+  // and a (truncated) trace category. Returns true on success.
+  function _pickCategory(modeLabel, category, geneToFlash) {{
+    if (!modeLabel || !category) return false;
+    var menuIdx = pickerMenuIdxForMode[modeLabel];
+    if (menuIdx === undefined) return false;
+    var btnMap = clickButtonMap[modeLabel];
+    if (!btnMap) return false;
+    var btnIdx = btnMap[category];
+    if (btnIdx === undefined) return false;
+    var menu = gd.layout.updatemenus[menuIdx];
+    if (!menu) return false;
+    var btn = menu.buttons[btnIdx];
+    if (!btn) return false;
+    var layoutUpd = Object.assign({{}}, btn.args[1] || {{}});
+    layoutUpd['updatemenus[' + menuIdx + '].active'] = btnIdx;
+    Plotly.update(gd, btn.args[0], layoutUpd);
+    _setGeneList(modeLabel, category);
+    var modeColP = modeColByLabel[modeLabel];
+    if (modeColP && barDataByModeCluster[modeColP]) {{
+      var cidP = _clusterIdFromLabel(category);
+      if (cidP) _updateBars(modeColP, cidP);
+    }}
+    if (geneToFlash) {{
+      setTimeout(function() {{ _scrollToGene(geneToFlash); }}, 0);
+    }}
+    return true;
+  }}
+
+  // ---- Gene search + autocomplete -----------------------------------------
+  if (SHOW_GENE_SEARCH && searchInput) {{
+    var SEARCH_LIMIT = 8;
+    var suggestActive = -1;
+    var lastSuggestions = [];
+
+    function _rankMatches(q) {{
+      if (!q) return [];
+      var ql = q.toLowerCase();
+      var pref = [], starts = [], contains = [];
+      for (var i = 0; i < autocompleteGenes.length; i++) {{
+        var g = autocompleteGenes[i];
+        var gl = g.toLowerCase();
+        if (gl === ql) pref.push(g);
+        else if (gl.indexOf(ql) === 0) starts.push(g);
+        else if (gl.indexOf(ql) !== -1) contains.push(g);
+        if (pref.length + starts.length + contains.length >= SEARCH_LIMIT * 3) break;
+      }}
+      return pref.concat(starts).concat(contains).slice(0, SEARCH_LIMIT);
+    }}
+
+    function _renderSuggestions(items, query) {{
+      if (!items.length) {{
+        searchSuggest.style.display = 'none';
+        searchSuggest.innerHTML = '';
+        lastSuggestions = [];
+        return;
+      }}
+      var q = (query || '').toLowerCase();
+      var html = '';
+      for (var i = 0; i < items.length; i++) {{
+        var g = items[i];
+        var gLow = g.toLowerCase();
+        var hi = gLow.indexOf(q);
+        var disp = g;
+        if (q && hi >= 0) {{
+          disp = g.substring(0, hi)
+            + '<b>' + g.substring(hi, hi + q.length) + '</b>'
+            + g.substring(hi + q.length);
+        }}
+        html += '<div class="g-sug" data-i="' + i + '"' +
+                ' style="padding:4px 8px; cursor:pointer; ' +
+                ((i === suggestActive) ? 'background:#e6f0ff;' : '') +
+                '">' + disp + '</div>';
+      }}
+      searchSuggest.innerHTML = html;
+      searchSuggest.style.display = 'block';
+      lastSuggestions = items;
+      var nodes = searchSuggest.querySelectorAll('.g-sug');
+      for (var k = 0; k < nodes.length; k++) {{
+        nodes[k].addEventListener('mousedown', (function(idx) {{
+          return function(ev) {{
+            ev.preventDefault();
+            _commitGene(lastSuggestions[idx]);
+          }};
+        }})(k));
+        nodes[k].addEventListener('mouseenter', (function(idx) {{
+          return function() {{
+            suggestActive = idx;
+            _renderSuggestions(lastSuggestions, searchInput.value);
+          }};
+        }})(k));
+      }}
+    }}
+
+    function _commitGene(gene) {{
+      if (!gene) return;
+      searchInput.value = gene;
+      searchSuggest.style.display = 'none';
+      suggestActive = -1;
+      var modeLabel = _activeModeLabel();
+      if (!modeLabel) {{
+        searchStatus.textContent = 'No active mode';
+        return;
+      }}
+      var modeMap = geneToCategoryByMode[modeLabel] || {{}};
+      var category = modeMap[gene];
+      if (!category) {{
+        var lowered = gene.toLowerCase();
+        var keys = Object.keys(modeMap);
+        for (var k = 0; k < keys.length; k++) {{
+          if (keys[k].toLowerCase() === lowered) {{
+            category = modeMap[keys[k]];
+            gene = keys[k];
+            break;
+          }}
+        }}
+      }}
+      if (!category) {{
+        searchStatus.textContent = '"' + gene + '" not found in ' + modeLabel;
+        return;
+      }}
+      var ok = _pickCategory(modeLabel, category, gene);
+      searchStatus.textContent = ok
+        ? gene + ' → ' + category
+        : 'Could not select ' + category;
+    }}
+
+    searchInput.addEventListener('input', function() {{
+      suggestActive = -1;
+      var items = _rankMatches(searchInput.value);
+      _renderSuggestions(items, searchInput.value);
+    }});
+
+    searchInput.addEventListener('keydown', function(e) {{
+      if (e.key === 'ArrowDown') {{
+        e.preventDefault();
+        if (lastSuggestions.length) {{
+          suggestActive = (suggestActive + 1) % lastSuggestions.length;
+          _renderSuggestions(lastSuggestions, searchInput.value);
+        }}
+      }} else if (e.key === 'ArrowUp') {{
+        e.preventDefault();
+        if (lastSuggestions.length) {{
+          suggestActive = (suggestActive - 1 + lastSuggestions.length) % lastSuggestions.length;
+          _renderSuggestions(lastSuggestions, searchInput.value);
+        }}
+      }} else if (e.key === 'Enter') {{
+        e.preventDefault();
+        var gene = (suggestActive >= 0 && lastSuggestions[suggestActive])
+          ? lastSuggestions[suggestActive]
+          : (lastSuggestions.length ? lastSuggestions[0] : searchInput.value);
+        _commitGene(gene);
+      }} else if (e.key === 'Escape') {{
+        searchSuggest.style.display = 'none';
+      }}
+    }});
+
+    searchInput.addEventListener('blur', function() {{
+      // Delay so a click on a suggestion still registers
+      setTimeout(function() {{ searchSuggest.style.display = 'none'; }}, 150);
+    }});
+    searchInput.addEventListener('focus', function() {{
+      if (searchInput.value) {{
+        var items = _rankMatches(searchInput.value);
+        _renderSuggestions(items, searchInput.value);
+      }}
+    }});
+  }}
+
   gd.on('plotly_buttonclicked', function(event) {{
     if (!event || !event.button) return;
     var btnLabel = event.button.label;
     var menuX = (event.menu || {{}}).x;
-    // Color-mode dropdown sits at x≈0 — reset gene list when mode switches
+    // Color-mode dropdown sits at x≈0 — reset gene list when mode switches,
+    // and if the new mode is a leiden one, repopulate bars with its first
+    // cluster's data (the data wasn't included in the button's args payload).
     if (menuX === undefined || menuX < 0.1) {{
       body.innerHTML = GENE_LIST_PLACEHOLDER;
+      var modeColCM = modeColByLabel[btnLabel];
+      if (modeColCM && barDataByModeCluster[modeColCM]) {{
+        _updateBars(modeColCM, firstClusterByMode[modeColCM]);
+      }}
       return;
     }}
     // Picker dropdown clicked — find the currently visible picker mode
@@ -1618,6 +2186,15 @@ def _save_one_interactive(
     }});
     if (!modeLabel) return;
     _setGeneList(modeLabel, btnLabel);
+    var modeColP = modeColByLabel[modeLabel];
+    if (modeColP && barDataByModeCluster[modeColP]) {{
+      if (/^Show all/.test(btnLabel)) {{
+        _updateBars(modeColP, firstClusterByMode[modeColP]);
+      }} else {{
+        var cidP = _clusterIdFromLabel(btnLabel);
+        if (cidP) _updateBars(modeColP, cidP);
+      }}
+    }}
   }});
 
   gd.on('plotly_click', function(eventData) {{
@@ -1654,6 +2231,15 @@ def _save_one_interactive(
         setTimeout(function() {{ _scrollToGene(clickedGene); }}, 0);
       }}
     }}
+    var modeColCK = modeColByLabel[modeLabel];
+    if (modeColCK && barDataByModeCluster[modeColCK]) {{
+      if (clearedToShowAll) {{
+        _updateBars(modeColCK, firstClusterByMode[modeColCK]);
+      }} else {{
+        var cidCK = _clusterIdFromLabel(category);
+        if (cidCK) _updateBars(modeColCK, cidCK);
+      }}
+    }}
   }});
 }})();
 """
@@ -1666,8 +2252,400 @@ def _save_one_interactive(
 
 
 # =============================================================================
+# Canonical embeddings — one PNG per (level, embedder), colored by Leiden +
+# top-GO-term centroid labels.
+# =============================================================================
+
+
+def _top_term_per_cluster(
+    enrichment: Optional[Dict[str, Dict]],
+) -> Dict[str, str]:
+    """For each cluster, pick the highest-combined-score term and strip the
+    parenthetical GO accession. Clusters without enrichment hits are dropped."""
+    out: Dict[str, str] = {}
+    for cid, rec in (enrichment or {}).items():
+        terms = rec.get("terms") or []
+        if not terms:
+            continue
+        top = max(terms, key=lambda t: t.get("combined_score") or 0.0)
+        term = top["term"]
+        if " (GO:" in term:
+            term = term.split(" (GO:")[0]
+        out[cid] = term
+    return out
+
+
+# Boilerplate fragments that bloat GO term names without adding signal.
+# Order matters — longest matches first so "positive regulation of" wins
+# over "regulation of".
+_TERM_BOILERPLATE_PREFIXES: Tuple[str, ...] = (
+    "positive regulation of ",
+    "negative regulation of ",
+    "regulation of ",
+    "response to ",
+    "involved in ",
+)
+_TERM_BOILERPLATE_SUFFIXES: Tuple[str, ...] = (
+    " process", " pathway", " biosynthetic", " metabolic process",
+    " signaling pathway", " response",
+)
+
+
+def _condense_term(term: str, max_chars: int = 30) -> str:
+    """Return a tighter form of a long GO term. Strip common low-information
+    prefixes/suffixes; if still over ``max_chars``, soft-wrap with textwrap so
+    the label sits on multiple short lines instead of one long line."""
+    if len(term) <= max_chars:
+        return term
+    lower = term.lower()
+    for p in _TERM_BOILERPLATE_PREFIXES:
+        if lower.startswith(p):
+            term = term[len(p):]
+            break
+    lower = term.lower()
+    for s in _TERM_BOILERPLATE_SUFFIXES:
+        if lower.endswith(s):
+            term = term[: -len(s)]
+            break
+    if len(term) <= max_chars:
+        return term
+    import textwrap
+    return textwrap.fill(term, width=max_chars, break_long_words=False)
+
+
+def _repel_label_positions(
+    positions: np.ndarray, min_dist: float,
+    n_iter: int = 80, step: float = 0.5,
+) -> np.ndarray:
+    """Push labels apart with simple pairwise repulsion. ``positions`` is an
+    (N, 2) array; pairs within ``min_dist`` get nudged along the line
+    connecting them until they're at least ``min_dist`` apart, or until
+    ``n_iter`` is exhausted."""
+    pos = np.asarray(positions, dtype=float).copy()
+    n = len(pos)
+    if n < 2:
+        return pos
+    rng = np.random.default_rng(0)
+    for _ in range(n_iter):
+        moved = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                d = pos[j] - pos[i]
+                dist = float(np.linalg.norm(d))
+                if dist >= min_dist:
+                    continue
+                if dist < 1e-9:
+                    d = rng.standard_normal(2)
+                    dist = float(np.linalg.norm(d))
+                direction = d / dist
+                push = (min_dist - dist) / 2.0 * step
+                pos[j] += direction * push
+                pos[i] -= direction * push
+                moved = True
+        if not moved:
+            break
+    return pos
+
+
+def _save_canonical_panel_png(
+    coords: np.ndarray, labels: np.ndarray, perts: np.ndarray,
+    cluster_to_term: Dict[str, str],
+    level: str, embedder: str, resolution_col: str,
+    out_path: Path, plt,
+) -> None:
+    """One PNG: scatter of the embedding colored by leiden cluster, with one
+    text label per unique top-GO term placed near the centroid of all points
+    whose cluster maps to that term. Labels are pairwise-repelled, connected
+    to their centroid by a thin guide line, and condensed/wrapped if long.
+    NTCs render as a separate red-X overlay matching the rest of the suite."""
+    from collections import defaultdict
+    import matplotlib as _mpl
+
+    coords = np.asarray(coords)
+    labels = np.asarray(labels)
+    perts = np.asarray(perts)
+
+    is_ntc = np.array([str(p).startswith("NTC") for p in perts])
+    nontnc = ~is_ntc
+
+    unique = sorted(set(int(l) for l in labels))
+    n_c = len(unique)
+    cmap = _mpl.colormaps.get("gist_rainbow")
+    cluster_to_color = {c: cmap(i / max(1, n_c - 1)) for i, c in enumerate(unique)}
+
+    fig, ax = plt.subplots(figsize=(14, 14))
+
+    # Non-NTC points colored by Leiden cluster
+    if nontnc.any():
+        nontnc_colors = np.array(
+            [cluster_to_color[int(labels[i])] for i in np.where(nontnc)[0]]
+        )
+        ax.scatter(
+            coords[nontnc, 0], coords[nontnc, 1],
+            c=nontnc_colors, s=38, alpha=0.55, linewidths=0,
+            zorder=2,
+        )
+
+    # NTC overlay — same red X marks as save_supercluster_overlays /
+    # _plot_categorical_overlay (RGB (0.88, 0.50, 0.50), edge #b05050).
+    if is_ntc.any():
+        ax.scatter(
+            coords[is_ntc, 0], coords[is_ntc, 1],
+            c=[(0.88, 0.50, 0.50)], marker="X", s=175, alpha=0.5,
+            edgecolors="#b05050", linewidths=0.3,
+            label=f"NTC (n={int(is_ntc.sum())})", zorder=10,
+        )
+
+    # Group every point whose cluster's top term matches into one label group
+    # and place a single label at that group's centroid.
+    term_points: Dict[str, List[np.ndarray]] = defaultdict(list)
+    for i, l in enumerate(labels):
+        cid = f"cluster_{int(l)}"
+        term = cluster_to_term.get(cid)
+        if term:
+            term_points[term].append(coords[i])
+
+    if term_points:
+        terms_in_order = list(term_points.keys())
+        centroids = np.array(
+            [np.asarray(term_points[t]).mean(axis=0) for t in terms_in_order]
+        )
+        spans = coords.max(axis=0) - coords.min(axis=0)
+        # Push labels further apart than before (was 0.06 of max span) so they
+        # actually clear each other after the bbox is rendered.
+        min_dist = float(0.11 * max(spans))
+        offsets = _repel_label_positions(
+            centroids, min_dist=min_dist, n_iter=200, step=0.6,
+        )
+
+        # Nicer sans-serif stack — Helvetica/Arial if installed, else falls
+        # back to matplotlib's bundled DejaVu Sans. semibold weight reads
+        # better than plain bold in the small font sizes we use here.
+        text_font_kw = dict(
+            family="sans-serif",
+            fontweight="semibold",
+        )
+
+        for term, centroid, offset in zip(terms_in_order, centroids, offsets):
+            display = _condense_term(term, max_chars=22)
+            if not np.allclose(centroid, offset):
+                ax.plot(
+                    [centroid[0], offset[0]], [centroid[1], offset[1]],
+                    color="0.55", lw=0.5, alpha=0.5, zorder=3,
+                )
+            ax.text(
+                offset[0], offset[1], display,
+                fontsize=11, ha="center", va="center",
+                bbox=dict(boxstyle="round,pad=0.30", fc="white", ec="0.7",
+                          alpha=0.35, lw=0.4),
+                zorder=5,
+                **text_font_kw,
+            )
+
+    # Axis titles + grid (no tick labels, but ticks still drive the grid)
+    ax.set_xlabel(f"{embedder}1", fontsize=20, fontweight="semibold")
+    ax.set_ylabel(f"{embedder}2", fontsize=20, fontweight="semibold")
+    ax.tick_params(axis="both", which="both", labelbottom=False, labelleft=False, length=0)
+    ax.grid(True, alpha=0.35, linewidth=0.6, color="0.55", zorder=0)
+    ax.set_axisbelow(True)
+
+    if is_ntc.any():
+        ax.legend(loc="upper right", fontsize=12, framealpha=0.7)
+
+    n_uniq = len(set(cluster_to_term.values()))
+    ax.set_title(
+        f"{level} {embedder} — colored by {resolution_col}\n"
+        f"{n_c} clusters, {n_uniq} unique top GO terms (label near centroid)",
+        fontsize=20, fontweight="bold", pad=12, family="sans-serif",
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_canonical_leiden_panels(
+    adata_guide,
+    adata_gene_embed,
+    leiden_results: Dict[str, np.ndarray],
+    leiden_guide_results: Dict[str, np.ndarray],
+    enrichment_per_res: Optional[Dict[str, Dict[str, Dict]]],
+    enrichment_guide_per_res: Optional[Dict[str, Dict[str, Dict]]],
+    plots_dir: Path,
+    plt,
+    _logger=logger,
+) -> None:
+    """For every Leiden resolution actually computed and every ``(level,
+    embedder)``, save one PNG — guide UMAP/PHATE and gene UMAP/PHATE — colored
+    by Leiden cluster with the top GO term per cluster placed near the
+    centroid of all points sharing that term. NTCs render as red X marks.
+    All PNGs land in ``plots_dir/canonical_leiden/{level}/png/``."""
+    out_dir = Path(plots_dir) / "canonical_leiden"
+
+    levels = (
+        ("guide", adata_guide, leiden_guide_results or {}, enrichment_guide_per_res),
+        ("gene",  adata_gene_embed, leiden_results or {}, enrichment_per_res),
+    )
+    n_saved = 0
+    for level_name, ad_obj, leiden_dict, enrich_dict in levels:
+        if ad_obj is None or not leiden_dict:
+            continue
+        png_dir = out_dir / level_name / "png"
+        png_dir.mkdir(parents=True, exist_ok=True)
+        perts = (
+            ad_obj.obs["perturbation"].values
+            if "perturbation" in ad_obj.obs.columns
+            else ad_obj.obs_names.values
+        )
+        for resolution_col, labels in leiden_dict.items():
+            cluster_to_term = _top_term_per_cluster(
+                (enrich_dict or {}).get(resolution_col),
+            )
+            for embed_key, embed_label in (("X_umap", "UMAP"), ("X_phate", "PHATE")):
+                if embed_key not in ad_obj.obsm:
+                    continue
+                out_path = png_dir / (
+                    f"{embed_label.lower()}_{resolution_col}.png"
+                )
+                try:
+                    _save_canonical_panel_png(
+                        np.asarray(ad_obj.obsm[embed_key]),
+                        labels,
+                        perts,
+                        cluster_to_term,
+                        level=level_name,
+                        embedder=embed_label,
+                        resolution_col=resolution_col,
+                        out_path=out_path,
+                        plt=plt,
+                    )
+                    n_saved += 1
+                    _logger.info(
+                        "  Saved canonical_leiden/%s/png/%s",
+                        level_name, out_path.name,
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        "  Canonical %s %s %s panel failed: %s",
+                        level_name, embed_label, resolution_col, exc,
+                    )
+    if n_saved == 0:
+        _logger.warning(
+            "  Canonical leiden panels: no eligible (resolution, level, embedder) "
+            "— wrote nothing",
+        )
+
+
+# =============================================================================
 # Public entry-point used by aggregate_channels / apply_second_pass_pca
 # =============================================================================
+
+
+_LEIDEN_CACHE_VERSION = 1
+
+
+def _leiden_cache_path(plots_dir: Path) -> Path:
+    """Cache lives in the run dir (one level up from plots/) as a single
+    pickle, so it survives wiping plots/ but tracks each h5ad pair."""
+    return Path(plots_dir).parent / "leiden_cache.pkl"
+
+
+def _load_leiden_cache(plots_dir: Path, _logger) -> Dict:
+    p = _leiden_cache_path(plots_dir)
+    if not p.exists():
+        return {}
+    try:
+        import pickle
+        with open(p, "rb") as f:
+            cache = pickle.load(f)
+        if not isinstance(cache, dict) or cache.get("version") != _LEIDEN_CACHE_VERSION:
+            return {}
+        return cache
+    except Exception as exc:
+        _logger.warning("  Leiden cache at %s unreadable (%s) — recomputing", p, exc)
+        return {}
+
+
+def _save_leiden_cache(plots_dir: Path, cache: Dict, _logger) -> None:
+    p = _leiden_cache_path(plots_dir)
+    try:
+        import pickle
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "wb") as f:
+            pickle.dump(cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+        _logger.info("  Wrote leiden cache to %s", p)
+    except Exception as exc:
+        _logger.warning("  Failed to write leiden cache (%s)", exc)
+
+
+def _cache_is_valid_for_level(
+    cache_level: Optional[Dict],
+    expected_n_obs: int,
+    expected_resolutions: Tuple[float, ...],
+) -> bool:
+    """Cached level data must (a) match observation count and (b) cover every
+    resolution requested. Extra cached resolutions are fine."""
+    if not cache_level:
+        return False
+    if cache_level.get("n_obs") != int(expected_n_obs):
+        return False
+    cached_cols = set((cache_level.get("leiden") or {}).keys())
+    needed_cols = {f"leiden_r{r:g}" for r in expected_resolutions}
+    return needed_cols.issubset(cached_cols)
+
+
+def _enrichment_for_gene_level(
+    adata_gene_embed, leiden_results, enrichr_libraries, _logger,
+) -> Dict[str, Dict[str, Dict]]:
+    out: Dict[str, Dict[str, Dict]] = {}
+    if not (leiden_results and adata_gene_embed is not None):
+        return out
+    perts_g = (
+        adata_gene_embed.obs["perturbation"].values
+        if "perturbation" in adata_gene_embed.obs.columns
+        else adata_gene_embed.obs_names.values
+    )
+    background = [str(p) for p in perts_g if not str(p).startswith("NTC")]
+    for col, labels in leiden_results.items():
+        cluster_to_genes: Dict[str, List[str]] = {}
+        for i, p in enumerate(perts_g):
+            cluster_to_genes.setdefault(f"cluster_{labels[i]}", []).append(str(p))
+        _logger.info(
+            "  Running GO enrichment for %s (%d clusters)...",
+            col, len(cluster_to_genes),
+        )
+        out[col] = _run_cluster_enrichment(
+            cluster_to_genes, background,
+            libraries=enrichr_libraries, _logger=_logger,
+        )
+    return out
+
+
+def _enrichment_for_guide_level(
+    adata_guide, leiden_guide_results, enrichr_libraries, _logger,
+) -> Dict[str, Dict[str, Dict]]:
+    out: Dict[str, Dict[str, Dict]] = {}
+    if not (leiden_guide_results and adata_guide is not None):
+        return out
+    perts_guide = (
+        adata_guide.obs["perturbation"].values
+        if "perturbation" in adata_guide.obs.columns
+        else adata_guide.obs_names.values
+    )
+    background_guide = sorted({str(p) for p in perts_guide if not str(p).startswith("NTC")})
+    for col, labels in leiden_guide_results.items():
+        cluster_to_genes: Dict[str, List[str]] = {}
+        for i, p in enumerate(perts_guide):
+            cluster_to_genes.setdefault(f"cluster_{labels[i]}", []).append(str(p))
+        cluster_to_genes = {k: sorted(set(v)) for k, v in cluster_to_genes.items()}
+        _logger.info(
+            "  Running GO enrichment for guide-level %s (%d clusters, dedup'd to genes)...",
+            col, len(cluster_to_genes),
+        )
+        out[col] = _run_cluster_enrichment(
+            cluster_to_genes, background_guide,
+            libraries=enrichr_libraries, _logger=_logger,
+        )
+    return out
 
 
 def save_extra_overlays(
@@ -1682,6 +2660,7 @@ def save_extra_overlays(
     leiden_resolutions: Tuple[float, ...] = DEFAULT_LEIDEN_RESOLUTIONS,
     supercategory_config_path: Optional[Path] = None,
     enrichr_libraries: Tuple[str, ...] = DEFAULT_ENRICHR_LIBRARIES,
+    use_cache: bool = True,
     _logger=logger,
 ) -> None:
     """One-shot helper called from aggregation/second-pass: produces all
@@ -1690,34 +2669,84 @@ def save_extra_overlays(
     GO enrichment is computed once per Leiden resolution and reused by both
     the static Leiden PNGs (legend labels) and the main interactive HTMLs
     (per-cluster pathway bar charts).
+
+    Leiden labels and Enrichr GO results are cached to ``<run_dir>/leiden_cache.pkl``
+    after the first compute so re-runs (e.g. ``--overlays-only``) skip both
+    steps. The cache is keyed by ``(level, n_obs)`` and validated against the
+    requested resolutions; pass ``use_cache=False`` to force recomputation.
     """
     overlay_maps = load_overlay_maps(supercategory_config_path)
 
-    leiden_results: Dict[str, np.ndarray] = {}
-    if adata_gene_embed is not None and "X_pca" in adata_gene_embed.obsm:
-        _logger.info("  Running Leiden at resolutions %s on gene embedding...", list(leiden_resolutions))
-        leiden_results = run_leiden_clustering(adata_gene_embed, leiden_resolutions)
+    # Persist gene → CHAD cluster / CORUM complex / super-category lookups onto
+    # adata.obs so they survive into the saved h5ad alongside leiden columns.
+    if adata_gene_embed is not None:
+        _apply_overlay_maps_to_adata(adata_gene_embed, overlay_maps, _logger)
+    if adata_guide is not None:
+        _apply_overlay_maps_to_adata(adata_guide, overlay_maps, _logger)
 
+    cache = _load_leiden_cache(plots_dir, _logger) if use_cache else {}
+    cache_dirty = False
+    cache.setdefault("version", _LEIDEN_CACHE_VERSION)
+
+    # ----- Gene level -----
+    leiden_results: Dict[str, np.ndarray] = {}
     enrichment_per_res: Dict[str, Dict[str, Dict]] = {}
-    if leiden_results and adata_gene_embed is not None:
-        perts_g = (
-            adata_gene_embed.obs["perturbation"].values
-            if "perturbation" in adata_gene_embed.obs.columns
-            else adata_gene_embed.obs_names.values
-        )
-        background = [str(p) for p in perts_g if not str(p).startswith("NTC")]
-        for col, labels in leiden_results.items():
-            cluster_to_genes: Dict[str, List[str]] = {}
-            for i, p in enumerate(perts_g):
-                cluster_to_genes.setdefault(f"cluster_{labels[i]}", []).append(str(p))
+    if adata_gene_embed is not None and "X_pca" in adata_gene_embed.obsm:
+        cache_gene = cache.get("gene") or {}
+        if _cache_is_valid_for_level(cache_gene, adata_gene_embed.n_obs, leiden_resolutions):
             _logger.info(
-                "  Running GO enrichment for %s (%d clusters)...",
-                col, len(cluster_to_genes),
+                "  Using cached gene Leiden + enrichment (%d resolutions)",
+                len(cache_gene.get("leiden", {})),
             )
-            enrichment_per_res[col] = _run_cluster_enrichment(
-                cluster_to_genes, background,
-                libraries=enrichr_libraries, _logger=_logger,
+            leiden_results = dict(cache_gene["leiden"])
+            enrichment_per_res = dict(cache_gene.get("enrichment", {}))
+            _apply_leiden_to_adata(adata_gene_embed, leiden_results, _logger)
+        else:
+            _logger.info("  Running Leiden at resolutions %s on gene embedding...", list(leiden_resolutions))
+            leiden_results = run_leiden_clustering(adata_gene_embed, leiden_resolutions)
+            enrichment_per_res = _enrichment_for_gene_level(
+                adata_gene_embed, leiden_results, enrichr_libraries, _logger,
             )
+            cache["gene"] = {
+                "n_obs": int(adata_gene_embed.n_obs),
+                "leiden": leiden_results,
+                "enrichment": enrichment_per_res,
+            }
+            cache_dirty = True
+        # Per-gene top-term annotation from Enrichr (GO BP / GO CC / Reactome / KEGG)
+        if enrichment_per_res:
+            _apply_enrichment_to_adata(
+                adata_gene_embed, leiden_results, enrichment_per_res, _logger=_logger
+            )
+
+    # ----- Guide level -----
+    leiden_guide_results: Dict[str, np.ndarray] = {}
+    enrichment_guide_per_res: Dict[str, Dict[str, Dict]] = {}
+    if adata_guide is not None and "X_pca" in adata_guide.obsm:
+        cache_guide = cache.get("guide") or {}
+        if _cache_is_valid_for_level(cache_guide, adata_guide.n_obs, leiden_resolutions):
+            _logger.info(
+                "  Using cached guide Leiden + enrichment (%d resolutions)",
+                len(cache_guide.get("leiden", {})),
+            )
+            leiden_guide_results = dict(cache_guide["leiden"])
+            enrichment_guide_per_res = dict(cache_guide.get("enrichment", {}))
+            _apply_leiden_to_adata(adata_guide, leiden_guide_results, _logger)
+        else:
+            _logger.info("  Running Leiden at resolutions %s on guide embedding...", list(leiden_resolutions))
+            leiden_guide_results = run_leiden_clustering(adata_guide, leiden_resolutions)
+            enrichment_guide_per_res = _enrichment_for_guide_level(
+                adata_guide, leiden_guide_results, enrichr_libraries, _logger,
+            )
+            cache["guide"] = {
+                "n_obs": int(adata_guide.n_obs),
+                "leiden": leiden_guide_results,
+                "enrichment": enrichment_guide_per_res,
+            }
+            cache_dirty = True
+
+    if cache_dirty:
+        _save_leiden_cache(plots_dir, cache, _logger)
 
     save_supercluster_overlays(
         adata_guide, adata_gene_embed, overlay_maps, plots_dir, plt, _logger=_logger,
@@ -1726,9 +2755,31 @@ def save_extra_overlays(
         adata_gene_embed, leiden_results, plots_dir, plt, _logger=_logger,
         enrichment_per_res=enrichment_per_res,
     )
+    # Guide-level CSVs (no static PNGs — too many guides to plot meaningfully).
+    save_leiden_csvs(
+        adata_guide,
+        leiden_guide_results,
+        Path(plots_dir) / "leiden",
+        "guide",
+        enrichment_per_res=enrichment_guide_per_res,
+        _logger=_logger,
+    )
     save_interactive_html(
         adata_guide, adata_gene_embed, overlay_maps, leiden_results,
         activity_map, dist_map, corum_map, chad_map,
         plots_dir, _logger=_logger,
         enrichment_per_res=enrichment_per_res,
+        leiden_guide_results=leiden_guide_results,
+        enrichment_guide_per_res=enrichment_guide_per_res,
+    )
+    save_canonical_leiden_panels(
+        adata_guide=adata_guide,
+        adata_gene_embed=adata_gene_embed,
+        leiden_results=leiden_results,
+        leiden_guide_results=leiden_guide_results,
+        enrichment_per_res=enrichment_per_res,
+        enrichment_guide_per_res=enrichment_guide_per_res,
+        plots_dir=plots_dir,
+        plt=plt,
+        _logger=_logger,
     )
