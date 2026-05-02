@@ -42,6 +42,8 @@ dependencies = [
     "diffusers[torch]",
     "phate>=1.0.7",
     "termcolor",
+    "plotly>=5.0",
+    "maayanlab-bioinformatics @ git+https://github.com/MaayanLab/maayanlab-bioinformatics.git",
 ]
 
 # extras
