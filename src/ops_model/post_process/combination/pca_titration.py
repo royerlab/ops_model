@@ -1198,6 +1198,29 @@ def _build_parser():
         "--include-cellpainting", action="store_true",
         help="Look under with_cellpainting/ (same as pca_optimization --include-cellpainting)",
     )
+    parser.add_argument(
+        "--with-4i", dest="include_4i", action="store_true",
+        help="Look under with_4i/ (same as pca_optimization --with-4i). "
+             "Composes with --with-cp and --include-cellpainting.",
+    )
+    parser.add_argument(
+        "--with-cp", dest="include_cp", action="store_true",
+        help="Look under with_cp/ (same as pca_optimization --with-cp). Composes with --with-4i.",
+    )
+    parser.add_argument(
+        "--only-4i", action="store_true",
+        help="Look under only_4i/ (same as pca_optimization --only-4i). Implies --with-4i.",
+    )
+    parser.add_argument(
+        "--only-cp", action="store_true",
+        help="Look under only_cp/ (same as pca_optimization --only-cp). Implies --with-cp.",
+    )
+    parser.add_argument(
+        "--paper-v1", type=str, nargs="?",
+        const="/hpc/projects/icd.fast.ops/configs/good_experiment_list_v1.yml",
+        default=None,
+        help="Look under paper_v1/ (same as pca_optimization --paper-v1).",
+    )
     parser.add_argument("--minibinder-subset", action="store_true",
                         help="Also run titration on the 20 minibinder geneKO targets "
                              "and produce comparison overlay plots")
@@ -1249,6 +1272,14 @@ def _build_parser():
 
 def _resolve_output_dir(args) -> Path:
     """Mirror pca_optimization.main() output nesting (non --direct)."""
+    only_4i = getattr(args, "only_4i", False)
+    only_cp = getattr(args, "only_cp", False)
+    if only_4i:
+        args.include_4i = True
+    if only_cp:
+        args.include_cp = True
+    include_standard = not (only_4i or only_cp)
+
     output_dir = Path(args.output_dir)
     if args.cell_profiler:
         output_dir = output_dir / "cellprofiler"
@@ -1260,8 +1291,17 @@ def _resolve_output_dir(args) -> Path:
     if getattr(args, "zscore_per_experiment", False):
         output_dir = output_dir / "zscore_per_exp"
 
+    if getattr(args, "paper_v1", None):
+        output_dir = output_dir / "paper_v1"
+
     if getattr(args, "include_cellpainting", False):
         output_dir = output_dir / "with_cellpainting"
+
+    if getattr(args, "include_cp", False):
+        output_dir = output_dir / ("only_cp" if only_cp and not include_standard else "with_cp")
+
+    if getattr(args, "include_4i", False):
+        output_dir = output_dir / ("only_4i" if only_4i and not include_standard else "with_4i")
 
     ds_suffix = "_per_guide" if getattr(args, "downsample_per_guide", False) else ""
     ds_on = args.downsampled or getattr(args, "downsample_per_guide", False)
@@ -1276,7 +1316,7 @@ def _resolve_output_dir(args) -> Path:
     elif ds_on:
         output_dir = output_dir / f"downsampled{ds_suffix}"
     else:
-        output_dir = output_dir / "all"
+        output_dir = output_dir / "all_livecell"
 
     ft = getattr(args, "fixed_threshold", None)
     if ft is not None and ft > 0:
@@ -1500,7 +1540,10 @@ def main():
     print(f"Titration output: {titration_dir}")
 
     if args.slurm:
-        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+        from ops_utils.hpc.slurm_batch_utils import (
+            submit_parallel_jobs,
+            wait_for_multiple_job_arrays,
+        )
 
         def _make_job(cf):
             sig_safe = cf.stem.replace("_cells", "")[:40]
@@ -1537,31 +1580,56 @@ def main():
             "cpus_per_task": args.slurm_cpus,
             "slurm_partition": args.slurm_partition,
         }
-        all_failed = []
+
+        # Submit both arrays without waiting so they run in parallel on SLURM,
+        # then watch them together (mirrors pca_optimization _handle_downsampled).
+        job_arrays = []
+        regular_params = {**base_slurm_params, "timeout_min": args.slurm_time}
+        phase_params = {**base_slurm_params, "timeout_min": phase_time}
 
         if regular_jobs:
             print(f"\nSubmitting {len(regular_jobs)} SLURM titration jobs ({args.slurm_time}min each)...")
-            result = submit_parallel_jobs(
+            result_reg = submit_parallel_jobs(
                 jobs_to_submit=regular_jobs,
                 experiment="pca_titration",
-                slurm_params={**base_slurm_params, "timeout_min": args.slurm_time},
+                slurm_params=regular_params,
                 log_dir="pca_optimization",
                 manifest_prefix="pca_titration",
-                wait_for_completion=True,
+                wait_for_completion=False,
             )
-            all_failed.extend(result.get("failed", []))
+            if result_reg.get("submitted_jobs"):
+                job_arrays.append({
+                    "submitted_jobs": result_reg["submitted_jobs"],
+                    "base_job_id": result_reg["base_job_id"],
+                    "label": "reporters",
+                    "slurm_params": regular_params,
+                })
 
         if phase_jobs:
             print(f"\nSubmitting {len(phase_jobs)} Phase titration job(s) ({phase_time}min)...")
-            result = submit_parallel_jobs(
+            result_phase = submit_parallel_jobs(
                 jobs_to_submit=phase_jobs,
                 experiment="pca_titration_phase",
-                slurm_params={**base_slurm_params, "timeout_min": phase_time},
+                slurm_params=phase_params,
                 log_dir="pca_optimization",
                 manifest_prefix="pca_titration_phase",
-                wait_for_completion=True,
+                wait_for_completion=False,
             )
-            all_failed.extend(result.get("failed", []))
+            if result_phase.get("submitted_jobs"):
+                job_arrays.append({
+                    "submitted_jobs": result_phase["submitted_jobs"],
+                    "base_job_id": result_phase["base_job_id"],
+                    "label": "phase",
+                    "slurm_params": phase_params,
+                })
+
+        all_failed = []
+        if job_arrays:
+            wait_result = wait_for_multiple_job_arrays(
+                job_arrays,
+                experiment="pca_titration",
+            )
+            all_failed = wait_result.get("failed", []) or []
 
         total_jobs = len(regular_jobs) + len(phase_jobs)
         if all_failed:
