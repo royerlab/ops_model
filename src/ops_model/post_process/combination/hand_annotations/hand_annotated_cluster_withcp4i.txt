@@ -1,8 +1,8 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
 # Total clusters annotated: 94
 # Total unique genes (primary section members): 810 / 1052 (77%)
-# Genes also appearing in another section's cluster (overlap-noted): 20
-# Total overlap annotations across the file: 24
+# Genes also appearing in another section's cluster (overlap-noted): 27
+# Total overlap annotations across the file: 31
 # Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
 # Significance: *** p≤0.001 (42), ** p≤0.01 (20), * p≤0.05 (40), ns p>0.05 (0)
 # Each section IS a complete leiden cluster (section_size = cluster_size).
@@ -53,14 +53,6 @@ SNAPC2
 SNRNP70
 CPSF6  # added from cluster
 NUDT21  # added from cluster
-Chromatid Cohesion/GBAF Complex:
-# r20 cluster_58: 5/5
-# Cohesin Loading Onto Chromatin (GO_BP) — adj_p=9.3e-07 ***
-BRD9
-RAD21
-SMARCD1
-SMC1A
-SMC3
 
 Regulation of DNA-templated Transcription:
 # r20 cluster_33: 5/5
@@ -70,6 +62,47 @@ BTAF1
 LIN9
 NEK1
 PRMT3
+
+Chromatid Cohesion/GBAF Complex:
+# r20 cluster_58: 5/5
+# Cohesin Loading Onto Chromatin (GO_BP) — adj_p=9.3e-07 ***
+BRD9
+RAD21
+SMARCD1
+SMC1A
+SMC3
+
+DNA Methylation/Methionine&Cysteine Metabolism:
+# r7 cluster_38: 15/15
+# DNA Methylation (Reactome) — adj_p=2.0e-02 *
+BEND6
+BTBD9
+CABIN1
+CMTR1
+CNOT10
+CNOT11
+DNMT1
+HIC2
+NUFIP2
+RANBP1
+SLC35B2
+TBP
+TMEM63B
+UHRF1
+USP18
+
+# ============================================================
+# Splicing & RNA Processing
+# ============================================================
+
+Spliceosome:
+# r20 cluster_148: 5/5
+# SPLICEOSOME (KEGG) — adj_p=1.4e-05 ***
+SF3B3
+SF3B5
+SNRPD1
+SNRPD2
+SNRPD3
 
 mRNA Splicing:
 # r20 cluster_61: 16/16
@@ -91,14 +124,36 @@ SRSF3
 TFIP11
 XAB2
 
-Spliceosome:
-# r20 cluster_148: 5/5
-# SPLICEOSOME (KEGG) — adj_p=1.4e-05 ***
-SF3B3
-SF3B5
-SNRPD1
-SNRPD2
-SNRPD3
+snRNA:
+# r7 cluster_6: 6/6
+# snRNA Metabolic Process (GO_BP) — adj_p=6.3e-11 ***
+INTS1
+INTS2
+INTS5
+INTS7
+ACSL4  # added from cluster
+INTS10  # added from cluster
+
+mRNA Processing (CCDC174 set):
+# r10 cluster_49: 7/7
+# mRNA Processing (GO_BP) — adj_p=4.9e-03 **
+CCDC174
+DDX39B
+KIN
+PPIE
+PPWD1
+RNF20
+ZFR
+
+mRNA Export / 3' Processing:
+# r10 cluster_65: 5/5
+# Transport Of Mature mRNA Derived From An Intronless Transcript (Reactome) — adj_p=1.5e-04 ***
+# mRNA 3'-End Processing (GO_BP) — adj_p=1.0e-02 **
+CPSF2
+CPSF3
+EXOSC5
+NUP214
+RGP1
 
 RNA Degradation / Chaperone-Mediated Protein Folding:
 # r4 cluster_35: 21/21
@@ -126,27 +181,6 @@ USP39
 ZCCHC9
 ZNRD1
 
-snRNA:
-# r7 cluster_6: 6/6
-# snRNA Metabolic Process (GO_BP) — adj_p=6.3e-11 ***
-INTS1
-INTS2
-INTS5
-INTS7
-ACSL4  # added from cluster
-INTS10  # added from cluster
-
-mRNA Processing (CCDC174 set):
-# r10 cluster_49: 7/7
-# mRNA Processing (GO_BP) — adj_p=4.9e-03 **
-CCDC174
-DDX39B
-KIN
-PPIE
-PPWD1
-RNF20
-ZFR
-
 P-body:
 # r10 cluster_33: 10/10
 # P-body (GO_CC) — adj_p=1.3e-03 **
@@ -161,48 +195,9 @@ TNRC6A
 VAMP4
 LARP7  # added from cluster
 
-mRNA Export / 3' Processing:
-# r10 cluster_65: 5/5
-# Transport Of Mature mRNA Derived From An Intronless Transcript (Reactome) — adj_p=1.5e-04 ***
-# mRNA 3'-End Processing (GO_BP) — adj_p=1.0e-02 **
-CPSF2
-CPSF3
-EXOSC5
-NUP214
-RGP1
-
-DNA Methylation/Methionine&Cysteine Metabolism:
-# r7 cluster_38: 15/15
-# DNA Methylation (Reactome) — adj_p=2.0e-02 *
-BEND6
-BTBD9
-CABIN1
-CMTR1
-CNOT10
-CNOT11
-DNMT1
-HIC2
-NUFIP2
-RANBP1
-SLC35B2
-TBP
-TMEM63B
-UHRF1
-USP18
-
-Aminoacyl-tRNA Synthetases / eIF2B:
-# r30 cluster_1: 9/9
-# Cytoplasmic Translational Initiation (GO_BP) — adj_p=1.3e-02 *
-# AMINOACYL-TRNA BIOSYNTHESIS (KEGG) — adj_p=4.3e-03 ** [validated at r20-c1]
-AARS
-ASNS
-DARS
-EIF2B2
-EIF2B4
-EPRS
-HARS
-LARS
-RARS
+# ============================================================
+# Translation Initiation & Aminoacyl-tRNA
+# ============================================================
 
 Translation:
 # r7 cluster_3: 5/5
@@ -212,16 +207,6 @@ NOP9
 RPLP1
 RPLP2
 ZZZ3
-
-tRNA aminoacylation for Protein Translation:
-# r30 cluster_76: 6/6
-# tRNA Aminoacylation (Reactome) — adj_p=1.1e-03 **
-CARS
-FARSA
-FARSB
-HYOU1
-KRI1
-MARS
 
 Translation Initiation:
 # r30 cluster_137: 6/6
@@ -245,6 +230,30 @@ EIF4G1
 EIF5B
 HSPA5
 TSR2
+
+Aminoacyl-tRNA Synthetases / eIF2B:
+# r30 cluster_1: 9/9
+# Cytoplasmic Translational Initiation (GO_BP) — adj_p=1.3e-02 *
+# AMINOACYL-TRNA BIOSYNTHESIS (KEGG) — adj_p=4.3e-03 ** [validated at r20-c1]
+AARS
+ASNS
+DARS
+EIF2B2
+EIF2B4
+EPRS
+HARS
+LARS
+RARS
+
+tRNA aminoacylation for Protein Translation:
+# r30 cluster_76: 6/6
+# tRNA Aminoacylation (Reactome) — adj_p=1.1e-03 **
+CARS
+FARSA
+FARSB
+HYOU1
+KRI1
+MARS
 
 Rescue of Stalled Ribosome:
 # r10 cluster_20: 22/22
@@ -272,40 +281,21 @@ TWSG1
 UFSP2
 USP14
 
-Ribosome biogenesis:
-# r20 cluster_118: 5/5
-# Ribosome Biogenesis (GO_BP) — adj_p=6.1e-04 ***
-EIF6
-NOL8
-NOLC1
-NOP16
-URB2
+Translational Stress Response (loose cluster):
+# r30 cluster_4: 8/8
+# Regulation of Translational Initiation in Response to Stress (GO_BP) — adj_p=3.8e-02 *
+ABHD10
+CPOX
+FOXL2
+METTL3
+NACC1
+PPP1CA
+WRB
+ZBED2
 
-Maturation of 5.8S rRNA:
-# r20 cluster_126: 6/6
-# Maturation of 5.8S rRNA (GO_BP) — adj_p=1.1e-02 *
-# RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 *** [validated at r50-c202]
-FTSJ3
-GNL3
-GTPBP4
-NSA2
-PPAN
-XPO1
-
-rRNA Processing:
-# r30 cluster_2: 11/11
-# rRNA Processing In Nucleus And Cytosol (Reactome) — adj_p=5.7e-10 ***
-AATF
-BMS1
-DDX47
-DDX52
-IMP4
-NOL10
-NOL6
-RCL1
-RRP7A
-TSR1
-UTP14A
+# ============================================================
+# Ribosomes & Ribosome Biogenesis
+# ============================================================
 
 Large Ribosomal Subunit:
 # r30 cluster_195: 12/12
@@ -339,6 +329,23 @@ RPS6
 RPS8
 RPS9
 
+Cytosolic Small Ribosomal Subunit:
+# r30 cluster_196: 4/4
+# Cytosolic Small Ribosomal Subunit (GO_CC) — adj_p=2.9e-03 ** [validated at r20-c142]
+RPS27A
+RPS29
+RPSA
+RSL24D1
+
+Ribosome biogenesis:
+# r20 cluster_118: 5/5
+# Ribosome Biogenesis (GO_BP) — adj_p=6.1e-04 ***
+EIF6
+NOL8
+NOLC1
+NOP16
+URB2
+
 Nucleolus:
 # r20 cluster_109: 9/9
 # Nucleolus (GO_CC) — adj_p=6.9e-09 ***
@@ -352,6 +359,32 @@ RPL5
 RRS1
 WDR12
 
+Maturation of 5.8S rRNA:
+# r20 cluster_126: 6/6
+# Maturation of 5.8S rRNA (GO_BP) — adj_p=1.1e-02 *
+# RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 *** [validated at r50-c202]
+FTSJ3
+GNL3
+GTPBP4
+NSA2
+PPAN
+XPO1
+
+rRNA Processing:
+# r30 cluster_2: 11/11
+# rRNA Processing In Nucleus And Cytosol (Reactome) — adj_p=5.7e-10 ***
+AATF
+BMS1
+DDX47
+DDX52
+IMP4
+NOL10
+NOL6
+RCL1
+RRP7A
+TSR1
+UTP14A
+
 Small-Subunit Processome (pre-rRNA):
 # r30 cluster_66: 6/6
 # Small-Subunit Processome (GO_CC) — adj_p=1.9e-07 ***
@@ -362,13 +395,19 @@ NOP58
 TBL3
 WDR36
 
-Cytosolic Small Ribosomal Subunit:
-# r30 cluster_196: 4/4
-# Cytosolic Small Ribosomal Subunit (GO_CC) — adj_p=2.9e-03 ** [validated at r20-c142]
-RPS27A
-RPS29
-RPSA
-RSL24D1
+# ============================================================
+# tRNA Metabolism
+# ============================================================
+
+tRNA Metabolic Process:
+# r20 cluster_75: 6/6
+# tRNA Metabolic Process (GO_BP) — adj_p=7.7e-03 **
+CD2BP2
+CDIPT
+GTF3C1
+INO80E
+TSEN2
+UBN1
 
 tRNA uridine modification:
 # r2 cluster_14: 8/8
@@ -382,15 +421,10 @@ RHOF
 URM1
 USP10
 
-tRNA Metabolic Process:
-# r20 cluster_75: 6/6
-# tRNA Metabolic Process (GO_BP) — adj_p=7.7e-03 **
-CD2BP2
-CDIPT
-GTF3C1
-INO80E
-TSEN2
-UBN1
+# ============================================================
+# DNA Replication & Repair
+# ============================================================
+
 DNA Replication:
 # r4 cluster_37: 13/13
 # DNA-templated DNA Replication (GO_BP) — adj_p=1.5e-14 ***
@@ -407,6 +441,7 @@ RRM1
 TIMELESS
 TIPIN
 TONSL
+
 CMG Complex (replication helicase):
 # r5 cluster_40: 7/7
 # CMG Complex (GO_CC) — adj_p=9.2e-03 **
@@ -446,18 +481,36 @@ RPA2
 RPL41
 TUBB8
 
-Spindle:
-# r30 cluster_16: 9/9
-# Spindle (GO_CC) — adj_p=1.9e-05 ***
-AURKB
-C2orf27B
-ECT2
-GOLGA6L1
-GOLGA8K
-INCENP
-KIF11
-KIF23
-KRT18
+# ============================================================
+# Cell Cycle & Mitosis
+# ============================================================
+
+CDK7/CCNH (CAK Complex):
+# r7 cluster_45: 19/23
+# Cyclin-Dependent Protein Kinase Holoenzyme Complex (GO_CC) — adj_p=3.9e-04 ***
+CA5A
+CCNH
+CDK7
+CHD4
+COMTD1
+COX14
+GGTLC2
+HSF1
+METTL7A
+MROH6
+P4HB
+PTPRR
+RAC3
+RBM42
+TERF1
+TRAPPC2L
+TUBA1A
+USH1G
+USP36
+CCND3  # also in cluster — listed in p53 Signaling Pathway
+CCNG1  # also in cluster — listed in p53 Signaling Pathway
+CHMP1A  # also in cluster — listed in p53 Signaling Pathway
+PPIA  # also in cluster — listed in p53 Signaling Pathway
 
 Cell Division:
 # r10 cluster_47: 12/12
@@ -474,6 +527,20 @@ MTHFD1
 SEC24A
 NCOA4  # added from cluster
 THG1L  # added from cluster
+
+Spindle:
+# r30 cluster_16: 9/9
+# Spindle (GO_CC) — adj_p=1.9e-05 ***
+AURKB
+C2orf27B
+ECT2
+GOLGA6L1
+GOLGA8K
+INCENP
+KIF11
+KIF23
+KRT18
+
 Microtubule Nucleation:
 # r30 cluster_161: 7/7
 # Regulation of Microtubule Nucleation (GO_BP) — adj_p=1.5e-05 ***
@@ -498,28 +565,9 @@ FAM83H
 PCF11
 TUBGCP6
 
-CDK7/CCNH (CAK Complex):
-# r7 cluster_45: 23/23
-# Cyclin-Dependent Protein Kinase Holoenzyme Complex (GO_CC) — adj_p=3.9e-04 ***
-CA5A
-CCNH
-CDK7
-CHD4
-COMTD1
-COX14
-GGTLC2
-HSF1
-METTL7A
-MROH6
-P4HB
-PTPRR
-RAC3
-RBM42
-TERF1
-TRAPPC2L
-TUBA1A
-USH1G
-USP36
+# ============================================================
+# ER & Protein Quality Control
+# ============================================================
 
 ER Membrane/Protein Glycosylation:
 # r7 cluster_34: 18/18
@@ -553,15 +601,6 @@ EMC2
 EMC3
 RBM26
 
-Actin Nucleation (ARP2/3):
-# r20 cluster_8: 5/5
-# Actin Nucleation (GO_BP) — adj_p=1.1e-06 ***
-ACTR3
-ARPC2
-ARPC3
-ARPC4
-TARDBP
-
 Protein Targeting to ER (SRP/SEC61):
 # r20 cluster_131: 7/7
 # Protein Targeting to ER (GO_BP) — adj_p=1.8e-08 ***
@@ -574,7 +613,7 @@ SRP68
 SRPRA
 
 Tail-Anchored Membrane Protein Insertion into ER (GET pathway):
-# r7 cluster_31: 13/13
+# r7 cluster_31: 10/13
 # Tail-Anchored Membrane Protein Insertion Into ER Membrane (GO_BP) — adj_p=3.3e-04 ***
 ARGLU1
 CUL1
@@ -586,6 +625,9 @@ SCAF8
 SETD1B
 SPCS3
 TGFBR1
+EMC1  # also in cluster — listed in Protein insertion into ER
+EMC2  # also in cluster — listed in Protein insertion into ER
+EMC3  # also in cluster — listed in Protein insertion into ER
 NUFIP2  # went to: DNA Methylation/Methionine&Cysteine Metabolism
 
 Hrd1p Ubiquitin Ligase Complex (ERAD):
@@ -614,6 +656,36 @@ MCEE
 MCM5
 POLE4
 UQCC2
+
+Unfolded Protein Response:
+# r20 cluster_113: 10/10
+# Response to Unfolded Protein (GO_BP) — adj_p=4.1e-02 *
+DYNLL2
+ERN1
+FAT1
+HOXB2
+LIMD2
+MBTD1
+MIEN1
+SLC35B1
+SLC4A1
+TM7SF3
+
+# ============================================================
+# Membrane Trafficking — Golgi & Vesicles
+# ============================================================
+
+ER to Golgi Anterograde Transport:
+# r20 cluster_93: 8/8
+# ER To Golgi Anterograde Transport (Reactome) — adj_p=2.0e-09 ***
+COG3
+PREB
+SEC16A
+SEC23IP
+STX5
+TMED2
+TRAPPC11
+TRAPPC4
 
 Golgi to plasma membrane transport:
 # r10 cluster_36: 11/11
@@ -650,6 +722,17 @@ SNX32
 THOC3
 EXOSC5  # in cluster but listed under another section
 
+Golgi Lumen:
+# r5 cluster_36: 7/7
+# Golgi Lumen (GO_CC) — adj_p=7.5e-03 **
+GABRR3
+LIAS
+MUC13
+PIAS1
+PROS1
+SEC22A
+TIPARP
+
 Golgi Cisterna:
 # r30 cluster_148: 6/6
 # Golgi Cisterna (GO_CC) — adj_p=3.6e-02 *
@@ -671,18 +754,6 @@ GBF1
 NAPA
 SON
 
-ER to Golgi Anterograde Transport:
-# r20 cluster_93: 8/8
-# ER To Golgi Anterograde Transport (Reactome) — adj_p=2.0e-09 ***
-COG3
-PREB
-SEC16A
-SEC23IP
-STX5
-TMED2
-TRAPPC11
-TRAPPC4
-
 Coated Vesicle:
 # r10 cluster_23: 6/6
 # Coated Vesicle (GO_CC) — adj_p=4.7e-02 *
@@ -693,16 +764,24 @@ PRPF39
 TMEM167A
 YIPF5
 
-Golgi Lumen:
-# r5 cluster_36: 7/7
-# Golgi Lumen (GO_CC) — adj_p=7.5e-03 **
-GABRR3
-LIAS
-MUC13
-PIAS1
-PROS1
-SEC22A
-TIPARP
+# ============================================================
+# Endocytosis & Lysosome
+# ============================================================
+
+Endocytosis:
+# r30 cluster_15: 10/10
+# ENDOCYTOSIS (KEGG) — adj_p=4.3e-02 *
+AGAP4
+AGAP9
+CBWD1
+CBWD3
+FOXD4L1
+NBPF15
+TBC1D3B
+TBC1D3G
+TRIM43
+USP17L5
+
 Endosome/Clathrin:
 # r30 cluster_28: 6/6
 # Clathrin-mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
@@ -714,19 +793,6 @@ GRB2
 KRAS
 SH3GL1
 
-Cation Transmembrane Transport:
-# r30 cluster_47: 8/8
-# Monoatomic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
-# Inorganic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
-ATP6V0A1
-CACNB1
-HSPB9
-KRT10
-PIGS
-RAB5C
-STAT5B
-TEFM
-
 Lysosomal Transport:
 # r20 cluster_84: 6/6
 # Lysosomal Transport (GO_BP) — adj_p=5.4e-06 ***
@@ -736,16 +802,6 @@ CHMP6
 HGS
 PDCD7
 VPS29
-
-Actin Polymerization:
-# r10 cluster_67: 6/6
-# Actin Filament Polymerization (GO_BP) — adj_p=3.2e-02 *
-CTPS2
-GPX4
-HDAC6
-PIM2
-SH3KBP1
-WASL
 
 Secondary Lysosome:
 # r5 cluster_28: 17/17
@@ -768,38 +824,9 @@ SKP2
 SPHK2
 ZNF574
 
-Voltage-gate Sodium Channel Complex:
-# r30 cluster_176: 6/6
-# Sodium Channel Complex (GO_CC) — adj_p=3.6e-02 *
-METTL7B
-MUCL1
-PAN2
-SCN8A
-TSPAN31
-ZBTB39
-
-Sodium Channel Complex:
-# r10 cluster_43: 9/9
-# (no Enrichr term matches title; top sig: Regulation of Heart Contraction (GO_BP) p=2.8e-02)
-BRK1
-CIAPIN1
-COG4
-GLB1
-PKMYT1
-SCN10A
-TRPC1
-TYK2
-MOB4  # added from cluster
-Potassium Ion Transport:
-# r20 cluster_43: 7/7
-# Potassium Ion Transport (GO_BP) — adj_p=4.0e-02 *
-ATIC
-BET1
-CA13
-KCNG1
-NBEAL1
-NUDCD1
-ZNF704
+# ============================================================
+# Cell Surface — Channels / Adhesion / Signaling
+# ============================================================
 
 Calcium Signaling:
 # r10 cluster_17: 19/19
@@ -839,6 +866,54 @@ SNRNP40
 SSBP3
 SSX2IP
 TRIM33
+
+Cation Transmembrane Transport:
+# r30 cluster_47: 8/8
+# Monoatomic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
+# Inorganic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
+ATP6V0A1
+CACNB1
+HSPB9
+KRT10
+PIGS
+RAB5C
+STAT5B
+TEFM
+
+Voltage-gate Sodium Channel Complex:
+# r30 cluster_176: 6/6
+# Sodium Channel Complex (GO_CC) — adj_p=3.6e-02 *
+METTL7B
+MUCL1
+PAN2
+SCN8A
+TSPAN31
+ZBTB39
+
+Sodium Channel Complex:
+# r10 cluster_43: 9/9
+# (no Enrichr term matches title; top sig: Regulation of Heart Contraction (GO_BP) p=2.8e-02)
+BRK1
+CIAPIN1
+COG4
+GLB1
+PKMYT1
+SCN10A
+TRPC1
+TYK2
+MOB4  # added from cluster
+
+Potassium Ion Transport:
+# r20 cluster_43: 7/7
+# Potassium Ion Transport (GO_BP) — adj_p=4.0e-02 *
+ATIC
+BET1
+CA13
+KCNG1
+NBEAL1
+NUDCD1
+ZNF704
+
 Cell Adhesion Molecules:
 # r7 cluster_25: 8/8
 # Calcium-Independent Cell-Cell Adhesion via Plasma Membrane Cell-Adhesion Molecules (GO_BP) — adj_p=2.5e-02 *
@@ -851,6 +926,53 @@ PLOD3
 PTDSS1
 SDC1
 DLD  # went to: DNA Repair / Endosomal Cluster
+
+Cell Motility / Integrin Signaling:
+# r7 cluster_54: 5/5
+# MET Promotes Cell Motility (Reactome) — adj_p=7.8e-03 **
+# CD40 Signaling Pathway (GO_BP) — adj_p=1.8e-02 *
+CFL1
+ITGB1
+MEAF6
+RAPGEF1
+ZC3H4
+
+# ============================================================
+# Cytoskeleton & Motility
+# ============================================================
+
+Actin Nucleation (ARP2/3):
+# r20 cluster_8: 5/5
+# Actin Nucleation (GO_BP) — adj_p=1.1e-06 ***
+ACTR3
+ARPC2
+ARPC3
+ARPC4
+TARDBP
+
+Actin Polymerization:
+# r10 cluster_67: 6/6
+# Actin Filament Polymerization (GO_BP) — adj_p=3.2e-02 *
+CTPS2
+GPX4
+HDAC6
+PIM2
+SH3KBP1
+WASL
+
+Actin Filament Depolymerization:
+# r20 cluster_56: 9/9
+# Actin Filament Depolymerization (GO_BP) — adj_p=4.7e-02 *
+# Negative Regulation of Organelle Assembly (GO_BP) — adj_p=1.1e-02 * [also enriched, BRCA1+TWF1-driven]
+BRCA1
+KRTAP2-3
+KRTAP2-4
+KRTAP4-2
+NMT1
+OSBPL7
+PHF23
+PPY
+TWF1
 
 Dynein Complex:
 # r20 cluster_88: 8/8
@@ -879,42 +1001,9 @@ SPEN
 ZMYM3
 ZNF131
 
-Unfolded Protein Response:
-# r20 cluster_113: 10/10
-# Response to Unfolded Protein (GO_BP) — adj_p=4.1e-02 *
-DYNLL2
-ERN1
-FAT1
-HOXB2
-LIMD2
-MBTD1
-MIEN1
-SLC35B1
-SLC4A1
-TM7SF3
-Cell Motility / Integrin Signaling:
-# r7 cluster_54: 5/5
-# MET Promotes Cell Motility (Reactome) — adj_p=7.8e-03 **
-# CD40 Signaling Pathway (GO_BP) — adj_p=1.8e-02 *
-CFL1
-ITGB1
-MEAF6
-RAPGEF1
-ZC3H4
-
-Actin Filament Depolymerization:
-# r20 cluster_56: 9/9
-# Actin Filament Depolymerization (GO_BP) — adj_p=4.7e-02 *
-# Negative Regulation of Organelle Assembly (GO_BP) — adj_p=1.1e-02 * [also enriched, BRCA1+TWF1-driven]
-BRCA1
-KRTAP2-3
-KRTAP2-4
-KRTAP4-2
-NMT1
-OSBPL7
-PHF23
-PPY
-TWF1
+# ============================================================
+# Nuclear Pore & Transport
+# ============================================================
 
 Nuclear Import:
 # r10 cluster_61: 8/8
@@ -928,14 +1017,14 @@ PFN1
 RANGAP1
 UBAP2L
 
-Mitochondrial Outer Membrane (FBXL4 cluster):
-# r30 cluster_145: 5/5
-# Mitochondrial Outer Membrane (GO_CC) — adj_p=1.4e-02 *
-FBXL4
-PRDM13
-RNF146
-UFL1
-ZRSR2
+Nuclear Pore Organization:
+# r20 cluster_139: 4/5
+# Nuclear Pore Organization (GO_BP) — adj_p=9.8e-04 ***
+MAP2K7
+NUP54
+NUP98
+RAE1
+MOB4  # in cluster but listed under another section
 
 Nuclear Deformation/Cornified Envelope:
 # r20 cluster_132: 8/8
@@ -949,26 +1038,24 @@ RHOQ
 SPRR2A
 SPRR2B
 
-Nuclear Pore Organization:
-# r20 cluster_139: 4/5
-# Nuclear Pore Organization (GO_BP) — adj_p=9.8e-04 ***
-MAP2K7
-NUP54
-NUP98
-RAE1
-MOB4  # in cluster but listed under another section
+# ============================================================
+# Mitochondria
+# ============================================================
 
-Mitochondrial Outer Membrane (extended cluster):
-# r20 cluster_99: 5/6
-# (no Enrichr term matches title; top sig: Chromocenter (GO_CC) p=4.2e-02)
-COQ10B
-GTF3C6
-MBD5
-SEC63
-TBPL1
-THG1L  # in cluster but listed under another section
-
-HSD17B12  # went to: Protein Targeting to ER (SRP/SEC61)
+Mitochondrial Translation:
+# r30 cluster_42: 11/11
+# Mitochondrial Translation (Reactome) — adj_p=1.9e-09 ***
+ATAD3A
+ATP5F1B
+DHX30
+DNAJA3
+HSPD1
+MRPL20
+MRPL34
+MRPL39
+MRPL40
+MRPL52
+NDUFC1
 
 Mitochondrial Import:
 # r10 cluster_72: 11/11
@@ -984,20 +1071,27 @@ PTPMT1
 TIMM23
 TIMM44
 TOMM20
-Mitochondrial Translation:
-# r30 cluster_42: 11/11
-# Mitochondrial Translation (Reactome) — adj_p=1.9e-09 ***
-ATAD3A
-ATP5F1B
-DHX30
-DNAJA3
-HSPD1
-MRPL20
-MRPL34
-MRPL39
-MRPL40
-MRPL52
-NDUFC1
+
+Mitochondrial Outer Membrane (FBXL4 cluster):
+# r30 cluster_145: 5/5
+# Mitochondrial Outer Membrane (GO_CC) — adj_p=1.4e-02 *
+FBXL4
+PRDM13
+RNF146
+UFL1
+ZRSR2
+
+Mitochondrial Outer Membrane (extended cluster):
+# r20 cluster_99: 5/6
+# (no Enrichr term matches title; top sig: Chromocenter (GO_CC) p=4.2e-02)
+COQ10B
+GTF3C6
+MBD5
+SEC63
+TBPL1
+THG1L  # in cluster but listed under another section
+
+HSD17B12  # went to: Protein Targeting to ER (SRP/SEC61)
 
 Electron Transport Chain:
 # r30 cluster_105: 6/6
@@ -1030,6 +1124,10 @@ VMP1
 THRA  # added from cluster
 VPS25  # added from cluster
 
+# ============================================================
+# Proteasome / Ubiquitin / Autophagy
+# ============================================================
+
 Proteasome:
 # r10 cluster_82: 7/7
 # PROTEASOME (KEGG) — adj_p=3.7e-16 ***
@@ -1040,40 +1138,6 @@ PSMD11
 PSMD14
 PSMD2
 PSMD4
-
-Endocytosis:
-# r30 cluster_15: 10/10
-# ENDOCYTOSIS (KEGG) — adj_p=4.3e-02 *
-AGAP4
-AGAP9
-CBWD1
-CBWD3
-FOXD4L1
-NBPF15
-TBC1D3B
-TBC1D3G
-TRIM43
-USP17L5
-
-Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling:
-# r30 cluster_102: 5/5
-# Negative Regulation of Intracellular Signal Transduction (GO_BP) — adj_p=1.7e-05 ***
-CNOT1
-CNOT2
-PTEN
-TSC1
-TSC2
-COP Complex/Protein Neddylation:
-# r7 cluster_57: 8/8
-# Neddylation (Reactome) — adj_p=3.2e-12 ***
-COPS2
-COPS3
-COPS4
-COPS5
-COPS6
-COPS8
-DDB1
-GPS1
 
 Cul2-RING Ubiquitin Ligase Complex:
 # r20 cluster_60: 7/7
@@ -1086,6 +1150,38 @@ PRAMEF6
 SPCS2
 UBE2D3
 
+COP Complex/Protein Neddylation:
+# r7 cluster_57: 8/8
+# Neddylation (Reactome) — adj_p=3.2e-12 ***
+COPS2
+COPS3
+COPS4
+COPS5
+COPS6
+COPS8
+DDB1
+GPS1
+
+Microautophagy / Carnitine Metabolism:
+# r30 cluster_44: 6/6
+# Microautophagy (GO_BP) — adj_p=3.3e-02 *
+# Carnitine Metabolic Process (GO_BP) — adj_p=3.3e-02 *
+ATG9A
+CCNC
+CERCAM
+CRAT
+GOLGA2
+SLC39A9
+
+Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling:
+# r30 cluster_102: 5/5
+# Negative Regulation of Intracellular Signal Transduction (GO_BP) — adj_p=1.7e-05 ***
+CNOT1
+CNOT2
+PTEN
+TSC1
+TSC2
+
 p53 Signaling Pathway:
 # r50 cluster_93: 4/5
 # P53 SIGNALING PATHWAY (KEGG) — adj_p=7.1e-03 **
@@ -1095,8 +1191,12 @@ CHMP1A
 PPIA
 NCOA4  # in cluster but listed under another section
 
+# ============================================================
+# Metabolism
+# ============================================================
+
 Inositol Phosphate Metabolism:
-# r4 cluster_18: 27/31
+# r4 cluster_18: 18/31
 # INOSITOL PHOSPHATE METABOLISM (KEGG) — adj_p=1.3e-02 *
 ANP32B
 ARNT2
@@ -1129,16 +1229,6 @@ PTEN  # also in r4-c18 cluster (listed elsewhere)
 SLC39A9  # also in r4-c18 cluster (listed elsewhere)
 TSC1  # also in r4-c18 cluster (listed elsewhere)
 TSC2  # also in r4-c18 cluster (listed elsewhere)
-Microautophagy / Carnitine Metabolism:
-# r30 cluster_44: 6/6
-# Microautophagy (GO_BP) — adj_p=3.3e-02 *
-# Carnitine Metabolic Process (GO_BP) — adj_p=3.3e-02 *
-ATG9A
-CCNC
-CERCAM
-CRAT
-GOLGA2
-SLC39A9
 
 Purine Metabolism:
 # r30 cluster_23: 6/6
@@ -1150,6 +1240,17 @@ NCKIPSD
 NPRL2
 SACM1L
 
+Purine Biosynthesis:
+# r7 cluster_53: 7/7
+# Purine Nucleobase Metabolic Process (GO_BP) — adj_p=3.5e-02 *
+CEP135
+GNG5
+PAICS
+PDGFRA
+PPAT
+PSPC1
+THOC7
+
 Gluconeogenesis:
 # r30 cluster_53: 5/5
 # Negative Regulation of Gluconeogenesis (GO_BP) — adj_p=3.7e-02 *
@@ -1158,18 +1259,6 @@ HIST1H2BK
 MAPRE3
 OR2T5
 TELO2
-
-Translational Stress Response (loose cluster):
-# r30 cluster_4: 8/8
-# Regulation of Translational Initiation in Response to Stress (GO_BP) — adj_p=3.8e-02 *
-ABHD10
-CPOX
-FOXL2
-METTL3
-NACC1
-PPP1CA
-WRB
-ZBED2
 
 Energy Metabolism (Fatty Acid / Glycolysis / Sulfur)/ Lipid droplets:
 # r10 cluster_6: 8/10
@@ -1184,28 +1273,14 @@ GOLT1B
 NAPG
 PGK1
 UFM1
+ACSL4  # also in cluster — listed in snRNA
+INTS10  # also in cluster — listed in snRNA
+ACSL4  # also in cluster — listed in snRNA
 ACSL4  # also in cluster (claimed elsewhere)
 
-Purine Biosynthesis:
-# r7 cluster_53: 7/7
-# Purine Nucleobase Metabolic Process (GO_BP) — adj_p=3.5e-02 *
-CEP135
-GNG5
-PAICS
-PDGFRA
-PPAT
-PSPC1
-THOC7
-
-Hypoxia:
-# r5 cluster_33: 6/6
-# Cellular Response to Hypoxia (GO_BP) — adj_p=5.2e-04 ***
-ATXN7L3
-DCAF7
-MAX
-MTOR
-PDPK1
-RPTOR
+# ============================================================
+# Signaling — mTOR / Hypoxia / Inflammation
+# ============================================================
 
 Ragulator (FNIP-folliculin):
 # r10 cluster_79: 4/8
@@ -1218,6 +1293,16 @@ INTS1  # also in cluster — listed in snRNA section
 INTS2  # also in cluster — listed in snRNA section
 INTS5  # also in cluster — listed in snRNA section
 INTS7  # also in cluster — listed in snRNA section
+
+Hypoxia:
+# r5 cluster_33: 6/6
+# Cellular Response to Hypoxia (GO_BP) — adj_p=5.2e-04 ***
+ATXN7L3
+DCAF7
+MAX
+MTOR
+PDPK1
+RPTOR
 
 Inflammatory Response:
 # r50 cluster_66: 5/5
