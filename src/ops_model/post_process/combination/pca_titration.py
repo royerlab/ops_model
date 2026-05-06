@@ -537,7 +537,7 @@ def _run_titration_points(
                 # Report mean over non-NTC perts so x-axis reflects what gene KOs actually get
                 scores["cells_per_guide"] = target
                 if "n_cells" in g_sub.obs.columns:
-                    cpp = g_sub.obs.groupby(pert_col)["n_cells"].sum()
+                    cpp = g_sub.obs.groupby(pert_col, observed=True)["n_cells"].sum()
                     non_ntc = ~cpp.index.astype(str).str.startswith("NTC")
                     scores["cells_per_perturbation"] = float(
                         cpp[non_ntc].mean() if non_ntc.any() else cpp.mean()
@@ -579,16 +579,80 @@ def _build_titration_schedule(total_cells: int) -> list:
     return cell_targets
 
 
-def _build_per_ko_schedule(max_cells_per_ko: int, min_cells_per_ko: int = 1) -> list:
-    """Build cells-per-KO schedule: max, max*0.75, ... >= min."""
+def _build_per_ko_schedule(
+    max_cells_per_ko: int, min_cells_per_ko: int = 1, ratio: float = DOWNSAMPLE_RATIO,
+) -> list:
+    """Build cells-per-KO schedule: max, max*ratio, ... >= min."""
     targets = []
     n = max_cells_per_ko
     while n >= min_cells_per_ko:
         targets.append(int(n))
-        n = int(n * DOWNSAMPLE_RATIO)
+        nxt = int(n * ratio)
+        if nxt == n:  # avoid infinite loop when ratio is too close to 1
+            nxt = n - 1
+        n = nxt
     if not targets:
         targets = [max_cells_per_ko]
     return targets
+
+
+def _cache_split(
+    csv_path: Path, cell_targets: List[int], target_col: str, _logger,
+) -> Tuple[List[int], List[Dict]]:
+    """Return (targets_to_run, cached_rows) — subset ``cell_targets`` to those
+    not yet present in the CSV at ``csv_path`` under ``target_col``.
+
+    On any read error, returns (cell_targets, []) (i.e. recompute everything).
+    """
+    if not csv_path.is_file():
+        return list(cell_targets), []
+    try:
+        df_old = pd.read_csv(csv_path)
+    except Exception as exc:
+        _logger.warning(f"  Cache read failed ({exc}); recomputing all.")
+        return list(cell_targets), []
+    if target_col not in df_old.columns:
+        return list(cell_targets), []
+    done = {int(v) for v in df_old[target_col].dropna().astype(int).tolist()}
+    missing = [t for t in cell_targets if int(t) not in done]
+    cached_rows = df_old.to_dict(orient="records")
+    if cached_rows:
+        _logger.info(
+            f"  Cache hit: {len(cached_rows)} existing rows in {csv_path.name}; "
+            f"{len(missing)}/{len(cell_targets)} targets need scoring"
+        )
+    return missing, cached_rows
+
+
+def _merge_and_write(
+    new_df: pd.DataFrame, cached_rows: List[Dict], target_col: str, csv_path: Path,
+    _logger,
+) -> pd.DataFrame:
+    """Concat new rows with cached rows, dedupe on target_col, sort desc, write."""
+    all_rows = (cached_rows or []) + new_df.to_dict(orient="records")
+    df = pd.DataFrame(all_rows)
+    if target_col in df.columns:
+        df = (
+            df.dropna(subset=[target_col])
+              .drop_duplicates(subset=[target_col], keep="last")
+              .sort_values(target_col, ascending=False)
+              .reset_index(drop=True)
+        )
+    df.to_csv(csv_path, index=False)
+    _logger.info(
+        f"  Saved {csv_path} ({len(df)} rows: {len(new_df)} new + "
+        f"{len(cached_rows)} cached)"
+    )
+    return df
+
+
+def _titration_target_col(per_guide: bool, per_ko: bool) -> str:
+    """Schedule x-axis column matching ``_run_titration_points`` outputs."""
+    if per_guide:
+        return "cells_per_guide"
+    if per_ko:
+        return "cells_per_perturbation"
+    return "n_cells"
 
 
 def titrate_single_reporter(
@@ -602,7 +666,9 @@ def titrate_single_reporter(
     per_ko_max: bool = False,
     per_guide: bool = False,
     per_guide_max: bool = False,
+    per_guide_median: bool = False,
     n_bootstraps: int = 1,
+    cache: bool = True,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -631,23 +697,31 @@ def titrate_single_reporter(
 
     _logger.info(f"Titrating {signal}: {total_cells:,} cells, {adata_cells.n_vars} PCs")
 
-    if per_guide or per_guide_max:
+    if per_guide or per_guide_max or per_guide_median:
         if "sgRNA" not in adata_cells.obs.columns:
             raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
         pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
-        sg_counts = adata_cells.obs.groupby("sgRNA").size()
-        sg_to_pert = adata_cells.obs.groupby("sgRNA")[pert_col].first()
+        sg_counts = adata_cells.obs.groupby("sgRNA", observed=True).size()
+        sg_to_pert = adata_cells.obs.groupby("sgRNA", observed=True)[pert_col].first()
         non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
         non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
-        if per_guide_max:
+        pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
+        if per_guide_median:
+            # Start at the MEDIAN of non-NTC cells/guide (more conservative
+            # than p90 — only the upper half of the distribution caps at the
+            # starting budget). Schedule down to 1 cell/guide just like max mode.
+            start_per_guide = int(np.median(pool.values))
+            cell_targets = _build_per_ko_schedule(start_per_guide)
+            mode_label = f"median (start={start_per_guide:,})"
+        elif per_guide_max:
             # Clip to p90 non-NTC so one outlier guide doesn't stretch the schedule
-            pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
             start_per_guide = int(np.percentile(pool.values, 90))
+            cell_targets = _build_per_ko_schedule(start_per_guide)
             mode_label = "max (p90)"
         else:
             start_per_guide = int(non_ntc_counts.min()) if len(non_ntc_counts) else int(sg_counts.min())
+            cell_targets = _build_per_ko_schedule(start_per_guide)
             mode_label = "min"
-        cell_targets = _build_per_ko_schedule(start_per_guide)
         _logger.info(f"  Per-guide titration points ({mode_label} non-NTC = {start_per_guide:,} cells/guide): {cell_targets}")
         per_guide = True
     elif per_ko or per_ko_max:
@@ -680,21 +754,29 @@ def titrate_single_reporter(
     reporter_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Full titration ---
-    df_full = _run_titration_points(
-        adata_cells.copy(),
-        cell_targets,
-        norm_method,
-        signal,
-        np.random.RandomState(random_seed),
-        _logger,
-        min_exp=min_exp,
-        per_ko=per_ko,
-        per_guide=per_guide,
-        n_bootstraps=n_bootstraps,
-    )
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
-    df_full.to_csv(csv_path, index=False)
-    _logger.info(f"  Saved {csv_path}")
+    full_target_col = _titration_target_col(per_guide=per_guide, per_ko=per_ko)
+    targets_to_run, cached_rows = (
+        _cache_split(csv_path, cell_targets, full_target_col, _logger)
+        if cache else (list(cell_targets), [])
+    )
+    if targets_to_run:
+        df_new = _run_titration_points(
+            adata_cells.copy(),
+            targets_to_run,
+            norm_method,
+            signal,
+            np.random.RandomState(random_seed),
+            _logger,
+            min_exp=min_exp,
+            per_ko=per_ko,
+            per_guide=per_guide,
+            n_bootstraps=n_bootstraps,
+        )
+    else:
+        df_new = pd.DataFrame()
+        _logger.info("  All targets cached; skipping recompute.")
+    df_full = _merge_and_write(df_new, cached_rows, full_target_col, csv_path, _logger)
 
     # --- Minibinder subset titrations ---
     df_library = None  # Option A: subset cells, score subset perturbations
@@ -710,31 +792,46 @@ def titrate_single_reporter(
         adata_sub = _subset_to_targets(adata_cells, targets, _logger)
         sub_targets = _build_titration_schedule(adata_sub.n_obs)
         _logger.info(f"  Subset titration points: {sub_targets}")
-        df_library = _run_titration_points(
-            adata_sub,
-            sub_targets,
-            norm_method,
-            signal,
-            np.random.RandomState(random_seed),
-            _logger,
+        lib_csv = minibinder_dir / f"{sig_safe}_titration_library.csv"
+        sub_target_col = _titration_target_col(per_guide=False, per_ko=False)
+        sub_to_run, sub_cached = (
+            _cache_split(lib_csv, sub_targets, sub_target_col, _logger)
+            if cache else (list(sub_targets), [])
         )
-        df_library.to_csv(
-            minibinder_dir / f"{sig_safe}_titration_library.csv", index=False
-        )
+        if sub_to_run:
+            df_lib_new = _run_titration_points(
+                adata_sub,
+                sub_to_run,
+                norm_method,
+                signal,
+                np.random.RandomState(random_seed),
+                _logger,
+            )
+        else:
+            df_lib_new = pd.DataFrame()
+        df_library = _merge_and_write(df_lib_new, sub_cached, sub_target_col, lib_csv, _logger)
 
         # Option B — subset scores: same full cells, but report only subset mAP/ratios
         _logger.info("  [Option B] Subset scores from full pool...")
-        df_scores = _run_titration_points(
-            adata_cells.copy(),
-            cell_targets,
-            norm_method,
-            signal,
-            np.random.RandomState(random_seed),
-            _logger,
-            subset_targets=targets,
+        scores_csv = minibinder_dir / f"{sig_safe}_titration_scores.csv"
+        scores_to_run, scores_cached = (
+            _cache_split(scores_csv, cell_targets, full_target_col, _logger)
+            if cache else (list(cell_targets), [])
         )
-        df_scores.to_csv(
-            minibinder_dir / f"{sig_safe}_titration_scores.csv", index=False
+        if scores_to_run:
+            df_scores_new = _run_titration_points(
+                adata_cells.copy(),
+                scores_to_run,
+                norm_method,
+                signal,
+                np.random.RandomState(random_seed),
+                _logger,
+                subset_targets=targets,
+            )
+        else:
+            df_scores_new = pd.DataFrame()
+        df_scores = _merge_and_write(
+            df_scores_new, scores_cached, full_target_col, scores_csv, _logger,
         )
 
     # Plot — PNG + SVG for each scale
@@ -933,6 +1030,32 @@ def _plot_titration_comparison(
     ratio_labels = TITRATION_RATIO_LABELS
     map_labels = TITRATION_MAP_LABELS
     _scale_label = SCALE_LABEL_SHORT
+
+    # Dump the (x, y, sem) points for every series plotted, long format.
+    long_rows: List[Dict] = []
+    for series_label, df_src in ((label_a, df_full), (label_b, df_subset)):
+        for x_col_, _, _ in _X_AXIS_VARIANTS:
+            if x_col_ not in df_src.columns:
+                continue
+            for metric in metrics:
+                for kind in ("ratio", "map_mean"):
+                    ycol = f"{metric}_{kind}"
+                    sem_col = f"{ycol}_sem"
+                    if ycol not in df_src.columns:
+                        continue
+                    for _, row in df_src.iterrows():
+                        long_rows.append({
+                            "series": series_label,
+                            "metric": metric,
+                            "kind": kind,
+                            "x_col": x_col_,
+                            "x": float(row[x_col_]),
+                            "y": float(row[ycol]) if pd.notna(row.get(ycol)) else float("nan"),
+                            "sem": float(row[sem_col]) if sem_col in df_src.columns and pd.notna(row.get(sem_col)) else float("nan"),
+                        })
+    if long_rows:
+        cmp_csv = reporter_dir / f"{sig_safe}_comparison_{suffix}.csv"
+        pd.DataFrame(long_rows).to_csv(cmp_csv, index=False)
 
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in df_full.columns or x_col not in df_subset.columns:
@@ -1264,6 +1387,14 @@ def _build_parser():
                         help="Titrate by cells-per-sgRNA. Schedule starts at MAX non-NTC "
                              "cells/guide — large guides keep gaining, small guides cap out. "
                              "Output → titration_per_guide/")
+    parser.add_argument("--per-guide-median-titration", action="store_true",
+                        help="Titrate by cells-per-sgRNA. Schedule starts at MAX (p90 non-NTC) "
+                             "and STOPS once the median non-NTC cells/guide is reached "
+                             "(upper-half of guide cell-count range only). "
+                             "Output → titration_guide_median/")
+    parser.add_argument("--no-cache", dest="cache", action="store_false", default=True,
+                        help="Disable row-level caching (recompute every titration point even "
+                             "if an existing <reporter>_titration.csv already has it).")
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -1482,7 +1613,9 @@ def main():
         args.slurm_time = scaled
 
     variant_dir = _resolve_output_dir(args)
-    if args.per_guide_max_titration:
+    if args.per_guide_median_titration:
+        titration_subdir = "titration_guide_median"
+    elif args.per_guide_max_titration:
         titration_subdir = "titration_per_guide"
     elif args.per_guide_min_titration:
         titration_subdir = "titration_guide_min"
@@ -1560,7 +1693,9 @@ def main():
                     "per_ko_max": args.per_ko_max_titration,
                     "per_guide": args.per_guide_min_titration,
                     "per_guide_max": args.per_guide_max_titration,
+                    "per_guide_median": args.per_guide_median_titration,
                     "n_bootstraps": int(args.bootstrap),
+                    "cache": bool(args.cache),
                 },
             }
 
@@ -1683,7 +1818,9 @@ def main():
                 per_ko_max=args.per_ko_max_titration,
                 per_guide=args.per_guide_min_titration,
                 per_guide_max=args.per_guide_max_titration,
+                per_guide_median=args.per_guide_median_titration,
                 n_bootstraps=int(args.bootstrap),
+                cache=bool(args.cache),
             )
             print(f"  {result}")
 
