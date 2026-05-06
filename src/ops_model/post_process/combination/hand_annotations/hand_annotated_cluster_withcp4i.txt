@@ -1,17 +1,23 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
-# Total clusters annotated: 93
-# Total unique genes covered: 813 / 1052 (77%)
-# Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
-# Significance: *** p≤0.001 (49), ** p≤0.01 (16), * p≤0.05 (20), ns p>0.05 (6)
-# Each section is a real leiden cluster — see '# rX cluster_Y' tag below each header
 
+# Total clusters annotated: 93
+
+# Total unique genes covered: 813 / 1052 (77%)
+
+# Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
+
+# Significance: *** p≤0.001 (49), ** p≤0.01 (16), * p≤0.05 (20), ns p>0.05 (6)
+
+# Each section is a real leiden cluster — tag format: '# rX cluster_Y: section_in/cluster_total — adj_p ★'
 
 # ============================================================
+
 # Transcription & RNA Polymerase
+
 # ============================================================
 
 RNA Polymerase:
-# r4 cluster_40 (9/9 genes = 100%) — adj_p=1.7e-11 ***
+# r30 cluster_158: 9/9 — adj_p=8.5e-09 ***
 GTF2B
 MED18
 MED21
@@ -23,7 +29,7 @@ POLR2F
 POLR2H
 
 RNA polymerase:
-# r7 cluster_39 (9/9 genes = 100%) — adj_p=2.8e-06 ***
+# r5 cluster_51: 9/9 — adj_p=8.9e-07 ***
 GTF2A1
 GTF2A2
 NCBP2
@@ -35,7 +41,7 @@ TAF12
 TAF6
 
 Transcription Factors:
-# r4 cluster_40 (12/14 genes = 86%) — adj_p=1.7e-11 ***
+# r1.5 cluster_14: 14/49 — adj_p=1.3e-17 ***
 CPSF6
 CUL2
 ERCC3
@@ -52,7 +58,7 @@ POLR2E
 SRSF7
 
 Chromatid Cohesion/GBAF Complex:
-# r4 cluster_29 (5/5 genes = 100%) — adj_p=1.7e-05 ***
+# r20 cluster_58: 5/5 — adj_p=9.3e-07 ***
 BRD9
 RAD21
 SMARCD1
@@ -60,20 +66,15 @@ SMC1A
 SMC3
 
 Regulation of DNA-templated Transcription:
-# r20 cluster_33 (5/5 genes = 100%) — adj_p=2.3e-02 *
+# r20 cluster_33: 5/5 — adj_p=2.3e-02 *
 ARID5B
 BTAF1
 LIN9
 NEK1
 PRMT3
 
-
-# ============================================================
-# Splicing & RNA Processing
-# ============================================================
-
 Spliceosome:
-# r4 cluster_31 (16/16 genes = 100%) — adj_p=1.3e-28 ***
+# r20 cluster_61: 16/16 — adj_p=6.7e-22 ***
 BUD31
 CDC5L
 EFTUD2
@@ -92,7 +93,7 @@ TFIP11
 XAB2
 
 Spliceosome Assembly:
-# r4 cluster_31 (5/5 genes = 100%) — adj_p=1.3e-28 ***
+# r20 cluster_148: 5/5 — adj_p=4.2e-08 ***
 SF3B3
 SF3B5
 SNRPD1
@@ -100,7 +101,7 @@ SNRPD2
 SNRPD3
 
 RNA Degradation:
-# r4 cluster_35 (21/21 genes = 100%) — adj_p=5.0e-08 ***
+# r1.5 cluster_17: 21/21 — adj_p=5.0e-08 ***
 CCT3
 CCT4
 CCT6A
@@ -124,14 +125,14 @@ ZCCHC9
 ZNRD1
 
 snRNA:
-# r4 cluster_23 (4/4 genes = 100%) — adj_p=9.6e-05 ***
+# r30 cluster_167: 4/4 — adj_p=1.0e+00 ns
 INTS1
 INTS2
 INTS5
 INTS7
 
 mRNA Processing (CCDC174 set):
-# r4 cluster_10 (7/7 genes = 100%) — adj_p=5.9e-03 **
+# r10 cluster_49: 7/7 — adj_p=4.9e-03 **
 CCDC174
 DDX39B
 KIN
@@ -141,7 +142,7 @@ RNF20
 ZFR
 
 P-body:
-# r10 cluster_33 (10/10 genes = 100%) — adj_p=1.3e-03 **
+# r10 cluster_33: 10/10 — adj_p=1.3e-03 **
 ASNA1
 COL18A1
 DIS3L2
@@ -154,20 +155,15 @@ TNRC6A
 VAMP4
 
 mRNA Export / 3' Processing:
-# r10 cluster_65 (5/5 genes = 100%) — adj_p=1.5e-04 ***
+# r10 cluster_65: 5/5 — adj_p=1.5e-04 ***
 CPSF2
 CPSF3
 EXOSC5
 NUP214
 RGP1
 
-
-# ============================================================
-# DNA Methylation / Chromatin
-# ============================================================
-
 DNA Methylation/Methionine&Cysteine Metabolism:
-# r4 cluster_29 (14/14 genes = 100%) — adj_p=1.7e-05 ***
+# r7 cluster_38: 14/15 — adj_p=2.0e-02 *
 BEND6
 BTBD9
 CABIN1
@@ -183,13 +179,8 @@ TMEM63B
 UHRF1
 USP18
 
-
-# ============================================================
-# Translation Initiation
-# ============================================================
-
 eIF2 Recycling/Asparagine Metabolism:
-# r4 cluster_1 (9/9 genes = 100%) — adj_p=1.9e-09 ***
+# r30 cluster_1: 9/9 — adj_p=3.6e-03 **
 AARS
 ASNS
 DARS
@@ -201,7 +192,7 @@ LARS
 RARS
 
 Translation:
-# r4 cluster_3 (5/5 genes = 100%) — adj_p=1.4e-13 ***
+# r7 cluster_3: 5/5 — adj_p=1.3e-02 *
 ABCE1
 NOP9
 RPLP1
@@ -209,7 +200,7 @@ RPLP2
 ZZZ3
 
 tRNA aminoacylation for Protein Translation:
-# r4 cluster_1 (5/5 genes = 100%) — adj_p=1.9e-09 ***
+# r30 cluster_76: 5/6 — adj_p=3.6e-04 ***
 CARS
 FARSA
 FARSB
@@ -217,7 +208,7 @@ HYOU1
 KRI1
 
 Translation Initiation:
-# r30 cluster_137 (6/6 genes = 100%) — adj_p=1.0e-07 ***
+# r30 cluster_137: 6/6 — adj_p=1.0e-07 ***
 EIF2B3
 EIF2B5
 EIF2S1
@@ -226,7 +217,7 @@ QARS
 SARS
 
 Cytoplasmic Translation Initiation (eIFs):
-# r4 cluster_1 (9/9 genes = 100%) — adj_p=1.9e-09 ***
+# r10 cluster_74: 9/9 — adj_p=1.6e-06 ***
 EIF1AD
 EIF3A
 EIF3B
@@ -238,7 +229,7 @@ HSPA5
 TSR2
 
 Rescue of Stalled Ribosome:
-# r3 cluster_5 (22/22 genes in cluster of 46) — adj_p=1.2e-02 *
+# r10 cluster_20: 22/22 — adj_p=2.2e-02 *
 ALKBH8
 AMMECR1
 ASCC3
@@ -262,13 +253,8 @@ TWSG1
 UFSP2
 USP14
 
-
-# ============================================================
-# Ribosomes & Ribosome Biogenesis
-# ============================================================
-
 Ribosome biogenesis:
-# r4 cluster_3 (5/5 genes = 100%) — adj_p=1.4e-13 ***
+# r20 cluster_118: 5/5 — adj_p=6.1e-04 ***
 EIF6
 NOL8
 NOLC1
@@ -276,7 +262,7 @@ NOP16
 URB2
 
 Maturation of 5.8S rRNA:
-# r4 cluster_3 (6/6 genes = 100%) — adj_p=1.4e-13 ***
+# r20 cluster_126: 6/6 — adj_p=1.0e-03 **
 FTSJ3
 GNL3
 GTPBP4
@@ -285,7 +271,7 @@ PPAN
 XPO1
 
 rRNA Processing:
-# r4 cluster_2 (11/11 genes = 100%) — adj_p=2.1e-19 ***
+# r30 cluster_2: 11/11 — adj_p=4.3e-13 ***
 AATF
 BMS1
 DDX47
@@ -299,7 +285,7 @@ TSR1
 UTP14A
 
 Large Ribosomal Subunit:
-# r4 cluster_42 (12/12 genes = 100%) — adj_p=8.0e-48 ***
+# r30 cluster_195: 12/12 — adj_p=4.0e-23 ***
 RPL15
 RPL18
 RPL23
@@ -314,7 +300,7 @@ RPL9
 UBA52
 
 Small Ribosomal Subunit:
-# r4 cluster_42 (12/12 genes = 100%) — adj_p=8.0e-48 ***
+# r20 cluster_124: 12/12 — adj_p=2.1e-24 ***
 FAU
 RPS10
 RPS14
@@ -329,7 +315,7 @@ RPS8
 RPS9
 
 Nucleolus:
-# r4 cluster_3 (9/9 genes = 100%) — adj_p=1.4e-13 ***
+# r20 cluster_109: 9/9 — adj_p=6.9e-09 ***
 DDX18
 GNL2
 GNL3L
@@ -341,7 +327,7 @@ RRS1
 WDR12
 
 Small-Subunit Processome (pre-rRNA):
-# r4 cluster_2 (6/6 genes = 100%) — adj_p=2.1e-19 ***
+# r30 cluster_66: 6/6 — adj_p=1.9e-07 ***
 C12orf45
 NOL7
 NOP56
@@ -350,19 +336,14 @@ TBL3
 WDR36
 
 Cytosolic Small Ribosomal Subunit:
-# r4 cluster_42 (4/4 genes = 100%) — adj_p=8.0e-48 ***
+# r30 cluster_196: 4/4 — adj_p=1.0e+00 ns
 RPS27A
 RPS29
 RPSA
 RSL24D1
 
-
-# ============================================================
-# tRNA Metabolism
-# ============================================================
-
 tRNA uridine modification:
-# r4 cluster_39 (8/8 genes = 100%) — adj_p=1.1e-09 ***
+# r2 cluster_14: 8/8 — adj_p=1.1e-09 ***
 CTU1
 CTU2
 DPH3
@@ -373,7 +354,7 @@ URM1
 USP10
 
 tRNA Metabolic Process:
-# r7 cluster_51 (7/7 genes = 100%) — adj_p=3.5e-02 *
+# r7 cluster_51: 7/9 — adj_p=3.5e-02 *
 CD2BP2
 CDIPT
 COQ7
@@ -382,13 +363,8 @@ INO80E
 TSEN2
 UBN1
 
-
-# ============================================================
-# DNA Replication & Repair
-# ============================================================
-
 DNA Replication:
-# r4 cluster_37 (13/16 genes = 81%) — adj_p=1.5e-14 ***
+# r4 cluster_37: 13/13 — adj_p=1.5e-14 ***
 CDC45
 MCM7
 MTBP
@@ -402,12 +378,12 @@ RRM1
 TIMELESS
 TIPIN
 TONSL
-MCM3
-MCM5
-POLE4
+MCM3  # went to: r4-c6
+MCM5  # went to: r4-c6
+POLE4  # went to: r4-c6
 
 CMG Complex (replication helicase):
-# r7 cluster_49 (7/7 genes = 100%) — adj_p=9.2e-03 **
+# r5 cluster_40: 7/7 — adj_p=9.2e-03 **
 CCNB1
 CHMP7
 CHTF8
@@ -417,7 +393,7 @@ GINS2
 REV3L
 
 DNA Repair / Endosomal Cluster:
-# r7 cluster_28 (11/13 genes = 85%) — adj_p=1.5e-02 *
+# r7 cluster_28: 11/13 — adj_p=1.5e-02 *
 AP3M1
 B4GALT5
 CD4
@@ -430,14 +406,8 @@ FLII
 STX8
 UBE2N
 
-
-
-# ============================================================
-# Cell Cycle & Mitosis
-# ============================================================
-
 Spindle:
-# r4 cluster_15 (7/7 genes = 100%) — adj_p=1.0e-04 ***
+# r30 cluster_33: 7/7 — adj_p=3.5e-02 *
 AQP7
 CDC27
 HMGB1
@@ -447,7 +417,7 @@ RPL41
 TUBB8
 
 Mitotic Spindle Assembly:
-# r4 cluster_15 (9/9 genes = 100%) — adj_p=1.0e-04 ***
+# r30 cluster_16: 9/9 — adj_p=1.9e-05 ***
 AURKB
 C2orf27B
 ECT2
@@ -459,7 +429,7 @@ KIF23
 KRT18
 
 Cell Division:
-# r4 cluster_4 (12/14 genes = 86%) — adj_p=2.1e-02 *
+# r10 cluster_47: 12/12 — adj_p=1.2e-02 *
 CALM1
 CEP55
 EBF1
@@ -472,11 +442,11 @@ MTHFD1
 NCOA4
 SEC24A
 THG1L
-NEDD8
-UBE2M
+NEDD8  # went to: r10-c41
+UBE2M  # went to: r10-c41
 
 Microtubule Nucleation:
-# r7 cluster_21 (7/7 genes = 100%) — adj_p=1.9e-05 ***
+# r30 cluster_161: 7/7 — adj_p=2.3e-06 ***
 HAUS4
 HAUS5
 HAUS6
@@ -486,7 +456,7 @@ SMC2
 TERF2
 
 Kinetochore / Membraneless Organelle Assembly:
-# r7 cluster_21 (8/8 genes = 100%) — adj_p=1.9e-05 ***
+# r20 cluster_21: 8/8 — adj_p=1.3e-05 ***
 ALYREF
 BUB1B
 CENPC
@@ -497,7 +467,7 @@ PCF11
 TUBGCP6
 
 CDK7/CCNH (CAK Complex):
-# r7 cluster_45 (19/23 genes = 83%) — adj_p=3.9e-04 ***
+# r7 cluster_45: 19/23 — adj_p=3.9e-04 ***
 CA5A
 CCNH
 CDK7
@@ -518,13 +488,8 @@ TUBA1A
 USH1G
 USP36
 
-
-# ============================================================
-# ER & Protein Quality Control
-# ============================================================
-
 ER Membrane/Protein Glycosylation:
-# r4 cluster_25 (18/18 genes = 100%) — adj_p=1.4e-02 *
+# r7 cluster_34: 18/18 — adj_p=5.2e-03 **
 ATRX
 CERS6
 CIAO1
@@ -545,19 +510,22 @@ TTN
 VPS26A
 
 Protein insertion into ER:
-# r30 cluster_32 (5/5 genes = 100%) — adj_p=1.8e-07 ***
+# r30 cluster_32: 5/5 — adj_p=1.8e-07 ***
 APC
 EMC1
 EMC2
 EMC3
 RBM26
 
-Protein Targeting to ER:
-# r4 cluster_9 (10/10 genes = 100%) — adj_p=1.9e-08 ***
+Actin Nucleation (ARP2/3):
+# r30 cluster_8: 4/4 — adj_p=1.0e+00 ns
 ACTR3
 ARPC2
 ARPC3
 ARPC4
+
+Protein Targeting to ER (SRP/SEC61):
+# r20 cluster_131: 6/7 — adj_p=6.1e-11 ***
 SEC61A1
 SEC61G
 SRP19
@@ -566,7 +534,7 @@ SRP68
 SRPRA
 
 Tail-Anchored Membrane Protein Insertion into ER (GET pathway):
-# r4 cluster_23 (11/11 genes = 100%) — adj_p=9.6e-05 ***
+# r4 cluster_23: 11/20 — adj_p=9.6e-05 ***
 ARGLU1
 CUL1
 ELAVL1
@@ -580,7 +548,7 @@ TGFBR1
 NUFIP2
 
 Hrd1p Ubiquitin Ligase Complex (ERAD):
-# r10 cluster_12 (11/11 genes = 100%) — adj_p=1.8e-03 **
+# r10 cluster_12: 11/11 — adj_p=1.8e-03 **
 ALG12
 BLOC1S2
 BORCS7
@@ -594,7 +562,7 @@ SYVN1
 TMX2
 
 ER Stress Response (PERK):
-# r20 cluster_62 (6/8 genes = 75%) — adj_p=4.7e-02 *
+# r20 cluster_62: 6/8 — adj_p=4.7e-02 *
 C1D
 CAD
 EIF2AK3
@@ -602,13 +570,8 @@ FIGLA
 MCEE
 UQCC2
 
-
-# ============================================================
-# Membrane Trafficking — Golgi & Vesicles
-# ============================================================
-
 Golgi to plasma membrane transport:
-# r4 cluster_28 (11/11 genes = 100%) — adj_p=1.8e-14 ***
+# r10 cluster_36: 11/11 — adj_p=5.6e-05 ***
 ATP6V1B2
 ATP6V1H
 COG7
@@ -622,7 +585,7 @@ RABGGTA
 RABGGTB
 
 cis-Golgi Network:
-# r4 cluster_24 (13/13 genes = 100%) — adj_p=8.5e-02 ns
+# r7 cluster_26: 13/15 — adj_p=1.2e-01 ns
 ARL2
 B3GAT3
 CCDC59
@@ -638,7 +601,7 @@ SNX32
 KRT8
 
 Cell Death/Golgi Cisterna:
-# r10 cluster_29 (6/6 genes = 100%) — adj_p=4.3e-02 *
+# r30 cluster_148: 6/6 — adj_p=3.6e-02 *
 FOXD4L5
 GOLGA6D
 LYPD2
@@ -647,7 +610,7 @@ SPATA31A5
 USP17L12
 
 COPI Vesicle Membrane:
-# r10 cluster_62 (6/6 genes = 100%) — adj_p=4.9e-14 ***
+# r20 cluster_97: 6/7 — adj_p=3.0e-08 ***
 COPA
 COPB1
 COPB2
@@ -656,7 +619,7 @@ GBF1
 NAPA
 
 ER to Golgi Anterograde Transport:
-# r4 cluster_28 (8/8 genes = 100%) — adj_p=1.8e-14 ***
+# r20 cluster_93: 8/8 — adj_p=1.1e-09 ***
 COG3
 PREB
 SEC16A
@@ -667,7 +630,7 @@ TRAPPC11
 TRAPPC4
 
 Coated Vesicle / Sorting:
-# r10 cluster_23 (6/6 genes = 100%) — adj_p=4.7e-02 *
+# r10 cluster_23: 6/6 — adj_p=4.7e-02 *
 AP1M1
 IER3IP1
 OGT
@@ -676,7 +639,7 @@ TMEM167A
 YIPF5
 
 Golgi Lumen:
-# r4 cluster_33 (8/8 genes = 100%) — adj_p=1.2e-02 *
+# r4 cluster_33: 8/8 — adj_p=1.2e-02 *
 CAPZB
 GABRR3
 LIAS
@@ -686,13 +649,8 @@ PROS1
 SEC22A
 TIPARP
 
-
-# ============================================================
-# Endocytosis & Lysosome
-# ============================================================
-
 Endosome/Clathrin:
-# r4 cluster_19 (14/14 genes = 100%) — adj_p=3.7e-03 **
+# r10 cluster_25: 14/24 — adj_p=9.4e-04 ***
 AP2A1
 AP2M1
 AP2S1
@@ -709,7 +667,7 @@ TEFM
 VPS25
 
 Lysosomal Transport:
-# r4 cluster_38 (6/6 genes = 100%) — adj_p=7.4e-08 ***
+# r20 cluster_84: 6/6 — adj_p=9.9e-07 ***
 CHMP2A
 CHMP4B
 CHMP6
@@ -718,7 +676,7 @@ PDCD7
 VPS29
 
 Endocytosis:
-# r10 cluster_67 (6/6 genes in cluster of 6) — adj_p=2.4e-02 *
+# r10 cluster_67: 6/6 — adj_p=2.4e-02 *
 CTPS2
 GPX4
 HDAC6
@@ -727,7 +685,7 @@ SH3KBP1
 WASL
 
 Secondary Lysosome:
-# r4 cluster_22 (17/17 genes = 100%) — adj_p=7.5e-03 **
+# r5 cluster_28: 17/17 — adj_p=5.4e-03 **
 AP3S1
 ARPP19
 CAPN12
@@ -746,13 +704,8 @@ SKP2
 SPHK2
 ZNF574
 
-
-# ============================================================
-# Calcium / Exocytosis / Cell Surface
-# ============================================================
-
 Voltage-gate Sodium Channel Complex:
-# r4 cluster_20 (5/5 genes = 100%) — adj_p=1.7e-02 *
+# r30 cluster_176: 5/6 — adj_p=3.6e-02 *
 METTL7B
 MUCL1
 PAN2
@@ -760,7 +713,7 @@ SCN8A
 TSPAN31
 
 Sodium Channel Complex:
-# r4 cluster_20 (9/11 genes = 82%) — adj_p=1.7e-02 *
+# r1.5 cluster_9: 11/74 — adj_p=3.2e-04 ***
 BRK1
 CIAPIN1
 COG4
@@ -774,7 +727,7 @@ INO80D
 ZBTB39
 
 Regulation of Potassium Ion Transport:
-# r20 cluster_43 (7/7 genes in cluster of 7) — adj_p=4.0e-02 *
+# r20 cluster_43: 7/7 — adj_p=4.0e-02 *
 ATIC
 BET1
 CA13
@@ -784,7 +737,7 @@ NUDCD1
 ZNF704
 
 Calcium Signaling:
-# r10 cluster_17 (16/16 genes in cluster of 19) — adj_p=3.9e-02 *
+# r20 cluster_16: 16/17 — adj_p=1.0e-01 ns
 AHCYL1
 CEP85
 DHDDS
@@ -803,7 +756,7 @@ ZFP69B
 ZNF593
 
 Calcium-dependent Exocytosis:
-# r4 cluster_14 (15/15 genes = 100%) — adj_p=1.2e-01 ns
+# r4 cluster_14: 15/42 — adj_p=1.2e-01 ns
 ELOVL1
 KDM4A
 METAP1
@@ -821,7 +774,7 @@ STXBP3
 TRIM33
 
 Tight Junctions:
-# r4 cluster_6 (7/8 genes = 88%) — adj_p=4.2e-02 *
+# r5 cluster_23: 8/18 — adj_p=2.0e-02 *
 AP1S1
 CLDN15
 DLD
@@ -831,13 +784,8 @@ IMPDH1
 PLOD3
 PTDSS1
 
-
-# ============================================================
-# Cytoskeleton & Motility
-# ============================================================
-
 Dynein Complex:
-# r4 cluster_32 (8/8 genes = 100%) — adj_p=3.0e-10 ***
+# r20 cluster_88: 8/8 — adj_p=9.5e-14 ***
 CLASP1
 DCTN4
 DCTN5
@@ -848,7 +796,7 @@ DYNC1LI2
 DYNLL1
 
 Intermediate Filaments:
-# r10 cluster_31 (11/11 genes = 100%) — adj_p=6.6e-02 ns
+# r10 cluster_31: 11/11 — adj_p=6.6e-02 ns
 ARHGEF9
 BLOC1S6
 C5orf30
@@ -862,7 +810,7 @@ ZMYM3
 ZNF131
 
 Cytoskeleton Organization:
-# r4 cluster_8 (13/13 genes = 100%) — adj_p=2.1e-01 ns
+# r4 cluster_8: 13/33 — adj_p=2.1e-01 ns
 DYNLL2
 ERN1
 HOXB2
@@ -878,7 +826,7 @@ SERINC3
 SUV39H1
 
 Cell Motility / Integrin Signaling:
-# r7 cluster_54 (5/5 genes = 100%) — adj_p=7.8e-03 **
+# r7 cluster_54: 5/5 — adj_p=7.8e-03 **
 CFL1
 ITGB1
 MEAF6
@@ -886,7 +834,7 @@ RAPGEF1
 ZC3H4
 
 Actin-based Cell Projection:
-# r20 cluster_56 (9/9 genes = 100%) — adj_p=1.1e-02 *
+# r20 cluster_56: 9/9 — adj_p=1.1e-02 *
 BRCA1
 KRTAP2-3
 KRTAP2-4
@@ -897,13 +845,8 @@ PHF23
 PPY
 TWF1
 
-
-# ============================================================
-# Nuclear Pore & Transport
-# ============================================================
-
 Nuclear Import:
-# r10 cluster_61 (8/8 genes = 100%) — adj_p=9.3e-04 ***
+# r10 cluster_61: 8/8 — adj_p=9.3e-04 ***
 CNOT4
 CSE1L
 DGCR8
@@ -914,7 +857,7 @@ RANGAP1
 UBAP2L
 
 Nucleocytoplasmic Transport (FBXL4 cluster):
-# r4 cluster_10 (5/5 genes = 100%) — adj_p=5.9e-03 **
+# r30 cluster_145: 5/5 — adj_p=1.4e-02 *
 FBXL4
 PRDM13
 RNF146
@@ -922,7 +865,7 @@ UFL1
 ZRSR2
 
 Nuclear Deformation/Cornified Envelope:
-# r4 cluster_30 (8/8 genes = 100%) — adj_p=3.8e-11 ***
+# r20 cluster_132: 8/8 — adj_p=2.7e-03 **
 HIST1H2AI
 OTOP1
 PLGLB2
@@ -933,19 +876,14 @@ SPRR2A
 SPRR2B
 
 Nuclear Pore Organization:
-# r20 cluster_139 (4/4 genes = 100%) — adj_p=9.8e-04 ***
+# r20 cluster_139: 4/5 — adj_p=9.8e-04 ***
 MAP2K7
 NUP54
 NUP98
 RAE1
 
-
-# ============================================================
-# Mitochondria
-# ============================================================
-
 Mitochondrial Outer Membrane:
-# r7 cluster_56 (8/8 genes = 100%) — adj_p=8.9e-02 ns
+# r7 cluster_56: 8/13 — adj_p=8.9e-02 ns
 COL9A1
 COQ10B
 CTDSPL2
@@ -956,7 +894,7 @@ SEC63
 TBPL1
 
 Mitochondrial Import:
-# r4 cluster_27 (11/12 genes = 92%) — adj_p=4.0e-30 ***
+# r30 cluster_131: 10/10 — adj_p=3.6e-10 ***
 DNAJC19
 GRPEL1
 HSPA9
@@ -964,14 +902,14 @@ IARS2
 PHB
 PHB2
 PRELID3B
-PTPMT1
 TIMM23
 TIMM44
 TOMM20
-ATP5ME
+PTPMT1  # went to: r30-c115
+ATP5ME  # went to: r30-c46
 
 Mitochondrial Translation:
-# r4 cluster_27 (11/11 genes = 100%) — adj_p=4.0e-30 ***
+# r30 cluster_42: 11/11 — adj_p=6.8e-12 ***
 ATAD3A
 ATP5F1B
 DHX30
@@ -985,7 +923,7 @@ MRPL52
 NDUFC1
 
 Electron Transport Chain:
-# r4 cluster_27 (6/6 genes = 100%) — adj_p=4.0e-30 ***
+# r30 cluster_105: 6/6 — adj_p=2.4e-07 ***
 COA5
 COX11
 COX7B
@@ -994,7 +932,7 @@ MRPL42
 VARS2
 
 Cristae Formation:
-# r10 cluster_69 (5/5 genes = 100%) — adj_p=6.9e-03 **
+# r30 cluster_164: 5/6 — adj_p=1.7e-03 **
 HNRNPK
 KANSL1
 MICOS13
@@ -1002,19 +940,14 @@ SAMM50
 UBR4
 
 rRNA processing in mitochondria:
-# r4 cluster_19 (4/4 genes = 100%) — adj_p=3.7e-03 **
+# r30 cluster_153: 4/6 — adj_p=3.0e-02 *
 GARS
 MRM1
 SKAP1
 VMP1
 
-
-# ============================================================
-# Proteasome / Ubiquitin / Autophagy
-# ============================================================
-
 Proteosome:
-# r4 cluster_30 (7/7 genes = 100%) — adj_p=3.8e-11 ***
+# r10 cluster_82: 7/7 — adj_p=3.7e-16 ***
 PSMB6
 PSMC2
 PSMC6
@@ -1024,7 +957,7 @@ PSMD2
 PSMD4
 
 Ubiquitation/Apoptosis:
-# r4 cluster_15 (10/10 genes = 100%) — adj_p=1.0e-04 ***
+# r30 cluster_15: 10/10 — adj_p=4.3e-02 *
 AGAP4
 AGAP9
 CBWD1
@@ -1037,7 +970,7 @@ TRIM43
 USP17L5
 
 Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling:
-# r7 cluster_46 (6/6 genes = 100%) — adj_p=1.3e-03 **
+# r5 cluster_45: 6/9 — adj_p=4.8e-04 ***
 CNOT1
 CNOT2
 CSNK2A3
@@ -1046,7 +979,7 @@ TSC1
 TSC2
 
 COP Complex/Protein Neddylation:
-# r4 cluster_32 (8/8 genes = 100%) — adj_p=3.0e-10 ***
+# r7 cluster_57: 8/8 — adj_p=7.5e-15 ***
 COPS2
 COPS3
 COPS4
@@ -1057,7 +990,7 @@ DDB1
 GPS1
 
 Cul2-RING Ubiquitin Ligase Complex:
-# r4 cluster_30 (7/7 genes = 100%) — adj_p=3.8e-11 ***
+# r20 cluster_60: 7/7 — adj_p=1.6e-03 **
 BTF3L4
 ELOC
 FCGR1A
@@ -1067,19 +1000,14 @@ SPCS2
 UBE2D3
 
 p53 Signaling Pathway:
-# r4 cluster_21 (4/4 genes = 100%) — adj_p=7.9e-03 **
+# r50 cluster_93: 4/5 — adj_p=7.1e-03 **
 CCND3
 CCNG1
 CHMP1A
 PPIA
 
-
-# ============================================================
-# Metabolism
-# ============================================================
-
 Inositol Phosphate Metabolism:
-# r4 cluster_18 (11/11 genes = 100%) — adj_p=8.8e-03 **
+# r5 cluster_21: 11/24 — adj_p=6.8e-02 ns
 COQ4
 IMPA2
 INPPL1
@@ -1093,7 +1021,7 @@ TPT1
 SEC23B
 
 Peroxisome:
-# r4 cluster_18 (6/6 genes = 100%) — adj_p=8.8e-03 **
+# r30 cluster_44: 6/6 — adj_p=3.3e-02 *
 ATG9A
 CCNC
 CERCAM
@@ -1102,7 +1030,7 @@ GOLGA2
 SLC39A9
 
 Purine Metabolism:
-# r30 cluster_23 (6/6 genes in cluster of 6) — adj_p=1.7e-02 *
+# r30 cluster_23: 6/6 — adj_p=1.7e-02 *
 AMIGO3
 CACNA1D
 IMPDH2
@@ -1111,7 +1039,7 @@ NPRL2
 SACM1L
 
 Gluconeogenesis:
-# r4 cluster_21 (5/5 genes = 100%) — adj_p=7.9e-03 **
+# r30 cluster_53: 5/5 — adj_p=2.5e-02 *
 B3GNT2
 HIST1H2BK
 MAPRE3
@@ -1119,7 +1047,7 @@ OR2T5
 TELO2
 
 Triglyceride Metabolism:
-# r4 cluster_5 (7/7 genes = 100%) — adj_p=9.5e-02 ns
+# r30 cluster_4: 7/8 — adj_p=3.8e-02 *
 ABHD10
 CPOX
 FOXL2
@@ -1129,7 +1057,7 @@ WRB
 ZBED2
 
 Energy Metabolism (Fatty Acid / Glycolysis / Sulfur)/ Lipid droplets:
-# r10 cluster_6 (10/10 genes = 100%) — adj_p=3.3e-02 *
+# r10 cluster_6: 10/10 — adj_p=3.3e-02 *
 ACSL4
 C5orf22
 CIT
@@ -1142,7 +1070,7 @@ PGK1
 UFM1
 
 Purine Biosynthesis:
-# r7 cluster_53 (7/7 genes = 100%) — adj_p=3.3e-02 *; PAICS+PPAT = canonical purine biosynthesis enzymes; cluster also covers Heterotrimeric G-protein + THO complex
+# r7 cluster_53: 7/7 — adj_p=3.3e-02 *
 CEP135
 GNG5
 PAICS
@@ -1151,14 +1079,8 @@ PPAT
 PSPC1
 THOC7
 
-
-
-# ============================================================
-# Signaling — mTOR / Hypoxia
-# ============================================================
-
 Hypoxia:
-# r4 cluster_19 (5/5 genes = 100%) — adj_p=3.7e-03 **
+# r5 cluster_33: 5/6 — adj_p=5.2e-04 ***
 ATXN7L3
 DCAF7
 MAX
@@ -1166,27 +1088,22 @@ MTOR
 PDPK1
 
 Ragulator (FNIP-folliculin / mTORC1):
-# r4 cluster_0 (4/4 genes = 100%) — adj_p=6.6e-05 ***
+# r20 cluster_137: 4/4 — adj_p=1.0e+00 ns
 LAMTOR1
 LAMTOR2
 LAMTOR3
 LAMTOR4
 
 MTOR Signaling:
-# r20 cluster_146 (4/5 genes = 80%)
+# r20 cluster_146: 4/4 — adj_p=1.0e+00 ns
 PPP1R15B
 RICTOR
-RPTOR
 TTI1
 TTI2
-
-
-# ============================================================
-# Other
-# ============================================================
+RPTOR  # went to: r20-c47
 
 Inflammatory Response:
-# r4 cluster_4 (6/6 genes = 100%) — adj_p=2.1e-02 *
+# r20 cluster_57: 6/6 — adj_p=1.1e-02 *
 BRD8
 CTSG
 DCAF11
