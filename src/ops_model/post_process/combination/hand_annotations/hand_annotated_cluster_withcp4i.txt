@@ -1,13 +1,11 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
 # Total clusters annotated: 94
 # Total unique genes (primary section members): 810 / 1000 (81%)
-# Genes also appearing in another section's cluster (overlap-noted): 28
-# Total overlap annotations across the file: 34
 # Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
-# Significance: *** p≤0.001 (44), ** p≤0.01 (21), * p≤0.05 (42), ns p>0.05 (0)
+# Significance: *** p≤0.001 (48), ** p≤0.01 (27), * p≤0.05 (45), ns p>0.05 (0)
 # Each section IS a complete leiden cluster (section_size = cluster_size).
 # Tag: '# rX cluster_Y: section_in/cluster_total' followed by per-title Enrichr term + database + adj_p.
-# Databases: GO_BP, GO_CC, GO_MF, Reactome, KEGG.
+# Databases: GO_BP, GO_CC, GO_MF, Reactome, KEGG, CORUM, MSigDB_Hallmark, WikiPathways, BioPlex, Pfam, COMPARTMENTS_Curated.
 # Multi-theme labels (A / B): one line per matched theme.
 # Overlap notes ('# went to: <Section>', '# also in cluster ...'): mark genes whose cluster identity
 #  spans multiple sections at different leiden resolutions (NOT counted as section members).
@@ -19,6 +17,7 @@
 RNA Polymerase II Complex:
 # r30 cluster_158: 9/9
 # RNA Polymerase II, Core Complex (GO_CC) — adj_p=8.5e-09 ***
+#   ↳ overlap: 5/9 cluster genes (56%)
 GTF2B
 MED18
 MED21
@@ -32,6 +31,7 @@ POLR2H
 RNA polymerase III Complex:
 # r5 cluster_51: 9/9
 # RNA Polymerase III Complex (GO_CC) — adj_p=9.4e-07 ***
+#   ↳ overlap: 4/9 cluster genes (44%)
 GTF2A1
 GTF2A2
 NCBP2
@@ -45,6 +45,7 @@ TAF6
 Transcription Factors:
 # r10 cluster_66: 12/12
 # RNA Polymerase II Transcription (Reactome) — adj_p=5.5e-03 **
+#   ↳ overlap: 7/12 cluster genes (58%)
 CUL2
 ERCC3
 GPN1
@@ -61,6 +62,7 @@ NUDT21  # added from cluster
 Regulation of DNA-templated Transcription:
 # r20 cluster_33: 5/5
 # Regulation of DNA-templated Transcription (GO_BP) — adj_p=2.3e-02 *
+#   ↳ overlap: 4/5 cluster genes (80%)
 ARID5B
 BTAF1
 LIN9
@@ -70,6 +72,7 @@ PRMT3
 Chromatid Cohesion/GBAF Complex:
 # r20 cluster_58: 5/5
 # Cohesin Loading Onto Chromatin (GO_BP) — adj_p=9.3e-07 ***
+#   ↳ overlap: 3/5 cluster genes (60%)
 BRD9
 RAD21
 SMARCD1
@@ -79,6 +82,7 @@ SMC3
 DNA Methylation/Methionine&Cysteine Metabolism:
 # r7 cluster_38: 15/15
 # DNA Methylation (Reactome) — adj_p=2.0e-02 *
+#   ↳ overlap: 2/15 cluster genes (13%)
 BEND6
 BTBD9
 CABIN1
@@ -102,6 +106,7 @@ USP18
 Spliceosome:
 # r20 cluster_148: 5/5
 # SPLICEOSOME (KEGG) — adj_p=1.4e-05 ***
+#   ↳ overlap: 4/5 cluster genes (80%)
 SF3B3
 SF3B5
 SNRPD1
@@ -111,6 +116,7 @@ SNRPD3
 mRNA Splicing:
 # r20 cluster_61: 16/16
 # mRNA Splicing, via Spliceosome (GO_BP) — adj_p=6.7e-22 ***
+#   ↳ overlap: 16/16 cluster genes (100%)
 BUD31
 CDC5L
 EFTUD2
@@ -131,6 +137,7 @@ XAB2
 snRNA:
 # r7 cluster_6: 6/6
 # snRNA Metabolic Process (GO_BP) — adj_p=6.3e-11 ***
+#   ↳ overlap: 5/6 cluster genes (83%)
 INTS1
 INTS2
 INTS5
@@ -141,6 +148,7 @@ INTS10  # added from cluster
 mRNA Processing (CCDC174 set):
 # r10 cluster_49: 7/7
 # mRNA Processing (GO_BP) — adj_p=4.9e-03 **
+#   ↳ overlap: 4/7 cluster genes (57%)
 CCDC174
 DDX39B
 KIN
@@ -152,7 +160,9 @@ ZFR
 mRNA Export / 3' Processing:
 # r10 cluster_65: 5/5
 # Transport Of Mature mRNA Derived From An Intronless Transcript (Reactome) — adj_p=1.5e-04 ***
+#   ↳ overlap: 3/5 cluster genes (60%)
 # mRNA 3'-End Processing (GO_BP) — adj_p=1.0e-02 **
+#   ↳ overlap: 2/5 cluster genes (40%)
 CPSF2
 CPSF3
 EXOSC5
@@ -161,8 +171,12 @@ RGP1
 
 RNA Degradation / Chaperone-Mediated Protein Folding:
 # r4 cluster_35: 21/21
+# CCT complex (chaperonin containing TCP1 complex) (CORUM) — adj_p=1.2e-13 ***
+#   ↳ overlap: 5/21 cluster genes (24%) [in 5-gene sub-cluster at r20-c74: 5/5=100%, perfect complex match]
 # Chaperone Mediated Protein Folding Independent of Cofactor (GO_BP) — adj_p=5.0e-08 ***
+#   ↳ overlap: 5/21 cluster genes (24%)
 # Regulation of Telomerase RNA Localization to Cajal Body (GO_BP) — adj_p=5.0e-08 ***
+#   ↳ overlap: 5/21 cluster genes (24%)
 CCT3
 CCT4
 CCT6A
@@ -188,6 +202,7 @@ ZNRD1
 P-body:
 # r10 cluster_33: 10/10
 # P-body (GO_CC) — adj_p=1.3e-03 **
+#   ↳ overlap: 3/10 cluster genes (30%)
 ASNA1
 COL18A1
 DIS3L2
@@ -206,6 +221,7 @@ LARP7  # added from cluster
 Translation:
 # r7 cluster_3: 5/5
 # Translation (GO_BP) — adj_p=1.4e-02 *
+#   ↳ overlap: 3/5 cluster genes (60%)
 ABCE1
 NOP9
 RPLP1
@@ -215,6 +231,7 @@ ZZZ3
 Translation Initiation:
 # r30 cluster_137: 6/6
 # Cap-dependent Translation Initiation (Reactome) — adj_p=4.8e-04 ***
+#   ↳ overlap: 4/6 cluster genes (67%)
 EIF2B3
 EIF2B5
 EIF2S1
@@ -225,6 +242,7 @@ SARS
 Cytoplasmic Translation Initiation (eIFs):
 # r10 cluster_74: 9/9
 # Translation (Reactome) — adj_p=4.0e-05 ***
+#   ↳ overlap: 5/9 cluster genes (56%)
 EIF1AD
 EIF3A
 EIF3B
@@ -237,8 +255,11 @@ TSR2
 
 Aminoacyl-tRNA Synthetases / eIF2B:
 # r30 cluster_1: 9/9
-# Cytoplasmic Translational Initiation (GO_BP) — adj_p=1.3e-02 *
+# Multisynthetase complex (CORUM) — adj_p=9.1e-08 ***
+#   ↳ overlap: 4/9 cluster genes (44%) [canonical aminoacyl-tRNA synthetase complex]
 # AMINOACYL-TRNA BIOSYNTHESIS (KEGG) — adj_p=4.3e-03 ** [validated at r20-c1]
+# Cytoplasmic Translational Initiation (GO_BP) — adj_p=1.3e-02 *
+#   ↳ overlap: 2/9 cluster genes (22%)
 AARS
 ASNS
 DARS
@@ -252,6 +273,7 @@ RARS
 tRNA aminoacylation for Protein Translation:
 # r30 cluster_76: 6/6
 # tRNA Aminoacylation (Reactome) — adj_p=1.1e-03 **
+#   ↳ overlap: 2/6 cluster genes (33%)
 CARS
 FARSA
 FARSB
@@ -262,6 +284,7 @@ MARS
 Rescue of Stalled Ribosome:
 # r10 cluster_20: 22/22
 # Rescue of Stalled Ribosome (GO_BP) — adj_p=2.2e-02 *
+#   ↳ overlap: 3/22 cluster genes (14%)
 ALKBH8
 AMMECR1
 ASCC3
@@ -288,6 +311,7 @@ USP14
 Translational Stress Response (loose cluster):
 # r30 cluster_4: 8/8
 # Regulation of Translational Initiation in Response to Stress (GO_BP) — adj_p=3.8e-02 *
+#   ↳ overlap: 1/8 cluster genes (12%)
 ABHD10
 CPOX
 FOXL2
@@ -304,6 +328,7 @@ ZBED2
 Large Ribosomal Subunit:
 # r30 cluster_195: 12/12
 # Cytosolic Large Ribosomal Subunit (GO_CC) — adj_p=4.0e-23 ***
+#   ↳ overlap: 12/12 cluster genes (100%)
 RPL15
 RPL18
 RPL23
@@ -320,6 +345,7 @@ UBA52
 Small Ribosomal Subunit:
 # r20 cluster_124: 12/12
 # Small Ribosomal Subunit (GO_CC) — adj_p=2.1e-24 ***
+#   ↳ overlap: 12/12 cluster genes (100%)
 FAU
 RPS10
 RPS14
@@ -344,6 +370,7 @@ RSL24D1
 Ribosome biogenesis:
 # r20 cluster_118: 5/5
 # Ribosome Biogenesis (GO_BP) — adj_p=6.1e-04 ***
+#   ↳ overlap: 4/5 cluster genes (80%)
 EIF6
 NOL8
 NOLC1
@@ -353,6 +380,7 @@ URB2
 Nucleolus:
 # r20 cluster_109: 9/9
 # Nucleolus (GO_CC) — adj_p=6.9e-09 ***
+#   ↳ overlap: 9/9 cluster genes (100%)
 DDX18
 GNL2
 GNL3L
@@ -366,7 +394,9 @@ WDR12
 Maturation of 5.8S rRNA:
 # r20 cluster_126: 6/6
 # Maturation of 5.8S rRNA (GO_BP) — adj_p=1.1e-02 *
+#   ↳ overlap: 2/6 cluster genes (33%)
 # RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 *** [validated at r50-c202]
+#   ↳ overlap: 3/6 cluster genes (50%)
 FTSJ3
 GNL3
 GTPBP4
@@ -377,6 +407,7 @@ XPO1
 rRNA Processing:
 # r30 cluster_2: 11/11
 # rRNA Processing In Nucleus And Cytosol (Reactome) — adj_p=5.7e-10 ***
+#   ↳ overlap: 9/11 cluster genes (82%)
 AATF
 BMS1
 DDX47
@@ -392,6 +423,7 @@ UTP14A
 Small-Subunit Processome (pre-rRNA):
 # r30 cluster_66: 6/6
 # Small-Subunit Processome (GO_CC) — adj_p=1.9e-07 ***
+#   ↳ overlap: 5/6 cluster genes (83%)
 C12orf45
 NOL7
 NOP56
@@ -406,6 +438,7 @@ WDR36
 tRNA Metabolic Process:
 # r20 cluster_75: 6/6
 # tRNA Metabolic Process (GO_BP) — adj_p=7.7e-03 **
+#   ↳ overlap: 2/6 cluster genes (33%)
 CD2BP2
 CDIPT
 GTF3C1
@@ -416,6 +449,7 @@ UBN1
 tRNA uridine modification:
 # r2 cluster_14: 8/8
 # tRNA Wobble Uridine Modification (GO_BP) — adj_p=1.1e-09 ***
+#   ↳ overlap: 5/8 cluster genes (62%)
 CTU1
 CTU2
 DPH3
@@ -432,6 +466,7 @@ USP10
 DNA Replication:
 # r4 cluster_37: 13/13
 # DNA-templated DNA Replication (GO_BP) — adj_p=1.5e-14 ***
+#   ↳ overlap: 9/13 cluster genes (69%)
 CDC45
 MCM7
 MTBP
@@ -449,6 +484,7 @@ TONSL
 CMG Complex (replication helicase):
 # r5 cluster_40: 7/7
 # CMG Complex (GO_CC) — adj_p=9.2e-03 **
+#   ↳ overlap: 2/7 cluster genes (29%)
 CCNB1
 CHMP7
 CHTF8
@@ -460,6 +496,7 @@ REV3L
 DNA Repair:
 # r7 cluster_28: 13/13
 # Positive Regulation of DNA Repair (GO_BP) — adj_p=4.4e-02 *
+#   ↳ overlap: 3/13 cluster genes (23%)
 AP3M1
 B4GALT5
 CD4
@@ -477,6 +514,7 @@ UBE2N
 DNA Recombination:
 # r30 cluster_33: 7/7
 # DNA Recombination (GO_BP) — adj_p=3.5e-02 *
+#   ↳ overlap: 2/7 cluster genes (29%)
 AQP7
 CDC27
 HMGB1
@@ -491,7 +529,12 @@ TUBB8
 
 CDK7/CCNH (CAK Complex):
 # r7 cluster_45: 19/23
+# CAK complex (Cdk-activating kinase complex) (CORUM) — adj_p=5.9e-03 **
+#   ↳ overlap: 2/23 cluster genes (9%) [CDK7+CCNH; canonical complex match]
+# Cyclin N (Pfam) — adj_p=3.5e-03 **
+#   ↳ overlap: 3/23 cluster genes (13%)
 # Cyclin-Dependent Protein Kinase Holoenzyme Complex (GO_CC) — adj_p=3.9e-04 ***
+#   ↳ overlap: 4/23 cluster genes (17%)
 CA5A
 CCNH
 CDK7
@@ -519,6 +562,7 @@ PPIA  # also in cluster — listed in p53 Signaling Pathway
 Cell Division:
 # r10 cluster_47: 12/12
 # Regulation of Cell Division (GO_BP) — adj_p=1.2e-02 *
+#   ↳ overlap: 3/12 cluster genes (25%)
 CALM1
 CEP55
 EBF1
@@ -535,6 +579,7 @@ THG1L  # added from cluster
 Spindle:
 # r30 cluster_16: 9/9
 # Spindle (GO_CC) — adj_p=1.9e-05 ***
+#   ↳ overlap: 5/9 cluster genes (56%)
 AURKB
 C2orf27B
 ECT2
@@ -548,6 +593,7 @@ KRT18
 Microtubule Nucleation:
 # r30 cluster_161: 7/7
 # Regulation of Microtubule Nucleation (GO_BP) — adj_p=1.5e-05 ***
+#   ↳ overlap: 3/7 cluster genes (43%)
 HAUS4
 HAUS5
 HAUS6
@@ -559,7 +605,9 @@ TERF2
 Kinetochore / Membraneless Organelle Assembly:
 # r20 cluster_21: 8/8
 # Kinetochore Organization (GO_BP) — adj_p=1.3e-05 ***
+#   ↳ overlap: 3/8 cluster genes (38%)
 # Membraneless Organelle Assembly (GO_BP) — adj_p=3.3e-03 **
+#   ↳ overlap: 3/8 cluster genes (38%)
 ALYREF
 BUB1B
 CENPC
@@ -576,7 +624,9 @@ TUBGCP6
 ER Membrane/Protein Glycosylation:
 # r7 cluster_34: 18/18
 # Protein Glycosylation (GO_BP) — adj_p=5.2e-03 **
+#   ↳ overlap: 4/18 cluster genes (22%)
 # Endoplasmic Reticulum Membrane (GO_CC) — adj_p=2.6e-02 *
+#   ↳ overlap: 6/18 cluster genes (33%)
 ATRX
 CERS6
 CIAO1
@@ -599,6 +649,7 @@ VPS26A
 Protein insertion into ER:
 # r30 cluster_32: 5/5
 # Protein Insertion Into ER Membrane By Stop-Transfer Membrane Anchor Sequence (GO_BP) — adj_p=3.6e-07 ***
+#   ↳ overlap: 3/5 cluster genes (60%)
 APC
 EMC1
 EMC2
@@ -608,6 +659,7 @@ RBM26
 Protein Targeting to ER (SRP/SEC61):
 # r20 cluster_131: 7/7
 # Protein Targeting to ER (GO_BP) — adj_p=1.8e-08 ***
+#   ↳ overlap: 5/7 cluster genes (71%)
 HSD17B12
 SEC61A1
 SEC61G
@@ -619,6 +671,7 @@ SRPRA
 Tail-Anchored Membrane Protein Insertion into ER (GET pathway):
 # r7 cluster_31: 10/13
 # Tail-Anchored Membrane Protein Insertion Into ER Membrane (GO_BP) — adj_p=3.3e-04 ***
+#   ↳ overlap: 3/13 cluster genes (23%)
 ARGLU1
 CUL1
 ELAVL1
@@ -634,9 +687,12 @@ EMC2  # also in cluster — listed in Protein insertion into ER
 EMC3  # also in cluster — listed in Protein insertion into ER
 NUFIP2  # went to: DNA Methylation/Methionine&Cysteine Metabolism
 
-Hrd1p Ubiquitin Ligase Complex (ERAD):
+Hrd1p Ubiquitin Ligase Complex (ERAD) / ER Membrane:
 # r10 cluster_12: 11/11
 # Hrd1p Ubiquitin Ligase Complex (GO_CC) — adj_p=1.8e-03 **
+#   ↳ overlap: 2/11 cluster genes (18%)
+# Endoplasmic Reticulum Membrane (GO_CC) — adj_p=4.6e-03 **
+#   ↳ overlap: 5/11 cluster genes (45%) [highest-overlap term]
 ALG12
 BLOC1S2
 BORCS7
@@ -651,7 +707,10 @@ TMX2
 
 ER Stress Response (PERK):
 # r20 cluster_62: 8/8
+# DNA REPLICATION (KEGG) — adj_p=3.0e-04 ***
+#   ↳ overlap: 3/6 sub-cluster genes (50%) [validated at r50-c171; PERK genes overlap with replication-stress response]
 # ER Overload Response (GO_BP) — adj_p=4.7e-02 *
+#   ↳ overlap: 1/8 cluster genes (12%)
 C1D
 CAD
 EIF2AK3
@@ -664,6 +723,7 @@ UQCC2
 Unfolded Protein Response:
 # r20 cluster_113: 10/10
 # Response to Unfolded Protein (GO_BP) — adj_p=4.1e-02 *
+#   ↳ overlap: 2/10 cluster genes (20%)
 DYNLL2
 ERN1
 FAT1
@@ -682,6 +742,7 @@ TM7SF3
 ER to Golgi Anterograde Transport:
 # r20 cluster_93: 8/8
 # ER To Golgi Anterograde Transport (Reactome) — adj_p=2.0e-09 ***
+#   ↳ overlap: 7/8 cluster genes (88%)
 COG3
 PREB
 SEC16A
@@ -693,7 +754,10 @@ TRAPPC4
 
 Golgi to plasma membrane transport:
 # r10 cluster_36: 11/11
+# Metabolism Of Proteins (Reactome) — adj_p=7.9e-03 **
+#   ↳ overlap: 6/7 cluster genes (86%) [validated at r20-c94 sub-cluster]
 # Golgi to Plasma Membrane Transport (GO_BP) — adj_p=1.7e-03 **
+#   ↳ overlap: 3/11 cluster genes (27%)
 ATP6V1B2
 ATP6V1H
 COG7
@@ -709,6 +773,7 @@ RABGGTB
 cis-Golgi Network:
 # r7 cluster_26: 14/15
 # cis-Golgi Network (GO_CC) — adj_p=1.2e-01 [near-sig, also at r4/r10]
+#   ↳ overlap: 2/15 cluster genes (13%)
 # Coated Vesicle Membrane / ER to Golgi Transport Vesicle (GO_CC) — adj_p=1.5e-02 * [validated at r0.5-c3 mega-cluster]
 ARL2
 B3GAT3
@@ -729,6 +794,7 @@ EXOSC5  # in cluster but listed under another section
 Golgi Lumen:
 # r5 cluster_36: 7/7
 # Golgi Lumen (GO_CC) — adj_p=7.5e-03 **
+#   ↳ overlap: 2/7 cluster genes (29%)
 GABRR3
 LIAS
 MUC13
@@ -740,6 +806,7 @@ TIPARP
 Golgi Cisterna:
 # r30 cluster_148: 6/6
 # Golgi Cisterna (GO_CC) — adj_p=3.6e-02 *
+#   ↳ overlap: 1/6 cluster genes (17%)
 FOXD4L5
 GOLGA6D
 LYPD2
@@ -750,6 +817,7 @@ USP17L12
 COPI Vesicle Membrane:
 # r20 cluster_97: 7/7
 # COPI-coated Vesicle Membrane (GO_CC) — adj_p=3.0e-08 ***
+#   ↳ overlap: 4/7 cluster genes (57%)
 COPA
 COPB1
 COPB2
@@ -761,6 +829,7 @@ SON
 Coated Vesicle:
 # r10 cluster_23: 6/6
 # Coated Vesicle (GO_CC) — adj_p=4.7e-02 *
+#   ↳ overlap: 2/6 cluster genes (33%)
 AP1M1
 IER3IP1
 OGT
@@ -775,6 +844,8 @@ YIPF5
 Endocytosis:
 # r30 cluster_15: 10/10
 # ENDOCYTOSIS (KEGG) — adj_p=4.3e-02 *
+#   ↳ overlap: 2/10 cluster genes (20%)
+# ArfGap (Pfam) — adj_p=4.5e-04 *** [40% overlap in sub-cluster at r50-c16; canonical endocytic regulators]
 AGAP4
 AGAP9
 CBWD1
@@ -789,7 +860,9 @@ USP17L5
 Endosome/Clathrin:
 # r30 cluster_28: 6/6
 # Clathrin-mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
+#   ↳ overlap: 5/6 cluster genes (83%)
 # Cargo Recognition For Clathrin-Mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
+#   ↳ overlap: 5/6 cluster genes (83%)
 AP2A1
 AP2M1
 AP2S1
@@ -800,6 +873,7 @@ SH3GL1
 Lysosomal Transport:
 # r20 cluster_84: 6/6
 # Lysosomal Transport (GO_BP) — adj_p=5.4e-06 ***
+#   ↳ overlap: 4/6 cluster genes (67%)
 CHMP2A
 CHMP4B
 CHMP6
@@ -810,6 +884,7 @@ VPS29
 Secondary Lysosome:
 # r5 cluster_28: 17/17
 # Secondary Lysosome (GO_CC) — adj_p=5.4e-03 **
+#   ↳ overlap: 2/17 cluster genes (12%)
 AP3S1
 ARPP19
 CAPN12
@@ -845,6 +920,9 @@ VPS25  # added from cluster
 Calcium Signaling:
 # r10 cluster_17: 19/19
 # Response to Calcium Ion (GO_BP) — adj_p=3.9e-02 *
+#   ↳ overlap: 3/19 cluster genes (16%)
+# EF-hand 7 (Pfam) — adj_p=2.0e-02 *
+#   ↳ overlap: 2/19 cluster genes (11%) [calcium-binding domain]
 AHCYL1
 CEP85
 DHDDS
@@ -868,6 +946,7 @@ ZNF593
 Calcium-dependent Exocytosis:
 # r30 cluster_139: 12/12
 # Protein Localization to Presynapse (GO_BP) — adj_p=6.7e-02 [near-sig]
+#   ↳ overlap: 1/12 cluster genes (8%)
 # Vesicle Coat / COPI Vesicle Coat (GO_CC) — adj_p=2.3e-03 ** [validated at r0.5-c2 mega-cluster]
 ELOVL1
 KDM4A
@@ -885,7 +964,9 @@ TRIM33
 Cation Transmembrane Transport:
 # r30 cluster_47: 8/8
 # Monoatomic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
+#   ↳ overlap: 2/8 cluster genes (25%)
 # Inorganic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
+#   ↳ overlap: 2/8 cluster genes (25%)
 ATP6V0A1
 CACNB1
 HSPB9
@@ -898,6 +979,7 @@ TEFM
 Voltage-gate Sodium Channel Complex:
 # r30 cluster_176: 6/6
 # Sodium Channel Complex (GO_CC) — adj_p=3.6e-02 *
+#   ↳ overlap: 1/6 cluster genes (17%)
 METTL7B
 MUCL1
 PAN2
@@ -909,6 +991,7 @@ Sodium Channel Complex:
 # r10 cluster_43: 9/9
 # Sodium Channel Complex (GO_CC) — adj_p=1.3e-01 [near-sig at full cluster, also at r1/r3/r4]
 # Regulation of Heart Contraction (GO_BP) — adj_p=2.8e-02 * [also enriched, Na-channel-driven]
+#   ↳ overlap: 2/9 cluster genes (22%)
 BRK1
 CIAPIN1
 COG4
@@ -922,6 +1005,7 @@ MOB4  # added from cluster
 Potassium Ion Transport:
 # r20 cluster_43: 7/7
 # Potassium Ion Transport (GO_BP) — adj_p=4.0e-02 *
+#   ↳ overlap: 1/7 cluster genes (14%)
 ATIC
 BET1
 CA13
@@ -930,9 +1014,12 @@ NBEAL1
 NUDCD1
 ZNF704
 
-Cell Adhesion Molecules:
+Cell Adhesion Molecules / EMT:
 # r7 cluster_25: 8/8
+# Epithelial Mesenchymal Transition (MSigDB_Hallmark) — adj_p=2.2e-03 **
+#   ↳ overlap: 2/8 cluster genes (25%) [EMT signature]
 # Calcium-Independent Cell-Cell Adhesion via Plasma Membrane Cell-Adhesion Molecules (GO_BP) — adj_p=2.5e-02 *
+#   ↳ overlap: 1/8 cluster genes (12%)
 AP1S1
 CLDN15
 FZD9
@@ -946,7 +1033,9 @@ DLD  # went to: DNA Repair / Endosomal Cluster
 Cell Motility / Integrin Signaling:
 # r7 cluster_54: 5/5
 # MET Promotes Cell Motility (Reactome) — adj_p=7.8e-03 **
+#   ↳ overlap: 2/5 cluster genes (40%)
 # CD40 Signaling Pathway (GO_BP) — adj_p=1.8e-02 *
+#   ↳ overlap: 1/5 cluster genes (20%)
 CFL1
 ITGB1
 MEAF6
@@ -960,15 +1049,19 @@ ZC3H4
 Actin Nucleation (ARP2/3):
 # r20 cluster_8: 5/5
 # Actin Nucleation (GO_BP) — adj_p=1.1e-06 ***
+#   ↳ overlap: 3/5 cluster genes (60%)
 ACTR3
 ARPC2
 ARPC3
 ARPC4
 TARDBP
 
-Actin Polymerization:
+Actin Filament Organization:
 # r10 cluster_67: 6/6
-# Actin Filament Polymerization (GO_BP) — adj_p=3.2e-02 *
+# Actin Filament Organization (GO_BP) — adj_p=3.2e-02 *
+#   ↳ overlap: 2/6 cluster genes (33%)
+# Protein Polymerization (GO_BP) — adj_p=2.4e-02 *
+#   ↳ overlap: 2/6 cluster genes (33%)
 CTPS2
 GPX4
 HDAC6
@@ -979,7 +1072,9 @@ WASL
 Actin Filament Depolymerization:
 # r20 cluster_56: 9/9
 # Actin Filament Depolymerization (GO_BP) — adj_p=4.7e-02 *
+#   ↳ overlap: 1/9 cluster genes (11%)
 # Negative Regulation of Organelle Assembly (GO_BP) — adj_p=1.1e-02 * [also enriched, BRCA1+TWF1-driven]
+#   ↳ overlap: 2/9 cluster genes (22%)
 BRCA1
 KRTAP2-3
 KRTAP2-4
@@ -993,7 +1088,9 @@ TWF1
 Dynein Complex / Motor Proteins:
 # r20 cluster_88: 8/8
 # MOTOR PROTEINS (KEGG) — adj_p=1.9e-12 ***
+#   ↳ overlap: 7/8 cluster genes (88%)
 # HSP90 Chaperone Cycle For Steroid Hormone Receptors (Reactome) — adj_p=9.5e-14 *** [also strongly enriched]
+#   ↳ overlap: 7/8 cluster genes (88%)
 CLASP1
 DCTN4
 DCTN5
@@ -1010,6 +1107,7 @@ DYNLL1
 Nuclear Import:
 # r10 cluster_61: 8/8
 # Nuclear Membrane (GO_CC) — adj_p=2.3e-02 *
+#   ↳ overlap: 2/8 cluster genes (25%)
 CNOT4
 CSE1L
 DGCR8
@@ -1022,6 +1120,7 @@ UBAP2L
 Nuclear Pore Organization:
 # r20 cluster_139: 4/5
 # Nuclear Pore Organization (GO_BP) — adj_p=9.8e-04 ***
+#   ↳ overlap: 2/5 cluster genes (40%)
 MAP2K7
 NUP54
 NUP98
@@ -1031,6 +1130,7 @@ MOB4  # in cluster but listed under another section
 Nuclear Deformation/Cornified Envelope:
 # r20 cluster_132: 8/8
 # Cornified Envelope (GO_CC) — adj_p=2.7e-03 **
+#   ↳ overlap: 2/8 cluster genes (25%)
 HIST1H2AI
 OTOP1
 PLGLB2
@@ -1047,6 +1147,7 @@ SPRR2B
 Mitochondrial Translation:
 # r30 cluster_42: 11/11
 # Mitochondrial Translation (Reactome) — adj_p=1.9e-09 ***
+#   ↳ overlap: 5/11 cluster genes (45%)
 ATAD3A
 ATP5F1B
 DHX30
@@ -1062,6 +1163,7 @@ NDUFC1
 Mitochondrial Import:
 # r10 cluster_72: 11/11
 # TIM23 Mitochondrial Import Inner Membrane Translocase Complex (GO_CC) — adj_p=5.0e-09 ***
+#   ↳ overlap: 5/11 cluster genes (45%)
 DNAJC19
 GRPEL1
 HSPA9
@@ -1077,6 +1179,7 @@ TOMM20
 Mitochondrial Outer Membrane (FBXL4 cluster):
 # r30 cluster_145: 5/5
 # Mitochondrial Outer Membrane (GO_CC) — adj_p=1.4e-02 *
+#   ↳ overlap: 2/5 cluster genes (40%)
 FBXL4
 PRDM13
 RNF146
@@ -1087,6 +1190,7 @@ Mitochondrial Outer Membrane (extended cluster):
 # r20 cluster_99: 5/6
 # Mitochondrial Outer Membrane (GO_CC) — adj_p=8.9e-02 [near-sig at r7-c56, also at r5/r10]
 # Chromocenter (GO_CC) — adj_p=4.2e-02 * [also enriched at this cluster]
+#   ↳ overlap: 1/6 cluster genes (17%)
 COQ10B
 GTF3C6
 MBD5
@@ -1099,6 +1203,7 @@ HSD17B12  # went to: Protein Targeting to ER (SRP/SEC61)
 Electron Transport Chain:
 # r30 cluster_105: 6/6
 # Aerobic Electron Transport Chain (GO_BP) — adj_p=4.3e-04 ***
+#   ↳ overlap: 2/6 cluster genes (33%)
 COA5
 COX11
 COX7B
@@ -1109,6 +1214,7 @@ VARS2
 Cristae Formation:
 # r30 cluster_164: 6/6
 # Cristae Formation (GO_BP) — adj_p=2.9e-03 **
+#   ↳ overlap: 2/6 cluster genes (33%)
 HNRNPK
 KANSL1
 MICOS13
@@ -1123,6 +1229,7 @@ UBR4
 Proteasome:
 # r10 cluster_82: 7/7
 # PROTEASOME (KEGG) — adj_p=3.7e-16 ***
+#   ↳ overlap: 7/7 cluster genes (100%)
 PSMB6
 PSMC2
 PSMC6
@@ -1134,6 +1241,7 @@ PSMD4
 Cul2-RING Ubiquitin Ligase Complex:
 # r20 cluster_60: 7/7
 # Cul2-RING Ubiquitin Ligase Complex (GO_CC) — adj_p=1.6e-03 **
+#   ↳ overlap: 2/7 cluster genes (29%)
 BTF3L4
 ELOC
 FCGR1A
@@ -1145,6 +1253,7 @@ UBE2D3
 COP Complex/Protein Neddylation:
 # r7 cluster_57: 8/8
 # Neddylation (Reactome) — adj_p=3.2e-12 ***
+#   ↳ overlap: 7/8 cluster genes (88%)
 COPS2
 COPS3
 COPS4
@@ -1157,7 +1266,9 @@ GPS1
 Microautophagy / Carnitine Metabolism:
 # r30 cluster_44: 6/6
 # Microautophagy (GO_BP) — adj_p=3.3e-02 *
+#   ↳ overlap: 1/6 cluster genes (17%)
 # Carnitine Metabolic Process (GO_BP) — adj_p=3.3e-02 *
+#   ↳ overlap: 1/6 cluster genes (17%)
 ATG9A
 CCNC
 CERCAM
@@ -1168,6 +1279,7 @@ SLC39A9
 Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling:
 # r30 cluster_102: 5/5
 # Negative Regulation of Intracellular Signal Transduction (GO_BP) — adj_p=1.7e-05 ***
+#   ↳ overlap: 4/5 cluster genes (80%)
 CNOT1
 CNOT2
 PTEN
@@ -1177,6 +1289,7 @@ TSC2
 p53 Signaling Pathway:
 # r50 cluster_93: 4/5
 # P53 SIGNALING PATHWAY (KEGG) — adj_p=7.1e-03 **
+#   ↳ overlap: 2/5 cluster genes (40%)
 CCND3
 CCNG1
 CHMP1A
@@ -1187,9 +1300,14 @@ NCOA4  # in cluster but listed under another section
 # Metabolism
 # ============================================================
 
-Inositol Phosphate Metabolism:
+Inositol Phosphate Metabolism / Insulin Signaling:
 # r4 cluster_18: 18/31
+# PHOSPHATIDYLINOSITOL SIGNALING SYSTEM (KEGG) — adj_p=8.8e-03 **
+#   ↳ overlap: 4/31 cluster genes (13%)
+# Insulin Signaling WP481 (WikiPathways) — adj_p=1.2e-02 *
+#   ↳ overlap: 5/31 cluster genes (16%) [highest-overlap term]
 # INOSITOL PHOSPHATE METABOLISM (KEGG) — adj_p=1.3e-02 *
+#   ↳ overlap: 3/31 cluster genes (10%)
 ANP32B
 ARNT2
 CALM3
@@ -1225,6 +1343,7 @@ TSC2  # also in r4-c18 cluster (listed elsewhere)
 Purine Metabolism:
 # r30 cluster_23: 6/6
 # PURINE METABOLISM (KEGG) — adj_p=1.7e-02 *
+#   ↳ overlap: 2/6 cluster genes (33%)
 AMIGO3
 CACNA1D
 IMPDH2
@@ -1235,6 +1354,7 @@ SACM1L
 Purine Biosynthesis:
 # r7 cluster_53: 7/7
 # Purine Nucleobase Metabolic Process (GO_BP) — adj_p=3.5e-02 *
+#   ↳ overlap: 1/7 cluster genes (14%)
 CEP135
 GNG5
 PAICS
@@ -1246,6 +1366,7 @@ THOC7
 Gluconeogenesis:
 # r30 cluster_53: 5/5
 # Negative Regulation of Gluconeogenesis (GO_BP) — adj_p=3.7e-02 *
+#   ↳ overlap: 1/5 cluster genes (20%)
 B3GNT2
 HIST1H2BK
 MAPRE3
@@ -1255,8 +1376,11 @@ TELO2
 Energy Metabolism (Fatty Acid / Glycolysis / Sulfur)/ Lipid droplets:
 # r10 cluster_6: 8/10
 # FATTY ACID BIOSYNTHESIS (KEGG) — adj_p=3.3e-02 *
+#   ↳ overlap: 1/10 cluster genes (10%)
 # GLYCOLYSIS / GLUCONEOGENESIS (KEGG) — adj_p=5.0e-02 *
+#   ↳ overlap: 1/10 cluster genes (10%)
 # SULFUR METABOLISM (KEGG) — adj_p=3.3e-02 *
+#   ↳ overlap: 1/10 cluster genes (10%)
 C5orf22
 CIT
 COG6
@@ -1273,6 +1397,7 @@ ACSL4  # also in cluster (claimed elsewhere)
 Intracellular Triglyceride Homeostasis (loose cluster):
 # r10 cluster_31: 11/11
 # Intracellular Triglyceride Homeostasis (GO_BP) — adj_p=6.6e-02 [near-sig at full cluster, sig at r20-c112 sub-cluster p=2.4e-02 *]
+#   ↳ overlap: 1/11 cluster genes (9%)
 ARHGEF9
 BLOC1S6
 C5orf30
@@ -1292,6 +1417,7 @@ ZNF131
 Ragulator (FNIP-folliculin):
 # r10 cluster_79: 4/8
 # FNIP-folliculin RagC/D GAP (GO_CC) — adj_p=4.4e-08 ***
+#   ↳ overlap: 4/8 cluster genes (50%)
 LAMTOR1
 LAMTOR2
 LAMTOR3
@@ -1304,6 +1430,7 @@ INTS7  # also in cluster — listed in snRNA section
 Hypoxia:
 # r5 cluster_33: 6/6
 # Cellular Response to Hypoxia (GO_BP) — adj_p=5.2e-04 ***
+#   ↳ overlap: 3/6 cluster genes (50%)
 ATXN7L3
 DCAF7
 MAX
@@ -1314,6 +1441,7 @@ RPTOR
 Inflammatory Response:
 # r50 cluster_66: 5/5
 # Cell Recruitment (Pro-Inflammatory Response) (Reactome) — adj_p=3.8e-02 *
+#   ↳ overlap: 1/5 cluster genes (20%)
 BRD8
 CTSG
 DCAF11
