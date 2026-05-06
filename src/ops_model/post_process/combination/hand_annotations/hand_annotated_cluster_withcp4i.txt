@@ -1,4 +1,11 @@
+# === Hand-annotated clusters (paper_v1 with CP + 4i) ===
+# Total clusters annotated: 90
+# Total unique genes covered: 785 / 1052 (75%)
+# Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
+# Each section is a real leiden cluster — see '# rX cluster_Y' tag below each header
+
 Spliceosome:
+# r4 cluster_31 (16/16 genes = 100%)
 BUD31
 CDC5L
 EFTUD2
@@ -12,12 +19,12 @@ RBM22
 SLU7
 SMU1
 SNRNP200
-SON
 SRSF3
 TFIP11
 XAB2
 
 Spliceosome Assembly:
+# r4 cluster_31 (5/5 genes = 100%)
 SF3B3
 SF3B5
 SNRPD1
@@ -25,6 +32,7 @@ SNRPD2
 SNRPD3
 
 RNA Degradation:
+# r4 cluster_35 (21/21 genes = 100%)
 CCT3
 CCT4
 CCT6A
@@ -47,8 +55,8 @@ USP39
 ZCCHC9
 ZNRD1
 
-
 RNA Polymerase:
+# r4 cluster_40 (9/9 genes = 100%)
 GTF2B
 MED18
 MED21
@@ -60,6 +68,7 @@ POLR2F
 POLR2H
 
 DNA Replication:
+# r4 cluster_37 (13/16 genes = 81%)
 CDC45
 MCM7
 MTBP
@@ -73,8 +82,12 @@ RRM1
 TIMELESS
 TIPIN
 TONSL
+MCM3
+MCM5
+POLE4
 
 Proteosome:
+# r4 cluster_30 (7/7 genes = 100%)
 PSMB6
 PSMC2
 PSMC6
@@ -84,6 +97,7 @@ PSMD2
 PSMD4
 
 Golgi to plasma membrane transport:
+# r4 cluster_28 (11/11 genes = 100%)
 ATP6V1B2
 ATP6V1H
 COG7
@@ -97,6 +111,7 @@ RABGGTA
 RABGGTB
 
 cis-Golgi Network:
+# r4 cluster_24 (13/13 genes = 100%)
 ARL2
 B3GAT3
 CCDC59
@@ -109,17 +124,10 @@ RAB6A
 RPS6KA4
 SCYL1
 SNX32
-
-Protein Neddylation:
-NAE1
-NEDD8
-PCID2
-PRRC2A
-UBE2M
-ZBTB39
-
+KRT8
 
 ER Membrane/Protein Glycosylation:
+# r4 cluster_25 (18/18 genes = 100%)
 ATRX
 CERS6
 CIAO1
@@ -139,7 +147,8 @@ STT3B
 TTN
 VPS26A
 
-Cell Death/Golgi Cisterna
+Cell Death/Golgi Cisterna:
+# r10 cluster_29 (6/6 genes = 100%)
 FOXD4L5
 GOLGA6D
 LYPD2
@@ -148,6 +157,7 @@ SPATA31A5
 USP17L12
 
 Ubiquitation/Apoptosis:
+# r4 cluster_15 (10/10 genes = 100%)
 AGAP4
 AGAP9
 CBWD1
@@ -160,6 +170,7 @@ TRIM43
 USP17L5
 
 Spindle:
+# r4 cluster_15 (7/7 genes = 100%)
 AQP7
 CDC27
 HMGB1
@@ -169,6 +180,7 @@ RPL41
 TUBB8
 
 Mitotic Spindle Assembly:
+# r4 cluster_15 (9/9 genes = 100%)
 AURKB
 C2orf27B
 ECT2
@@ -180,6 +192,7 @@ KIF23
 KRT18
 
 Ribosome biogenesis:
+# r4 cluster_3 (5/5 genes = 100%)
 EIF6
 NOL8
 NOLC1
@@ -187,6 +200,7 @@ NOP16
 URB2
 
 Maturation of 5.8S rRNA:
+# r4 cluster_3 (6/6 genes = 100%)
 FTSJ3
 GNL3
 GTPBP4
@@ -195,6 +209,7 @@ PPAN
 XPO1
 
 rRNA Processing:
+# r4 cluster_2 (11/11 genes = 100%)
 AATF
 BMS1
 DDX47
@@ -208,6 +223,7 @@ TSR1
 UTP14A
 
 tRNA uridine modification:
+# r4 cluster_39 (8/8 genes = 100%)
 CTU1
 CTU2
 DPH3
@@ -217,9 +233,18 @@ RHOF
 URM1
 USP10
 
-tRNA Metabolic Process
+tRNA Metabolic Process:
+# r7 cluster_51 (7/7 genes = 100%)
+CD2BP2
+CDIPT
+COQ7
+GTF3C1
+INO80E
+TSEN2
+UBN1
 
 eIF2 Recycling/Asparagine Metabolism:
+# r4 cluster_1 (9/9 genes = 100%)
 AARS
 ASNS
 DARS
@@ -231,6 +256,7 @@ LARS
 RARS
 
 Large Ribosomal Subunit:
+# r4 cluster_42 (12/12 genes = 100%)
 RPL15
 RPL18
 RPL23
@@ -245,6 +271,7 @@ RPL9
 UBA52
 
 Small Ribosomal Subunit:
+# r4 cluster_42 (12/12 genes = 100%)
 FAU
 RPS10
 RPS14
@@ -259,6 +286,7 @@ RPS8
 RPS9
 
 Translation:
+# r4 cluster_3 (5/5 genes = 100%)
 ABCE1
 NOP9
 RPLP1
@@ -266,6 +294,7 @@ RPLP2
 ZZZ3
 
 tRNA aminoacylation for Protein Translation:
+# r4 cluster_1 (5/5 genes = 100%)
 CARS
 FARSA
 FARSB
@@ -273,6 +302,7 @@ HYOU1
 KRI1
 
 RNA polymerase:
+# r7 cluster_39 (9/9 genes = 100%)
 GTF2A1
 GTF2A2
 NCBP2
@@ -284,6 +314,7 @@ TAF12
 TAF6
 
 Translation Initiation:
+# r30 cluster_137 (6/6 genes = 100%)
 EIF2B3
 EIF2B5
 EIF2S1
@@ -292,6 +323,7 @@ QARS
 SARS
 
 Cell Division:
+# r4 cluster_4 (12/14 genes = 86%)
 CALM1
 CEP55
 EBF1
@@ -304,23 +336,11 @@ MTHFD1
 NCOA4
 SEC24A
 THG1L
-
-Translation Initiation:
-EIF2S2
-RPL15
-RPL18
-RPL23
-RPL26
-RPL27A
-RPL30
-RPL32
-RPL34
-RPL35
-RPL37A
-RPL9
-UBA52
+NEDD8
+UBE2M
 
 Transcription Factors:
+# r4 cluster_40 (12/14 genes = 86%)
 CPSF6
 CUL2
 ERCC3
@@ -333,8 +353,11 @@ NUDT21
 POLR2I
 SNAPC2
 SNRNP70
+POLR2E
+SRSF7
 
 Chromatid Cohesion/GBAF Complex:
+# r4 cluster_29 (5/5 genes = 100%)
 BRD9
 RAD21
 SMARCD1
@@ -342,39 +365,33 @@ SMC1A
 SMC3
 
 DNA Methylation/Methionine&Cysteine Metabolism:
+# r4 cluster_29 (14/14 genes = 100%)
+BEND6
+BTBD9
+CABIN1
+CMTR1
 CNOT10
 CNOT11
 DNMT1
 HIC2
 RANBP1
+SLC35B2
+TBP
+TMEM63B
 UHRF1
 USP18
 
-Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling
+Autophagy/Cell Senescence/Negative Regulation of Intracellular Signaling:
+# r7 cluster_46 (6/6 genes = 100%)
 CNOT1
 CNOT2
 CSNK2A3
-NAE1
-PCID2
-PRRC2A
 PTEN
 TSC1
 TSC2
 
-MethylTransferase Complex:
-ATP6V1B2
-ATP6V1H
-COG7
-COG8
-EXOC4
-EXOC5
-HMGCR
-RAB10
-RAB14
-RABGGTA
-RABGGTB
-
 Nuclear Import:
+# r10 cluster_61 (8/8 genes = 100%)
 CNOT4
 CSE1L
 DGCR8
@@ -384,8 +401,8 @@ PFN1
 RANGAP1
 UBAP2L
 
-
-Mitochondrial Outer Membrane:
+Nucleocytoplasmic Transport (FBXL4 cluster):
+# r4 cluster_10 (5/5 genes = 100%)
 FBXL4
 PRDM13
 RNF146
@@ -393,21 +410,18 @@ UFL1
 ZRSR2
 
 Mitochondrial Outer Membrane:
+# r7 cluster_56 (8/8 genes = 100%)
 COL9A1
 COQ10B
 CTDSPL2
-FBXL4
 GTF3C6
 HSD17B12
 MBD5
-PRDM13
-RNF146
 SEC63
 TBPL1
-UFL1
-ZRSR2
 
 Inositol Phosphate Metabolism:
+# r4 cluster_18 (11/11 genes = 100%)
 COQ4
 IMPA2
 INPPL1
@@ -418,8 +432,10 @@ RNF41
 RXRA
 STXBP1
 TPT1
+SEC23B
 
 Peroxisome:
+# r4 cluster_18 (6/6 genes = 100%)
 ATG9A
 CCNC
 CERCAM
@@ -428,6 +444,7 @@ GOLGA2
 SLC39A9
 
 COP Complex/Protein Neddylation:
+# r4 cluster_32 (8/8 genes = 100%)
 COPS2
 COPS3
 COPS4
@@ -437,43 +454,34 @@ COPS8
 DDB1
 GPS1
 
-
-COPI Vesicle Membrane
+COPI Vesicle Membrane:
+# r10 cluster_62 (6/6 genes = 100%)
 COPA
 COPB1
 COPB2
 COPZ1
 GBF1
 NAPA
-SON
 
 Endosome/Clathrin:
+# r4 cluster_19 (14/14 genes = 100%)
 AP2A1
 AP2M1
 AP2S1
 ATP6V0A1
-BRCA1
 CACNB1
 GRB2
 HSPB9
 KRAS
 KRT10
-KRTAP2-3
-KRTAP2-4
-KRTAP4-2
-NMT1
-OSBPL7
-PHF23
 PIGS
-PPY
 RAB5C
 STAT5B
 TEFM
-THRA
-TWF1
 VPS25
 
 Dynein Complex:
+# r4 cluster_32 (8/8 genes = 100%)
 CLASP1
 DCTN4
 DCTN5
@@ -484,6 +492,7 @@ DYNC1LI2
 DYNLL1
 
 Intermediate Filaments:
+# r10 cluster_31 (11/11 genes = 100%)
 ARHGEF9
 BLOC1S6
 C5orf30
@@ -496,18 +505,8 @@ SPEN
 ZMYM3
 ZNF131
 
-Actin-based Cell Projection:
-BRCA1
-KRTAP2-3
-KRTAP2-4
-KRTAP4-2
-NMT1
-OSBPL7
-PHF23
-PPY
-TWF1
-
 Microtubule Nucleation:
+# r7 cluster_21 (7/7 genes = 100%)
 HAUS4
 HAUS5
 HAUS6
@@ -517,6 +516,7 @@ SMC2
 TERF2
 
 Mitochondrial Import:
+# r4 cluster_27 (11/12 genes = 92%)
 DNAJC19
 GRPEL1
 HSPA9
@@ -528,9 +528,10 @@ PTPMT1
 TIMM23
 TIMM44
 TOMM20
-
+ATP5ME
 
 Mitochondrial Translation:
+# r4 cluster_27 (11/11 genes = 100%)
 ATAD3A
 ATP5F1B
 DHX30
@@ -544,6 +545,7 @@ MRPL52
 NDUFC1
 
 Electron Transport Chain:
+# r4 cluster_27 (6/6 genes = 100%)
 COA5
 COX11
 COX7B
@@ -552,6 +554,7 @@ MRPL42
 VARS2
 
 Purine Metabolism:
+# r4 cluster_16 (6/6 genes = 100%)
 AMIGO3
 CACNA1D
 IMPDH2
@@ -560,21 +563,22 @@ NPRL2
 SACM1L
 
 Cristae Formation:
+# r10 cluster_69 (5/5 genes = 100%)
 HNRNPK
 KANSL1
 MICOS13
-RAB7A
 SAMM50
 UBR4
 
 rRNA processing in mitochondria:
+# r4 cluster_19 (4/4 genes = 100%)
 GARS
 MRM1
 SKAP1
-THRA
 VMP1
 
 Hypoxia:
+# r4 cluster_19 (5/5 genes = 100%)
 ATXN7L3
 DCAF7
 MAX
@@ -582,6 +586,7 @@ MTOR
 PDPK1
 
 Voltage-gate Sodium Channel Complex:
+# r4 cluster_20 (5/5 genes = 100%)
 METTL7B
 MUCL1
 PAN2
@@ -589,6 +594,7 @@ SCN8A
 TSPAN31
 
 Sodium Channel Complex:
+# r4 cluster_20 (9/11 genes = 82%)
 BRK1
 CIAPIN1
 COG4
@@ -598,8 +604,11 @@ PKMYT1
 SCN10A
 TRPC1
 TYK2
+INO80D
+ZBTB39
 
 Gluconeogenesis:
+# r4 cluster_21 (5/5 genes = 100%)
 B3GNT2
 HIST1H2BK
 MAPRE3
@@ -607,6 +616,7 @@ OR2T5
 TELO2
 
 Protein insertion into ER:
+# r30 cluster_32 (5/5 genes = 100%)
 APC
 EMC1
 EMC2
@@ -614,6 +624,7 @@ EMC3
 RBM26
 
 Protein Targeting to ER:
+# r4 cluster_9 (10/10 genes = 100%)
 ACTR3
 ARPC2
 ARPC3
@@ -626,6 +637,7 @@ SRP68
 SRPRA
 
 Nuclear Deformation/Cornified Envelope:
+# r4 cluster_30 (8/8 genes = 100%)
 HIST1H2AI
 OTOP1
 PLGLB2
@@ -635,15 +647,15 @@ RHOQ
 SPRR2A
 SPRR2B
 
-
 snRNA:
+# r4 cluster_23 (4/4 genes = 100%)
 INTS1
 INTS2
 INTS5
 INTS7
 
-
 Inflammatory Response:
+# r4 cluster_4 (6/6 genes = 100%)
 BRD8
 CTSG
 DCAF11
@@ -652,18 +664,407 @@ VTI1B
 ZNF219
 
 Lysosomal Transport:
+# r4 cluster_38 (6/6 genes = 100%)
 CHMP2A
 CHMP4B
 CHMP6
 HGS
 PDCD7
-RAB7A
 VPS29
 
 Endocytosis:
+# r7 cluster_44 (6/6 genes = 100%)
 CTPS2
 GPX4
 HDAC6
 PIM2
 SH3KBP1
 WASL
+
+# === Auto-added gap fills (significant clusters not previously annotated) ===
+
+ER to Golgi Anterograde Transport:
+# r4 cluster_28 (8/8 genes = 100%)
+COG3
+PREB
+SEC16A
+SEC23IP
+STX5
+TMED2
+TRAPPC11
+TRAPPC4
+
+Nucleolus:
+# r4 cluster_3 (9/9 genes = 100%)
+DDX18
+GNL2
+GNL3L
+MDN1
+NLE1
+RPF2
+RPL5
+RRS1
+WDR12
+
+Cytoplasmic Translation Initiation (eIFs):
+# r4 cluster_1 (9/9 genes = 100%)
+EIF1AD
+EIF3A
+EIF3B
+EIF3M
+EIF4A1
+EIF4G1
+EIF5B
+HSPA5
+TSR2
+
+Small-Subunit Processome (pre-rRNA):
+# r4 cluster_2 (6/6 genes = 100%)
+C12orf45
+NOL7
+NOP56
+NOP58
+TBL3
+WDR36
+
+Ragulator (FNIP-folliculin / mTORC1):
+# r4 cluster_0 (4/4 genes = 100%)
+LAMTOR1
+LAMTOR2
+LAMTOR3
+LAMTOR4
+
+Tail-Anchored Membrane Protein Insertion into ER (GET pathway):
+# r4 cluster_23 (11/11 genes = 100%)
+ARGLU1
+CUL1
+ELAVL1
+FBXW11
+JUNB
+RBM5
+SCAF8
+SETD1B
+SPCS3
+TGFBR1
+NUFIP2
+
+Kinetochore / Membraneless Organelle Assembly:
+# r7 cluster_21 (8/8 genes = 100%)
+ALYREF
+BUB1B
+CENPC
+CENPH
+CENPW
+FAM83H
+PCF11
+TUBGCP6
+
+Hrd1p Ubiquitin Ligase Complex (ERAD):
+# r10 cluster_12 (11/11 genes = 100%)
+ALG12
+BLOC1S2
+BORCS7
+CHST12
+GAK
+HDAC4
+NUP37
+PLA2G4A
+SEL1L
+SYVN1
+TMX2
+
+Secondary Lysosome:
+# r4 cluster_22 (17/17 genes = 100%)
+AP3S1
+ARPP19
+CAPN12
+CENPA
+COMMD5
+DMRTC2
+FTH1
+FTL
+HAMP
+HMGB3
+LENG8
+LIN37
+PRSS3
+RFWD3
+SKP2
+SPHK2
+ZNF574
+
+Cul2-RING Ubiquitin Ligase Complex:
+# r4 cluster_30 (7/7 genes = 100%)
+BTF3L4
+ELOC
+FCGR1A
+HIST2H3D
+PRAMEF6
+SPCS2
+UBE2D3
+
+mRNA Processing (CCDC174 set):
+# r4 cluster_10 (7/7 genes = 100%)
+CCDC174
+DDX39B
+KIN
+PPIE
+PPWD1
+RNF20
+ZFR
+
+CMG Complex (replication helicase):
+# r7 cluster_49 (7/7 genes = 100%)
+CCNB1
+CHMP7
+CHTF8
+DUT
+GINS1
+GINS2
+REV3L
+
+P-body:
+# r10 cluster_33 (10/10 genes = 100%)
+ASNA1
+COL18A1
+DIS3L2
+LARP7
+PATL1
+QTRT1
+S100B
+SOCS1
+TNRC6A
+VAMP4
+
+Rescue of Stalled Ribosome:
+# r4 cluster_13 (22/22 genes = 100%)
+ALKBH8
+AMMECR1
+ASCC3
+ATXN10
+CASP3
+CYP4V2
+ELP2
+ETS1
+FGF23
+GRIA3
+HBS1L
+HNRNPH2
+KDM6A
+MEX3C
+RPRD1A
+SCAF4
+SRPRB
+TIMM17B
+TLR3
+TWSG1
+UFSP2
+USP14
+
+Nuclear Pore Organization:
+# r20 cluster_139 (4/4 genes = 100%)
+MAP2K7
+NUP54
+NUP98
+RAE1
+
+# === Auto-added gap fills (round 2: r20/r50 fine-grained checks) ===
+
+mRNA Export / 3' Processing:
+# r10 cluster_65 (5/5 genes = 100%)
+CPSF2
+CPSF3
+EXOSC5
+NUP214
+RGP1
+
+Coated Vesicle / Sorting:
+# r10 cluster_23 (6/6 genes = 100%)
+AP1M1
+IER3IP1
+OGT
+PRPF39
+TMEM167A
+YIPF5
+
+p53 Signaling Pathway:
+# r4 cluster_21 (4/4 genes = 100%)
+CCND3
+CCNG1
+CHMP1A
+PPIA
+
+Regulation of Potassium Ion Transport:
+# r4 cluster_7 (7/7 genes = 100%)
+ATIC
+BET1
+CA13
+KCNG1
+NBEAL1
+NUDCD1
+ZNF704
+
+# === Ported from hand_annotated_cluster.txt (validated against new leiden clusters) ===
+
+Calcium Signaling:
+# r4 cluster_14 (16/16 genes = 100%)
+AHCYL1
+CEP85
+DHDDS
+DPH2
+MYBPHL
+MYCL
+PDZK1IP1
+PEF1
+PSRC1
+PUM1
+RBMXL1
+STK40
+SYPL2
+TMA16
+ZFP69B
+ZNF593
+
+Calcium-dependent Exocytosis:
+# r4 cluster_14 (15/15 genes = 100%)
+ELOVL1
+KDM4A
+METAP1
+NCDN
+NRAS
+POU3F1
+PPCS
+REST
+RNF11
+SLC25A24
+SNRNP40
+SSBP3
+SSX2IP
+STXBP3
+TRIM33
+
+Cytoskeleton Organization:
+# r4 cluster_8 (13/13 genes = 100%)
+DYNLL2
+ERN1
+HOXB2
+LIMD2
+MBTD1
+MIEN1
+SLC35B1
+SLC4A1
+ACSS2
+MAPK1
+RBM14
+SERINC3
+SUV39H1
+
+Tight Junctions:
+# r4 cluster_6 (7/8 genes = 88%)
+AP1S1
+CLDN15
+DLD
+FZD9
+H2AFX
+IMPDH1
+PLOD3
+PTDSS1
+
+Triglyceride Metabolism:
+# r4 cluster_5 (7/7 genes = 100%)
+ABHD10
+CPOX
+FOXL2
+METTL3
+PPP1CA
+WRB
+ZBED2
+
+MTOR Signaling:
+# r20 cluster_146 (4/5 genes = 80%)
+PPP1R15B
+RICTOR
+RPTOR
+TTI1
+TTI2
+
+Golgi Lumen:
+# r4 cluster_33 (8/8 genes = 100%)
+CAPZB
+GABRR3
+LIAS
+MUC13
+PIAS1
+PROS1
+SEC22A
+TIPARP
+
+# === Sub-theme splits from finer leiden resolutions ===
+
+Cytosolic Small Ribosomal Subunit:
+# r4 cluster_42 (4/4 genes = 100%)
+RPS27A
+RPS29
+RPSA
+RSL24D1
+
+# === Round 3: significant clusters not yet represented ===
+
+CDK7/CCNH (CAK Complex):
+# r7 cluster_45 (19/23 genes = 83%)
+CA5A
+CCNH
+CDK7
+CHD4
+COMTD1
+COX14
+GGTLC2
+HSF1
+METTL7A
+MROH6
+P4HB
+PTPRR
+RAC3
+RBM42
+TERF1
+TRAPPC2L
+TUBA1A
+USH1G
+USP36
+
+Cell Motility / Integrin Signaling:
+# r7 cluster_54 (5/5 genes = 100%)
+CFL1
+ITGB1
+MEAF6
+RAPGEF1
+ZC3H4
+
+Actin-based Cell Projection:
+# r20 cluster_56 (9/9 genes = 100%)
+BRCA1
+KRTAP2-3
+KRTAP2-4
+KRTAP4-2
+NMT1
+OSBPL7
+PHF23
+PPY
+TWF1
+
+Regulation of DNA-templated Transcription:
+# r20 cluster_33 (5/5 genes = 100%)
+ARID5B
+BTAF1
+LIN9
+NEK1
+PRMT3
+
+ER Stress Response (PERK):
+# r20 cluster_62 (6/8 genes = 75%)
+C1D
+CAD
+EIF2AK3
+FIGLA
+MCEE
+UQCC2
