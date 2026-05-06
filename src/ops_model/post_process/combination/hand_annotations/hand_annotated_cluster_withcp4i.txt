@@ -1,20 +1,16 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
-
-# Total clusters annotated: 93
-
-# Total unique genes covered: 813 / 1052 (77%)
-
+# Total clusters annotated: 94
+# Total unique genes (primary section members): 810 / 1052 (77%)
+# Genes also appearing in another section's cluster (overlap-noted): 20
+# Total overlap annotations across the file: 24
 # Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
-
-# Significance: *** p≤0.001 (49), ** p≤0.01 (16), * p≤0.05 (20), ns p>0.05 (6)
-
-# Each section is a real leiden cluster — tag format: '# rX cluster_Y: section_in/cluster_total — adj_p ★'
-
-# ============================================================
-
-# Transcription & RNA Polymerase
-
-# ============================================================
+# Significance: *** p≤0.001 (42), ** p≤0.01 (20), * p≤0.05 (40), ns p>0.05 (0)
+# Each section IS a complete leiden cluster (section_size = cluster_size).
+# Tag: '# rX cluster_Y: section_in/cluster_total' followed by per-title Enrichr term + database + adj_p.
+# Databases: GO_BP, GO_CC, GO_MF, Reactome, KEGG.
+# Multi-theme labels (A / B): one line per matched theme.
+# Overlap notes ('# went to: <Section>', '# also in cluster ...'): mark genes whose cluster identity
+#  spans multiple sections at different leiden resolutions (NOT counted as section members).
 
 RNA Polymerase II Complex:
 # r30 cluster_158: 9/9
@@ -57,9 +53,6 @@ SNAPC2
 SNRNP70
 CPSF6  # added from cluster
 NUDT21  # added from cluster
-POLR2E  # went to: r10-c77
-SRSF7  # went to: r10-c77
-
 Chromatid Cohesion/GBAF Complex:
 # r20 cluster_58: 5/5
 # Cohesin Loading Onto Chromatin (GO_BP) — adj_p=9.3e-07 ***
@@ -289,14 +282,15 @@ NOP16
 URB2
 
 Maturation of 5.8S rRNA:
-# r50 cluster_202: 5/5
-# RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 ***
+# r20 cluster_126: 6/6
+# Maturation of 5.8S rRNA (GO_BP) — adj_p=1.1e-02 *
+# RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 *** [validated at r50-c202]
+FTSJ3
 GNL3
 GTPBP4
 NSA2
 PPAN
 XPO1
-FTSJ3  # went to: r50-c63
 
 rRNA Processing:
 # r30 cluster_2: 11/11
@@ -397,8 +391,6 @@ GTF3C1
 INO80E
 TSEN2
 UBN1
-COQ7  # went to: r20-c95
-
 DNA Replication:
 # r4 cluster_37: 13/13
 # DNA-templated DNA Replication (GO_BP) — adj_p=1.5e-14 ***
@@ -415,10 +407,6 @@ RRM1
 TIMELESS
 TIPIN
 TONSL
-MCM3  # went to: r4-c6
-MCM5  # went to: r4-c6
-POLE4  # went to: r4-c6
-
 CMG Complex (replication helicase):
 # r5 cluster_40: 7/7
 # CMG Complex (GO_CC) — adj_p=9.2e-03 **
@@ -486,9 +474,6 @@ MTHFD1
 SEC24A
 NCOA4  # added from cluster
 THG1L  # added from cluster
-NEDD8  # went to: r10-c41
-UBE2M  # went to: r10-c41
-
 Microtubule Nucleation:
 # r30 cluster_161: 7/7
 # Regulation of Microtubule Nucleation (GO_BP) — adj_p=1.5e-05 ***
@@ -535,14 +520,11 @@ TRAPPC2L
 TUBA1A
 USH1G
 USP36
-CCND3  # added from cluster
-CCNG1  # added from cluster
-CHMP1A  # added from cluster
-PPIA  # added from cluster
 
 ER Membrane/Protein Glycosylation:
 # r7 cluster_34: 18/18
 # Protein Glycosylation (GO_BP) — adj_p=5.2e-03 **
+# Endoplasmic Reticulum Membrane (GO_CC) — adj_p=2.6e-02 *
 ATRX
 CERS6
 CIAO1
@@ -604,9 +586,6 @@ SCAF8
 SETD1B
 SPCS3
 TGFBR1
-EMC1  # added from cluster
-EMC2  # added from cluster
-EMC3  # added from cluster
 NUFIP2  # went to: DNA Methylation/Methionine&Cysteine Metabolism
 
 Hrd1p Ubiquitin Ligase Complex (ERAD):
@@ -653,7 +632,8 @@ RABGGTB
 
 cis-Golgi Network:
 # r7 cluster_26: 14/15
-# (no significant Enrichr term in cluster)
+# cis-Golgi Network (GO_CC) — adj_p=1.2e-01 [near-sig, also at r4/r10]
+# Coated Vesicle Membrane / ER to Golgi Transport Vesicle (GO_CC) — adj_p=1.5e-02 * [validated at r0.5-c3 mega-cluster]
 ARL2
 B3GAT3
 CCDC59
@@ -668,22 +648,7 @@ RPS6KA4
 SCYL1
 SNX32
 THOC3
-AP3M2  # went to: r7-c29
-ARHGAP22  # went to: r7-c29
-BEND3  # went to: r7-c36
-CHMP5  # went to: r7-c29
-COMMD4  # went to: r7-c24
-CYP26C1  # went to: r7-c29
-DENR  # went to: r7-c29
-GNPNAT1  # went to: r7-c24
-MAFA  # went to: r7-c29
-MMP17  # went to: r7-c29
-NR2E1  # went to: r7-c36
-NR2F2  # went to: r7-c24
-PARP12  # went to: r7-c29
-SIGLEC14  # went to: r7-c29
-TARDBP  # went to: r7-c24
-WDR73  # went to: r7-c29
+EXOSC5  # in cluster but listed under another section
 
 Golgi Cisterna:
 # r30 cluster_148: 6/6
@@ -738,8 +703,6 @@ PIAS1
 PROS1
 SEC22A
 TIPARP
-CAPZB  # went to: r5-c24
-
 Endosome/Clathrin:
 # r30 cluster_28: 6/6
 # Clathrin-mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
@@ -827,9 +790,6 @@ SCN10A
 TRPC1
 TYK2
 MOB4  # added from cluster
-INO80D  # went to: r10-c26
-ZBTB39  # went to: r10-c55
-
 Potassium Ion Transport:
 # r20 cluster_43: 7/7
 # Potassium Ion Transport (GO_BP) — adj_p=4.0e-02 *
@@ -879,10 +839,6 @@ SNRNP40
 SSBP3
 SSX2IP
 TRIM33
-REST  # went to: r30-c13
-SLC25A24  # went to: r30-c189
-STXBP3  # went to: r30-c189
-
 Cell Adhesion Molecules:
 # r7 cluster_25: 8/8
 # Calcium-Independent Cell-Cell Adhesion via Plasma Membrane Cell-Adhesion Molecules (GO_BP) — adj_p=2.5e-02 *
@@ -936,12 +892,6 @@ MIEN1
 SLC35B1
 SLC4A1
 TM7SF3
-ACSS2  # went to: r20-c7
-MAPK1  # went to: r20-c7
-RBM14  # went to: r20-c7
-SERINC3  # went to: r20-c7
-SUV39H1  # went to: r20-c45
-
 Cell Motility / Integrin Signaling:
 # r7 cluster_54: 5/5
 # MET Promotes Cell Motility (Reactome) — adj_p=7.8e-03 **
@@ -952,7 +902,19 @@ MEAF6
 RAPGEF1
 ZC3H4
 
-Actin-based Cell Projection:
+Actin Filament Depolymerization:
+# r20 cluster_56: 9/9
+# Actin Filament Depolymerization (GO_BP) — adj_p=4.7e-02 *
+# Negative Regulation of Organelle Assembly (GO_BP) — adj_p=1.1e-02 * [also enriched, BRCA1+TWF1-driven]
+BRCA1
+KRTAP2-3
+KRTAP2-4
+KRTAP4-2
+NMT1
+OSBPL7
+PHF23
+PPY
+TWF1
 
 Nuclear Import:
 # r10 cluster_61: 8/8
@@ -994,6 +956,7 @@ MAP2K7
 NUP54
 NUP98
 RAE1
+MOB4  # in cluster but listed under another section
 
 Mitochondrial Outer Membrane (extended cluster):
 # r20 cluster_99: 5/6
@@ -1003,8 +966,8 @@ GTF3C6
 MBD5
 SEC63
 TBPL1
-COL9A1  # went to: r20-c96
-CTDSPL2  # went to: r20-c96
+THG1L  # in cluster but listed under another section
+
 HSD17B12  # went to: Protein Targeting to ER (SRP/SEC61)
 
 Mitochondrial Import:
@@ -1021,8 +984,6 @@ PTPMT1
 TIMM23
 TIMM44
 TOMM20
-ATP5ME  # went to: r10-c34
-
 Mitochondrial Translation:
 # r30 cluster_42: 11/11
 # Mitochondrial Translation (Reactome) — adj_p=1.9e-09 ***
@@ -1102,8 +1063,6 @@ CNOT2
 PTEN
 TSC1
 TSC2
-CSNK2A3  # went to: r30-c122
-
 COP Complex/Protein Neddylation:
 # r7 cluster_57: 8/8
 # Neddylation (Reactome) — adj_p=3.2e-12 ***
@@ -1134,6 +1093,7 @@ CCND3
 CCNG1
 CHMP1A
 PPIA
+NCOA4  # in cluster but listed under another section
 
 Inositol Phosphate Metabolism:
 # r4 cluster_18: 27/31
@@ -1156,10 +1116,19 @@ SEC23B
 STXBP1
 TOR2A
 TPT1
-NAE1  # went to: r5-c45
-PCID2  # went to: r5-c45
-PRRC2A  # went to: r5-c45
-
+ATG9A  # also in r4-c18 cluster (listed elsewhere)
+CCNC  # also in r4-c18 cluster (listed elsewhere)
+CERCAM  # also in r4-c18 cluster (listed elsewhere)
+CRAT  # also in r4-c18 cluster (listed elsewhere)
+CSNK2A3  # also in r4-c18 cluster (listed elsewhere)
+GOLGA2  # also in r4-c18 cluster (listed elsewhere)
+NAE1  # also in r4-c18 cluster (listed elsewhere)
+PCID2  # also in r4-c18 cluster (listed elsewhere)
+PRRC2A  # also in r4-c18 cluster (listed elsewhere)
+PTEN  # also in r4-c18 cluster (listed elsewhere)
+SLC39A9  # also in r4-c18 cluster (listed elsewhere)
+TSC1  # also in r4-c18 cluster (listed elsewhere)
+TSC2  # also in r4-c18 cluster (listed elsewhere)
 Microautophagy / Carnitine Metabolism:
 # r30 cluster_44: 6/6
 # Microautophagy (GO_BP) — adj_p=3.3e-02 *
@@ -1215,6 +1184,7 @@ GOLT1B
 NAPG
 PGK1
 UFM1
+ACSL4  # also in cluster (claimed elsewhere)
 
 Purine Biosynthesis:
 # r7 cluster_53: 7/7
@@ -1244,6 +1214,10 @@ LAMTOR1
 LAMTOR2
 LAMTOR3
 LAMTOR4
+INTS1  # also in cluster — listed in snRNA section
+INTS2  # also in cluster — listed in snRNA section
+INTS5  # also in cluster — listed in snRNA section
+INTS7  # also in cluster — listed in snRNA section
 
 Inflammatory Response:
 # r50 cluster_66: 5/5
@@ -1253,4 +1227,3 @@ CTSG
 DCAF11
 LTB4R
 VTI1B
-ZNF219  # went to: r50-c27
