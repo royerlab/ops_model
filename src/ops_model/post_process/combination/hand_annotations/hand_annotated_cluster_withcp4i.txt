@@ -61,8 +61,13 @@ POLR2E  # went to: r10-c77
 SRSF7  # went to: r10-c77
 
 Chromatid Cohesion/GBAF Complex:
+# r20 cluster_58: 5/5
+# Cohesin Loading Onto Chromatin (GO_BP) — adj_p=9.3e-07 ***
 BRD9
+RAD21
 SMARCD1
+SMC1A
+SMC3
 
 Regulation of DNA-templated Transcription:
 # r20 cluster_33: 5/5
@@ -102,8 +107,9 @@ SNRPD1
 SNRPD2
 SNRPD3
 
-RNA Degradation:
-# r1.5 cluster_17: 21/21
+RNA Degradation / Chaperone-Mediated Protein Folding:
+# r4 cluster_35: 21/21
+# Chaperone Mediated Protein Folding Independent of Cofactor (GO_BP) — adj_p=5.0e-08 ***
 # Regulation of Telomerase RNA Localization to Cajal Body (GO_BP) — adj_p=5.0e-08 ***
 CCT3
 CCT4
@@ -191,9 +197,10 @@ TMEM63B
 UHRF1
 USP18
 
-eIF2 Recycling/Asparagine Metabolism:
+Aminoacyl-tRNA Synthetases / eIF2B:
 # r30 cluster_1: 9/9
-# (no Enrichr term matches title; top sig: Oligodendrocyte Development (GO_BP) p=3.6e-03)
+# Cytoplasmic Translational Initiation (GO_BP) — adj_p=1.3e-02 *
+# AMINOACYL-TRNA BIOSYNTHESIS (KEGG) — adj_p=4.3e-03 ** [validated at r20-c1]
 AARS
 ASNS
 DARS
@@ -283,7 +290,7 @@ URB2
 
 Maturation of 5.8S rRNA:
 # r50 cluster_202: 5/5
-# (no Enrichr term matches title; top sig: RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) p=5.2e-04)
+# RIBOSOME BIOGENESIS IN EUKARYOTES (KEGG) — adj_p=5.2e-04 ***
 GNL3
 GTPBP4
 NSA2
@@ -363,7 +370,7 @@ WDR36
 
 Cytosolic Small Ribosomal Subunit:
 # r30 cluster_196: 4/4
-# (no significant Enrichr term in cluster)
+# Cytosolic Small Ribosomal Subunit (GO_CC) — adj_p=2.9e-03 ** [validated at r20-c142]
 RPS27A
 RPS29
 RPSA
@@ -508,7 +515,7 @@ TUBGCP6
 
 CDK7/CCNH (CAK Complex):
 # r7 cluster_45: 23/23
-# (no Enrichr term matches title; top sig: Cyclin-Dependent Protein Kinase Holoenzyme Complex (GO_CC) p=3.9e-04)
+# Cyclin-Dependent Protein Kinase Holoenzyme Complex (GO_CC) — adj_p=3.9e-04 ***
 CA5A
 CCNH
 CDK7
@@ -556,7 +563,12 @@ TTN
 VPS26A
 
 Protein insertion into ER:
+# r30 cluster_32: 5/5
+# Protein Insertion Into ER Membrane By Stop-Transfer Membrane Anchor Sequence (GO_BP) — adj_p=3.6e-07 ***
 APC
+EMC1
+EMC2
+EMC3
 RBM26
 
 Actin Nucleation (ARP2/3):
@@ -673,7 +685,7 @@ SIGLEC14  # went to: r7-c29
 TARDBP  # went to: r7-c24
 WDR73  # went to: r7-c29
 
-Cell Death/Golgi Cisterna:
+Golgi Cisterna:
 # r30 cluster_148: 6/6
 # Golgi Cisterna (GO_CC) — adj_p=3.6e-02 *
 FOXD4L5
@@ -729,8 +741,20 @@ TIPARP
 CAPZB  # went to: r5-c24
 
 Endosome/Clathrin:
+# r30 cluster_28: 6/6
+# Clathrin-mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
+# Cargo Recognition For Clathrin-Mediated Endocytosis (Reactome) — adj_p=2.7e-06 ***
+AP2A1
+AP2M1
+AP2S1
+GRB2
+KRAS
+SH3GL1
+
+Cation Transmembrane Transport:
 # r30 cluster_47: 8/8
-# (no Enrichr term matches title; top sig: Monoatomic Cation Transmembrane Transport (GO_BP) p=4.2e-02)
+# Monoatomic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
+# Inorganic Cation Transmembrane Transport (GO_BP) — adj_p=4.2e-02 *
 ATP6V0A1
 CACNB1
 HSPB9
@@ -739,11 +763,6 @@ PIGS
 RAB5C
 STAT5B
 TEFM
-AP2A1  # went to: r30-c28
-AP2M1  # went to: r30-c28
-AP2S1  # went to: r30-c28
-GRB2  # went to: r30-c28
-KRAS  # went to: r30-c28
 
 Lysosomal Transport:
 # r20 cluster_84: 6/6
@@ -1041,7 +1060,8 @@ UBR4
 
 rRNA processing in mitochondria:
 # r30 cluster_153: 6/6
-# (no Enrichr term matches title; top sig: Prot Transport to Vacuole Inv in Ub-dep Prot Cat Proc via Multivsiclr Bdy Sorting Pway (GO_BP) p=3.0e-02)
+# Protein Transport to Vacuole, Multivesicular Body Sorting (GO_BP) — adj_p=3.0e-02 *
+# (note: cluster's enriched term doesn't match title; user-curated label preserved)
 GARS
 MRM1
 SKAP1
