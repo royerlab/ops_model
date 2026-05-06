@@ -1,16 +1,20 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
 # Total clusters annotated: 94
-# Total unique genes (primary section members): 810 / 1052 (77%)
-# Genes also appearing in another section's cluster (overlap-noted): 27
-# Total overlap annotations across the file: 31
+# Total unique genes (primary section members): 810 / 1000 (81%)
+# Genes also appearing in another section's cluster (overlap-noted): 28
+# Total overlap annotations across the file: 34
 # Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
-# Significance: *** p≤0.001 (42), ** p≤0.01 (20), * p≤0.05 (40), ns p>0.05 (0)
+# Significance: *** p≤0.001 (44), ** p≤0.01 (21), * p≤0.05 (42), ns p>0.05 (0)
 # Each section IS a complete leiden cluster (section_size = cluster_size).
 # Tag: '# rX cluster_Y: section_in/cluster_total' followed by per-title Enrichr term + database + adj_p.
 # Databases: GO_BP, GO_CC, GO_MF, Reactome, KEGG.
 # Multi-theme labels (A / B): one line per matched theme.
 # Overlap notes ('# went to: <Section>', '# also in cluster ...'): mark genes whose cluster identity
 #  spans multiple sections at different leiden resolutions (NOT counted as section members).
+
+# ============================================================
+# Transcription & RNA Polymerase
+# ============================================================
 
 RNA Polymerase II Complex:
 # r30 cluster_158: 9/9
@@ -824,6 +828,16 @@ SKP2
 SPHK2
 ZNF574
 
+Vacuolar Protein Transport / Multivesicular Body Sorting:
+# r30 cluster_153: 6/6
+# Protein Transport to Vacuole, Multivesicular Body Sorting (GO_BP) — adj_p=3.0e-02 *
+GARS
+MRM1
+SKAP1
+VMP1
+THRA  # added from cluster
+VPS25  # added from cluster
+
 # ============================================================
 # Cell Surface — Channels / Adhesion / Signaling
 # ============================================================
@@ -853,7 +867,8 @@ ZNF593
 
 Calcium-dependent Exocytosis:
 # r30 cluster_139: 12/12
-# (no Enrichr term matches title; top sig: Axon (GO_CC) p=4.8e-02)
+# Protein Localization to Presynapse (GO_BP) — adj_p=6.7e-02 [near-sig]
+# Vesicle Coat / COPI Vesicle Coat (GO_CC) — adj_p=2.3e-03 ** [validated at r0.5-c2 mega-cluster]
 ELOVL1
 KDM4A
 METAP1
@@ -892,7 +907,8 @@ ZBTB39
 
 Sodium Channel Complex:
 # r10 cluster_43: 9/9
-# (no Enrichr term matches title; top sig: Regulation of Heart Contraction (GO_BP) p=2.8e-02)
+# Sodium Channel Complex (GO_CC) — adj_p=1.3e-01 [near-sig at full cluster, also at r1/r3/r4]
+# Regulation of Heart Contraction (GO_BP) — adj_p=2.8e-02 * [also enriched, Na-channel-driven]
 BRK1
 CIAPIN1
 COG4
@@ -974,9 +990,10 @@ PHF23
 PPY
 TWF1
 
-Dynein Complex:
+Dynein Complex / Motor Proteins:
 # r20 cluster_88: 8/8
-# (no Enrichr term matches title; top sig: HSP90 Chaperone Cycle For Steroid Hormone Receptors (SHR) In Presence Of Ligand (Reactome) p=9.5e-14)
+# MOTOR PROTEINS (KEGG) — adj_p=1.9e-12 ***
+# HSP90 Chaperone Cycle For Steroid Hormone Receptors (Reactome) — adj_p=9.5e-14 *** [also strongly enriched]
 CLASP1
 DCTN4
 DCTN5
@@ -985,21 +1002,6 @@ DYNC1I2
 DYNC1LI1
 DYNC1LI2
 DYNLL1
-
-Intermediate Filaments:
-# r10 cluster_31: 11/11
-# (no significant Enrichr term in cluster)
-ARHGEF9
-BLOC1S6
-C5orf30
-DNASE1L1
-FANCM
-FOXK1
-FUNDC2
-SLC38A6
-SPEN
-ZMYM3
-ZNF131
 
 # ============================================================
 # Nuclear Pore & Transport
@@ -1083,7 +1085,8 @@ ZRSR2
 
 Mitochondrial Outer Membrane (extended cluster):
 # r20 cluster_99: 5/6
-# (no Enrichr term matches title; top sig: Chromocenter (GO_CC) p=4.2e-02)
+# Mitochondrial Outer Membrane (GO_CC) — adj_p=8.9e-02 [near-sig at r7-c56, also at r5/r10]
+# Chromocenter (GO_CC) — adj_p=4.2e-02 * [also enriched at this cluster]
 COQ10B
 GTF3C6
 MBD5
@@ -1112,17 +1115,6 @@ MICOS13
 RAB7A
 SAMM50
 UBR4
-
-rRNA processing in mitochondria:
-# r30 cluster_153: 6/6
-# Protein Transport to Vacuole, Multivesicular Body Sorting (GO_BP) — adj_p=3.0e-02 *
-# (note: cluster's enriched term doesn't match title; user-curated label preserved)
-GARS
-MRM1
-SKAP1
-VMP1
-THRA  # added from cluster
-VPS25  # added from cluster
 
 # ============================================================
 # Proteasome / Ubiquitin / Autophagy
@@ -1277,6 +1269,21 @@ ACSL4  # also in cluster — listed in snRNA
 INTS10  # also in cluster — listed in snRNA
 ACSL4  # also in cluster — listed in snRNA
 ACSL4  # also in cluster (claimed elsewhere)
+
+Intracellular Triglyceride Homeostasis (loose cluster):
+# r10 cluster_31: 11/11
+# Intracellular Triglyceride Homeostasis (GO_BP) — adj_p=6.6e-02 [near-sig at full cluster, sig at r20-c112 sub-cluster p=2.4e-02 *]
+ARHGEF9
+BLOC1S6
+C5orf30
+DNASE1L1
+FANCM
+FOXK1
+FUNDC2
+SLC38A6
+SPEN
+ZMYM3
+ZNF131
 
 # ============================================================
 # Signaling — mTOR / Hypoxia / Inflammation
