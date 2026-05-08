@@ -45,6 +45,25 @@ Phase 2 only (e.g. after code changes) without redoing the PCA sweeps.
   Append --aggregate-only to re-run Phase 2 only (e.g. after code changes).
   Use run_aggregate_all.sh to submit all 12 --aggregate-only jobs in parallel.
 
+Validation cohort run (4 experiments, Phase only, validation500 library)
+------------------------------------------------------------------------
+The validation experiments (ops0146/0147/0150/0151) use the validation500
+library, which has its own CHAD cluster file. ``--run-tag`` tucks the cohort
+under a ``paper_v1/<leaf>`` parent for organization (no actual --paper-v1 flag,
+since these experiments aren't in the paper_v1 YAML)::
+
+    python -m ops_model.post_process.combination.pca_optimization \\
+        --output-dir /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3 \\
+        --cell-dino \\
+        --zscore-per-experiment \\
+        --run-tag paper_v1/validation_4exp_phase_only \\
+        --experiments ops0146,ops0147,ops0150,ops0151 \\
+        --phase-only \\
+        --chad-annotation /hpc/projects/icd.fast.ops/configs/gene_clusters/val_library_chad_positive_controls_v1.yml \\
+        --slurm
+
+  → cell_dino/zscore_per_exp/paper_v1/validation_4exp_phase_only/phase_only/consensus_sweep/cosine/
+
 Output structure
 ----------------
   <root>/
@@ -503,6 +522,36 @@ def _save_sweep_outputs(
     out_subdir = output_dir / subdir
     out_subdir.mkdir(parents=True, exist_ok=True)
 
+    # Stamp the cell-level adata's uns with the PCA artifacts BEFORE writing,
+    # so downstream "reuse this transform" workflows can pull components +
+    # mean + feature_names + variance_ratio off the cells.h5ad directly
+    # (matches scanpy's `uns["pca"]` convention plus the existing top-level
+    # ``pca_components`` / ``pca_feature_names`` fields the rest of this
+    # pipeline reads off the guide/gene h5ads).
+    cell_pca_uns = {
+        "params": {
+            "n_components": int(peak_n),
+            "threshold": float(peak_t),
+            "zero_center": True,
+        },
+        "variance_ratio": np.diff(np.concatenate([[0.0], cumvar])).astype(np.float32)[:peak_n],
+    }
+    if "pca_components" in uns_metadata:
+        cell_pca_uns["components"] = np.asarray(uns_metadata["pca_components"], dtype=np.float32)
+    if "pca_feature_names" in uns_metadata:
+        cell_pca_uns["feature_names"] = list(uns_metadata["pca_feature_names"])
+    if uns_metadata.get("pca_mean") is not None:
+        cell_pca_uns["mean"] = np.asarray(uns_metadata["pca_mean"], dtype=np.float32)
+    adata_cells.uns["pca"] = cell_pca_uns
+    adata_cells.uns["pca_components"] = cell_pca_uns.get("components")
+    if "feature_names" in cell_pca_uns:
+        adata_cells.uns["pca_feature_names"] = cell_pca_uns["feature_names"]
+    if "mean" in cell_pca_uns:
+        adata_cells.uns["pca_mean"] = cell_pca_uns["mean"]
+    adata_cells.uns["pca_threshold"] = float(peak_t)
+    adata_cells.uns["n_pcs"] = int(peak_n)
+    adata_cells.uns["signal"] = signal
+
     # Save full cell-level h5ad (PCA-reduced) for downstream titration analysis
     adata_cells.obs["signal"] = signal
     adata_cells.write_h5ad(out_subdir / f"{file_prefix}{output_suffix}_cells.h5ad")
@@ -512,6 +561,9 @@ def _save_sweep_outputs(
     sub_idx = rng.choice(adata_cells.n_obs, n_sub, replace=False)
     sub_idx.sort()
     cells_sub = adata_cells[sub_idx].copy()
+    # `cells_sub` inherits adata_cells.uns by reference — re-stamp explicitly
+    # to be safe (some anndata slicing operations drop/copy uns inconsistently).
+    cells_sub.uns.update(adata_cells.uns)
     cells_sub.write_h5ad(out_subdir / f"{file_prefix}{output_suffix}_cells_sub.h5ad")
     del cells_sub
     # Remove signal col before aggregation (not needed and may interfere)
@@ -1050,6 +1102,15 @@ def pca_sweep_pooled_signal(
     )
     pca_components = pca_model.components_.copy()
     pca_var_ratio = pca_model.explained_variance_ratio_.copy()
+    # Capture the fit mean so we can re-project new cells (e.g. validation
+    # cohort) through this exact PCA: ``X_new_pcs = (X_new − pca_mean) @ pca_components.T``.
+    # Without this, downstream "reuse PCA" runs would have to assume zero-mean
+    # input, which only roughly holds after z-score.
+    pca_mean = (
+        pca_model.mean_.copy()
+        if getattr(pca_model, "mean_", None) is not None
+        else None
+    )
     del X_raw, pca_model
 
     # preserve_batch: skip sweep and use pca.variance_cutoff from config directly
@@ -1138,6 +1199,11 @@ def pca_sweep_pooled_signal(
             "n_features_raw": int(n_feats),
             "pca_components": pca_components[:selected_n].tolist(),
             "pca_feature_names": feature_names,
+            # Source-fit mean: enables ``X_new_pcs = (X_new − mean) @ comps.T``
+            # so downstream runs can re-project new cells through this exact PCA.
+            "pca_mean": (
+                pca_mean.tolist() if pca_mean is not None else None
+            ),
         },
         output_dir=output_dir,
         subdir="per_signal",
@@ -2139,6 +2205,7 @@ def aggregate_channels(
             dist_map=dist_map,
             corum_map=corum_map,
             chad_map=chad_map,
+            chad_path_override=CHAD_ANNOTATION_PATH,
             _logger=_logger,
         )
         # Re-save h5ads now that leiden_r* columns + neighbors graph have been
@@ -2725,6 +2792,7 @@ def apply_second_pass_pca(
             dist_map=dist_map,
             corum_map=corum_map,
             chad_map=chad_map,
+            chad_path_override=CHAD_ANNOTATION_PATH,
             _logger=_logger,
         )
         # Re-save h5ads with leiden_r* columns + neighbors graph just added
@@ -2774,8 +2842,15 @@ def _discover_experiment_pairs(
     include_4i: bool = False,
     include_cp: bool = False,
     include_standard: bool = True,
+    force_include: Optional[set] = None,
 ):
-    """Common experiment discovery for SLURM modes. Returns (all_pairs, attr_config, storage_roots, feature_dir, maps_path)."""
+    """Common experiment discovery for SLURM modes. Returns (all_pairs, attr_config, storage_roots, feature_dir, maps_path).
+
+    ``force_include`` (set of exp short names like ``{"ops0146"}``) bypasses
+    discovery's bad-experiment / non-default-library filters for the listed
+    experiments — used when the caller explicitly asked for them via
+    ``--experiments``.
+    """
     attr_config = load_attribution_config()
     storage_roots = get_storage_roots(attr_config)
     feature_dir = cp_override or attr_config.get("feature_dir", "dino_features")
@@ -2787,6 +2862,7 @@ def _discover_experiment_pairs(
             include_4i=include_4i,
             include_cp=include_cp,
             include_standard=include_standard,
+            force_include=force_include,
         )
     else:
         all_pairs = discover_dino_experiments(
@@ -2796,6 +2872,7 @@ def _discover_experiment_pairs(
             include_4i=include_4i,
             include_cp=include_cp,
             include_standard=include_standard,
+            force_include=force_include,
         )
     # 4i nucleus (DAPI) channels are nucleus segmentation refs, not biological
     # signals — drop them from the pool. CP DAPI stays since CP uses it as a
@@ -3309,6 +3386,7 @@ def _run_overlays_only(
         dist_map=dist_map,
         corum_map=corum_map,
         chad_map=chad_map,
+        chad_path_override=CHAD_ANNOTATION_PATH,
         _logger=_logger,
     )
     # Persist obs additions from save_extra_overlays (CHAD / CORUM / supercategory
@@ -3715,6 +3793,13 @@ def _handle_downsampled(args, output_dir, cp_override):
             print(f"--clean: removing {per_signal_dir}")
             shutil.rmtree(per_signal_dir)
 
+    # When the user explicitly named experiments via --experiments, let them
+    # through discovery's bad-experiment / non-default-library filters.
+    exp_whitelist = getattr(args, "experiments", None)
+    force_set: Optional[set] = None
+    if exp_whitelist:
+        force_set = {e.strip() for e in exp_whitelist.split(",") if e.strip()}
+
     all_pairs, attr_config, storage_roots, feature_dir, maps_path = (
         _discover_experiment_pairs(
             cp_override,
@@ -3722,6 +3807,7 @@ def _handle_downsampled(args, output_dir, cp_override):
             include_4i=getattr(args, "include_4i", False),
             include_cp=getattr(args, "include_cp", False),
             include_standard=getattr(args, "include_standard", True),
+            force_include=force_set,
         )
     )
     if not all_pairs:
@@ -4489,6 +4575,16 @@ def _build_parser():
              "Output → paper_v1/ subdir.",
     )
     parser.add_argument(
+        "--run-tag",
+        type=str,
+        default=None,
+        help="Optional cohort/run subfolder inserted into the output path after "
+             "the feature/zscore/paper_v1 subdirs and before the channel-set / "
+             "threshold subdirs. Accepts multi-segment paths "
+             "(e.g. 'paper_v1/validation_4exp_phase_only'). Pure organization — "
+             "does not filter experiments.",
+    )
+    parser.add_argument(
         "--experiments",
         type=str,
         default=None,
@@ -4628,6 +4724,15 @@ def main():
     if getattr(args, "paper_v1", None):
         output_dir = output_dir / "paper_v1"
         print(f"Paper-v1 experiment list enforced: output → {output_dir}")
+
+    # --run-tag accepts a multi-segment relative path (e.g.
+    # "paper_v1/validation_4exp_phase_only") so callers can recreate cohort
+    # folders that don't have a dedicated flag.
+    if getattr(args, "run_tag", None):
+        tag = args.run_tag.strip().strip("/")
+        if tag:
+            output_dir = output_dir / tag
+            print(f"Run tag: output → {output_dir}")
 
     # Nest under cell-painting subdir if requested
     if args.include_cellpainting:
