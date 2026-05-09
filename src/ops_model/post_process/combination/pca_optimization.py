@@ -2299,7 +2299,7 @@ def aggregate_channels(
             _logger,
         )
 
-    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
             import yaml as _yaml
@@ -2884,7 +2884,7 @@ def apply_second_pass_pca(
 
     _chad_path = (
         CHAD_ANNOTATION_PATH
-        or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+        or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     )
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
@@ -3219,7 +3219,7 @@ def _handle_chad_umap_only(args, output_dir):
         print("ERROR: No X_umap in gene embedding.")
         return
 
-    chad_path = args.chad_annotation or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    chad_path = args.chad_annotation or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     with open(chad_path) as f:
         chad_clusters = _yaml.safe_load(f)
 
@@ -4733,7 +4733,7 @@ def _build_parser():
         type=str,
         default=None,
         help="Path to custom CHAD annotation YAML for consistency scoring. "
-             "Defaults to chad_positive_controls_v4.yml.",
+             "Defaults to chad_positive_controls_v5_hierarchy.yml.",
     )
     parser.add_argument(
         "--chad-umap-only", action="store_true",
