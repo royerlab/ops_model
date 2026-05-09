@@ -1330,8 +1330,17 @@ def _score_single_reporter_metrics(
     """Score all 4 phenotypic metrics for one reporter's guide h5ad.
 
     Uses a smaller null_size than the aggregate run for speed.
-    Returns dict with activity, auc, distinctiveness, corum, chad,
-    and unfiltered variants: distinctiveness_all, corum_all, chad_all (NaN on failure).
+    Returns a dict with:
+      Scalars: activity, auc, distinctiveness, corum, chad, plus
+        unfiltered variants distinctiveness_all/corum_all/chad_all
+        (NaN on failure).
+      Per-gene/per-complex DataFrames (NEW, for downstream
+      reuse — atlas etc.):
+        activity_df         : per-perturbation activity mAP
+        distinctiveness_df  : per-perturbation distinctiveness mAP
+        corum_df            : per-CORUM-complex consistency mAP
+        chad_df             : per-CHAD-complex consistency mAP
+      Each DataFrame is None if its scoring step failed.
     """
     import math
 
@@ -1348,6 +1357,15 @@ def _score_single_reporter_metrics(
             "chad_all",
         )
     }
+    # Per-gene / per-complex DataFrames (raw mAP scores per entity for
+    # this reporter). The 4 mAP-scoring helpers below all return
+    # `(df, scalar_ratio)` — previously we kept only the scalar; now
+    # we also stash the df so callers can pivot to a per-(reporter,
+    # entity) matrix and save it.
+    result["activity_df"] = None
+    result["distinctiveness_df"] = None
+    result["corum_df"] = None
+    result["chad_df"] = None
     try:
         from ops_utils.analysis.map_scores import (
             phenotypic_activity_assesment,
@@ -1367,8 +1385,9 @@ def _score_single_reporter_metrics(
         )
         result["activity"] = float(active_ratio)
         result["auc"] = float(compute_auc_score(activity_map))
+        result["activity_df"] = activity_map
 
-        _, dist_ratio = phenotypic_distinctivness(
+        dist_df, dist_ratio = phenotypic_distinctivness(
             g_norm,
             plot_results=False,
             null_size=null_size,
@@ -1376,13 +1395,14 @@ def _score_single_reporter_metrics(
         )
         result["distinctiveness"] = float(dist_ratio)
         result["distinctiveness_all"] = result["distinctiveness"]
+        result["distinctiveness_df"] = dist_df
 
         e_norm = aggregate_to_level(
             g_norm, "gene", preserve_batch_info=False, subsample_controls=False
         )
         e_norm = _prepare_for_copairs(e_norm)
 
-        _, corum_ratio = phenotypic_consistency_corum(
+        corum_df, corum_ratio = phenotypic_consistency_corum(
             e_norm,
             plot_results=False,
             null_size=null_size,
@@ -1391,8 +1411,9 @@ def _score_single_reporter_metrics(
         )
         result["corum"] = float(corum_ratio)
         result["corum_all"] = result["corum"]
+        result["corum_df"] = corum_df
 
-        _, chad_ratio = phenotypic_consistency_manual_annotation(
+        chad_df, chad_ratio = phenotypic_consistency_manual_annotation(
             e_norm,
             plot_results=False,
             null_size=null_size,
@@ -1402,6 +1423,7 @@ def _score_single_reporter_metrics(
         )
         result["chad"] = float(chad_ratio)
         result["chad_all"] = result["chad"]
+        result["chad_df"] = chad_df
 
     except Exception as exc:
         _logger.warning(f"  Per-reporter metrics scoring failed: {exc}")
@@ -1409,13 +1431,26 @@ def _score_single_reporter_metrics(
 
 
 def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine"):
-    """Load per-channel/per-signal guide+gene h5ads, return blocks + report rows."""
+    """Load per-channel/per-signal guide+gene h5ads, return blocks +
+    report rows + per-reporter metric DataFrames.
+
+    Returns a 5-tuple:
+        (guide_blocks, gene_blocks, report_rows, total_cells,
+         per_reporter_metric_dfs)
+    where per_reporter_metric_dfs is
+        {signal_name: {"activity": df, "distinctiveness": df,
+                       "corum": df, "chad": df}}
+    Used by the caller to pivot into a per-(reporter, entity) matrix
+    and save it alongside `pca_report.csv` so atlas / downstream
+    consumers can read all 4 mAP scores per reporter.
+    """
     guide_files = sorted(per_unit_dir.glob("*_guide.h5ad"))
     if not guide_files:
-        return None, None, [], 0
+        return None, None, [], 0, {}
 
     _logger.info(f"Found {len(guide_files)} per-unit guide files")
     guide_blocks, gene_blocks, report_rows = [], [], []
+    per_reporter_metric_dfs = {}
     total_cells = 0
 
     for gf in guide_files:
@@ -1443,6 +1478,16 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
         reporter_metrics = _score_single_reporter_metrics(
             g, norm_method, _logger, distance=distance
         )
+
+        # Stash the per-gene/per-complex DataFrames keyed by signal so
+        # the caller can pivot them into per-(reporter, entity)
+        # matrices and save. Skip None values (failed scoring step).
+        per_reporter_metric_dfs[sig] = {
+            "activity": reporter_metrics.get("activity_df"),
+            "distinctiveness": reporter_metrics.get("distinctiveness_df"),
+            "corum": reporter_metrics.get("corum_df"),
+            "chad": reporter_metrics.get("chad_df"),
+        }
 
         report_rows.append(
             {
@@ -1472,7 +1517,8 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
             f"corum={reporter_metrics['corum_all']:.1%} chad={reporter_metrics['chad_all']:.1%}"
         )
 
-    return guide_blocks or None, gene_blocks, report_rows, total_cells
+    return (guide_blocks or None, gene_blocks, report_rows, total_cells,
+            per_reporter_metric_dfs)
 
 
 def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
@@ -1530,6 +1576,82 @@ def _score_activity_aggregated(adata_guide, metrics_dir, _logger, distance="cosi
     except Exception as exc:
         _logger.error(f"  Activity scoring failed: {exc}")
         return None, 0.0, 0.0
+
+
+def _save_per_reporter_metric_matrices(
+    per_reporter_metric_dfs,
+    output_dir,
+    _logger,
+):
+    """Pivot the per-reporter mAP DataFrames collected by
+    `_load_per_unit_blocks` into 4 per-(reporter × entity) matrices and
+    save them alongside `pca_report.csv`. Outputs land in
+    `<output_dir>/plots/marker_overlay/`:
+
+        gene_reporter_activity_raw.csv         (rows = perturbations)
+        gene_reporter_distinctiveness_raw.csv  (rows = perturbations)
+        complex_reporter_corum_consistency.csv (rows = CORUM complexes)
+        complex_reporter_chad_consistency.csv  (rows = CHAD complexes)
+
+    The distinctiveness CSV mirrors what
+    `gene_best_marker_assignment.compute_all_scores` produces (same
+    schema), so atlas / heatmap consumers can pick it up by either
+    path. The CHAD/CORUM matrices are NEW — they're the per-(complex,
+    reporter) consistency mAP that previously had no precomputed
+    artifact (only per-complex scalars in `pca_report.csv`).
+    """
+    if not per_reporter_metric_dfs:
+        return
+    overlay_dir = Path(output_dir) / "plots" / "marker_overlay"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+
+    def _pivot(metric_key, key_col, value_col, out_csv):
+        """Build {entity_id: {reporter: mAP}} → DataFrame, save."""
+        pivot = {}
+        for sig, dfs in per_reporter_metric_dfs.items():
+            df = dfs.get(metric_key)
+            if df is None or len(df) == 0:
+                continue
+            if key_col not in df.columns or value_col not in df.columns:
+                _logger.warning(
+                    f"  [{metric_key}] {sig}: missing {key_col!r}/{value_col!r}"
+                    f" in returned df — skipping"
+                )
+                continue
+            pivot[sig] = dict(zip(df[key_col].astype(str),
+                                  df[value_col].astype(float)))
+        if not pivot:
+            _logger.warning(f"  [{metric_key}] no data to save")
+            return
+        all_entities = sorted({k for r in pivot.values() for k in r})
+        out_df = pd.DataFrame(
+            {sig: [pivot[sig].get(e, float("nan")) for e in all_entities]
+             for sig in sorted(pivot)},
+            index=all_entities,
+        )
+        out_df.index.name = key_col
+        out_df.to_csv(out_csv)
+        _logger.info(
+            f"  Saved {out_csv.name}: {out_df.shape[0]} entities × "
+            f"{out_df.shape[1]} reporters"
+        )
+
+    _pivot(
+        "activity", "perturbation", "mean_average_precision",
+        overlay_dir / "gene_reporter_activity_raw.csv",
+    )
+    _pivot(
+        "distinctiveness", "perturbation", "mean_average_precision",
+        overlay_dir / "gene_reporter_distinctiveness_raw.csv",
+    )
+    _pivot(
+        "corum", "complex_num", "mean_average_precision",
+        overlay_dir / "complex_reporter_corum_consistency.csv",
+    )
+    _pivot(
+        "chad", "complex_num", "mean_average_precision",
+        overlay_dir / "complex_reporter_chad_consistency.csv",
+    )
 
 
 def _save_aggregated_h5ads(
@@ -1960,11 +2082,20 @@ def aggregate_channels(
     per_unit_dir = output_dir / per_unit_subdir
 
     # Step 1: Load per-channel/per-signal blocks
-    guide_blocks, gene_blocks, report_rows, total_cells = _load_per_unit_blocks(
+    (guide_blocks, gene_blocks, report_rows, total_cells,
+     per_reporter_metric_dfs) = _load_per_unit_blocks(
         per_unit_dir, norm_method, _logger, distance=distance
     )
     if guide_blocks is None:
         return "FAILED: no valid per-channel data loaded"
+
+    # Save the per-reporter mAP matrices for all 4 metrics — atlas and
+    # downstream consumers read them from <output_dir>/plots/marker_overlay/
+    # to drive per-marker channel selection (CHAD consistency for
+    # complex pages, distinctiveness for gene pages, etc.).
+    _save_per_reporter_metric_matrices(
+        per_reporter_metric_dfs, output_dir, _logger,
+    )
 
     # Step 2: Concat + normalize
     adata_guide, adata_gene = _concat_and_normalize(
