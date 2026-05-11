@@ -426,6 +426,9 @@ class ValidationReport:
         return len(self.warnings)
 
 
+DEFAULT_GUIDE_COL = "sgRNA"
+
+
 class AnndataSpec:
     """Schema specification manager for AnnData objects.
 
@@ -437,13 +440,24 @@ class AnndataSpec:
     ----------
     schemas : Dict[str, Dict[str, Any]]
         Dictionary mapping schema level names to their specifications
+    guide_col : str
+        Name of the .obs column holding per-construct identifiers
+        (e.g. "sgRNA" for CRISPR, "minibinder_perturbation" for minibinder).
     """
 
-    def __init__(self):
+    def __init__(self, guide_col: str = DEFAULT_GUIDE_COL):
         """Initialize the schema specification manager.
 
         Loads all schema definitions for supported aggregation levels.
+
+        Parameters
+        ----------
+        guide_col : str, default="sgRNA"
+            Name of the .obs column holding per-construct identifiers.
+            Threaded through cell- and guide-level schemas so that the
+            required FieldSpec for that column uses the configured name.
         """
+        self.guide_col = guide_col
         self.schemas = {
             "base": self._define_base_schema(),
             "cell": self._define_cell_schema(),
@@ -601,11 +615,11 @@ class AnndataSpec:
             "required_fields": base["required_fields"]
             + [
                 FieldSpec(
-                    name="sgRNA",
+                    name=self.guide_col,
                     dtype=str,
                     required=True,
-                    description="Guide RNA identifier",
-                    suggestion="Add sgRNA column with guide identifiers",
+                    description="Per-construct identifier (e.g. sgRNA, minibinder peptide)",
+                    suggestion=f"Add {self.guide_col} column with construct identifiers",
                 ),
                 FieldSpec(
                     name="well",
@@ -655,12 +669,12 @@ class AnndataSpec:
             "required_fields": base["required_fields"]
             + [
                 FieldSpec(
-                    name="sgRNA",
+                    name=self.guide_col,
                     dtype=str,
                     required=True,
                     unique=False,
-                    description="Guide RNA identifier",
-                    suggestion="Add sgRNA column with guide identifiers",
+                    description="Per-construct identifier (e.g. sgRNA, minibinder peptide)",
+                    suggestion=f"Add {self.guide_col} column with construct identifiers",
                 ),
             ],
             "optional_fields": base["optional_fields"]
@@ -717,8 +731,11 @@ class AnndataSpec:
                     name="guides",
                     dtype=object,
                     required=True,
-                    description="List of guide RNAs aggregated for this gene",
-                    suggestion="Add guides column with list of sgRNA identifiers per gene",
+                    description="List of per-construct identifiers aggregated for this gene",
+                    suggestion=(
+                        f"Add guides column with list of {self.guide_col} "
+                        "identifiers per gene"
+                    ),
                 ),
             ],
             "uns_requirements": {
@@ -817,7 +834,7 @@ class AnndataValidator:
         Default strictness mode for validation
     """
 
-    def __init__(self, strict: bool = True):
+    def __init__(self, strict: bool = True, guide_col: Optional[str] = None):
         """Initialize the AnnData validator.
 
         Parameters
@@ -825,8 +842,14 @@ class AnndataValidator:
         strict : bool, default=True
             Default strictness mode. If True, validation raises exceptions on
             failure. If False, returns ValidationReport without raising.
+        guide_col : Optional[str], default=None
+            Name of the .obs column holding per-construct identifiers
+            (e.g. "sgRNA" for CRISPR, "minibinder_perturbation" for minibinder).
+            If None, validate() will read it from adata.uns["guide_col"] when
+            available, falling back to the default ("sgRNA").
         """
-        self.spec = AnndataSpec()
+        self._default_guide_col = guide_col or DEFAULT_GUIDE_COL
+        self.spec = AnndataSpec(guide_col=self._default_guide_col)
         self.strict = strict
 
     def validate(
@@ -875,6 +898,13 @@ class AnndataValidator:
         )
 
         logger.info(f"Starting validation (level={level}, strict={use_strict})")
+
+        # Sync the schema spec with the AnnData's guide_col. Legacy files that
+        # predate the guide_col convention fall back to the validator's default
+        # (defaults to "sgRNA" for CRISPR back-compat).
+        adata_guide_col = adata.uns.get("guide_col", self._default_guide_col)
+        if adata_guide_col != self.spec.guide_col:
+            self.spec = AnndataSpec(guide_col=adata_guide_col)
 
         # Get schema
         try:
@@ -1471,10 +1501,11 @@ class AnndataValidator:
         if "x_position" in obs_cols and "y_position" in obs_cols:
             return "cell"
 
-        # Check for guide level (has sgRNA and n_cells, sgRNA should be mostly unique)
-        if "sgRNA" in obs_cols and "n_cells" in obs_cols:
-            # If sgRNA is highly unique, likely guide level
-            if adata.obs["sgRNA"].nunique() / len(adata.obs) > 0.8:
+        # Check for guide level (has guide_col and n_cells, guide_col should be mostly unique)
+        guide_col = adata.uns.get("guide_col", self._default_guide_col)
+        if guide_col in obs_cols and "n_cells" in obs_cols:
+            # If guide_col is highly unique, likely guide level
+            if adata.obs[guide_col].nunique() / len(adata.obs) > 0.8:
                 return "guide"
 
         # Check for gene level (has n_cells but not necessarily unique sgRNA)
