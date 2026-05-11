@@ -16,15 +16,22 @@ from sklearn.decomposition import PCA
 from ops_model.data.paths import OpsPaths
 from ops_model.features.anndata_utils import create_aggregated_embeddings, pca_embed
 
-NONFEATURE_COLUMNS = [
-    "label_str",
-    "label_int",
-    "sgRNA",
-    "well",
-    "experiment",
-    "x_position",
-    "y_position",
-]
+DEFAULT_GUIDE_COL = "sgRNA"
+
+
+def _nonfeature_columns(guide_col: str = DEFAULT_GUIDE_COL) -> list[str]:
+    return [
+        "label_str",
+        "label_int",
+        guide_col,
+        "well",
+        "experiment",
+        "x_position",
+        "y_position",
+    ]
+
+
+NONFEATURE_COLUMNS = _nonfeature_columns()
 
 
 # Profiling context manager
@@ -123,6 +130,8 @@ def create_adata_object(
     if config:
         cell_type = config.get("cell_type", cell_type)
         embedding_type = config.get("embedding_type", embedding_type)
+    guide_col = (config or {}).get("guide_col", DEFAULT_GUIDE_COL)
+    nonfeature_cols = _nonfeature_columns(guide_col)
 
     # Validate required fields
     if not cell_type:
@@ -150,7 +159,7 @@ def create_adata_object(
         # Identify channels from feature columns
         # CellProfiler features follow pattern: single_object_{channel}_{feature}
         feature_cols = [
-            col for col in features.columns if col not in NONFEATURE_COLUMNS
+            col for col in features.columns if col not in nonfeature_cols
         ]
 
         # Extract unique channels from feature column names.
@@ -188,7 +197,7 @@ def create_adata_object(
     with timer("Extracting labels and metadata"):
         gene_strs = np.asarray(features["label_str"].values)
         gene_ints = np.asarray(features["label_int"].values)
-        sgRNA_ids = np.asarray(features["sgRNA"].values)
+        guide_ids = np.asarray(features[guide_col].values)
         well_id = np.asarray(features["well"].values)
 
         # Extract experiment field (required by validator)
@@ -212,7 +221,7 @@ def create_adata_object(
             has_positions = False
 
         # Drop non-feature columns
-        cols_to_drop = [col for col in NONFEATURE_COLUMNS if col in features.columns]
+        cols_to_drop = [col for col in nonfeature_cols if col in features.columns]
         features = features.drop(columns=cols_to_drop)
 
     with timer("Converting array strings to floats"):
@@ -263,7 +272,7 @@ def create_adata_object(
         # Update metadata arrays to match filtered rows
         gene_strs = gene_strs[good_rows_mask]
         gene_ints = gene_ints[good_rows_mask]
-        sgRNA_ids = sgRNA_ids[good_rows_mask]
+        guide_ids = guide_ids[good_rows_mask]
         well_id = well_id[good_rows_mask]
         experiment_ids = experiment_ids[good_rows_mask]
         x_pos = x_pos[good_rows_mask]
@@ -320,7 +329,7 @@ def create_adata_object(
             adata.obs["reporter"] = "unknown"
 
         # Add required .obs fields (cell schema)
-        adata.obs["sgRNA"] = sgRNA_ids
+        adata.obs[guide_col] = guide_ids
         adata.obs["well"] = well_id
         adata.obs["experiment"] = experiment_ids
         adata.obs["x_position"] = x_pos  # Always add (may be NaN)
@@ -334,6 +343,7 @@ def create_adata_object(
         # Add required .uns fields (base schema)
         adata.uns["cell_type"] = cell_type
         adata.uns["embedding_type"] = embedding_type
+        adata.uns["guide_col"] = guide_col
 
         # Add optional .uns fields (useful metadata)
         adata.uns["channel_mapping"] = channel_mapping  # Always add
@@ -342,6 +352,7 @@ def create_adata_object(
         print(f"Added .uns metadata:")
         print(f"  cell_type: {cell_type}")
         print(f"  embedding_type: {embedding_type}")
+        print(f"  guide_col: {guide_col}")
         print(f"  channel_mapping: {channel_mapping}")
 
     return adata

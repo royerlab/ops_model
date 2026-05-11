@@ -31,6 +31,7 @@ from ops_model.features.evaluate_cp import (
     # center_scale_fast,
     timer,
     NONFEATURE_COLUMNS,
+    DEFAULT_GUIDE_COL,
 )
 from ops_model.features.anndata_utils import create_aggregated_embeddings, pca_embed
 from ops_model.post_process.anndata_processing.anndata_validator import (
@@ -131,6 +132,8 @@ def create_adata_object_embedding(
     Returns:
         AnnData object with embeddings and metadata
     """
+    guide_col = (config or {}).get("guide_col", DEFAULT_GUIDE_COL)
+
     with timer("Reading CSV"):
         # Read CSV - embedding features are already numeric
         features = pd.read_csv(save_path, low_memory=False)
@@ -141,7 +144,7 @@ def create_adata_object_embedding(
         # Extract metadata columns
         gene_strs = np.asarray(features["label_str"].values)
         gene_ints = np.asarray(features["label_int"].values)
-        sgRNA_ids = np.asarray(features["sgRNA"].values)
+        guide_ids = np.asarray(features[guide_col].values)
         well_id = np.asarray(features["well"].values)
 
         # Read experiment from CSV if not provided
@@ -168,7 +171,7 @@ def create_adata_object_embedding(
 
         # Drop all non-numeric columns (catches known string metadata + any unexpected label columns)
         non_numeric_cols = features.select_dtypes(exclude="number").columns.tolist()
-        known_str_metadata = {"label_str", "sgRNA", "well", "experiment"}
+        known_str_metadata = {"label_str", guide_col, "well", "experiment"}
         unexpected = [c for c in non_numeric_cols if c not in known_str_metadata]
         if unexpected:
             print(
@@ -203,7 +206,7 @@ def create_adata_object_embedding(
             features = features.dropna()
             gene_strs = gene_strs[features.index]
             gene_ints = gene_ints[features.index]
-            sgRNA_ids = sgRNA_ids[features.index]
+            guide_ids = guide_ids[features.index]
             well_id = well_id[features.index]
             if has_positions:
                 x_pos = x_pos[features.index]
@@ -219,7 +222,7 @@ def create_adata_object_embedding(
             features = features.dropna()
             gene_strs = gene_strs[features.index]
             gene_ints = gene_ints[features.index]
-            sgRNA_ids = sgRNA_ids[features.index]
+            guide_ids = guide_ids[features.index]
             well_id = well_id[features.index]
             if has_positions:
                 x_pos = x_pos[features.index]
@@ -258,7 +261,7 @@ def create_adata_object_embedding(
         # Use perturbation instead of label_str (validator requirement)
         adata.obs["perturbation"] = gene_strs
         adata.obs["label_int"] = gene_ints
-        adata.obs["sgRNA"] = sgRNA_ids
+        adata.obs[guide_col] = guide_ids
         adata.obs["well"] = well_id
 
         # Position fields are required by validator (always add)
@@ -303,6 +306,7 @@ def create_adata_object_embedding(
             )
 
         adata.uns["embedding_type"] = embedding_type
+        adata.uns["guide_col"] = guide_col
 
         # Add channel metadata (optional but useful)
         if channel:
@@ -482,7 +486,14 @@ def process_embedding_csv(
                 and "X_umap" in embeddings_guide_bulk_ad.obsm.keys()
             ):
                 plot_path = save_dir / "guide_umap.png"
-                sc.pl.umap(embeddings_guide_bulk_ad, color="sgRNA", save=str(plot_path))
+                guide_col_for_plot = embeddings_guide_bulk_ad.uns.get(
+                    "guide_col", DEFAULT_GUIDE_COL
+                )
+                sc.pl.umap(
+                    embeddings_guide_bulk_ad,
+                    color=guide_col_for_plot,
+                    save=str(plot_path),
+                )
                 print(f"Saved guide UMAP plot to {plot_path}")
     else:
         print("\nSkipping guide-level aggregation (disabled in config)")
