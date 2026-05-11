@@ -71,6 +71,7 @@ import numpy as np
 import pandas as pd
 
 from ops_model.features.anndata_utils import (
+    _guide_col,
     aggregate_to_level,
     hconcat_by_perturbation,
     normalize_guide_adata,
@@ -160,7 +161,11 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     """Strip obs to copairs-required columns and cast X to float64."""
     if "n_cells" not in adata.obs.columns:
         adata.obs["n_cells"] = 1
-    keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata.obs.columns]
+    keep = [
+        c
+        for c in [_guide_col(adata), "perturbation", "n_cells"]
+        if c in adata.obs.columns
+    ]
     adata.obs = adata.obs[keep].copy()
     for col in adata.obs.columns:
         if adata.obs[col].dtype.name == "category":
@@ -647,10 +652,11 @@ def pca_sweep_pooled_signal(
             try:
                 adata_backed = ad.read_h5ad(path, backed="r")
                 obs = adata_backed.obs
-                if "sgRNA" in obs.columns:
+                guide_col_name = _guide_col(adata_backed)
+                if guide_col_name in obs.columns:
                     if exclude_dud_guides:
-                        obs = obs[~obs["sgRNA"].isin(DUD_GUIDES)]
-                    vc = obs["sgRNA"].value_counts()
+                        obs = obs[~obs[guide_col_name].isin(DUD_GUIDES)]
+                    vc = obs[guide_col_name].value_counts()
                     for s, c in vc.items():
                         pooled_sg_counts[s] = pooled_sg_counts.get(s, 0) + int(c)
                 adata_backed.file.close()
@@ -727,6 +733,7 @@ def pca_sweep_pooled_signal(
     n_vars_expected = None
     loaded_exps = []
     var_names = None
+    inferred_guide_col: Optional[str] = None  # captured from first source h5ad
 
     t_load = time.time()
     for exp, ch in exp_channel_pairs:
@@ -736,11 +743,14 @@ def pca_sweep_pooled_signal(
         adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
         if adata is None:
             continue
+        guide_col_name = _guide_col(adata)
+        if inferred_guide_col is None:
+            inferred_guide_col = guide_col_name
 
-        # Filter out dud sgRNAs (off-target / toxic) — enabled by default
-        if exclude_dud_guides and "sgRNA" in adata.obs.columns:
+        # Filter out dud constructs (off-target / toxic) — enabled by default
+        if exclude_dud_guides and guide_col_name in adata.obs.columns:
             n_before = adata.n_obs
-            keep = ~adata.obs["sgRNA"].isin(DUD_GUIDES)
+            keep = ~adata.obs[guide_col_name].isin(DUD_GUIDES)
             n_dropped = int((~keep).sum())
             if n_dropped > 0:
                 adata = adata[keep].copy()
@@ -759,10 +769,14 @@ def pca_sweep_pooled_signal(
             del adata
             continue
 
-        if downsample_per_guide and cells_per_guide_cap is not None and "sgRNA" in adata.obs.columns:
-            # Per-sgRNA cap: each sgRNA contributes (cap / pooled_count) of its cells
-            # from each experiment, so global total per sgRNA ≈ cells_per_guide_cap.
-            sgrnas = adata.obs["sgRNA"].values
+        if (
+            downsample_per_guide
+            and cells_per_guide_cap is not None
+            and guide_col_name in adata.obs.columns
+        ):
+            # Per-construct cap: each construct contributes (cap / pooled_count) of its
+            # cells from each experiment, so global total per construct ≈ cells_per_guide_cap.
+            sgrnas = adata.obs[guide_col_name].values
             keep_mask = np.zeros(adata.n_obs, dtype=bool)
             for s in np.unique(sgrnas):
                 s_idx = np.where(sgrnas == s)[0]
@@ -792,7 +806,9 @@ def pca_sweep_pooled_signal(
             adata.obs["label_str"] = adata.obs["perturbation"]
         # Keep obs cols needed for aggregation + track provenance
         keep_cols = [
-            c for c in ["sgRNA", "perturbation", "label_str"] if c in adata.obs.columns
+            c
+            for c in [guide_col_name, "perturbation", "label_str"]
+            if c in adata.obs.columns
         ]
         obs = adata.obs[keep_cols].copy()
         obs["experiment"] = exp.split("_")[0]
@@ -833,8 +849,11 @@ def pca_sweep_pooled_signal(
     )
 
     # Obs DataFrames for scoring (without experiment col which breaks copairs)
+    guide_col_name = inferred_guide_col or "sgRNA"
     score_cols = [
-        c for c in ["sgRNA", "perturbation", "label_str"] if c in obs_df_full.columns
+        c
+        for c in [guide_col_name, "perturbation", "label_str"]
+        if c in obs_df_full.columns
     ]
     obs_df = obs_df_full[score_cols].copy()
 
@@ -2267,8 +2286,9 @@ def _handle_downsampled(args, output_dir, cp_override):
                     continue
                 try:
                     a = ad.read_h5ad(path, backed="r")
-                    if "sgRNA" in a.obs.columns:
-                        seen.update(a.obs["sgRNA"].astype(str).unique())
+                    a_guide_col = _guide_col(a)
+                    if a_guide_col in a.obs.columns:
+                        seen.update(a.obs[a_guide_col].astype(str).unique())
                     a.file.close()
                 except Exception:
                     pass

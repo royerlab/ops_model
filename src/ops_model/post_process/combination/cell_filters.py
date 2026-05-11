@@ -26,30 +26,34 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
+from ops_model.features.anndata_utils import _guide_col
+
 logger = logging.getLogger(__name__)
 
 CellFilter = Callable[[ad.AnnData], ad.AnnData]
 
 
 class DudGuideFilter:
-    """Remove cells whose sgRNA appears in a known dud-guide list.
+    """Remove cells whose per-construct identifier appears in a known dud list.
 
     Parameters
     ----------
     dud_guides:
-        Guide sequences to exclude (matched against obs["sgRNA"]).
+        Identifier values to exclude. Matched against the column named by
+        ``adata.uns["guide_col"]`` (default ``"sgRNA"``).
     """
 
     def __init__(self, dud_guides: list[str]) -> None:
         self.dud_guides = set(dud_guides)
 
     def __call__(self, adata: ad.AnnData) -> ad.AnnData:
-        if "sgRNA" not in adata.obs.columns:
+        guide_col = _guide_col(adata)
+        if guide_col not in adata.obs.columns:
             return adata
-        mask = ~adata.obs["sgRNA"].isin(self.dud_guides)
+        mask = ~adata.obs[guide_col].isin(self.dud_guides)
         n_removed = int((~mask).sum())
         if n_removed > 0:
-            n_dud_found = adata.obs.loc[~mask, "sgRNA"].nunique()
+            n_dud_found = adata.obs.loc[~mask, guide_col].nunique()
             logger.info(
                 f"  DudGuideFilter: removed {n_removed}/{adata.n_obs} cells "
                 f"({n_removed / adata.n_obs:.1%}) matching {n_dud_found} dud guides"

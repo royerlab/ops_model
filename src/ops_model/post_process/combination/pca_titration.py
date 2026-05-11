@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from ops_model.features.anndata_utils import (
+    _guide_col,
     aggregate_to_level,
     normalize_guide_adata,
 )
@@ -176,7 +177,11 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     """Strip obs to copairs-required columns and cast X to float64."""
     if "n_cells" not in adata.obs.columns:
         adata.obs["n_cells"] = 1
-    keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata.obs.columns]
+    keep = [
+        c
+        for c in [_guide_col(adata), "perturbation", "n_cells"]
+        if c in adata.obs.columns
+    ]
     adata.obs = adata.obs[keep].copy()
     for col in adata.obs.columns:
         if adata.obs[col].dtype.name == "category":
@@ -216,9 +221,12 @@ def _subsample_per_guide_and_aggregate(
     ~4 sgRNAs), this samples directly at sgRNA level so every guide — NTC or KO —
     gets the same cell budget.
     """
-    if "sgRNA" not in adata_cells.obs.columns:
-        raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
-    sgrnas = adata_cells.obs["sgRNA"].values
+    guide_col_name = _guide_col(adata_cells)
+    if guide_col_name not in adata_cells.obs.columns:
+        raise ValueError(
+            f"Per-guide titration requires {guide_col_name!r} column in obs"
+        )
+    sgrnas = adata_cells.obs[guide_col_name].values
     kept_idx = []
     for s in np.unique(sgrnas):
         s_idx = np.where(sgrnas == s)[0]
@@ -632,11 +640,14 @@ def titrate_single_reporter(
     _logger.info(f"Titrating {signal}: {total_cells:,} cells, {adata_cells.n_vars} PCs")
 
     if per_guide or per_guide_max:
-        if "sgRNA" not in adata_cells.obs.columns:
-            raise ValueError("Per-guide titration requires 'sgRNA' column in obs")
+        guide_col_name = _guide_col(adata_cells)
+        if guide_col_name not in adata_cells.obs.columns:
+            raise ValueError(
+                f"Per-guide titration requires {guide_col_name!r} column in obs"
+            )
         pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
-        sg_counts = adata_cells.obs.groupby("sgRNA").size()
-        sg_to_pert = adata_cells.obs.groupby("sgRNA")[pert_col].first()
+        sg_counts = adata_cells.obs.groupby(guide_col_name).size()
+        sg_to_pert = adata_cells.obs.groupby(guide_col_name)[pert_col].first()
         non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
         non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
         if per_guide_max:

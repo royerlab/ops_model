@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 from ops_model.features.anndata_utils import (
+    _guide_col,
     aggregate_to_level,
     normalize_guide_adata,
 )
@@ -72,19 +73,25 @@ def _combine_reporters(
 ) -> Optional[ad.AnnData]:
     """Inner join two guide-level adatas on sgRNA key and concatenate features.
 
-    Both adatas must already be normalized. Rows are aligned by sgRNA (the
-    exact guide sequence), giving an unambiguous 1:1 mapping even when random
-    subsampling causes slightly different guide sets to survive in each reporter.
-    Falls back to ``perturbation`` (gene name) if sgRNA is not available.
+    Both adatas must already be normalized. Rows are aligned by the per-construct
+    identifier (resolved via ``uns["guide_col"]`` — ``"sgRNA"`` for CRISPR,
+    ``"minibinder_perturbation"`` for minibinder), giving an unambiguous 1:1
+    mapping even when random subsampling causes slightly different guide sets to
+    survive in each reporter. Falls back to ``perturbation`` (gene name) if the
+    guide column is not available.
 
     Returns None if fewer than 2 guides are shared.
     """
     import scipy.sparse as sp
 
-    # Choose join key: sgRNA if available (exact guide), else gene-level perturbation
+    # Choose join key: per-construct identifier if available, else perturbation.
+    guide_col_a = _guide_col(adata_a)
+    guide_col_b = _guide_col(adata_b)
     key = (
-        "sgRNA"
-        if "sgRNA" in adata_a.obs.columns and "sgRNA" in adata_b.obs.columns
+        guide_col_a
+        if guide_col_a == guide_col_b
+        and guide_col_a in adata_a.obs.columns
+        and guide_col_b in adata_b.obs.columns
         else "perturbation"
     )
 
@@ -115,9 +122,12 @@ def _combine_reporters(
     X_combined = np.hstack([_to_dense(sub_a.X), _to_dense(sub_b.X)]).astype(np.float32)
 
     keep_cols = [
-        c for c in ["perturbation", "sgRNA", "n_cells"] if c in sub_a.obs.columns
+        c
+        for c in ["perturbation", _guide_col(sub_a), "n_cells"]
+        if c in sub_a.obs.columns
     ]
     combined = ad.AnnData(X=X_combined, obs=sub_a.obs[keep_cols].copy())
+    combined.uns["guide_col"] = _guide_col(sub_a)
     return combined
 
 

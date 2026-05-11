@@ -5,7 +5,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import anndata as ad
 
 from .config_handler import CombinationConfig
-from ops_model.features.anndata_utils import concatenate_experiments_comprehensive
+from ops_model.features.anndata_utils import (
+    concatenate_experiments_comprehensive,
+    _guide_col,
+)
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -144,7 +147,11 @@ def _prepare_cells_for_scoring(adata: "ad.AnnData") -> "ad.AnnData":
 
     if "n_cells" not in adata.obs.columns:
         adata.obs["n_cells"] = 1
-    keep = [c for c in ["sgRNA", "perturbation", "n_cells"] if c in adata.obs.columns]
+    keep = [
+        c
+        for c in [_guide_col(adata), "perturbation", "n_cells"]
+        if c in adata.obs.columns
+    ]
     adata.obs = adata.obs[keep].copy()
     for col in adata.obs.columns:
         if adata.obs[col].dtype.name == "category":
@@ -345,6 +352,7 @@ def _process_signal_group(
     n_vars_expected = None
     normalize_before_pca = pca_config.get("normalize_before_pca", False)
     inferred_cell_type = None  # read from first successfully loaded h5ad
+    inferred_guide_col = None  # read from first successfully loaded h5ad
 
     for exp, ch in exp_channel_pairs:
         if exp_cell_counts.get((exp, ch), 0) == 0:
@@ -364,6 +372,8 @@ def _process_signal_group(
 
         if inferred_cell_type is None:
             inferred_cell_type = adata.uns.get("cell_type", "cell")
+        if inferred_guide_col is None:
+            inferred_guide_col = _guide_col(adata)
 
         if n_vars_expected is None:
             n_vars_expected = adata.n_vars
@@ -387,7 +397,9 @@ def _process_signal_group(
                 adata = adata[idx].copy()
 
         keep_cols = [
-            c for c in ["sgRNA", "perturbation", "label_str"] if c in adata.obs.columns
+            c
+            for c in [_guide_col(adata), "perturbation", "label_str"]
+            if c in adata.obs.columns
         ]
         obs = adata.obs[keep_cols].copy()
         obs["experiment"] = exp.split("_")[0]
@@ -416,6 +428,10 @@ def _process_signal_group(
     # index_unique ensures obs_names are unique across experiments (avoids AnnData warning).
     adata_cells = ad.concat(all_blocks, join="inner", index_unique="-")
     del all_blocks
+    # Per-experiment all_blocks were built without .uns; restore guide_col so
+    # downstream consumers (and any aggregated outputs) see the right column.
+    if inferred_guide_col is not None:
+        adata_cells.uns["guide_col"] = inferred_guide_col
     if np.isnan(adata_cells.X).any():
         adata_cells.X = np.nan_to_num(adata_cells.X, nan=0.0)
 
@@ -427,7 +443,7 @@ def _process_signal_group(
     # Separate obs for scoring (no experiment column — copairs doesn't handle extra string cols)
     score_cols = [
         c
-        for c in ["sgRNA", "perturbation", "label_str"]
+        for c in [_guide_col(adata_cells), "perturbation", "label_str"]
         if c in adata_cells.obs.columns
     ]
     obs_for_scoring = adata_cells.obs[score_cols].copy()
@@ -509,10 +525,11 @@ def _process_signal_group(
         pc_names = [f"{signal}_PC{j}" for j in range(n_pcs)]
         del X_pcs
 
-    # Compute n_experiments per sgRNA from obs_full before dropping the experiment column.
+    # Compute n_experiments per guide from obs_full before dropping the experiment column.
     # Injected directly into g.obs after guide aggregation (aggregate_to_level at guide level
     # does not carry arbitrary cell-obs columns through, so cell-level injection is lost).
-    sgRNA_to_n_exp = obs_full.groupby("sgRNA")["experiment"].nunique()
+    guide_col_name = inferred_guide_col or _guide_col(adata_cells)
+    guide_to_n_exp = obs_full.groupby(guide_col_name)["experiment"].nunique()
 
     # Drop experiment column before aggregation unless preserving batch info
     # (copairs is incompatible with extra string cols, but preserve_batch skips copairs scoring)
@@ -525,6 +542,7 @@ def _process_signal_group(
         obs=obs_for_agg,
         var=pd.DataFrame(index=pc_names),
     )
+    adata_reduced.uns["guide_col"] = guide_col_name
     del X_reduced
 
     if save_cell_level:
@@ -533,6 +551,7 @@ def _process_signal_group(
             obs=obs_full.copy(),
             var=adata_reduced.var.copy(),
         )
+        adata_cell.uns["guide_col"] = guide_col_name
 
     g = aggregate_to_level(
         adata_reduced, level="guide", method="mean", preserve_batch_info=preserve_batch
@@ -547,7 +566,9 @@ def _process_signal_group(
 
     # Inject n_experiments into guide obs so Phase 2's guide→gene aggregation picks it up
     # via aggregate_to_level's max() path (lines 804-808 of anndata_utils.py).
-    g.obs["n_experiments"] = g.obs["sgRNA"].map(sgRNA_to_n_exp).fillna(1).astype(int)
+    g.obs["n_experiments"] = (
+        g.obs[guide_col_name].map(guide_to_n_exp).fillna(1).astype(int)
+    )
     g.uns["aggregation_method"] = "mean"
     e.uns["aggregation_method"] = "mean"
 
