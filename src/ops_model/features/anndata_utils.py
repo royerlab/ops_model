@@ -33,6 +33,18 @@ DEFAULT_SEARCH_DIRS = [
     Path("/hpc/projects/icd.ops"),
 ]
 
+DEFAULT_GUIDE_COL = "sgRNA"
+
+
+def _guide_col(adata: ad.AnnData, default: str = DEFAULT_GUIDE_COL) -> str:
+    """Return the .obs column holding per-construct identifiers.
+
+    Reads ``adata.uns["guide_col"]`` when present; falls back to
+    ``default`` (``"sgRNA"``) for legacy AnnData objects that predate the
+    guide_col convention.
+    """
+    return adata.uns.get("guide_col", default)
+
 
 def _find_experiment_dir(
     exp_short: str,
@@ -141,7 +153,9 @@ def _get_n_cells_from_cell_file(
 
     try:
         adata_backed = ad.read_h5ad(cell_file, backed="r")
-        group_col = "sgRNA" if target_level == "guide" else "label_str"
+        group_col = (
+            _guide_col(adata_backed) if target_level == "guide" else "label_str"
+        )
         counts = adata_backed.obs[group_col].value_counts()
         adata_backed.file.close()
         if verbose:
@@ -182,7 +196,7 @@ def _extract_and_verify_uns_metadata(
          - ops0089/GFP: 'cell'
          - ops0108/Phase2D: 'guide'  # <-- Different!"
     """
-    required_keys = ["cell_type", "embedding_type"]
+    required_keys = ["cell_type", "embedding_type", "guide_col"]
     metadata_values = {key: [] for key in required_keys}
     source_info = []
 
@@ -206,7 +220,13 @@ def _extract_and_verify_uns_metadata(
         for key in required_keys:
             if key not in adata.uns:
                 # Provide sensible defaults for non-DINO feature types (e.g., CellProfiler)
-                default = "cell" if key == "cell_type" else "unknown"
+                # and for legacy AnnData that predates the guide_col convention.
+                if key == "cell_type":
+                    default = "cell"
+                elif key == "guide_col":
+                    default = DEFAULT_GUIDE_COL
+                else:
+                    default = "unknown"
                 adata.uns[key] = default
             metadata_values[key].append((source, adata.uns[key]))
 
@@ -592,8 +612,9 @@ def aggregate_to_level(
     """
     # Determine grouping column
     # Use perturbation instead of label_str for gene level (validator requirement)
+    guide_col = _guide_col(adata)
     if level == "guide":
-        group_col = "sgRNA"
+        group_col = guide_col
     else:  # gene level
         group_col = "perturbation"
         # Backwards compatibility: fall back to label_str if perturbation not found
@@ -620,10 +641,10 @@ def aggregate_to_level(
 
     # Handle control gene subsampling if requested
     if subsample_controls and level == "gene":
-        # Validate that sgRNA column exists (needed for grouping guides)
-        if "sgRNA" not in adata.obs.columns:
+        # Validate that the guide column exists (needed for grouping guides)
+        if guide_col not in adata.obs.columns:
             raise ValueError(
-                "Control subsampling requires 'sgRNA' column in adata.obs. "
+                f"Control subsampling requires {guide_col!r} column in adata.obs. "
                 "Cannot group guides without guide identifiers."
             )
 
@@ -647,7 +668,7 @@ def aggregate_to_level(
 
         # Get all unique guides for the control gene
         control_mask = adata.obs[gene_col] == control_gene
-        control_guides = adata.obs.loc[control_mask, "sgRNA"].unique()
+        control_guides = adata.obs.loc[control_mask, guide_col].unique()
         n_control_guides = len(control_guides)
 
         print(
@@ -678,7 +699,7 @@ def aggregate_to_level(
         # Remap control gene cells to their group labels
         def remap_label(row):
             if row[gene_col] == control_gene:
-                return guide_to_group[row["sgRNA"]]
+                return guide_to_group[row[guide_col]]
             return row[gene_col]
 
         adata.obs[gene_col] = adata.obs.apply(remap_label, axis=1)
@@ -804,8 +825,10 @@ def aggregate_to_level(
             n_cells_per_group.append(len(indices_array))
 
         # Track guides per gene if aggregating to gene level (validator requirement)
-        if level == "gene" and "sgRNA" in adata.obs.columns:
-            guides_in_group = adata.obs.iloc[indices_array]["sgRNA"].unique().tolist()
+        if level == "gene" and guide_col in adata.obs.columns:
+            guides_in_group = (
+                adata.obs.iloc[indices_array][guide_col].unique().tolist()
+            )
             guides_per_gene.append(guides_in_group)
 
         # Track experiments per gene if aggregating to gene level (validator requirement)
@@ -1046,6 +1069,7 @@ def aggregate_to_level(
         for key in [
             "cell_type",
             "embedding_type",
+            "guide_col",
             "channel",
             "channel_mapping",
             "per_experiment_mode",
@@ -1789,7 +1813,10 @@ def concatenate_features_by_channel(
 
     # Find common genes/guides across all sources
     print(f"\nFinding common {aggregation_level}s across sources...")
-    label_key = "sgRNA" if aggregation_level == "guide" else "label_str"
+    first_src = next(iter(adata_by_source.values()))
+    label_key = (
+        _guide_col(first_src) if aggregation_level == "guide" else "label_str"
+    )
 
     gene_sets = [set(adata.obs[label_key]) for adata in adata_by_source.values()]
     common_genes = set.intersection(*gene_sets)
@@ -2028,7 +2055,7 @@ def _handle_per_experiment_observations(
     ad.AnnData
         Data with experiment column, optionally filtered to shared observations
     """
-    label_col = "sgRNA" if level == "guide" else "label_str"
+    label_col = _guide_col(adata_concat) if level == "guide" else "label_str"
 
     # Ensure experiment column exists
     if "experiment" not in adata_concat.obs.columns:
@@ -2082,6 +2109,7 @@ def _handle_per_experiment_observations(
     adata_concat.uns["n_experiments"] = adata_concat.obs["experiment"].nunique()
     adata_concat.uns["cell_type"] = verified_uns["cell_type"]
     adata_concat.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_concat.uns["guide_col"] = verified_uns["guide_col"]
 
     # Store vertical aggregation metadata (similar to pooled mode but without pooling)
     adata_concat.uns["vertical_metadata"] = {
@@ -2135,7 +2163,7 @@ def _handle_per_well_observations(
         Data with one row per (guide/gene, well, experiment), optionally filtered
         to shared (guide/gene, well) pairs.
     """
-    label_col = "sgRNA" if level == "guide" else "label_str"
+    label_col = _guide_col(adata_concat) if level == "guide" else "label_str"
 
     for col in ["well", "experiment"]:
         if col not in adata_concat.obs.columns:
@@ -2170,6 +2198,7 @@ def _handle_per_well_observations(
     adata_concat.uns["n_experiments"] = adata_concat.obs["experiment"].nunique()
     adata_concat.uns["cell_type"] = verified_uns["cell_type"]
     adata_concat.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_concat.uns["guide_col"] = verified_uns["guide_col"]
     adata_concat.uns["vertical_metadata"] = {
         "experiments": list(cell_counts.keys()),
         "cell_counts_per_experiment": cell_counts,
@@ -2249,7 +2278,7 @@ def _combine_duplicate_observations(
         )
 
     # Original pooling logic continues below
-    label_key = "sgRNA" if level == "guide" else "label_str"
+    label_key = _guide_col(adata_concat) if level == "guide" else "label_str"
 
     if verbose:
         print(f"    Combining duplicate {level}s across experiments...")
@@ -2372,6 +2401,7 @@ def _combine_duplicate_observations(
     # Add back verified metadata to the new AnnData object
     adata_pooled.uns["cell_type"] = verified_uns["cell_type"]
     adata_pooled.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_pooled.uns["guide_col"] = verified_uns["guide_col"]
 
     if verbose:
         print(f"      Combined to {len(adata_pooled)} unique {level}s")
@@ -2511,7 +2541,9 @@ def _process_vertical_group(
                     adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
                 # Compute real n_cells from cell-level file (backed mode — no X loaded)
                 if "n_cells" not in adata_agg.obs.columns:
-                    group_col = "sgRNA" if target_level == "guide" else "label_str"
+                    group_col = (
+                        _guide_col(adata_agg) if target_level == "guide" else "label_str"
+                    )
                     counts = _get_n_cells_from_cell_file(
                         anndata_dir, channel, target_level, verbose
                     )
@@ -2710,6 +2742,7 @@ def _process_vertical_group(
     # Restore verified metadata to adata_concat (ad.concat only keeps .uns from first object)
     adata_concat.uns["cell_type"] = verified_uns["cell_type"]
     adata_concat.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_concat.uns["guide_col"] = verified_uns["guide_col"]
 
     if verbose:
         print(f"      Concatenated: {adata_concat.shape}")
@@ -2754,6 +2787,7 @@ def _process_vertical_group(
     # _combine_duplicate_observations creates a new AnnData, so we need to add this back
     adata_pooled.uns["cell_type"] = verified_uns["cell_type"]
     adata_pooled.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_pooled.uns["guide_col"] = verified_uns["guide_col"]
 
     return adata_pooled
 
@@ -2864,7 +2898,9 @@ def _process_horizontal_group(
                 adata_agg.obs["perturbation"] = adata_agg.obs["label_str"]
             # Compute real n_cells from cell-level file (backed mode — no X loaded)
             if "n_cells" not in adata_agg.obs.columns:
-                group_col = "sgRNA" if target_level == "guide" else "label_str"
+                group_col = (
+                    _guide_col(adata_agg) if target_level == "guide" else "label_str"
+                )
                 counts = _get_n_cells_from_cell_file(
                     anndata_dir, channel, target_level, verbose
                 )
@@ -3076,7 +3112,10 @@ def _align_biological_groups(
     List[str]
         Sorted list of common observation IDs (genes or guides)
     """
-    label_key = "sgRNA" if target_level == "guide" else "label_str"
+    first_adata = next(iter(group_adatas.values()))
+    label_key = (
+        _guide_col(first_adata) if target_level == "guide" else "label_str"
+    )
 
     if verbose:
         print(f"\nAligning {target_level}s across biological groups (join={join})...")
@@ -3148,7 +3187,10 @@ def _concatenate_horizontal(
     ad.AnnData
         Combined AnnData with horizontally concatenated features
     """
-    label_key = "sgRNA" if target_level == "guide" else "label_str"
+    first_adata = next(iter(group_adatas.values()))
+    label_key = (
+        _guide_col(first_adata) if target_level == "guide" else "label_str"
+    )
 
     if verbose:
         print(f"\nHorizontally concatenating features...")
@@ -3276,6 +3318,7 @@ def _concatenate_horizontal(
     # Add verified metadata to horizontally concatenated object
     adata_combined.uns["cell_type"] = verified_uns["cell_type"]
     adata_combined.uns["embedding_type"] = verified_uns["embedding_type"]
+    adata_combined.uns["guide_col"] = verified_uns["guide_col"]
 
     return adata_combined
 
@@ -4310,26 +4353,29 @@ def main():
 def hconcat_by_perturbation(
     blocks: List[ad.AnnData], level: str = "guide"
 ) -> ad.AnnData:
-    """Horizontally concatenate AnnData blocks by matching on perturbation/sgRNA key.
+    """Horizontally concatenate AnnData blocks by matching on perturbation/guide key.
 
-    Aligns observations across blocks using the perturbation key (sgRNA for guide,
-    perturbation otherwise), then stacks features (columns) side-by-side.
+    Aligns observations across blocks using the per-construct identifier
+    (resolved via uns["guide_col"] for guide level, falling back to "sgRNA";
+    "perturbation" otherwise), then stacks features (columns) side-by-side.
 
     Parameters
     ----------
     blocks : list of AnnData
         AnnData objects to concatenate horizontally. Must share the same
-        perturbation/sgRNA observations.
+        per-construct observations.
     level : str
-        "guide" uses sgRNA as the join key, otherwise uses perturbation.
+        "guide" joins on the per-construct identifier; otherwise on
+        "perturbation".
 
     Returns
     -------
     AnnData with horizontally concatenated features and unique var names.
     """
+    guide_col_name = _guide_col(blocks[0])
     key = (
-        "sgRNA"
-        if level == "guide" and "sgRNA" in blocks[0].obs.columns
+        guide_col_name
+        if level == "guide" and guide_col_name in blocks[0].obs.columns
         else "perturbation"
     )
     common = set(blocks[0].obs[key].values)
