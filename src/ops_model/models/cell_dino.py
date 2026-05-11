@@ -109,6 +109,7 @@ def extract_cell_dino_features(
         final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
         link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
+        guide_col=config.get("guide_col", "sgRNA"),
     )
     dm.construct_dataloaders(
         labels_df=labels_df,
@@ -147,6 +148,7 @@ def extract_cell_dino_features(
     save_every = 100  # Save every N batches
     all_features = []
     chunk_idx = 0
+    guide_col = dm.guide_col
 
     # Extract features from all batches
     for batch_idx, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
@@ -161,7 +163,7 @@ def extract_cell_dino_features(
         features_db["label_str"] = [
             dm.int_label_lut[label] for label in batch["gene_label"].numpy()
         ]
-        features_db["sgRNA"] = [a["sgRNA"] for a in batch["crop_info"]]
+        features_db[guide_col] = [a[guide_col] for a in batch["crop_info"]]
         features_db["experiment"] = [a["store_key"] for a in batch["crop_info"]]
         features_db["x_position"] = [a["x_pheno"] for a in batch["crop_info"]]
         features_db["y_position"] = [a["y_pheno"] for a in batch["crop_info"]]

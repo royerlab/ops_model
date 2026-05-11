@@ -284,6 +284,7 @@ def create_subset(
     experiment_dict,
     bounds: list[int],
     out_channels: list[str] = None,
+    guide_col: str = "sgRNA",
 ):
     """
     Create a dataset subset for the specified index range.
@@ -292,6 +293,9 @@ def create_subset(
         experiment_dict: Dictionary mapping experiment names to FOV lists
         bounds: [start, end] index range
         out_channels: List of channel names (default: ["Phase2D", "mCherry"])
+        guide_col: Name of the per-construct identifier column in the link CSV
+            (default: "sgRNA"; e.g. "minibinder_perturbation" for minibinder
+            experiments)
 
     Returns:
         Tuple of (Subset dataset, label lookup table)
@@ -306,6 +310,7 @@ def create_subset(
         out_channels=out_channels,
         initial_yx_patch_size=(256, 256),
         verbose=False,
+        guide_col=guide_col,
     )
 
     data_manager.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
@@ -321,6 +326,7 @@ def extract_cp_features(
     experiment_dict: dict,
     bounds: list[int],
     out_channels: list[str] = None,
+    guide_col: str = "sgRNA",
 ):
     """
     Extract CellProfiler features for a subset of the dataset.
@@ -329,6 +335,8 @@ def extract_cp_features(
         experiment_dict: Dictionary mapping experiment names to FOV lists
         bounds: [start, end] index range to process
         out_channels: List of channel names (default: ["Phase2D", "mCherry"])
+        guide_col: Name of the per-construct identifier column to extract from
+            crop_info (default: "sgRNA").
 
     Returns:
         pd.DataFrame: DataFrame with extracted features and metadata
@@ -340,7 +348,9 @@ def extract_cp_features(
     shape_features_fcn = object_measurements.pop("sizeshape")
     colocalization_measurements = get_correlation_measurements()
 
-    subset, int_label_lut = create_subset(experiment_dict, bounds, out_channels)
+    subset, int_label_lut = create_subset(
+        experiment_dict, bounds, out_channels, guide_col=guide_col
+    )
 
     # Pre-define channel and mask metadata
     # Create indexed channel list: [(channel_name, index), ...]
@@ -428,7 +438,7 @@ def extract_cp_features(
 
         cell_features["label_int"] = int(batch["gene_label"])
         cell_features["label_str"] = int_label_lut[batch["gene_label"]]
-        cell_features["sgRNA"] = batch["crop_info"]["sgRNA"]
+        cell_features[guide_col] = batch["crop_info"][guide_col]
         cell_features["experiment"] = batch["crop_info"]["store_key"]
         cell_features["x_position"] = batch["crop_info"]["x_pheno"]
         cell_features["y_position"] = batch["crop_info"]["y_pheno"]
@@ -480,7 +490,8 @@ def load_labels_parallel(experiment_dict: dict) -> pd.DataFrame:
 
 
 def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels,
-                 gran_queue=None, result_store=None, result_lock=None):
+                 gran_queue=None, result_store=None, result_lock=None,
+                 guide_col: str = "sgRNA"):
     """Pool initializer: store shared data and open per-process zarr handles.
 
     CPU-only: no CUDA contexts. GPU granularity goes through gran_queue
@@ -502,6 +513,7 @@ def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_c
         out_channels=out_channels,
         label_int_lut=label_int_lut,
         int_label_lut=int_label_lut,
+        guide_col=guide_col,
     )
     _worker_state["int_label_lut"] = int_label_lut
     _worker_state["out_channels"] = out_channels
@@ -510,17 +522,18 @@ def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_c
     _worker_state["result_lock"] = result_lock
 
 
-def _process_cell_range(bounds):
-    """Worker function: extract features for a range of cells using shared state."""
+def _process_cell_range(indices: list[int]):
+    """Worker function: extract features for a list of dataset indices using shared state."""
     import os as _os
     _pid = _os.getpid()
     _t0 = time.perf_counter()
     dataset = _worker_state["dataset"]
     int_label_lut = _worker_state["int_label_lut"]
     out_channels = _worker_state["out_channels"]
+    guide_col = dataset.guide_col
 
-    n_cells = bounds[1] - bounds[0]
-    subset = Subset(dataset, list(range(bounds[0], bounds[1])))
+    n_cells = len(indices)
+    subset = Subset(dataset, indices)
 
     object_measurements = get_core_measurements()
     shape_features_fcn = object_measurements.pop("sizeshape")
@@ -628,7 +641,7 @@ def _process_cell_range(bounds):
 
         cell_features["label_int"] = int(batch["gene_label"])
         cell_features["label_str"] = int_label_lut[batch["gene_label"]]
-        cell_features["sgRNA"] = batch["crop_info"]["sgRNA"]
+        cell_features[guide_col] = batch["crop_info"][guide_col]
         cell_features["experiment"] = batch["crop_info"]["store_key"]
         cell_features["x_position"] = batch["crop_info"]["x_pheno"]
         cell_features["y_position"] = batch["crop_info"]["y_pheno"]
@@ -671,10 +684,11 @@ def _process_cell_range(bounds):
 
 def extract_cp_features_parallel(
     experiment_dict: dict,
-    bounds: list[int],
+    indices: list[int],
     out_channels: list[str] = None,
     num_workers: int = None,
     labels_df=None,
+    guide_col: str = "sgRNA",
 ):
     """
     Extract CellProfiler features using multiprocessing.Pool with shared state.
@@ -686,9 +700,10 @@ def extract_cp_features_parallel(
 
     Args:
         experiment_dict: Dictionary mapping experiment names to FOV lists
-        bounds: [start, end] index range to process
+        indices: List of dataset indices to process (may be non-contiguous)
         out_channels: List of channel names
         num_workers: Number of worker processes (default: CPUs × 1.5)
+        guide_col: Name of the per-construct identifier column (default: "sgRNA").
 
     Returns:
         pd.DataFrame with extracted features
@@ -708,6 +723,7 @@ def extract_cp_features_parallel(
             out_channels=out_channels,
             initial_yx_patch_size=(256, 256),
             verbose=False,
+            guide_col=guide_col,
         )
         dm.construct_dataloaders(num_workers=0, dataset_type="cell_profile")
         labels_df = dm.train_loader.dataset.labels_df
@@ -719,13 +735,12 @@ def extract_cp_features_parallel(
         label_int_lut = {gene: i for i, gene in enumerate(gene_labels)}
         int_label_lut = {i: gene for i, gene in enumerate(gene_labels)}
 
-    # Split bounds into sub-ranges
-    total = bounds[1] - bounds[0]
-    chunk = math.ceil(total / num_workers)
-    sub_bounds = [
-        [bounds[0] + i * chunk, min(bounds[0] + (i + 1) * chunk, bounds[1])]
+    # Split index list evenly across workers
+    chunk = math.ceil(len(indices) / num_workers)
+    sub_indices = [
+        indices[i * chunk : (i + 1) * chunk]
         for i in range(num_workers)
-        if bounds[0] + i * chunk < bounds[1]
+        if i * chunk < len(indices)
     ]
 
     # Start GPU workers for granularity (shared queue, separate CUDA contexts)
@@ -735,12 +750,12 @@ def extract_cp_features_parallel(
 
     # CPU workers: no CUDA contexts, submit granularity to GPU workers via queue
     with Pool(
-        processes=len(sub_bounds),
+        processes=len(sub_indices),
         initializer=_init_worker,
         initargs=(labels_df, label_int_lut, int_label_lut, experiment_dict, out_channels,
-                  gran_queue, result_store, result_lock),
+                  gran_queue, result_store, result_lock, guide_col),
     ) as pool:
-        dfs = pool.map(_process_cell_range, sub_bounds)
+        dfs = pool.map(_process_cell_range, sub_indices)
 
     # Shut down GPU workers
     stop_gpu_workers(gpu_procs, gran_queue)
@@ -857,6 +872,7 @@ def _process_single_cell_cached(idx):
     int_label_lut = _worker_state["int_label_lut"]
     chunk_size = _worker_state["chunk_size"]
     cell_masks_flag = _worker_state["cell_masks"]
+    guide_col = _worker_state.get("guide_col", "sgRNA")
 
     obj_meas = _worker_state["object_measurements"]
     shape_fn = _worker_state["shape_features_fcn"]
@@ -928,7 +944,7 @@ def _process_single_cell_cached(idx):
 
     cell_features["label_int"] = int(label_int_lut[ci.gene_name])
     cell_features["label_str"] = int_label_lut[label_int_lut[ci.gene_name]]
-    cell_features["sgRNA"] = crop_info["sgRNA"]
+    cell_features[guide_col] = crop_info[guide_col]
     cell_features["experiment"] = crop_info["store_key"]
     cell_features["x_position"] = crop_info["x_pheno"]
     cell_features["y_position"] = crop_info["y_pheno"]
@@ -942,6 +958,7 @@ def extract_cp_features_bulk_read(
     out_channels: list[str] = None,
     num_workers: int = None,
     labels_df=None,
+    guide_col: str = "sgRNA",
 ):
     """
     Bulk-read architecture: read all needed zarr chunks into RAM, then compute.
@@ -1023,6 +1040,7 @@ def extract_cp_features_bulk_read(
     _worker_state["int_label_lut"] = int_label_lut
     _worker_state["chunk_size"] = chunk_size
     _worker_state["cell_masks"] = True  # match CellProfileDataset default
+    _worker_state["guide_col"] = guide_col
 
     # Phase 2: Compute with dynamic load balancing (zero I/O)
     # imap_unordered with chunksize=64: workers grab batches of 64 cells.

@@ -71,6 +71,8 @@ def _build_slurm_setup(num_threads: int = 2) -> list[str]:
         "export ZARR__THREADING__MAX_WORKERS=1",
         "export ZARR__ASYNC__CONCURRENCY=1",
         "export SLURM_CPU_BIND=none",
+        'export CUPY_CACHE_DIR=/tmp/cupy_cache_${SLURM_JOB_ID:-$$}',
+        'export CUDA_CACHE_PATH=/tmp/cuda_cache_${SLURM_JOB_ID:-$$}',
     ]
     for var in _OPS_ENV_VARS:
         val = os.environ.get(var)
@@ -136,6 +138,8 @@ def cp_features_worker_fcn(
     csv_source: str = None,
     filename_template: str = None,
     base_path: str = None,
+    indices: list[int] = None,
+    guide_col: str = "sgRNA",
 ):
     """
     Worker function for distributed CP feature extraction using submitit.
@@ -158,13 +162,13 @@ def cp_features_worker_fcn(
     import time
 
     t0 = time.perf_counter()
-    total_cells = bounds[1] - bounds[0]
+    resolved_indices = indices if indices is not None else list(range(bounds[0], bounds[1]))
+    total_cells = len(resolved_indices)
     # 30 workers — CuPy pool capped at 1GB/worker in _init_worker
     num_workers = max(1, len(os.sched_getaffinity(0)) - 2)
 
     print(
-        f"Job {job_id}: Processing {total_cells} cells [{bounds[0]}:{bounds[1]}] "
-        f"with {num_workers} workers"
+        f"Job {job_id}: Processing {total_cells} cells with {num_workers} workers"
     )
 
     labels_df = None
@@ -177,10 +181,11 @@ def cp_features_worker_fcn(
 
     results_df = extract_cp_features_parallel(
         experiment_dict=experiment_dict,
-        bounds=bounds,
+        indices=resolved_indices,
         out_channels=out_channels,
         num_workers=num_workers,
         labels_df=labels_df,
+        guide_col=guide_col,
     )
 
     # Create output directory if it doesn't exist
@@ -339,6 +344,7 @@ def cp_features_main(
         initial_yx_patch_size=tuple(config["data_manager"]["initial_yx_patch_size"]),
         link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
+        guide_col=config.get("guide_col", "sgRNA"),
     )
     data_manager.construct_dataloaders(labels_df=labels_df, num_workers=0, dataset_type="cell_profile")
     total_size = len(data_manager.train_loader.dataset)
@@ -376,6 +382,7 @@ def cp_features_main(
 
     # Extract channel names from config
     out_channels = config["data_manager"]["out_channels"]
+    guide_col = config.get("guide_col", "sgRNA")
 
     # Submit as single array job using map_array
     array_jobs = executor.map_array(
@@ -388,6 +395,8 @@ def cp_features_main(
         [csv_source] * num_jobs,
         [filename_template] * num_jobs,
         [base_path] * num_jobs,
+        [None] * num_jobs,  # indices (default)
+        [guide_col] * num_jobs,
     )
 
     # Get the array job ID (all tasks share the same base job_id)

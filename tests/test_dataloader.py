@@ -94,46 +94,93 @@ def test_batch_keys_basic(basic_batch):
 
 
 # ============================================================================
-# normalize_link_csv tests
+# guide_col plumbing tests
 # ============================================================================
 
 
-def test_normalize_link_csv_passthrough():
-    """Canonical column names pass through unchanged."""
-    df = pd.DataFrame(
-        {"gene_name": ["GENE_A"], "sgRNA": ["GENE_A_sg1"], "bbox": ["[0,0,10,10]"]}
+def test_default_guide_col():
+    """DEFAULT_GUIDE_COL is 'sgRNA' so legacy callers keep working."""
+    assert data_loader.DEFAULT_GUIDE_COL == "sgRNA"
+
+
+def test_ops_data_manager_stores_guide_col():
+    """OpsDataManager records the configured guide_col on the instance."""
+    dm = data_loader.OpsDataManager(
+        experiments={"ops0031_20250424": ["A/1/0"]},
+        guide_col="minibinder_perturbation",
     )
-    result = data_loader.normalize_link_csv(df)
-    assert list(result.columns) == list(df.columns)
-    pd.testing.assert_frame_equal(result, df)
+    assert dm.guide_col == "minibinder_perturbation"
 
 
-def test_normalize_link_csv_minibinder():
-    """New-style minibinder columns are renamed to canonical names."""
+def test_ops_data_manager_default_guide_col():
+    """Omitting guide_col defaults to 'sgRNA'."""
+    dm = data_loader.OpsDataManager(experiments={"ops0031_20250424": ["A/1/0"]})
+    assert dm.guide_col == "sgRNA"
+
+
+def test_base_dataset_stores_guide_col():
+    """BaseDataset captures guide_col on the instance for feature extractors to read."""
     df = pd.DataFrame(
         {
             "minibinder_perturbation": ["mb_001"],
-            "AA_sequence": ["MASTK..."],
-            "gene_target": ["EGFR"],
+            "gene_name": ["EGFR"],
+            "bbox": ["[0,0,10,10]"],
         }
     )
-    result = data_loader.normalize_link_csv(df)
-    assert "gene_name" in result.columns
-    assert "sgRNA" in result.columns
-    assert "minibinder_perturbation" not in result.columns
-    assert "AA_sequence" not in result.columns
-    # gene_target has no alias — should remain intact
-    assert "gene_target" in result.columns
-
-
-def test_normalize_link_csv_unknown_columns_untouched():
-    """Columns absent from COLUMN_ALIASES are left intact."""
-    df = pd.DataFrame(
-        {"some_new_col": [1, 2], "minibinder_perturbation": ["mb_001", "mb_002"]}
+    ds = data_loader.BaseDataset(
+        stores={}, labels_df=df, guide_col="minibinder_perturbation"
     )
-    result = data_loader.normalize_link_csv(df)
-    assert "some_new_col" in result.columns
-    assert "gene_name" in result.columns
+    assert ds.guide_col == "minibinder_perturbation"
+
+
+def test_get_labels_minibinder_fallback(tmp_path):
+    """When the link CSV is minibinder-style (no gene_name column), get_labels
+    copies minibinder_perturbation into gene_name so the downstream gene_name
+    flow keeps working."""
+    df = pd.DataFrame(
+        {
+            "minibinder_perturbation": ["mb_001", "mb_002"],
+            "AA_sequence": ["MASTK...", "ABCDE..."],
+            "gene_target": ["EGFR", "BRCA1"],
+            "segmentation_id": [1, 2],
+            "bbox": ["[0,0,10,10]", "[20,20,30,30]"],
+        }
+    )
+    csv_path = tmp_path / "A1_linked_pheno_iss.csv"
+    df.to_csv(csv_path, index=False)
+    dm = data_loader.OpsDataManager(
+        experiments={"ops_test": ["A/1/0"]},
+        link_csv_dir=str(tmp_path),
+        guide_col="minibinder_perturbation",
+    )
+    labels = dm.get_labels()
+    # The guide column is preserved with its original name (not aliased).
+    assert "minibinder_perturbation" in labels.columns
+    assert "sgRNA" not in labels.columns
+    # gene_name has been copied from minibinder_perturbation.
+    assert "gene_name" in labels.columns
+    assert list(labels["gene_name"]) == ["mb_001", "mb_002"]
+
+
+def test_get_labels_fails_loudly_when_guide_col_missing(tmp_path):
+    """If the configured guide_col is not in the link CSV, get_labels raises
+    immediately rather than letting NaNs propagate downstream."""
+    df = pd.DataFrame(
+        {
+            "minibinder_perturbation": ["mb_001"],
+            "segmentation_id": [1],
+            "bbox": ["[0,0,10,10]"],
+        }
+    )
+    csv_path = tmp_path / "A1_linked_pheno_iss.csv"
+    df.to_csv(csv_path, index=False)
+    dm = data_loader.OpsDataManager(
+        experiments={"ops_test": ["A/1/0"]},
+        link_csv_dir=str(tmp_path),
+        guide_col="sgRNA",  # but the CSV doesn't have sgRNA
+    )
+    with pytest.raises(ValueError, match=r"guide_col 'sgRNA' not in link CSV"):
+        dm.get_labels()
 
 
 def test_get_labels_gene_name_column_present(basic_data_manager):

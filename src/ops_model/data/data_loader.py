@@ -37,18 +37,10 @@ import warnings
 
 warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
 
-# Maps experiment-specific column names → canonical internal names.
-# Add new entries here to support additional experiment types.
-COLUMN_ALIASES: dict[str, str] = {
-    "minibinder_perturbation": "gene_name",  # minibinder experiments
-    "AA_sequence": "sgRNA",  # minibinder experiments
-}
-
-
-def normalize_link_csv(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename experiment-specific column variants to canonical names."""
-    rename = {src: dst for src, dst in COLUMN_ALIASES.items() if src in df.columns}
-    return df.rename(columns=rename)
+# Default name of the per-construct identifier column in adata.obs.
+# Override per experiment via OpsDataManager(guide_col=...) (e.g.
+# "minibinder_perturbation" for minibinder experiments).
+DEFAULT_GUIDE_COL = "sgRNA"
 
 
 class BaseDataset(Dataset):
@@ -64,6 +56,7 @@ class BaseDataset(Dataset):
         int_label_lut: dict = None,  # int --> string
         cell_masks: bool = True,
         transform: Optional[Callable] = None,
+        guide_col: str = DEFAULT_GUIDE_COL,
     ):
         self.stores = stores
         self.labels_df = labels_df
@@ -73,6 +66,7 @@ class BaseDataset(Dataset):
         self.label_int_lut = label_int_lut
         self.int_label_lut = int_label_lut
         self.cell_masks = cell_masks
+        self.guide_col = guide_col
 
         if transform is None:
             self.transform = Compose(
@@ -492,6 +486,7 @@ class OpsDataManager:
         out_channels: List[str] | Literal["random"] = "random",
         verbose: bool = False,
         link_csv_dir: str | None = None,
+        guide_col: str = DEFAULT_GUIDE_COL,
     ):
         self.experiments = experiments
         self.data_split = data_split
@@ -506,6 +501,7 @@ class OpsDataManager:
         self.link_csv_dir = Path(link_csv_dir) if link_csv_dir is not None else None
         if self.link_csv_dir is not None and len(self.experiments) > 1:
             raise ValueError("link_csv_dir can only be used with a single experiment")
+        self.guide_col = guide_col
 
         self.train_loader = None
         self.val_loader = None
@@ -537,10 +533,29 @@ class OpsDataManager:
                     well_prefix = w[0] + w[2]
                     csv_path = self.link_csv_dir / f"{well_prefix}_linked_pheno_iss.csv"
                 else:
-                    csv_path = OpsPaths(exp_name, well=w).links["training"]
+                    csv_path = OpsPaths(exp_name, well=w).links["original"]
                 print(f"Reading link CSV from {csv_path}")
                 labels_tmp = pd.read_csv(csv_path)
-                labels_tmp = normalize_link_csv(labels_tmp)
+
+                # Minibinder back-compat: link CSVs from minibinder experiments
+                # don't have a "gene_name" column. Copy minibinder_perturbation
+                # into gene_name so downstream gene_name-aware code (e.g. the
+                # balanced-sampling and gene-label LUT helpers) keeps working.
+                # Follow-up: minibinder gene-level should ultimately use
+                # gene_target, not the construct id — tracked separately.
+                if (
+                    "gene_name" not in labels_tmp.columns
+                    and "Gene name" not in labels_tmp.columns
+                    and "minibinder_perturbation" in labels_tmp.columns
+                ):
+                    labels_tmp["gene_name"] = labels_tmp["minibinder_perturbation"]
+
+                if self.guide_col not in labels_tmp.columns:
+                    raise ValueError(
+                        f"guide_col {self.guide_col!r} not in link CSV "
+                        f"{csv_path}. Available columns: "
+                        f"{list(labels_tmp.columns)}"
+                    )
 
                 # remove rows with NaN segmentation_id
                 labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
@@ -642,6 +657,7 @@ class OpsDataManager:
             "out_channels": self.out_channels,
             "label_int_lut": self.label_int_lut,
             "int_label_lut": self.int_label_lut,
+            "guide_col": self.guide_col,
         }
 
         if dataset_type == "basic":

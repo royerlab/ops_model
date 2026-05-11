@@ -33,6 +33,7 @@ class CytoselfPredictionWriter(BasePredictionWriter):
         output_dir: str,
         write_interval,
         int_label_lut: dict,
+        guide_col: str = "sgRNA",
     ):
         super().__init__(write_interval)
         self.output_dir = Path(output_dir)
@@ -40,6 +41,7 @@ class CytoselfPredictionWriter(BasePredictionWriter):
         self.low_count = 0
         self.metadata = {}
         self.int_label_lut = int_label_lut
+        self.guide_col = guide_col
 
     def setup(self, trainer, pl_module, stage):
         if stage == "predict":
@@ -104,7 +106,7 @@ class CytoselfPredictionWriter(BasePredictionWriter):
                     self.int_label_lut[label]
                     for label in batch["gene_label"].cpu().numpy()
                 ],
-                "sgRNA": [a["sgRNA"] for a in batch["crop_info"]],
+                self.guide_col: [a[self.guide_col] for a in batch["crop_info"]],
                 "experiment": [a["store_key"] for a in batch["crop_info"]],
                 "x_position": [a["x_pheno"] for a in batch["crop_info"]],
                 "y_position": [a["y_pheno"] for a in batch["crop_info"]],
