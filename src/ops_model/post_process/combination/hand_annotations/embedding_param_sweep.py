@@ -59,6 +59,134 @@ DEFAULT_RUN_DIR = (
     "cell_dino/zscore_per_exp/paper_v1/all/fixed_80%/cosine/second_pca_consensus"
 )
 
+# Hand-annotated leiden clusters used to color the sweep panels and gauge
+# how well a parameter regime separates real biology. Two flavours match the
+# two embedding trees produced by pca_optimization.
+DEFAULT_CLUSTER_ANNOTATIONS_LIVECELL = (
+    Path(__file__).resolve().parent / "hand_annotated_cluster.txt"
+)
+DEFAULT_CLUSTER_ANNOTATIONS_WITHCP4I = (
+    Path(__file__).resolve().parent / "hand_annotated_cluster_withcp4i.txt"
+)
+
+
+# ---------------------------------------------------------------------------
+# Cluster-annotation parsing + coloring helpers
+# (mirrors gene_best_marker_assignment so the two visualizations stay
+# pixel-comparable across scripts).
+# ---------------------------------------------------------------------------
+
+
+def _parse_hand_annotated_clusters(path: Path) -> Dict[str, List[str]]:
+    """Parse a hand_annotated_cluster.txt file → {cluster_name: [gene, ...]}."""
+    out: Dict[str, List[str]] = {}
+    name: Optional[str] = None
+    genes: List[str] = []
+
+    def _flush() -> None:
+        nonlocal name, genes
+        if name and genes:
+            out[name] = list(genes)
+        name = None
+        genes = []
+
+    for raw in Path(path).read_text().splitlines():
+        s = raw.strip()
+        if not s:
+            _flush()
+            continue
+        if s.startswith("#"):
+            continue
+        if s.endswith(":"):
+            _flush()
+            name = s.rstrip(":").strip()
+            continue
+        if name is not None:
+            genes.append(s)
+    _flush()
+    return out
+
+
+def _build_cluster_color_map(
+    embed_genes: np.ndarray,
+    cluster_map: Dict[str, List[str]],
+    *,
+    ntc_prefix: str = "NTC",
+    palette_name: str = "tab20",
+):
+    """Return (rgba, cluster_colors, ntc_mask) aligned to ``embed_genes``.
+
+    rgba           : (N, 4) per-gene — cluster color at alpha 0.9, gray (0.30)
+                     for un-annotated, alpha 0 for NTC (drawn separately as ✕).
+    cluster_colors : {cluster_name → RGBA tuple} — exposed so the legend
+                     mirrors the panel coloring exactly.
+    ntc_mask       : bool array marking NTC genes (matched on ``ntc_prefix``).
+    """
+    import matplotlib
+
+    embed_genes = np.asarray(embed_genes)
+    cluster_names = list(cluster_map.keys())
+    cmap = matplotlib.colormaps.get_cmap(palette_name)
+    cluster_colors: Dict[str, tuple] = {
+        name: tuple(cmap(i % 20)) for i, name in enumerate(cluster_names)
+    }
+    gene_to_cluster: Dict[str, str] = {}
+    for nm, gs in cluster_map.items():
+        for g in gs:
+            gene_to_cluster.setdefault(str(g), nm)
+
+    n = len(embed_genes)
+    rgba = np.zeros((n, 4), dtype=np.float32)
+    rgba[:, :3] = 0.78
+    rgba[:, 3] = 0.30
+    ntc_mask = np.zeros(n, dtype=bool)
+    for i, g in enumerate(embed_genes):
+        gs = str(g)
+        if gs.startswith(ntc_prefix):
+            ntc_mask[i] = True
+            rgba[i, 3] = 0.0   # painted separately
+            continue
+        cl = gene_to_cluster.get(gs)
+        if cl is not None:
+            r, gc, b, _ = cluster_colors[cl]
+            rgba[i, :3] = (r, gc, b)
+            rgba[i, 3] = 0.90
+    return rgba, cluster_colors, ntc_mask
+
+
+def _save_cluster_color_legend(
+    cluster_colors: Dict[str, tuple],
+    out_path: Path, plt,
+    *,
+    ncol: int = 3,
+) -> None:
+    """One-off swatch reference: cluster name → color, in ``ncol`` columns."""
+    import matplotlib.patches as mpatches
+
+    items = list(cluster_colors.items())
+    n = len(items)
+    rows = (n + ncol - 1) // ncol
+    fig, ax = plt.subplots(figsize=(2.8 * ncol, 0.18 * rows + 0.8))
+    ax.axis("off")
+    handles = [
+        mpatches.Patch(facecolor=color, edgecolor="black",
+                       linewidth=0.3, label=name)
+        for name, color in items
+    ]
+    ax.legend(
+        handles=handles, loc="upper left", bbox_to_anchor=(0, 1),
+        ncol=ncol, fontsize=7, frameon=False,
+        handlelength=1.4, handleheight=1.2, labelspacing=0.4,
+        columnspacing=1.2,
+    )
+    fig.suptitle(
+        f"Hand-annotated cluster color legend ({n} clusters)",
+        fontsize=12, fontweight="bold", y=0.99,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
 
 # ---------------------------------------------------------------------------
 # Sweep workers
@@ -114,12 +242,24 @@ def _draw_grid(
     row_label: str, col_label: str,
     title: str, out_path: Path, plt,
     default_key: Optional[Tuple] = None,
+    cluster_data: Optional[Dict] = None,
 ) -> None:
+    """Draw the sweep canvas. When ``cluster_data`` is provided every panel
+    paints points colored by their hand-annotated cluster (gray for un-
+    annotated genes; red ✕ for NTCs) so the eye can compare cluster
+    separation across param combinations at a glance.
+
+    ``cluster_data`` keys (all required when set):
+        ``rgba``     — (n_pts, 4) per-point RGBA aligned to coords order
+        ``ntc_mask`` — bool (n_pts,) marking NTC genes
+    """
     nr, nc = len(row_vals), len(col_vals)
     fig, axes = plt.subplots(
         nr, nc, figsize=(3.2 * nc + 0.6, 3.2 * nr + 0.8),
         squeeze=False,
     )
+    rgba = cluster_data["rgba"] if cluster_data else None
+    ntc_mask = cluster_data["ntc_mask"] if cluster_data else None
     for i, rv in enumerate(row_vals):
         for j, cv in enumerate(col_vals):
             ax = axes[i, j]
@@ -131,10 +271,22 @@ def _draw_grid(
                 ax.text(0.5, 0.5, "—", transform=ax.transAxes,
                         ha="center", va="center", fontsize=28, color="#999")
             else:
-                ax.scatter(
-                    coords[:, 0], coords[:, 1],
-                    s=2, c="0.25", alpha=0.4, linewidths=0,
-                )
+                if rgba is not None and rgba.shape[0] == coords.shape[0]:
+                    ax.scatter(
+                        coords[:, 0], coords[:, 1],
+                        s=4, c=rgba, linewidths=0,
+                    )
+                    if ntc_mask is not None and ntc_mask.any():
+                        ax.scatter(
+                            coords[ntc_mask, 0], coords[ntc_mask, 1],
+                            marker="x", s=14, c="red", linewidths=0.8,
+                            alpha=0.55, zorder=4,
+                        )
+                else:
+                    ax.scatter(
+                        coords[:, 0], coords[:, 1],
+                        s=2, c="0.25", alpha=0.4, linewidths=0,
+                    )
                 ax.set_aspect("equal", adjustable="datalim")
             is_default = default_key is not None and (rv, cv) == default_key
             tile_title = f"{row_label}={rv}\n{col_label}={cv}"
@@ -235,12 +387,52 @@ def _process_level(
 ) -> None:
     X = clean_X_for_embedding(adata)
     n_obs = X.shape[0]
+    sub_idx: Optional[np.ndarray] = None
     if cfg["max_points"] and n_obs > cfg["max_points"]:
         rng = np.random.default_rng(cfg["random_seed"])
-        idx = rng.choice(n_obs, size=cfg["max_points"], replace=False)
-        X = X[idx]
+        sub_idx = rng.choice(n_obs, size=cfg["max_points"], replace=False)
+        X = X[sub_idx]
         _logger.info("  %s: subsampled %d -> %d obs", level, n_obs, X.shape[0])
     _logger.info("  %s: %d obs x %d features", level, X.shape[0], X.shape[1])
+
+    # Build cluster-color overlay if requested. Indices stay aligned to the
+    # post-subsample X order so every panel's scatter colors line up exactly.
+    cluster_data: Optional[Dict] = None
+    if cfg.get("cluster_annotations"):
+        cluster_path = Path(cfg["cluster_annotations"])
+        if not cluster_path.is_file():
+            _logger.warning(
+                "  %s: cluster annotations file missing — falling back to gray panels: %s",
+                level, cluster_path,
+            )
+        else:
+            gene_col = ("geneKO_name" if "geneKO_name" in adata.obs.columns
+                        else "perturbation")
+            embed_genes = adata.obs[gene_col].astype(str).values
+            if sub_idx is not None:
+                embed_genes = embed_genes[sub_idx]
+            cluster_map = _parse_hand_annotated_clusters(cluster_path)
+            rgba, cluster_colors, ntc_mask = _build_cluster_color_map(
+                embed_genes, cluster_map,
+            )
+            n_assigned = int(((rgba[:, 3] >= 0.85) & ~ntc_mask).sum())
+            _logger.info(
+                "  %s: cluster overlay enabled — %d/%d genes mapped to %d clusters "
+                "(plus %d NTC), source=%s",
+                level, n_assigned, len(embed_genes), len(cluster_colors),
+                int(ntc_mask.sum()), cluster_path.name,
+            )
+            cluster_data = {
+                "rgba": rgba,
+                "cluster_colors": cluster_colors,
+                "ntc_mask": ntc_mask,
+                "embed_genes": embed_genes,
+            }
+            # One-off legend reference dropped at the level it applies to
+            _save_cluster_color_legend(
+                cluster_colors,
+                plots_dir / f"{level}_cluster_color_legend.png", plt,
+            )
 
     specs = _build_specs(cfg, embedders)
     if not specs:
@@ -263,6 +455,7 @@ def _process_level(
             f"\nheld: metric={CANONICAL_UMAP['metric']}, spread={CANONICAL_UMAP['spread']}",
             plots_dir / f"{level}_umap_primary_sweep.png", plt,
             default_key=(CANONICAL_UMAP["n_neighbors"], CANONICAL_UMAP["min_dist"]),
+            cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_umap_primary_sweep.png", level)
     if "umap_secondary" in canvases:
@@ -274,6 +467,7 @@ def _process_level(
             f"min_dist={CANONICAL_UMAP['min_dist']}",
             plots_dir / f"{level}_umap_secondary_sweep.png", plt,
             default_key=(CANONICAL_UMAP["metric"], CANONICAL_UMAP["spread"]),
+            cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_umap_secondary_sweep.png", level)
     if "phate_primary" in canvases:
@@ -284,6 +478,7 @@ def _process_level(
             f"\nheld: t={CANONICAL_PHATE['t']}, gamma={CANONICAL_PHATE['gamma']}",
             plots_dir / f"{level}_phate_primary_sweep.png", plt,
             default_key=(CANONICAL_PHATE["knn"], CANONICAL_PHATE["decay"]),
+            cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_phate_primary_sweep.png", level)
     if "phate_secondary" in canvases:
@@ -294,6 +489,7 @@ def _process_level(
             f"\nheld: knn={CANONICAL_PHATE['knn']}, decay={CANONICAL_PHATE['decay']}",
             plots_dir / f"{level}_phate_secondary_sweep.png", plt,
             default_key=(CANONICAL_PHATE["t"], CANONICAL_PHATE["gamma"]),
+            cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_phate_secondary_sweep.png", level)
 
@@ -443,6 +639,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--random-seed", default=42, type=int)
     p.add_argument("--max-points", default=0, type=int,
                    help="0=use all; else random subsample to this many obs before fitting")
+    p.add_argument(
+        "--cluster-annotations", default=None, type=str,
+        help="Path to a hand_annotated_cluster.txt file. When provided, every "
+             "sweep panel paints points colored by their cluster + a red ✕ "
+             "overlay for NTC genes, plus a one-off cluster_color_legend.png "
+             "is saved per level. Default: auto-resolves to "
+             "hand_annotated_cluster_withcp4i.txt if --run-dir contains "
+             "with_cp/with_4i/, else hand_annotated_cluster.txt.",
+    )
+    p.add_argument(
+        "--no-cluster-overlay", action="store_true",
+        help="Skip the cluster color overlay even when the default annotation "
+             "file resolves (uniform-gray panels like the original sweep).",
+    )
 
     # SLURM (submission is the default; pass --local to run on the current node)
     p.add_argument("--local", action="store_true",
@@ -474,6 +684,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cfg_from_args(args: argparse.Namespace) -> Dict:
+    # Auto-resolve cluster annotations: if the run-dir path includes
+    # ``with_cp/with_4i`` use the joint flavour, else the live-cell-only one.
+    if args.no_cluster_overlay:
+        cluster_annotations: Optional[str] = None
+    elif args.cluster_annotations is not None:
+        cluster_annotations = args.cluster_annotations
+    else:
+        cluster_annotations = str(
+            DEFAULT_CLUSTER_ANNOTATIONS_WITHCP4I
+            if "with_cp/with_4i" in str(args.run_dir)
+            else DEFAULT_CLUSTER_ANNOTATIONS_LIVECELL
+        )
     return {
         "run_dir": args.run_dir,
         "levels": _parse_list(args.levels),
@@ -481,6 +703,7 @@ def _cfg_from_args(args: argparse.Namespace) -> Dict:
         "secondary": not args.no_secondary,
         "random_seed": args.random_seed,
         "max_points": args.max_points,
+        "cluster_annotations": cluster_annotations,
         "umap_n_neighbors": _parse_list(args.umap_n_neighbors, cast=int),
         "umap_min_dist": _parse_list(args.umap_min_dist, cast=float),
         "umap_metric_list": _parse_list(args.umap_metric_list),
