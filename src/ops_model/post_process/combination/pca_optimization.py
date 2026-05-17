@@ -502,6 +502,7 @@ def _save_sweep_outputs(
     metric_peaks: Optional[Dict] = None,
     preserve_batch: bool = False,
     output_suffix: str = "",
+    agg_method: str = "mean",
 ):
     """Build AnnData at peak PCs, save cell subsample, aggregate to guide/gene, write outputs.
 
@@ -509,6 +510,7 @@ def _save_sweep_outputs(
         drop_obs_cols: Columns to drop from obs before aggregation (e.g. ['experiment'] for copairs).
         preserve_batch: If True, aggregate preserving experiment identity in obs.
         output_suffix: Appended to file_prefix in all output filenames (e.g. '_batch', '_nopca').
+        agg_method: aggregation method for cells→guide/gene (default ``mean``).
     """
     X_reduced = X_pcs[:, :peak_n].astype(np.float32)
     pc_names = [f"{signal}_PC{j}" for j in range(peak_n)]
@@ -576,10 +578,10 @@ def _save_sweep_outputs(
         ]
 
     g = aggregate_to_level(
-        adata_cells, level="guide", method="mean", preserve_batch_info=preserve_batch
+        adata_cells, level="guide", method=agg_method, preserve_batch_info=preserve_batch
     )
     e = aggregate_to_level(
-        adata_cells, level="gene", method="mean", preserve_batch_info=preserve_batch
+        adata_cells, level="gene", method=agg_method, preserve_batch_info=preserve_batch
     )
     del adata_cells
     g.X = np.asarray(g.X, dtype=np.float32)
@@ -657,6 +659,7 @@ def _save_raw_outputs(
     drop_obs_cols: Optional[List[str]] = None,
     preserve_batch: bool = False,
     output_suffix: str = "",
+    agg_method: str = "mean",
 ) -> None:
     """Save cell, guide, and gene h5ads without PCA reduction.
 
@@ -693,10 +696,10 @@ def _save_raw_outputs(
         ]
 
     g = aggregate_to_level(
-        adata_cells, level="guide", method="mean", preserve_batch_info=preserve_batch
+        adata_cells, level="guide", method=agg_method, preserve_batch_info=preserve_batch
     )
     e = aggregate_to_level(
-        adata_cells, level="gene", method="mean", preserve_batch_info=preserve_batch
+        adata_cells, level="gene", method=agg_method, preserve_batch_info=preserve_batch
     )
     del adata_cells
     g.X = np.asarray(g.X, dtype=np.float32)
@@ -706,6 +709,7 @@ def _save_raw_outputs(
         "pca_applied": False,
         "n_features": int(n_feats),
         "signal": signal,
+        "agg_method": agg_method,
     }
     base_uns.update(uns_metadata)
     for adata in [g, e]:
@@ -740,6 +744,7 @@ def pca_sweep_pooled_signal(
     exclude_dud_guides: bool = True,
     downsample_per_guide: bool = False,
     cells_per_guide: int = 250,
+    agg_method: str = "mean",
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -1059,6 +1064,7 @@ def pca_sweep_pooled_signal(
             drop_obs_cols=None if preserve_batch else ["experiment"],
             preserve_batch=preserve_batch,
             output_suffix=output_suffix,
+            agg_method=agg_method,
         )
         elapsed = time.time() - t_start
         _logger.info(
@@ -1216,6 +1222,7 @@ def pca_sweep_pooled_signal(
         sweep_peak_t=sweep_peak_t,
         preserve_batch=preserve_batch,
         output_suffix=output_suffix,
+        agg_method=agg_method,
     )
 
     elapsed = time.time() - t_start
@@ -1521,8 +1528,11 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
             per_reporter_metric_dfs)
 
 
-def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
-    """Horizontal concat, NTC normalize, re-aggregate to gene, strip obs for copairs."""
+def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger, agg_method: str = "mean"):
+    """Horizontal concat, NTC normalize, re-aggregate to gene, strip obs for copairs.
+
+    ``agg_method`` controls the guide→gene reduction (default ``mean``).
+    """
     adata_guide = hconcat_by_perturbation(guide_blocks, "guide")
     adata_gene = hconcat_by_perturbation(gene_blocks, "gene")
     del guide_blocks, gene_blocks
@@ -1534,9 +1544,11 @@ def _concat_and_normalize(guide_blocks, gene_blocks, norm_method, _logger):
     adata_guide = normalize_guide_adata(adata_guide, norm_method)
     adata_guide.X = np.asarray(adata_guide.X, dtype=np.float32)
 
+    _logger.info(f"Aggregating guide→gene with method={agg_method!r}")
     adata_gene = aggregate_to_level(
         adata_guide,
         "gene",
+        method=agg_method,
         preserve_batch_info=False,
         subsample_controls=False,
     )
