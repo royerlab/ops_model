@@ -1,8 +1,8 @@
 # === Hand-annotated clusters (paper_v1 with CP + 4i) ===
-# Total clusters annotated: 94
-# Total unique genes (primary section members): 810 / 1000 (81%)
+# Total clusters annotated: 96
+# Total unique genes (primary section members): 814 / 1000 (81%)
 # Adj-p threshold for cluster validation: 0.05 (BH-FDR via Enrichr)
-# Significance: *** p≤0.001 (48), ** p≤0.01 (27), * p≤0.05 (45), ns p>0.05 (0)
+# Significance: *** p≤0.001 (48), ** p≤0.01 (27), * p≤0.05 (46), ns p>0.05 (0)
 # Each section IS a complete leiden cluster (section_size = cluster_size).
 # Tag: '# rX cluster_Y: section_in/cluster_total' followed by per-title Enrichr term + database + adj_p.
 # Databases: GO_BP, GO_CC, GO_MF, Reactome, KEGG, CORUM, MSigDB_Hallmark, WikiPathways, BioPlex, Pfam, COMPARTMENTS_Curated.
@@ -169,35 +169,49 @@ EXOSC5
 NUP214
 RGP1
 
-RNA Degradation / Chaperone-Mediated Protein Folding:
-# r4 cluster_35: 21/21
+CCT Chaperonin Complex / Telomere Maintenance:
+# r20 cluster_74: 5/5  (sub-cluster of r4 cluster_35)
 # CCT complex (chaperonin containing TCP1 complex) (CORUM) — adj_p=1.2e-13 ***
-#   ↳ overlap: 5/21 cluster genes (24%) [in 5-gene sub-cluster at r20-c74: 5/5=100%, perfect complex match]
-# Chaperone Mediated Protein Folding Independent of Cofactor (GO_BP) — adj_p=5.0e-08 ***
-#   ↳ overlap: 5/21 cluster genes (24%)
-# Regulation of Telomerase RNA Localization to Cajal Body (GO_BP) — adj_p=5.0e-08 ***
-#   ↳ overlap: 5/21 cluster genes (24%)
+#   ↳ overlap: 5/5 cluster genes (100%)
+# Positive Regulation of Telomere Maintenance via Telomere Lengthening (GO_BP) — adj_p=4.4e-13 ***
+#   ↳ overlap: 5/5 cluster genes (100%)
+# Chaperone Mediated Protein Folding Independent of Cofactor (GO_BP) — adj_p=4.4e-13 ***
+#   ↳ overlap: 5/5 cluster genes (100%)
 CCT3
 CCT4
 CCT6A
 CCT7
+TCP1
+
+RNA Polymerase I Complex:
+# r30 cluster_86: 9/9  (sub-cluster of r4 cluster_35)
+# RNA Polymerase I Promoter Escape (Reactome) — adj_p=6.5e-05 ***
+#   ↳ overlap: 4/9 cluster genes (44%)
+# RNA Polymerase I Transcription (Reactome) — adj_p=6.5e-05 ***
+#   ↳ overlap: 4/9 cluster genes (44%)
+# Nucleolus (GO_CC) — adj_p=3.9e-02 *
+#   ↳ overlap: 4/9 cluster genes (44%)
 CD3EAP
+NCL
+POLR1B
+POLR1C
+POLR1E
+RRN3
+TAF1B
+USP39
+ZNRD1
+
+RNA Degradation (Exosome):
+# r4 cluster_35: 7/21  (remainder after CCT and Pol I sub-clusters split off; see also: CCT Chaperonin r20-c74, RNA Polymerase I r30-c86)
+# Exosome (RNase Complex) (GO_CC) — adj_p=2.6e-05 ***
+#   ↳ overlap: 3/7 section genes (43%)
 EXOSC3
 EXOSC6
 EXOSC8
 ILF3
 LTV1
-NCL
-POLR1B
-POLR1C
-POLR1E
 RPS19BP1
-RRN3
-TAF1B
-TCP1
-USP39
 ZCCHC9
-ZNRD1
 
 P-body:
 # r10 cluster_33: 10/10
@@ -310,6 +324,8 @@ USP14
 
 Translational Stress Response (loose cluster):
 # r30 cluster_4: 8/8
+# Negative Regulation of DNA-templated Transcription (GO_BP) — adj_p=4.0e-02 *
+#   ↳ overlap: 3/8 cluster genes (38%) [highest-overlap term]
 # Regulation of Translational Initiation in Response to Stress (GO_BP) — adj_p=3.8e-02 *
 #   ↳ overlap: 1/8 cluster genes (12%)
 ABHD10
@@ -1188,8 +1204,10 @@ ZRSR2
 
 Mitochondrial Outer Membrane (extended cluster):
 # r20 cluster_99: 5/6
+# BIN3 interactome (BioPlex) — adj_p=1.3e-03 **
+#   ↳ overlap: 2/6 cluster genes (33%) [highest-overlap term]
 # Mitochondrial Outer Membrane (GO_CC) — adj_p=8.9e-02 [near-sig at r7-c56, also at r5/r10]
-# Chromocenter (GO_CC) — adj_p=4.2e-02 * [also enriched at this cluster]
+# Chromocenter (GO_CC) — adj_p=4.2e-02 *
 #   ↳ overlap: 1/6 cluster genes (17%)
 COQ10B
 GTF3C6
@@ -1263,8 +1281,12 @@ COPS8
 DDB1
 GPS1
 
-Microautophagy / Carnitine Metabolism:
+Microautophagy / Carnitine Metabolism / Golgi-Mitochondria:
 # r30 cluster_44: 6/6
+# GOLGI APPARATUS SUBCOMPARTMENT (COMPARTMENTS_Curated) — adj_p=1.3e-02 *
+#   ↳ overlap: 3/6 cluster genes (50%) [highest-overlap term]
+# MITOCHONDRION (COMPARTMENTS_Curated) — adj_p=4.8e-02 *
+#   ↳ overlap: 3/6 cluster genes (50%)
 # Microautophagy (GO_BP) — adj_p=3.3e-02 *
 #   ↳ overlap: 1/6 cluster genes (17%)
 # Carnitine Metabolic Process (GO_BP) — adj_p=3.3e-02 *
@@ -1353,6 +1375,8 @@ SACM1L
 
 Purine Biosynthesis:
 # r7 cluster_53: 7/7
+# Purine Metabolism And Related Disorders WP4224 (WikiPathways) — adj_p=6.5e-03 **
+#   ↳ overlap: 2/7 cluster genes (29%) [highest-overlap term]
 # Purine Nucleobase Metabolic Process (GO_BP) — adj_p=3.5e-02 *
 #   ↳ overlap: 1/7 cluster genes (14%)
 CEP135
@@ -1440,6 +1464,8 @@ RPTOR
 
 Inflammatory Response:
 # r50 cluster_66: 5/5
+# NEUROACTIVE LIGAND-RECEPTOR INTERACTION (KEGG) — adj_p=7.1e-03 **
+#   ↳ overlap: 2/5 cluster genes (40%) [highest-overlap term; LTB4R+CTSG-driven]
 # Cell Recruitment (Pro-Inflammatory Response) (Reactome) — adj_p=3.8e-02 *
 #   ↳ overlap: 1/5 cluster genes (20%)
 BRD8
