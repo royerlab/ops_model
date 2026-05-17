@@ -1282,6 +1282,10 @@ def _build_parser():
     parser = argparse.ArgumentParser(
         description="Per-reporter cell-count titration analysis.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        # Disable argparse's prefix matching so unknown flags fail loudly
+        # instead of silently aliasing to a longer flag (e.g. `--compare`
+        # mapping to `--compare-only` and skipping the titration step).
+        allow_abbrev=False,
     )
     parser.add_argument(
         "-o", "--output-dir", type=str, default=DEFAULT_PCA_OPT_ROOT,

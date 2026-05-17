@@ -37,6 +37,12 @@ DEFAULT_ENRICHR_LIBRARIES = (
     "GO_Cellular_Component_2025",
     "Reactome_2022",
     "KEGG_2026",
+    "CORUM",
+    "MSigDB_Hallmark_2020",
+    "WikiPathways_2024_Human",
+    "BioPlex_2017",
+    "Pfam_Domains_2019",
+    "COMPARTMENTS_Curated_2025",
 )
 DEFAULT_SUPERCATEGORY_CONFIG = Path(
     "/home/gav.sturm/linked_folders/mydata/ops_mono/organelle_profiler/configs/gene_supercategory_mapping.yaml"
@@ -50,16 +56,24 @@ DEFAULT_SUPERCATEGORY_CONFIG = Path(
 
 def load_overlay_maps(
     supercategory_config_path: Optional[Path] = None,
+    chad_path_override: Optional[Path] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Build the three gene → annotation dicts used for overlay coloring.
 
     Returns ``{"super": ..., "chad": ..., "corum": ...}`` where each value is
     a ``gene_name -> annotation`` dict. Genes without an annotation are not
     present in the returned dict (callers default them to ``"Uncategorized"``).
+
+    ``chad_path_override`` (optional): explicit CHAD hierarchy YAML to use for
+    the cluster overlay. When set, takes precedence over the
+    ``chad_hierarchy_path`` field in the supercategory config — needed for
+    runs against gene libraries that don't share the paper_v1 v5 hierarchy
+    (e.g. ``val_library_chad_positive_controls_v1.yml`` for validation_500).
     """
     out: Dict[str, Dict[str, str]] = {"super": {}, "chad": {}, "corum": {}}
 
     cfg_path = Path(supercategory_config_path or DEFAULT_SUPERCATEGORY_CONFIG)
+    cfg: dict = {}
     if not cfg_path.exists():
         logger.warning(
             "Super-category config not found at %s — supercluster overlays will be empty",
@@ -85,17 +99,19 @@ def load_overlay_maps(
             logger.warning("  Super-category map load failed: %s", exc)
 
     try:
-        # CHAD cluster (from heatmap pattern)
+        # CHAD cluster (from heatmap pattern). Override > config > default.
         from ops_utils.analysis.gene_supercategories import (
             _load_chad_hierarchy,
             DEFAULT_CHAD_PATH,
         )
 
-        chad_path = (
-            Path(cfg.get("chad_hierarchy_path", str(DEFAULT_CHAD_PATH)))
-            if cfg_path.exists()
-            else DEFAULT_CHAD_PATH
-        )
+        if chad_path_override is not None:
+            chad_path = Path(chad_path_override)
+        elif cfg_path.exists():
+            chad_path = Path(cfg.get("chad_hierarchy_path", str(DEFAULT_CHAD_PATH)))
+        else:
+            chad_path = DEFAULT_CHAD_PATH
+        logger.info("  CHAD overlay hierarchy: %s", chad_path)
         chad = _load_chad_hierarchy(chad_path)
         gene_to_cluster: Dict[str, str] = {}
         for _id, cluster in chad.items():
@@ -168,6 +184,12 @@ _LIBRARY_OBS_COL = {
     "GO_Cellular_Component_2025": "go_cc_term",
     "Reactome_2022": "reactome_term",
     "KEGG_2026": "kegg_term",
+    "CORUM": "corum_complex_term",
+    "MSigDB_Hallmark_2020": "msigdb_hallmark_term",
+    "WikiPathways_2024_Human": "wikipathways_term",
+    "BioPlex_2017": "bioplex_term",
+    "Pfam_Domains_2019": "pfam_domain",
+    "COMPARTMENTS_Curated_2025": "compartments_term",
 }
 
 # Significance threshold for surfacing an Enrichr term as the "top" term in obs.
@@ -2659,6 +2681,7 @@ def save_extra_overlays(
     chad_map: Optional[pd.DataFrame] = None,
     leiden_resolutions: Tuple[float, ...] = DEFAULT_LEIDEN_RESOLUTIONS,
     supercategory_config_path: Optional[Path] = None,
+    chad_path_override: Optional[Path] = None,
     enrichr_libraries: Tuple[str, ...] = DEFAULT_ENRICHR_LIBRARIES,
     use_cache: bool = True,
     _logger=logger,
@@ -2675,7 +2698,9 @@ def save_extra_overlays(
     steps. The cache is keyed by ``(level, n_obs)`` and validated against the
     requested resolutions; pass ``use_cache=False`` to force recomputation.
     """
-    overlay_maps = load_overlay_maps(supercategory_config_path)
+    overlay_maps = load_overlay_maps(
+        supercategory_config_path, chad_path_override=chad_path_override,
+    )
 
     # Persist gene → CHAD cluster / CORUM complex / super-category lookups onto
     # adata.obs so they survive into the saved h5ad alongside leiden columns.
