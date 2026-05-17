@@ -47,7 +47,7 @@ from ops_utils.analysis.map_scores import (
     phenotypic_activity_assesment,
 )
 
-from ops_model.post_process.combination.pca_optimization_sweep_core import (
+from ops_model.post_process.combination.pca_optimization.sweep_core import (
     _prepare_for_copairs,
 )
 

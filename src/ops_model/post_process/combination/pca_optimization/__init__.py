@@ -132,19 +132,19 @@ from ops_utils.data.positive_controls import (
     plot_positive_controls_grid,
 )
 
-from ops_model.post_process.combination.pca_optimization_chromosome import (
+from ops_model.post_process.combination.pca_optimization.chromosome import (
     _load_chromosome_map,
     _plot_chromosome_overlay,
     _plot_chromosome_overlay_html,
 )
-from ops_model.post_process.combination.pca_optimization_op_signal import (
+from ops_model.post_process.combination.pca_optimization.op_signal import (
     _discover_op_files,
     pca_sweep_op_signal,
 )
-from ops_model.post_process.combination.pca_optimization_parser import (
+from ops_model.post_process.combination.pca_optimization.parser import (
     _build_parser,
 )
-from ops_model.post_process.combination.pca_optimization_slurm import (
+from ops_model.post_process.combination.pca_optimization.slurm import (
     _aggregate_then_second_pca,
     _build_second_pca_kwargs,
     _make_agg_slurm_params,
@@ -152,7 +152,7 @@ from ops_model.post_process.combination.pca_optimization_slurm import (
     _submit_aggregation_slurm,
     _submit_phase1_slurm,
 )
-from ops_model.post_process.combination.pca_optimization_sweep_core import (
+from ops_model.post_process.combination.pca_optimization.sweep_core import (
     _init_sweep_logger,
     _prepare_for_copairs,
     _run_guide_threshold_sweep,
@@ -161,7 +161,7 @@ from ops_model.post_process.combination.pca_optimization_sweep_core import (
     _save_sweep_outputs,
     _score_activity_per_threshold,
 )
-from ops_model.post_process.combination.pca_optimization_aggregation import (
+from ops_model.post_process.combination.pca_optimization.aggregation import (
     ANNOTATED_GENE_PANEL_PATH,
     _annotate_genes_from_panel,
     _atomic_write_h5ad,
@@ -4266,6 +4266,3 @@ def main():
     else:
         _handle_downsampled(args, output_dir, cp_override)
 
-
-if __name__ == "__main__":
-    main()
