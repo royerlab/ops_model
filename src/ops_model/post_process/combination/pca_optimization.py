@@ -159,6 +159,22 @@ DEFAULT_SWEEP_THRESHOLDS_CP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0
 MIN_PCS = 10  # Minimum PCs for peak selection (avoids degenerate 1-PC artifact)
 PCA_FIT_CAP = 5_000_000  # Cells used to fit PCA axes; larger datasets use passthrough (fit subsample, transform all)
 
+# Consistency-score annotation paths — module-level globals so submitit can
+# pickle helper functions that reference them. Default values are picked up
+# from CLI flags in main() (``--chad-annotation`` / ``--ebi-annotation``).
+CHAD_ANNOTATION_PATH: Optional[str] = None
+EBI_ANNOTATION_PATH: Optional[str] = (
+    "/hpc/projects/icd.fast.ops/configs/gene_clusters/"
+    "EBI_complexes_v1_old_gene_names.yaml"
+)
+
+# Default location of the OrganelleProfiler consolidated per-marker h5ads.
+# Mirrors organelle_profiler.feature_extraction.consolidate_all_cells.DEFAULT_OUTPUT_DIR.
+DEFAULT_OP_ROOT = (
+    "/hpc/projects/intracellular_dashboard/fast_ops/models/"
+    "alex_lin_attention/all_cells_v2"
+)
+
 # Dud sgRNAs known to produce off-target/toxic phenotypes — filtered out by default.
 # Source: cell_dino_final.yml cell_filters.
 DUD_GUIDES = frozenset({
@@ -1234,6 +1250,352 @@ def pca_sweep_pooled_signal(
 
 
 # =============================================================================
+# OrganelleProfiler mode: per-marker consolidated h5ads
+# =============================================================================
+
+
+def _discover_op_files(
+    op_root: str, paper_v1_path: Optional[str] = None,
+) -> List[Tuple[str, Path]]:
+    """List all ``all_cells_*.h5ad`` files under ``op_root``.
+
+    Returns ``[(viz_channel, path), ...]`` where ``viz_channel`` is the
+    canonical marker label read from each file's ``obs.viz_channel`` (first
+    row). Falls back to deriving from the filename if the column is absent.
+
+    ``paper_v1_path`` is accepted for symmetry with the dino/CP path but is
+    not enforced here — OP h5ads are already constructed against a fixed
+    cohort (see consolidate_all_cells's ``--paper-v1``).
+    """
+    op_root = Path(op_root)
+    if not op_root.exists():
+        raise FileNotFoundError(f"--op-root does not exist: {op_root}")
+    files = sorted(op_root.glob("all_cells_*.h5ad"))
+    if not files:
+        raise FileNotFoundError(f"No all_cells_*.h5ad in {op_root}")
+    pairs: List[Tuple[str, Path]] = []
+    for path in files:
+        # Pull viz_channel from obs (first row) for the canonical label
+        try:
+            backed = ad.read_h5ad(path, backed="r")
+            viz = (
+                str(backed.obs["viz_channel"].iloc[0])
+                if "viz_channel" in backed.obs.columns
+                else path.stem.replace("all_cells_phase", "Phase").replace(
+                    "all_cells_fluor_", ""
+                )
+            )
+            backed.file.close()
+        except Exception:
+            viz = path.stem.replace("all_cells_phase", "Phase").replace(
+                "all_cells_fluor_", ""
+            )
+        pairs.append((viz, path))
+    return pairs
+
+
+def pca_sweep_op_signal(
+    signal: str,
+    op_path: str,
+    output_dir: str,
+    target_n_cells: int,
+    norm_method: str = "ntc",
+    sweep_thresholds: Optional[List[float]] = None,
+    random_seed: int = 42,
+    distance: str = "cosine",
+    fixed_threshold: Optional[float] = None,
+    preserve_batch: bool = False,
+    no_pca: bool = False,
+    zscore_per_experiment: bool = False,
+    exclude_dud_guides: bool = True,
+    agg_method: str = "mean",
+) -> str:
+    """OrganelleProfiler variant of :func:`pca_sweep_pooled_signal`.
+
+    Reads a single ``all_cells_*.h5ad`` (cells already pooled across all
+    paper_v1 experiments for one viz_channel), normalizes obs, optionally
+    z-scores per experiment, fits PCA, sweeps thresholds, and writes the same
+    ``per_signal/`` outputs the rest of the pipeline expects.
+
+    Top-level (picklable) so submitit can dispatch one job per OP file.
+    """
+    _logger = _init_sweep_logger()
+    t_start = time.time()
+    output_dir = Path(output_dir)
+    op_path = Path(op_path)
+    rng = np.random.RandomState(random_seed)
+
+    thresholds = (
+        DEFAULT_SWEEP_THRESHOLDS
+        if fixed_threshold is not None
+        else (sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS)
+    )
+
+    _logger.info(f"OP signal {signal}: reading {op_path.name}")
+    adata = ad.read_h5ad(op_path)
+    _logger.info(f"  Loaded {adata.n_obs:,} cells × {adata.n_vars} features")
+
+    # --- Normalize obs to match downstream expectations ---
+    obs = adata.obs
+
+    # Strip experiment to short name (ops0146 not ops0146_20260402)
+    if "experiment" in obs.columns:
+        obs["experiment"] = obs["experiment"].astype(str).str.split("_").str[0]
+    else:
+        _logger.warning("  No 'experiment' column — using a single batch")
+        obs["experiment"] = "op_pooled"
+
+    # Ensure perturbation column. OP h5ads store NTC cells with gene="NTC"
+    # but gene_name="" (blank), and KO cells get both columns set identically.
+    # MUST prefer `gene` over `gene_name` so NTC controls survive — otherwise
+    # scoring has no null reference and every metric returns 0.
+    if "perturbation" not in obs.columns:
+        for fallback in ("gene", "gene_name"):
+            if fallback in obs.columns:
+                obs["perturbation"] = obs[fallback].astype(str)
+                break
+    if "perturbation" not in obs.columns:
+        return f"FAILED: {signal} — no perturbation / gene / gene_name column"
+
+    # Drop rows with blank perturbation (defensive: NTC cells with empty
+    # gene_name in some files, mislabeled rows, etc.) so the null reference
+    # isn't polluted.
+    blank_mask = obs["perturbation"].isin({"", "nan", "None"})
+    if blank_mask.any():
+        n_blank = int(blank_mask.sum())
+        adata = adata[~blank_mask.values].copy()
+        obs = adata.obs
+        _logger.warning(
+            f"  Dropped {n_blank:,} cells with blank perturbation label"
+        )
+
+    if "label_str" not in obs.columns:
+        obs["label_str"] = obs["perturbation"]
+
+    if exclude_dud_guides and "sgRNA" in obs.columns:
+        n_before = adata.n_obs
+        keep = ~obs["sgRNA"].isin(DUD_GUIDES)
+        if (~keep).any():
+            adata = adata[keep].copy()
+            obs = adata.obs
+            _logger.info(
+                f"  Dropped {n_before - adata.n_obs:,} dud-guide cells "
+                f"({n_before:,} → {adata.n_obs:,})"
+            )
+
+    # --- Subsample to target_n_cells (proportional across experiments) ---
+    n_total = adata.n_obs
+    if n_total > target_n_cells:
+        exps = obs["experiment"].values
+        exp_counts = pd.Series(exps).value_counts()
+        kept_idx = []
+        for exp_id, cnt in exp_counts.items():
+            mask_idx = np.where(exps == exp_id)[0]
+            fraction = cnt / n_total
+            n_take = max(1, int(round(fraction * target_n_cells)))
+            n_take = min(n_take, len(mask_idx))
+            picked = rng.choice(mask_idx, n_take, replace=False)
+            kept_idx.append(picked)
+        kept_idx = np.sort(np.concatenate(kept_idx))
+        adata = adata[kept_idx].copy()
+        obs = adata.obs
+        _logger.info(
+            f"  Subsampled {n_total:,} → {adata.n_obs:,} cells "
+            f"(proportional across {len(exp_counts)} experiments)"
+        )
+
+    n_cells_pooled = int(n_total)
+    n_cells = adata.n_obs
+    loaded_exps = sorted(obs["experiment"].unique().tolist())
+    n_exps = len(loaded_exps)
+
+    X_raw = np.asarray(adata.X, dtype=np.float32)
+    X_raw = np.nan_to_num(X_raw, nan=0.0, posinf=0.0, neginf=0.0)
+    feature_names = list(adata.var_names)
+    n_feats = X_raw.shape[1]
+    del adata
+
+    score_cols = [c for c in ["sgRNA", "perturbation", "label_str"] if c in obs.columns]
+    obs_df_full = obs[score_cols + ["experiment"]].reset_index(drop=True)
+    obs_df = obs_df_full[score_cols].copy()
+
+    # Per-experiment z-score before PCA
+    if zscore_per_experiment:
+        from sklearn.preprocessing import StandardScaler
+
+        experiments = obs_df_full["experiment"].values
+        for exp_id in np.unique(experiments):
+            mask = experiments == exp_id
+            X_raw[mask] = StandardScaler().fit_transform(X_raw[mask])
+        _logger.info(
+            f"  Per-experiment z-score applied ({len(np.unique(experiments))} experiments)"
+        )
+
+    # --- No-PCA early exit ---
+    if no_pca:
+        output_suffix = "_nopca" + ("_batch" if preserve_batch else "")
+        file_prefix = sanitize_signal_filename(signal)
+        _save_raw_outputs(
+            X_raw=X_raw,
+            obs_df=obs_df_full,
+            feature_names=feature_names,
+            signal=signal,
+            uns_metadata={
+                "experiment": ",".join(loaded_exps),
+                "channel": signal,
+                "n_cells": int(n_cells),
+                "n_cells_pooled": n_cells_pooled,
+                "n_experiments": n_exps,
+                "n_features_raw": int(n_feats),
+                "source": str(op_path),
+            },
+            output_dir=output_dir,
+            subdir="per_signal",
+            file_prefix=file_prefix,
+            rng=rng,
+            _logger=_logger,
+            drop_obs_cols=None if preserve_batch else ["experiment"],
+            preserve_batch=preserve_batch,
+            output_suffix=output_suffix,
+            agg_method=agg_method,
+        )
+        elapsed = time.time() - t_start
+        return (
+            f"SUCCESS: {signal} — no PCA, {n_feats} raw features "
+            f"({n_exps} exps, {n_cells}/{n_cells_pooled} cells) in {elapsed:.0f}s"
+        )
+
+    # --- Fit PCA (single shot — OP files are at most a few M cells after capping) ---
+    t_pca = time.time()
+    if n_cells > PCA_FIT_CAP:
+        fit_idx = rng.choice(n_cells, PCA_FIT_CAP, replace=False)
+        fit_idx.sort()
+        _logger.info(
+            f"  Fitting PCA on {PCA_FIT_CAP:,}/{n_cells:,} subsampled cells..."
+        )
+        _, cumvar, pca_model = fit_pca(X_raw[fit_idx])
+        del fit_idx
+        chunk_size = 2_000_000
+        X_pcs_chunks = []
+        for i in range(0, n_cells, chunk_size):
+            chunk = np.asarray(X_raw[i : i + chunk_size], dtype=np.float64)
+            chunk = np.nan_to_num(chunk, nan=0.0, posinf=0.0, neginf=0.0)
+            X_pcs_chunks.append(pca_model.transform(chunk).astype(np.float32))
+        X_pcs = np.vstack(X_pcs_chunks)
+        del X_pcs_chunks
+    else:
+        _logger.info(f"  Fitting PCA on {n_cells:,} × {n_feats} matrix...")
+        X_pcs, cumvar, pca_model = fit_pca(X_raw)
+
+    _logger.info(
+        f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components"
+    )
+    pca_components = pca_model.components_.copy()
+    pca_mean = pca_model.mean_.copy() if getattr(pca_model, "mean_", None) is not None else None
+    del X_raw, pca_model
+
+    # --- Threshold sweep ---
+    if preserve_batch:
+        attr_config = load_attribution_config()
+        variance_cutoff = attr_config.get("pca", {}).get("variance_cutoff", 0.80)
+        selected_t = variance_cutoff
+        selected_n = n_pcs_for_threshold(cumvar, variance_cutoff)
+        selected_r, selected_a = 0.0, 0.0
+        sweep_rows: List[Dict] = []
+        metric_peaks: Dict = {}
+        sweep_peak_t = variance_cutoff
+    else:
+        t_sweep = time.time()
+        _logger.info(f"  Threshold sweep ({len(thresholds)} thresholds)...")
+        result = _run_threshold_sweep(
+            X_pcs,
+            cumvar,
+            obs_df,
+            thresholds,
+            norm_method,
+            extra_sweep_cols={"signal": signal, "n_experiments": n_exps},
+            _logger=_logger,
+            distance=distance,
+        )
+        _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
+        if result is None:
+            return f"FAILED: {signal} — no valid threshold found (all < {MIN_PCS} PCs)"
+        sweep_rows = result["sweep_rows"]
+        consensus_t = result["consensus_t"]
+        consensus_n = result["consensus_n"]
+        consensus_r = result["consensus_r"]
+        consensus_a = result["consensus_a"]
+        metric_peaks = {
+            k: result[k] for k in ("peak_act_t", "peak_dist_t", "peak_chad_t")
+        }
+        sweep_peak_t = consensus_t
+        selected_t, selected_n, selected_r, selected_a = (
+            consensus_t, consensus_n, consensus_r, consensus_a,
+        )
+        if fixed_threshold is not None:
+            fixed_n = n_pcs_for_threshold(cumvar, fixed_threshold)
+            fixed_row = next(
+                (r for r in sweep_rows if r["threshold"] == fixed_threshold), None
+            )
+            selected_r = fixed_row["activity"] if fixed_row else consensus_r
+            selected_a = fixed_row["auc"] if fixed_row else consensus_a
+            _logger.info(
+                f"  Fixed threshold override: {fixed_threshold:.0%} → {fixed_n} PCs "
+                f"(consensus was {consensus_t:.0%})"
+            )
+            selected_t, selected_n = fixed_threshold, fixed_n
+
+    # --- Save ---
+    file_prefix = sanitize_signal_filename(signal)
+    exps_str = ", ".join(loaded_exps[:5]) + (f" +{len(loaded_exps)-5} more" if len(loaded_exps) > 5 else "")
+    output_suffix = "_batch" if preserve_batch else ""
+    _save_sweep_outputs(
+        X_pcs,
+        obs_df_full,
+        cumvar,
+        peak_n=selected_n,
+        peak_t=selected_t,
+        peak_activity_r=selected_r,
+        peak_activity_auc=selected_a,
+        best_act_t=metric_peaks.get("peak_act_t", selected_t),
+        metric_peaks=metric_peaks or None,
+        signal=signal,
+        sweep_rows=sweep_rows,
+        uns_metadata={
+            "experiment": ",".join(loaded_exps),
+            "channel": signal,
+            "n_cells": int(n_cells),
+            "n_cells_pooled": int(n_cells_pooled),
+            "n_experiments": int(n_exps),
+            "n_features_raw": int(n_feats),
+            "pca_components": pca_components[:selected_n].tolist(),
+            "pca_feature_names": feature_names,
+            "pca_mean": pca_mean.tolist() if pca_mean is not None else None,
+            "source": str(op_path),
+        },
+        output_dir=output_dir,
+        subdir="per_signal",
+        file_prefix=file_prefix,
+        suptitle=f"{signal} ({n_exps} exps: {exps_str}) — {n_cells:,}/{n_cells_pooled:,} cells, {n_feats} features",
+        rng=rng,
+        _logger=_logger,
+        drop_obs_cols=None if preserve_batch else ["experiment"],
+        fixed_threshold=fixed_threshold,
+        sweep_peak_t=sweep_peak_t,
+        preserve_batch=preserve_batch,
+        output_suffix=output_suffix,
+        agg_method=agg_method,
+    )
+
+    elapsed = time.time() - t_start
+    return (
+        f"SUCCESS: {signal} — {selected_n} PCs @ {selected_t:.0%}, "
+        f"{selected_r:.1%} active ({n_exps} exps, {n_cells}/{n_cells_pooled} cells) "
+        f"in {elapsed:.0f}s"
+    )
+
+
+# =============================================================================
 # Phase 2: Aggregation sub-steps (used by aggregate_channels)
 # =============================================================================
 
@@ -1764,12 +2126,330 @@ def _annotate_genes_from_panel(adata_gene: ad.AnnData, _logger) -> None:
     )
 
 
-def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger, random_seed: int = 42):
+def _load_chromosome_map(csv_path: str, _logger) -> Optional[pd.DataFrame]:
+    """Load symbol → chromosome / chromosome_arm CSV.
+
+    Returns a DataFrame indexed by perturbation with a ``chr_arm`` composite
+    column (e.g. ``"12q"``) used for categorical coloring, or ``None`` if the
+    file is unreadable. Rows where chromosome or arm is missing get
+    ``chr_arm = "unmapped"``.
+
+    Accepts two schemas so the same path works for both the original
+    chromosome panel CSVs *and* the shared ``chrom_arm_mapping.csv`` cache
+    produced by the chrom-arm correction helper:
+
+    1. ``perturbation, chromosome, chromosome_arm``  (legacy panel CSV) —
+       chrom_arm = chromosome + arm (e.g. ``'12' + 'q' → '12q'``).
+    2. ``symbol, chrom_arm``                          (chrom-arm cache) —
+       chrom_arm values look like ``'chr12q'``; the ``chr`` prefix is
+       stripped to produce ``'12q'`` so the legend matches schema (1).
+    """
+    sep = "\t" if str(csv_path).lower().endswith(".tsv") else ","
+    try:
+        df = pd.read_csv(csv_path, sep=sep)
+    except Exception as exc:
+        _logger.warning(f"  Chromosome CSV/TSV unreadable ({csv_path}): {exc}")
+        return None
+    cols = set(df.columns)
+    if {"perturbation", "chromosome", "chromosome_arm"}.issubset(cols):
+        df = df[["perturbation", "chromosome", "chromosome_arm"]].copy()
+        df["perturbation"] = df["perturbation"].astype(str)
+        chrom_str = df["chromosome"].astype(str).str.replace(r"\.0$", "", regex=True)
+        arm = df["chromosome_arm"].astype(str)
+        df["chr_arm"] = chrom_str + arm
+        blank = chrom_str.isin({"nan", "", "None"}) | arm.isin({"nan", "", "None"})
+        df.loc[blank, "chr_arm"] = "unmapped"
+    elif {"gene", "updated_gene", "chrom_arm"}.issubset(cols):
+        # Shared TSV: emit one row per (gene + updated_gene) so either
+        # legacy or current HUGO symbol resolves to the same arm.
+        df = df[["gene", "updated_gene", "chrom_arm"]].copy()
+        raw = df["chrom_arm"].astype(str).str.strip()
+        stripped = raw.str.replace(r"^chr", "", regex=True)
+        arm = stripped.str.extract(r"([pq])$", expand=False)
+        chrom_str = stripped.str.replace(r"[pq]$", "", regex=True)
+        df["chromosome"] = chrom_str
+        df["chromosome_arm"] = arm
+        df["chr_arm"] = chrom_str + arm.fillna("")
+        blank = raw.isin({"nan", "", "None", "NaN"}) | arm.isna()
+        df.loc[blank, "chr_arm"] = "unmapped"
+        rows_legacy = df.rename(columns={"gene": "perturbation"})[
+            ["perturbation", "chromosome", "chromosome_arm", "chr_arm"]
+        ]
+        rows_updated = df.rename(columns={"updated_gene": "perturbation"})[
+            ["perturbation", "chromosome", "chromosome_arm", "chr_arm"]
+        ]
+        df = (
+            pd.concat([rows_legacy, rows_updated], ignore_index=True)
+            .dropna(subset=["perturbation"])
+        )
+        df["perturbation"] = df["perturbation"].astype(str)
+    elif {"symbol", "chrom_arm"}.issubset(cols):
+        # legacy chrom-arm-correction cache format: split "chr<N><p|q>".
+        df = df[["symbol", "chrom_arm"]].copy()
+        df["perturbation"] = df["symbol"].astype(str)
+        raw = df["chrom_arm"].astype(str)
+        stripped = raw.str.replace(r"^chr", "", regex=True)
+        arm = stripped.str.extract(r"([pq])$", expand=False)
+        chrom_str = stripped.str.replace(r"[pq]$", "", regex=True)
+        df["chromosome"] = chrom_str
+        df["chromosome_arm"] = arm
+        df["chr_arm"] = chrom_str + arm.fillna("")
+        blank = raw.isin({"nan", "", "None", "NaN"}) | arm.isna()
+        df.loc[blank, "chr_arm"] = "unmapped"
+    else:
+        _logger.warning(
+            f"  Chromosome CSV/TSV {csv_path} has none of the expected schemas "
+            f"(perturbation+chromosome+chromosome_arm OR "
+            f"gene+updated_gene+chrom_arm OR symbol+chrom_arm); "
+            f"got columns: {sorted(cols)}"
+        )
+        return None
+    df = df.drop_duplicates("perturbation").set_index("perturbation")
+    _logger.info(
+        f"  Loaded chromosome map: {len(df)} perturbations, "
+        f"{df['chr_arm'].nunique()} unique chr_arm categories"
+    )
+    return df
+
+
+def _plot_chromosome_overlay(
+    coords: np.ndarray,
+    perts,
+    chrom_df: pd.DataFrame,
+    embedding_name: str,
+    out_path: Path,
+    plt,
+    _logger,
+) -> None:
+    """Scatter ``coords`` colored by ``chr_arm`` from ``chrom_df``.
+
+    Saves both PNG and SVG. Genes missing from ``chrom_df`` are drawn in light
+    grey at the back so the colored layer reads cleanly on top.
+    """
+    perts_arr = np.asarray(perts.values if hasattr(perts, "values") else perts).astype(str)
+    chr_arm = pd.Series(perts_arr).map(chrom_df["chr_arm"]).fillna("unmapped").values
+
+    # Order categories: numerically by chromosome (so legend is "1p, 1q, 2p, ..."),
+    # putting "unmapped" last.
+    def _sort_key(label: str):
+        if label == "unmapped":
+            return (1_000, "z")
+        # split into leading number + trailing arm
+        i = 0
+        while i < len(label) and label[i].isdigit():
+            i += 1
+        try:
+            chrom_num = int(label[:i]) if i > 0 else 1_000
+        except ValueError:
+            chrom_num = 1_000
+        return (chrom_num, label[i:])
+
+    unique_labels = sorted(set(chr_arm), key=_sort_key)
+    # Build a categorical palette using tab20 + tab20b + tab20c (60 distinct
+    # colors), repeating only if there are >60 categories.
+    import matplotlib as _mpl
+    palette = (
+        list(_mpl.colormaps["tab20"].colors)
+        + list(_mpl.colormaps["tab20b"].colors)
+        + list(_mpl.colormaps["tab20c"].colors)
+    )
+    color_map = {}
+    color_idx = 0
+    for lbl in unique_labels:
+        if lbl == "unmapped":
+            color_map[lbl] = (0.75, 0.75, 0.75, 0.5)  # light grey, semi-transparent
+        else:
+            color_map[lbl] = palette[color_idx % len(palette)]
+            color_idx += 1
+
+    fig, ax = plt.subplots(figsize=(14, 11))
+    # Draw unmapped first (under), then categories in legend order.
+    # Sizes doubled from the original (18→36 / 10→20) for better readability;
+    # text also doubled (13→26 axes, 14→28 title, 8→16 legend).
+    for lbl in ["unmapped"] + [l for l in unique_labels if l != "unmapped"]:
+        mask = chr_arm == lbl
+        if not mask.any():
+            continue
+        ax.scatter(
+            coords[mask, 0],
+            coords[mask, 1],
+            s=36 if lbl != "unmapped" else 20,
+            c=[color_map[lbl]],
+            label=lbl,
+            edgecolors="none",
+            alpha=0.85 if lbl != "unmapped" else 0.4,
+        )
+    ax.set_xlabel(f"{embedding_name}1", fontsize=26)
+    ax.set_ylabel(f"{embedding_name}2", fontsize=26)
+    ax.tick_params(labelsize=18)
+    ax.set_title(
+        f"Gene-level {embedding_name} — colored by chromosome arm",
+        fontsize=28,
+        fontweight="bold",
+    )
+    # Legend off to the right, multi-column for many categories
+    n_cols = max(1, int(np.ceil(len(unique_labels) / 22)))
+    ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        fontsize=16,
+        ncol=n_cols,
+        frameon=False,
+        title="chr_arm",
+        title_fontsize=18,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path.with_suffix(".png"), dpi=150, bbox_inches="tight")
+    fig.savefig(out_path.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
+    _logger.info(f"  Saved {out_path.name}.{{png,svg}} ({len(unique_labels)} categories)")
+
+
+def _plot_chromosome_overlay_html(
+    coords: np.ndarray,
+    perts,
+    chrom_df: pd.DataFrame,
+    embedding_name: str,
+    out_path: Path,
+    _logger,
+) -> None:
+    """Interactive Plotly version of :func:`_plot_chromosome_overlay`.
+
+    One trace per ``chr_arm`` category so toggling the legend hides/shows each
+    chromosome arm independently. Hover shows perturbation + chromosome arm.
+    Saves an HTML file at ``out_path`` (``.html`` extension applied if absent).
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError as exc:
+        _logger.warning(f"  Chromosome HTML skipped: plotly missing ({exc})")
+        return
+
+    perts_arr = np.asarray(perts.values if hasattr(perts, "values") else perts).astype(str)
+    chr_arm = pd.Series(perts_arr).map(chrom_df["chr_arm"]).fillna("unmapped").values
+    chrom_lookup = chrom_df["chromosome"].astype(str).to_dict()
+    arm_lookup = chrom_df["chromosome_arm"].astype(str).to_dict()
+
+    def _sort_key(label: str):
+        if label == "unmapped":
+            return (1_000, "z")
+        i = 0
+        while i < len(label) and label[i].isdigit():
+            i += 1
+        try:
+            chrom_num = int(label[:i]) if i > 0 else 1_000
+        except ValueError:
+            chrom_num = 1_000
+        return (chrom_num, label[i:])
+
+    unique_labels = sorted(set(chr_arm), key=_sort_key)
+
+    import matplotlib as _mpl
+    palette_rgb = (
+        list(_mpl.colormaps["tab20"].colors)
+        + list(_mpl.colormaps["tab20b"].colors)
+        + list(_mpl.colormaps["tab20c"].colors)
+    )
+
+    def _rgba(rgb, a):
+        r, g, b = [int(round(255 * c)) for c in rgb[:3]]
+        return f"rgba({r},{g},{b},{a})"
+
+    fig = go.Figure()
+    color_idx = 0
+    for lbl in unique_labels:
+        mask = chr_arm == lbl
+        if not mask.any():
+            continue
+        if lbl == "unmapped":
+            color = "rgba(190,190,190,0.5)"
+            size = 7
+        else:
+            color = _rgba(palette_rgb[color_idx % len(palette_rgb)], 0.85)
+            size = 9
+            color_idx += 1
+
+        sub_perts = perts_arr[mask]
+        hover = [
+            f"<b>{p}</b><br>chr_arm: {lbl}"
+            + (f"<br>chromosome: {chrom_lookup.get(p, '')}" if chrom_lookup.get(p) else "")
+            + (f"<br>arm: {arm_lookup.get(p, '')}" if arm_lookup.get(p) else "")
+            for p in sub_perts
+        ]
+        fig.add_trace(
+            go.Scattergl(
+                x=coords[mask, 0],
+                y=coords[mask, 1],
+                mode="markers",
+                marker=dict(size=size, color=color, line=dict(width=0)),
+                name=lbl,
+                text=hover,
+                hoverinfo="text",
+                legendgroup=lbl,
+            )
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=f"Gene-level {embedding_name} — colored by chromosome arm",
+            font=dict(size=22, family="Helvetica, Arial, sans-serif"),
+        ),
+        xaxis=dict(title=f"{embedding_name}1", title_font=dict(size=18)),
+        yaxis=dict(title=f"{embedding_name}2", title_font=dict(size=18)),
+        legend=dict(
+            title=dict(text="chr_arm", font=dict(size=14)),
+            font=dict(size=12),
+            itemsizing="constant",
+            tracegroupgap=2,
+        ),
+        width=1300,
+        height=950,
+        plot_bgcolor="white",
+        margin=dict(l=70, r=220, t=80, b=70),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#e5e5e5", zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#e5e5e5", zeroline=False)
+
+    if out_path.suffix.lower() != ".html":
+        out_path = out_path.with_suffix(".html")
+    fig.write_html(str(out_path), include_plotlyjs="cdn", full_html=True)
+    _logger.info(f"  Saved {out_path.name} ({len(unique_labels)} traces)")
+
+
+def _compute_and_plot_embeddings(
+    adata_guide,
+    metric_lookup,
+    plots_dir,
+    plt,
+    _logger,
+    random_seed: int = 42,
+    chromosome_csv: Optional[str] = None,
+    umap_type: str = "max",
+):
     """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls.
 
     Returns adata_gene_embed with embeddings stored in obsm — caller should save it.
     The same ``random_seed`` is threaded into ``split_ntc_for_embedding``, UMAP,
     and PHATE so a given seed deterministically reproduces the same embedding.
+
+    ``chromosome_csv``: optional CSV (columns include ``perturbation``,
+    ``chromosome``, ``chromosome_arm``). When provided, also writes a
+    chromosome-arm-colored gene-level scatter for each embedding.
+
+    ``umap_type``: which UMAP recipe to use.
+
+      * ``"max"`` (default, Max's settings): scanpy-driven
+        ``sc.pp.neighbors(n_neighbors=8, use_rep="X_pca")`` followed by
+        ``sc.tl.umap(min_dist=0.25, alpha=1.0, gamma=1.5, maxiter=2000,
+        init_pos=X_pca[:, :2])``. PCA-anchored initialization gives a more
+        stable, biology-aware layout that converges quickly.
+      * ``"gav"`` (legacy): umap-learn ``UMAP(n_neighbors=min(10, n-1),
+        min_dist=0.25, random_state=seed)`` fit directly on the feature
+        matrix with default spectral init.
+
+    Both write the same ``obsm["X_umap"]`` and ``uns["umap"]["params"]``;
+    the params dict records the chosen ``umap_type`` so downstream
+    consumers can tell which one produced the layout.
     """
     adata_gene_embed = split_ntc_for_embedding(adata_guide, random_seed=random_seed)
     _logger.info(
@@ -1792,11 +2472,58 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
     level_perts = {}
 
     def _make_embedder(name):
-        """Return fit_fn(X, n_obs, level) -> (coords, params_dict) or None if library missing."""
+        """Return ``fit_fn(X, n_obs, level, adata)`` → ``(coords, params)``,
+        or ``(None, {})`` if the inputs can't be embedded. The ``adata``
+        argument is only used by the ``umap_type="max"`` UMAP recipe which
+        needs ``obsm["X_pca"]`` for its PCA-anchored init.
+        """
         if name == "UMAP":
+            if umap_type == "max":
+                import scanpy as sc
+
+                def _fit(X, n_obs, level, adata=None):
+                    nn = min(8, max(n_obs - 1, 2))
+                    if nn < 2:
+                        return None, {}
+                    if adata is None or "X_pca" not in adata.obsm:
+                        _logger.warning(
+                            f"  umap_type='max' needs adata.obsm['X_pca']; "
+                            f"falling back to umap-learn for {level}"
+                        )
+                        from umap import UMAP as _UMAP
+                        model = _UMAP(n_components=2, n_neighbors=nn,
+                                      min_dist=0.25, random_state=random_seed)
+                        return model.fit_transform(X), {
+                            "n_neighbors": nn, "min_dist": 0.25,
+                            "random_state": random_seed, "umap_type": "max",
+                            "fallback": "no_X_pca",
+                        }
+                    # Scanpy path — see Max's recipe.
+                    adata_tmp = adata.copy()
+                    init_pos = adata_tmp.obsm["X_pca"][:, :2].copy()
+                    sc.pp.neighbors(adata_tmp, n_neighbors=nn, use_rep="X_pca")
+                    sc.tl.umap(
+                        adata_tmp,
+                        min_dist=0.25,
+                        random_state=random_seed,
+                        alpha=1.0, gamma=1.5, maxiter=2000,
+                        init_pos=init_pos,
+                    )
+                    coords = adata_tmp.obsm["X_umap"]
+                    return coords, {
+                        "n_neighbors": int(nn), "min_dist": 0.25,
+                        "random_state": int(random_seed),
+                        "alpha": 1.0, "gamma": 1.5, "maxiter": 2000,
+                        "init_pos": "X_pca[:, :2]",
+                        "umap_type": "max",
+                    }
+
+                return _fit
+
+            # umap_type == "gav" — legacy umap-learn-direct path.
             from umap import UMAP
 
-            def _fit(X, n_obs, level):
+            def _fit(X, n_obs, level, adata=None):
                 nn = min(10, n_obs - 1)
                 if nn < 2:
                     return None, {}
@@ -1812,6 +2539,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                     "min_dist": 0.25,
                     "random_state": random_seed,
                     "metric": "euclidean",
+                    "umap_type": "gav",
                     "a": float(
                         getattr(model, "a_", None) or getattr(model, "_a", None) or 0
                     ),
@@ -1825,7 +2553,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
         elif name == "PHATE":
             import phate
 
-            def _fit(X, n_obs, level):
+            def _fit(X, n_obs, level, adata=None):
                 knn = min(15 if n_obs > 2000 else 10, n_obs - 1)
                 if knn < 2:
                     return None, {}
@@ -1843,6 +2571,11 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
 
             return _fit
 
+    # Load chromosome map once (None if not requested or file is unreadable)
+    chrom_df = (
+        _load_chromosome_map(chromosome_csv, _logger) if chromosome_csv else None
+    )
+
     for embed_name, pkg_hint in [("UMAP", "umap-learn"), ("PHATE", "phate")]:
         try:
             fit_fn = _make_embedder(embed_name)
@@ -1855,7 +2588,7 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                     f"  Computing {level_name} {embed_name} ({adata_level.n_obs} obs, {adata_level.n_vars} features)..."
                 )
                 X_clean = clean_X_for_embedding(adata_level)
-                coords, embed_params = fit_fn(X_clean, adata_level.n_obs, level_name)
+                coords, embed_params = fit_fn(X_clean, adata_level.n_obs, level_name, adata_level)
                 if coords is None:
                     _logger.warning(
                         f"  {embed_name} skipped for {level_name}: too few observations"
@@ -1887,6 +2620,24 @@ def _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _lo
                 embed_csv_name = f"{level_name}_{embed_name.lower()}_coords.csv"
                 embed_df.to_csv(plots_dir / embed_csv_name, index=False)
                 _logger.info(f"  Saved plots/{embed_csv_name}")
+                # Chromosome-arm overlay (gene level only — guide level has 4×
+                # the points and the same chr_arm per perturbation, so the
+                # plot would just be a denser copy).
+                if chrom_df is not None and level_name == "gene":
+                    try:
+                        chrom_stem = plots_dir / f"{level_name}_{embed_name.lower()}_chromosome"
+                        _plot_chromosome_overlay(
+                            coords, perts, chrom_df, embed_name,
+                            chrom_stem, plt, _logger,
+                        )
+                        _plot_chromosome_overlay_html(
+                            coords, perts, chrom_df, embed_name,
+                            chrom_stem, _logger,
+                        )
+                    except Exception as chr_err:
+                        _logger.warning(
+                            f"  Chromosome overlay ({embed_name}) failed: {chr_err}"
+                        )
         except Exception as err:
             _logger.warning(f"  {embed_name} plots failed: {err}")
 
@@ -1985,9 +2736,12 @@ def _score_consistency(
     distance="cosine",
     suffix="",
 ):
-    """Run CORUM + CHAD consistency scoring, save CSVs and plots.
+    """Run CORUM + CHAD + EBI consistency scoring, save CSVs and plots.
 
-    Returns (corum_map, corum_ratio, chad_map, chad_ratio) or (None, 0, None, 0) on failure.
+    Returns ``(corum_map, corum_ratio, chad_map, chad_ratio,
+    ebi_map, ebi_ratio)`` — six values now that EBI is a permanent third
+    consistency metric. Failure mode is six zeros so callers can keep
+    unpacking with one shape.
 
     NOTE: ``phenotypic_consistency_*`` is called WITHOUT ``activity_map``, so
     consistency is computed over all genes regardless of the ``suffix``
@@ -1995,7 +2749,7 @@ def _score_consistency(
     """
     label = "all geneKOs"
     if activity_map is None:
-        return None, 0.0, None, 0.0
+        return None, 0.0, None, 0.0, None, 0.0
     try:
         from ops_utils.analysis.map_scores import (
             phenotypic_consistency_corum,
@@ -2031,25 +2785,36 @@ def _score_consistency(
         )
         _logger.info(f"  Manual CHAD ({label}): {consistency_manual_ratio:.1%}")
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        plot_map_scatter(
-            ax1,
-            consistency_corum_map,
-            f"Consistency CORUM ({label})",
-            consistency_corum_ratio,
-            show_ntc=False,
+        _logger.info(f"Running EBI consistency ({label})...")
+        consistency_ebi_map, consistency_ebi_ratio = (
+            phenotypic_consistency_manual_annotation(
+                adata_gene,
+                plot_results=False,
+                null_size=100_000,
+                cache_similarity=True,
+                distance=distance,
+                annotation_path=EBI_ANNOTATION_PATH,
+            )
         )
-        plot_map_scatter(
-            ax2,
-            consistency_manual_map,
-            f"Consistency CHAD ({label})",
-            consistency_manual_ratio,
-            show_ntc=False,
+        consistency_ebi_map.to_csv(
+            metrics_dir / f"phenotypic_consistency_ebi{suffix}.csv", index=False
         )
+        _logger.info(f"  EBI ({label}): {consistency_ebi_ratio:.1%}")
+
+        # 1×3 panel: CORUM + CHAD + EBI scatter (existing style)
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(22, 7))
+        plot_map_scatter(ax1, consistency_corum_map,
+                         f"Consistency CORUM ({label})",
+                         consistency_corum_ratio, show_ntc=False)
+        plot_map_scatter(ax2, consistency_manual_map,
+                         f"Consistency CHAD ({label})",
+                         consistency_manual_ratio, show_ntc=False)
+        plot_map_scatter(ax3, consistency_ebi_map,
+                         f"Consistency EBI ({label})",
+                         consistency_ebi_ratio, show_ntc=False)
         fig.suptitle(
             f"Consistency Metrics ({label}) — {total_feats} features",
-            fontsize=13,
-            fontweight="bold",
+            fontsize=13, fontweight="bold",
         )
         fig.tight_layout()
         fig.savefig(
@@ -2057,15 +2822,32 @@ def _score_consistency(
         )
         plt.close(fig)
         _logger.info(f"  Saved plots/map_consistency{suffix}.png")
+
+        # Standalone EBI panel using the canonical map-scatter helper —
+        # same style as the activity / distinctiveness mAP scatters.
+        try:
+            fig, ax = plt.subplots(figsize=(8, 7))
+            plot_map_scatter(
+                ax, consistency_ebi_map,
+                f"Consistency EBI ({label})",
+                consistency_ebi_ratio, show_ntc=False,
+            )
+            fig.tight_layout()
+            fig.savefig(plots_dir / f"map_ebi_volcano{suffix}.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            _logger.info(f"  Saved plots/map_ebi_volcano{suffix}.png")
+        except Exception as exc:
+            _logger.warning(f"  EBI volcano plot failed: {exc}")
+
         return (
-            consistency_corum_map,
-            consistency_corum_ratio,
-            consistency_manual_map,
-            consistency_manual_ratio,
+            consistency_corum_map, consistency_corum_ratio,
+            consistency_manual_map, consistency_manual_ratio,
+            consistency_ebi_map, consistency_ebi_ratio,
         )
     except Exception as exc:
         _logger.error(f"  Consistency metrics ({label}) failed: {exc}")
-        return None, 0.0, None, 0.0
+        return None, 0.0, None, 0.0, None, 0.0
 
 
 # =============================================================================
@@ -2079,6 +2861,9 @@ def aggregate_channels(
     per_unit_subdir: str = "per_channel",
     distance: str = "cosine",
     random_seed: int = 42,
+    agg_method: str = "mean",
+    chromosome_csv: Optional[str] = None,
+    umap_type: str = "max",
 ) -> str:
     """Load per-channel (or per-signal) h5ads, concatenate, normalize, score, save.
 
@@ -2087,6 +2872,10 @@ def aggregate_channels(
     Args:
         per_unit_subdir: subdirectory containing guide/gene h5ads.
             "per_channel" for standard mode, "per_signal" for downsampled mode.
+        agg_method: cells→guides / guides→geneKOs reduction (``mean`` or
+            ``median``). Default ``mean``.
+        chromosome_csv: optional CSV mapping perturbation → chromosome /
+            chromosome_arm; used to color gene-level UMAP + PHATE.
     """
     _logger = _init_sweep_logger()
     t_start = time.time()
@@ -2111,7 +2900,7 @@ def aggregate_channels(
 
     # Step 2: Concat + normalize
     adata_guide, adata_gene = _concat_and_normalize(
-        guide_blocks, gene_blocks, norm_method, _logger
+        guide_blocks, gene_blocks, norm_method, _logger, agg_method=agg_method
     )
     total_feats = adata_guide.n_vars
 
@@ -2177,6 +2966,8 @@ def aggregate_channels(
     adata_gene_embed = _compute_and_plot_embeddings(
         adata_guide, metric_lookup, plots_dir, plt, _logger,
         random_seed=random_seed,
+        chromosome_csv=chromosome_csv,
+        umap_type=umap_type,
     )
     # Re-save guide + gene-embed with embeddings now populated
     _atomic_write_h5ad(adata_guide, output_dir / "guide_pca_optimized.h5ad", _logger)
@@ -2200,7 +2991,7 @@ def aggregate_channels(
         _logger,
         distance=distance,
     )
-    corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(
+    corum_map, corum_ratio, chad_map, chad_ratio, ebi_map, ebi_ratio = _score_consistency(
         adata_gene,
         activity_map,
         total_feats,
@@ -2582,15 +3373,32 @@ def apply_second_pass_pca(
     run_sweep: bool = True,
     sweep_thresholds: Optional[List[float]] = None,
     random_seed: int = 42,
+    agg_method: str = "mean",
+    chromosome_csv: Optional[str] = None,
+    input_path: Optional[str] = None,
+    subdir_suffix: str = "",
+    skip_pca: bool = False,
+    umap_type: str = "max",
 ) -> str:
     """Second-pass PCA on the already-concatenated NTC-normalized guide features.
 
-    Reads ``<output_dir>/guide_pca_optimized.h5ad`` (output of
-    :func:`aggregate_channels`), fits a PCA on its horizontally-concatenated
-    guide features, retains the top ``threshold`` of cumulative variance,
-    re-aggregates to gene level, re-scores all phenotypic metrics, and writes
-    the results to ``<output_dir>/<subdir>/`` (default
-    ``second_pca_{threshold:.0%}``).
+    Reads a guide-level h5ad (default ``<output_dir>/guide_pca_optimized.h5ad``;
+    override with ``input_path`` to point at a corrected variant), fits a PCA
+    on its horizontally-concatenated features, retains the top ``threshold``
+    of cumulative variance, re-aggregates to gene level, re-scores all
+    phenotypic metrics, and writes results to ``<output_dir>/<subdir>/``.
+
+    Default ``subdir`` is ``second_pca_consensus`` (consensus mode) or
+    ``second_pca_<pct>`` (fixed threshold). ``subdir_suffix`` appends a tag
+    (e.g. ``_chrom_arm_corr``) so an opt-in correction run never clobbers the
+    untouched baseline output sitting next to it.
+
+    ``skip_pca``: when True, skip the 2nd-pass PCA fit entirely — treat the
+    input guide ``.X`` as already-final features, aggregate to gene level,
+    score the 4 metrics, and write outputs to a ``chrom_arm_corr<suffix>/``
+    subdir (NOT ``second_pca_*``). Useful when you want the full plotting +
+    scoring pipeline run on a chrom-arm-corrected guide h5ad without the
+    additional compression layer.
     """
     _logger = _init_sweep_logger()
     t_start = time.time()
@@ -2599,17 +3407,29 @@ def apply_second_pass_pca(
     # threshold <= 0 means "consensus sweep" — pick the threshold that maximizes the
     # normalized sum of activity + distinctiveness + chad. Forces the sweep on.
     use_consensus = threshold is None or threshold <= 0
-    if use_consensus:
+    if skip_pca:
+        # No PCA fit → no sweep + a different subdir prefix. The wrapper passes
+        # subdir_suffix already containing "_chrom_arm_corr[_method]", so we
+        # just strip the leading underscore and use it directly as the subdir.
+        run_sweep = False
+        use_consensus = False
+        if subdir is None:
+            subdir = (subdir_suffix.lstrip("_") if subdir_suffix
+                      else "chrom_arm_corr")
+    elif use_consensus:
         run_sweep = True
         if subdir is None:
-            subdir = "second_pca_consensus"
+            subdir = f"second_pca_consensus{subdir_suffix}"
     else:
         if subdir is None:
-            subdir = f"second_pca_{int(round(threshold * 100)):02d}"
+            subdir = f"second_pca_{int(round(threshold * 100)):02d}{subdir_suffix}"
     out_dir = output_dir / subdir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    guide_path = output_dir / "guide_pca_optimized.h5ad"
+    if input_path is not None:
+        guide_path = Path(input_path)
+    else:
+        guide_path = output_dir / "guide_pca_optimized.h5ad"
     if not guide_path.exists():
         return f"FAILED: {guide_path} not found — run aggregation first"
 
@@ -2621,94 +3441,125 @@ def apply_second_pass_pca(
         f"  Input: {n_guides:,} guides x {n_feats_in:,} concatenated NTC-normalized features"
     )
 
-    X_in = np.asarray(adata_in.X, dtype=np.float32)
-    X_in = np.nan_to_num(X_in, nan=0.0, posinf=0.0, neginf=0.0)
-    _logger.info(f"  Fitting second-pass PCA on {n_guides:,} x {n_feats_in:,} matrix...")
-    t_pca = time.time()
-    X_pcs, cumvar, pca_model = fit_pca(X_in)
-    _logger.info(
-        f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components computed"
-    )
-
-    # Sweep variance thresholds at guide level (input is already NTC-normalized)
-    sweep_result = None
-    if run_sweep:
-        thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
+    if skip_pca:
+        # Treat input X as already-final features — no PCA fit, no sweep,
+        # no slicing. The downstream scoring + aggregation + plot pipeline
+        # runs unchanged on the input AnnData.
         _logger.info(
-            f"  Sweeping {len(thresholds)} variance thresholds at guide level..."
+            f"  skip_pca=True → using input features directly "
+            f"({n_feats_in} features, no 2nd-pass compression)"
         )
-        t_sweep = time.time()
-        sweep_result = _run_guide_threshold_sweep(
-            X_pcs,
-            cumvar,
-            adata_in.obs,
-            thresholds,
-            _logger=_logger,
-            distance=distance,
-        )
-        _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
-
-    if use_consensus:
-        if sweep_result is None:
-            return f"FAILED: consensus mode requested but sweep produced no valid thresholds"
-        threshold = float(sweep_result["consensus_t"])
-        n_pcs = int(sweep_result["consensus_n"])
-        _logger.info(
-            f"  Consensus mode: chose {threshold:.0%} ({n_pcs} PCs) — "
-            f"max of normalized act+dist+chad"
-        )
+        adata_guide = adata_in.copy()
+        # Keep var_names from the corrected input (e.g. "Phase::PC0"
+        # for combined-titration outputs).
+        n_pcs = adata_guide.n_vars
+        cumvar = np.full(n_pcs, np.nan, dtype=np.float32)
+        pca_model = None
+        sweep_result = None
+        adata_guide.obsm["X_pca"] = np.asarray(adata_guide.X, dtype=np.float32)
+        adata_guide.uns["pca"] = {
+            "variance_ratio": np.full(n_pcs, np.nan, dtype=np.float32),
+            "params": {"n_components": int(n_pcs), "skip_pca": True},
+        }
+        adata_guide.uns["second_pca"] = {
+            "input_features": int(n_feats_in),
+            "input_path": str(guide_path),
+            "skip_pca": True,
+        }
+        adata_guide.uns["norm_method"] = norm_method
+        input_feature_names = list(adata_in.var_names)
+        threshold = float("nan")
     else:
-        n_pcs = n_pcs_for_threshold(cumvar, threshold)
+        X_in = np.asarray(adata_in.X, dtype=np.float32)
+        X_in = np.nan_to_num(X_in, nan=0.0, posinf=0.0, neginf=0.0)
+        _logger.info(f"  Fitting second-pass PCA on {n_guides:,} x {n_feats_in:,} matrix...")
+        t_pca = time.time()
+        X_pcs, cumvar, pca_model = fit_pca(X_in)
         _logger.info(
-            f"  Retaining {n_pcs} PCs at {threshold:.0%} "
-            f"(explained={float(cumvar[n_pcs - 1]):.3f})"
+            f"  PCA done in {time.time() - t_pca:.0f}s — {X_pcs.shape[1]} components computed"
         )
-        if sweep_result is not None:
+
+        # Sweep variance thresholds at guide level (input is already NTC-normalized)
+        sweep_result = None
+        if run_sweep:
+            thresholds = sweep_thresholds or DEFAULT_SWEEP_THRESHOLDS
             _logger.info(
-                f"  (sweep consensus peak: {sweep_result['consensus_t']:.0%} = "
-                f"{sweep_result['consensus_n']} PCs)"
+                f"  Sweeping {len(thresholds)} variance thresholds at guide level..."
             )
+            t_sweep = time.time()
+            sweep_result = _run_guide_threshold_sweep(
+                X_pcs,
+                cumvar,
+                adata_in.obs,
+                thresholds,
+                _logger=_logger,
+                distance=distance,
+            )
+            _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
 
-    X_reduced = X_pcs[:, :n_pcs].astype(np.float32)
-    pc_names = [f"sPC{i}" for i in range(n_pcs)]
+        if use_consensus:
+            if sweep_result is None:
+                return f"FAILED: consensus mode requested but sweep produced no valid thresholds"
+            threshold = float(sweep_result["consensus_t"])
+            n_pcs = int(sweep_result["consensus_n"])
+            _logger.info(
+                f"  Consensus mode: chose {threshold:.0%} ({n_pcs} PCs) — "
+                f"max of normalized act+dist+chad"
+            )
+        else:
+            n_pcs = n_pcs_for_threshold(cumvar, threshold)
+            _logger.info(
+                f"  Retaining {n_pcs} PCs at {threshold:.0%} "
+                f"(explained={float(cumvar[n_pcs - 1]):.3f})"
+            )
+            if sweep_result is not None:
+                _logger.info(
+                    f"  (sweep consensus peak: {sweep_result['consensus_t']:.0%} = "
+                    f"{sweep_result['consensus_n']} PCs)"
+                )
 
-    obs = adata_in.obs.copy()
-    adata_guide = ad.AnnData(
-        X=X_reduced,
-        obs=obs,
-        var=pd.DataFrame(index=pc_names),
-    )
-    variance_ratio_per_pc = np.diff(np.concatenate([[0.0], cumvar])).astype(np.float32)
-    input_feature_names = list(adata_in.var_names)
-    second_pca_uns = {
-        "input_features": int(n_feats_in),
-        "input_path": str(guide_path),
-        "threshold": float(threshold),
-        "n_pcs": int(n_pcs),
-        "explained_variance": float(cumvar[n_pcs - 1]),
-        "components": pca_model.components_[:n_pcs].astype(np.float32),
-        "input_feature_names": input_feature_names,
-    }
-    adata_guide.obsm["X_pca"] = X_reduced.copy()
-    adata_guide.uns["pca"] = {
-        "variance_ratio": variance_ratio_per_pc[:n_pcs],
-        "params": {
-            "n_components": int(n_pcs),
+        X_reduced = X_pcs[:, :n_pcs].astype(np.float32)
+        pc_names = [f"sPC{i}" for i in range(n_pcs)]
+
+        obs = adata_in.obs.copy()
+        adata_guide = ad.AnnData(
+            X=X_reduced,
+            obs=obs,
+            var=pd.DataFrame(index=pc_names),
+        )
+        variance_ratio_per_pc = np.diff(np.concatenate([[0.0], cumvar])).astype(np.float32)
+        input_feature_names = list(adata_in.var_names)
+        second_pca_uns = {
+            "input_features": int(n_feats_in),
+            "input_path": str(guide_path),
             "threshold": float(threshold),
-            "zero_center": True,
-        },
-    }
-    adata_guide.uns["second_pca"] = second_pca_uns
-    adata_guide.uns["norm_method"] = norm_method
+            "n_pcs": int(n_pcs),
+            "explained_variance": float(cumvar[n_pcs - 1]),
+            "components": pca_model.components_[:n_pcs].astype(np.float32),
+            "input_feature_names": input_feature_names,
+        }
+        adata_guide.obsm["X_pca"] = X_reduced.copy()
+        adata_guide.uns["pca"] = {
+            "variance_ratio": variance_ratio_per_pc[:n_pcs],
+            "params": {
+                "n_components": int(n_pcs),
+                "threshold": float(threshold),
+                "zero_center": True,
+            },
+        }
+        adata_guide.uns["second_pca"] = second_pca_uns
+        adata_guide.uns["norm_method"] = norm_method
 
     adata_guide = _prepare_for_copairs(adata_guide)
     adata_gene = aggregate_to_level(
-        adata_guide, "gene", preserve_batch_info=False, subsample_controls=False
+        adata_guide, "gene", method=agg_method, preserve_batch_info=False, subsample_controls=False
     )
     adata_gene = _prepare_for_copairs(adata_gene)
     adata_gene.obsm["X_pca"] = np.asarray(adata_gene.X, dtype=np.float32)
     adata_gene.uns["pca"] = adata_guide.uns["pca"]
-    adata_gene.uns["second_pca"] = second_pca_uns
+    # In skip_pca mode there's no fitted-PCA metadata to carry across — reuse
+    # the same uns block we stamped on adata_guide in the skip_pca branch.
+    adata_gene.uns["second_pca"] = adata_guide.uns["second_pca"]
     adata_gene.uns["norm_method"] = norm_method
 
     total_feats = adata_guide.n_vars
@@ -2740,24 +3591,25 @@ def apply_second_pass_pca(
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(np.arange(1, len(cumvar) + 1), cumvar, lw=2, color="steelblue")
-        ax.axhline(threshold, ls="--", color="red", alpha=0.6, label=f"{threshold:.0%}")
-        ax.axvline(n_pcs, ls=":", color="black", alpha=0.5, label=f"{n_pcs} PCs")
-        ax.set_xlabel("PC index")
-        ax.set_ylabel("Cumulative explained variance")
-        ax.set_title(
-            f"Second-pass PCA — {n_feats_in} features → {n_pcs} PCs at {threshold:.0%}"
-        )
-        ax.legend()
-        ax.grid(alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(plots_dir / "second_pca_cumvar.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        _logger.info("  Saved plots/second_pca_cumvar.png")
-    except Exception as exc:
-        _logger.warning(f"  Cumvar plot failed: {exc}")
+    if not skip_pca:
+        try:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.plot(np.arange(1, len(cumvar) + 1), cumvar, lw=2, color="steelblue")
+            ax.axhline(threshold, ls="--", color="red", alpha=0.6, label=f"{threshold:.0%}")
+            ax.axvline(n_pcs, ls=":", color="black", alpha=0.5, label=f"{n_pcs} PCs")
+            ax.set_xlabel("PC index")
+            ax.set_ylabel("Cumulative explained variance")
+            ax.set_title(
+                f"Second-pass PCA — {n_feats_in} features → {n_pcs} PCs at {threshold:.0%}"
+            )
+            ax.legend()
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(plots_dir / "second_pca_cumvar.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            _logger.info("  Saved plots/second_pca_cumvar.png")
+        except Exception as exc:
+            _logger.warning(f"  Cumvar plot failed: {exc}")
 
     if sweep_result is not None:
         sweep_df = pd.DataFrame(sweep_result["sweep_rows"])
@@ -2791,19 +3643,21 @@ def apply_second_pass_pca(
             _logger.warning(f"  Sweep plot failed: {exc}")
 
     # Per-PC marker contribution (which signals drive each second-pass PC)
-    try:
-        _save_pc_marker_contributions(
-            components=pca_model.components_[:n_pcs],
-            input_feature_names=input_feature_names,
-            n_pcs=n_pcs,
-            cumvar=cumvar,
-            out_dir=out_dir,
-            plots_dir=plots_dir,
-            plt=plt,
-            _logger=_logger,
-        )
-    except Exception as exc:
-        _logger.warning(f"  Per-PC marker contribution plot failed: {exc}")
+    # Skip in no-PCA mode — there's no fitted PCA basis to attribute back to.
+    if not skip_pca:
+        try:
+            _save_pc_marker_contributions(
+                components=pca_model.components_[:n_pcs],
+                input_feature_names=input_feature_names,
+                n_pcs=n_pcs,
+                cumvar=cumvar,
+                out_dir=out_dir,
+                plots_dir=plots_dir,
+                plt=plt,
+                _logger=_logger,
+            )
+        except Exception as exc:
+            _logger.warning(f"  Per-PC marker contribution plot failed: {exc}")
 
     if activity_map is not None:
         try:
@@ -2824,6 +3678,8 @@ def apply_second_pass_pca(
     adata_gene_embed = _compute_and_plot_embeddings(
         adata_guide, metric_lookup, plots_dir, plt, _logger,
         random_seed=random_seed,
+        chromosome_csv=chromosome_csv,
+        umap_type=umap_type,
     )
     _atomic_write_h5ad(adata_guide, out_dir / "guide_pca_optimized.h5ad", _logger)
     if adata_gene_embed is not None:
@@ -2842,7 +3698,7 @@ def apply_second_pass_pca(
         _logger,
         distance=distance,
     )
-    corum_map, corum_ratio, chad_map, chad_ratio = _score_consistency(
+    corum_map, corum_ratio, chad_map, chad_ratio, ebi_map, ebi_ratio = _score_consistency(
         adata_gene,
         activity_map,
         total_feats,
@@ -3065,6 +3921,9 @@ def _aggregate_then_second_pca(
     second_pca_run_sweep: bool,
     second_pca_sweep_thresholds: Optional[List[float]],
     random_seed: int = 42,
+    agg_method: str = "mean",
+    chromosome_csv: Optional[str] = None,
+    umap_type: str = "max",
 ) -> str:
     """Run Phase 2 aggregation and the 2nd-pass PCA back-to-back.
 
@@ -3076,6 +3935,9 @@ def _aggregate_then_second_pca(
         per_unit_subdir=per_unit_subdir,
         distance=distance,
         random_seed=random_seed,
+        agg_method=agg_method,
+        chromosome_csv=chromosome_csv,
+        umap_type=umap_type,
     )
     if str(agg_result).startswith("FAILED"):
         return agg_result
@@ -3088,6 +3950,9 @@ def _aggregate_then_second_pca(
         run_sweep=second_pca_run_sweep,
         sweep_thresholds=second_pca_sweep_thresholds,
         random_seed=random_seed,
+        agg_method=agg_method,
+        chromosome_csv=chromosome_csv,
+        umap_type=umap_type,
     )
     return f"{agg_result} | 2nd-pca: {second_result}"
 
@@ -3118,6 +3983,9 @@ def _submit_aggregation_slurm(
     distance="cosine",
     second_pca_kwargs: Optional[Dict] = None,
     random_seed: int = 42,
+    agg_method: str = "mean",
+    chromosome_csv: Optional[str] = None,
+    umap_type: str = "max",
 ):
     """Submit a single aggregation SLURM job (optionally chained with 2nd-pass PCA)."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -3130,6 +3998,9 @@ def _submit_aggregation_slurm(
             "per_unit_subdir": per_unit_subdir,
             "distance": distance,
             "random_seed": random_seed,
+            "agg_method": agg_method,
+            "chromosome_csv": chromosome_csv,
+            "umap_type": umap_type,
             **second_pca_kwargs,
         }
         job_name = f"{manifest_prefix}_aggregate_2pca"
@@ -3141,6 +4012,9 @@ def _submit_aggregation_slurm(
             "per_unit_subdir": per_unit_subdir,
             "distance": distance,
             "random_seed": random_seed,
+            "agg_method": agg_method,
+            "chromosome_csv": chromosome_csv,
+            "umap_type": umap_type,
         }
         job_name = f"{manifest_prefix}_aggregate"
 
@@ -3192,6 +4066,9 @@ def _submit_phase1_slurm(
             distance=args.distance,
             second_pca_kwargs=_build_second_pca_kwargs(args),
             random_seed=getattr(args, "seed", 42),
+            agg_method=getattr(args, "agg_method", "mean"),
+            chromosome_csv=getattr(args, "chromosome_csv", None),
+            umap_type=getattr(args, "umap_type", "max"),
         )
 
     print(f"\nSubmitting {len(jobs)} {unit_label} SLURM jobs...")
@@ -3298,7 +4175,10 @@ def _handle_umap_only(args, output_dir):
 
     plots_dir = umap_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
-    _compute_and_plot_embeddings(adata_guide, metric_lookup, plots_dir, plt, _logger)
+    _compute_and_plot_embeddings(
+        adata_guide, metric_lookup, plots_dir, plt, _logger,
+        umap_type=getattr(args, "umap_type", "max"),
+    )
     print("SUCCESS: Embedding plots saved")
 
 
@@ -3352,6 +4232,7 @@ def _recompute_embeddings_for_seed(
     out_dir=None,
     umap_n_neighbors: Optional[int] = None,
     umap_min_dist: Optional[float] = None,
+    umap_type: str = "max",
 ):
     """Refit UMAP + PHATE in-place using ``seed``. Skips embeddings whose
     stored params already match. Returns the set of embedding names that
@@ -3360,17 +4241,31 @@ def _recompute_embeddings_for_seed(
     ``umap_n_neighbors`` / ``umap_min_dist`` are optional overrides — when
     set they bypass the sweep cache (the cache is keyed on default
     n_neighbors=15, min_dist=0.1) and force a refit at the requested params.
+
+    ``umap_type``: 'max' (default) → scanpy with PCA-anchored init;
+    'gav' → legacy umap-learn directly on the feature matrix.
     """
     refit: set = set()
     n_obs = adata.n_obs
-    nn = int(umap_n_neighbors) if umap_n_neighbors is not None else min(15, n_obs - 1)
+    # Honor the umap_type defaults when the caller didn't pass overrides.
+    if umap_n_neighbors is not None:
+        nn = int(umap_n_neighbors)
+    elif umap_type == "max":
+        nn = min(8, n_obs - 1)
+    else:
+        nn = min(15, n_obs - 1)
     nn = min(nn, n_obs - 1)
     if nn < 2:
         _logger.warning(
             "  %s: too few obs (%d) — skipping embedding recompute", level_name, n_obs,
         )
         return refit
-    md = float(umap_min_dist) if umap_min_dist is not None else 0.1
+    if umap_min_dist is not None:
+        md = float(umap_min_dist)
+    elif umap_type == "max":
+        md = 0.25
+    else:
+        md = 0.1
 
     if "X_pca" in adata.obsm:
         X = np.asarray(adata.obsm["X_pca"], dtype=np.float32)
@@ -3381,6 +4276,7 @@ def _recompute_embeddings_for_seed(
     stored_seed = _stored_embedding_seed(adata, "umap")
     stored_nn = stored_params.get("n_neighbors")
     stored_md = stored_params.get("min_dist")
+    stored_type = stored_params.get("umap_type")
 
     # Look up the cache for the (nn, md) the user requested — sweep writes
     # one cache per param combo, so there's a hit if and only if a sweep was
@@ -3392,38 +4288,70 @@ def _recompute_embeddings_for_seed(
     needs_umap = (
         cache_coords is not None
         or stored_seed != int(seed)
+        or stored_type != umap_type
         or (umap_n_neighbors is not None and stored_nn != nn)
         or (umap_min_dist is not None and stored_md != md)
     )
     if needs_umap:
         coords = cache_coords
         if coords is None:
-            _logger.info(
-                "  Refitting %s UMAP at seed=%d, n_neighbors=%d, min_dist=%g "
-                "(stored: seed=%s, nn=%s, md=%s)",
-                level_name, seed, nn, md,
-                stored_seed, stored_nn, stored_md,
-            )
-            from umap import UMAP
-
-            try:
-                model = UMAP(
-                    n_components=2, n_neighbors=nn, min_dist=md,
-                    random_state=int(seed),
+            if umap_type == "max" and "X_pca" in adata.obsm:
+                _logger.info(
+                    "  Refitting %s UMAP via scanpy (umap_type=max): "
+                    "sc.pp.neighbors(n_neighbors=%d, use_rep='X_pca'); "
+                    "sc.tl.umap(min_dist=%g, random_state=%d, alpha=1.0, "
+                    "gamma=1.5, maxiter=2000, init_pos=X_pca[:, :2])  "
+                    "(stored: seed=%s, nn=%s, md=%s, type=%s)",
+                    level_name, nn, md, int(seed),
+                    stored_seed, stored_nn, stored_md, stored_type,
                 )
-                coords = model.fit_transform(X)
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning("  %s UMAP refit failed: %s", level_name, exc)
-                coords = None
+                try:
+                    import scanpy as sc
+                    adata_tmp = adata.copy()
+                    init_pos = adata_tmp.obsm["X_pca"][:, :2].copy()
+                    sc.pp.neighbors(adata_tmp, n_neighbors=nn, use_rep="X_pca")
+                    sc.tl.umap(
+                        adata_tmp, min_dist=md, random_state=int(seed),
+                        alpha=1.0, gamma=1.5, maxiter=2000, init_pos=init_pos,
+                    )
+                    coords = adata_tmp.obsm["X_umap"]
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("  %s scanpy UMAP refit failed: %s", level_name, exc)
+                    coords = None
+            else:
+                _logger.info(
+                    "  Refitting %s UMAP via umap-learn (umap_type=%s): "
+                    "UMAP(n_neighbors=%d, min_dist=%g, random_state=%d)  "
+                    "(stored: seed=%s, nn=%s, md=%s, type=%s)",
+                    level_name, umap_type, nn, md, int(seed),
+                    stored_seed, stored_nn, stored_md, stored_type,
+                )
+                from umap import UMAP
+                try:
+                    model = UMAP(
+                        n_components=2, n_neighbors=nn, min_dist=md,
+                        random_state=int(seed),
+                    )
+                    coords = model.fit_transform(X)
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("  %s UMAP refit failed: %s", level_name, exc)
+                    coords = None
 
         if coords is not None:
             adata.obsm["X_umap"] = np.asarray(coords, dtype=np.float32)
-            adata.uns["umap"] = {"params": {
+            params_dict = {
                 "n_neighbors": nn,
                 "min_dist": md,
                 "random_state": int(seed),
                 "metric": "euclidean",
-            }}
+                "umap_type": umap_type,
+            }
+            if umap_type == "max":
+                params_dict.update({
+                    "alpha": 1.0, "gamma": 1.5, "maxiter": 2000,
+                    "init_pos": "X_pca[:, :2]",
+                })
+            adata.uns["umap"] = {"params": params_dict}
             refit.add("umap")
 
     if _stored_embedding_seed(adata, "phate") != int(seed):
@@ -3458,6 +4386,9 @@ def _run_overlays_only(
     seed: int = 42,
     umap_n_neighbors: Optional[int] = None,
     umap_min_dist: Optional[float] = None,
+    chromosome_csv: Optional[str] = None,
+    chromosome_only: bool = False,
+    umap_type: str = "max",
 ) -> str:
     """Picklable SLURM worker: regenerate HTML overlays from existing h5ads.
 
@@ -3489,13 +4420,53 @@ def _run_overlays_only(
     _logger.info(f"Loading {gene_path}...")
     adata_gene_embed = ad.read_h5ad(gene_path)
 
+    plots_dir = out / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    if chromosome_only:
+        # Skip the seed refit + save_extra_overlays. Just plot the chromosome
+        # overlay using whatever X_umap / X_phate is already in the gene h5ad.
+        if not chromosome_csv:
+            return "ERROR: --chromosome-only requires --chromosome-csv"
+        chrom_df = _load_chromosome_map(chromosome_csv, _logger)
+        if chrom_df is None:
+            return "ERROR: chromosome CSV unreadable or missing required columns"
+        perts_gene = get_perts_col(adata_gene_embed)
+        chrom_count = 0
+        for embedding_name, obsm_key in (("UMAP", "X_umap"), ("PHATE", "X_phate")):
+            coords = adata_gene_embed.obsm.get(obsm_key)
+            if coords is None:
+                _logger.warning(
+                    f"  {obsm_key} missing on gene embedding — skipping {embedding_name}"
+                )
+                continue
+            try:
+                stem = plots_dir / f"gene_{embedding_name.lower()}_chromosome"
+                _plot_chromosome_overlay(
+                    np.asarray(coords), perts_gene, chrom_df,
+                    embedding_name, stem, plt, _logger,
+                )
+                _plot_chromosome_overlay_html(
+                    np.asarray(coords), perts_gene, chrom_df,
+                    embedding_name, stem, _logger,
+                )
+                chrom_count += 1
+            except Exception as chr_err:
+                _logger.warning(
+                    f"  Chromosome overlay ({embedding_name}) failed: {chr_err}"
+                )
+        return f"SUCCESS: regenerated {chrom_count} chromosome plot(s) only"
+
     # Guide level: don't pass UMAP param overrides (gene-level only).
-    if _recompute_embeddings_for_seed(adata_guide, "guide", seed, _logger, out_dir=out):
+    if _recompute_embeddings_for_seed(
+        adata_guide, "guide", seed, _logger, out_dir=out, umap_type=umap_type,
+    ):
         _logger.info(f"  Rewriting {guide_path} with refit embeddings")
         _atomic_write_h5ad(adata_guide, guide_path, _logger)
     if _recompute_embeddings_for_seed(
         adata_gene_embed, "gene", seed, _logger, out_dir=out,
         umap_n_neighbors=umap_n_neighbors, umap_min_dist=umap_min_dist,
+        umap_type=umap_type,
     ):
         _logger.info(f"  Rewriting {gene_path} with refit embeddings")
         _atomic_write_h5ad(adata_gene_embed, gene_path, _logger)
@@ -3515,9 +4486,6 @@ def _run_overlays_only(
     corum_map = _load_csv("phenotypic_consistency_corum.csv")
     chad_map = _load_csv("phenotypic_consistency_manual.csv")
 
-    plots_dir = out / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
     from ops_model.post_process.combination.embedding_overlays import save_extra_overlays
 
     save_extra_overlays(
@@ -3532,11 +4500,40 @@ def _run_overlays_only(
         chad_path_override=CHAD_ANNOTATION_PATH,
         _logger=_logger,
     )
+
+    # Chromosome-arm overlays (gene level only) — uses the freshly loaded
+    # X_umap / X_phate from gene_embedding_pca_optimized.h5ad.
+    chrom_count = 0
+    if chromosome_csv:
+        chrom_df = _load_chromosome_map(chromosome_csv, _logger)
+        if chrom_df is not None:
+            perts_gene = get_perts_col(adata_gene_embed)
+            for embedding_name, obsm_key in (("UMAP", "X_umap"), ("PHATE", "X_phate")):
+                coords = adata_gene_embed.obsm.get(obsm_key)
+                if coords is None:
+                    _logger.warning(
+                        f"  {obsm_key} missing on gene embedding — skipping "
+                        f"chromosome overlay for {embedding_name}"
+                    )
+                    continue
+                try:
+                    stem = plots_dir / f"gene_{embedding_name.lower()}_chromosome"
+                    _plot_chromosome_overlay(
+                        np.asarray(coords), perts_gene, chrom_df,
+                        embedding_name, stem, plt, _logger,
+                    )
+                    chrom_count += 1
+                except Exception as chr_err:
+                    _logger.warning(
+                        f"  Chromosome overlay ({embedding_name}) failed: {chr_err}"
+                    )
+
     # Persist obs additions from save_extra_overlays (CHAD / CORUM / supercategory
     # / leiden_r* / GO BP/CC / Reactome / KEGG / neighbors graph) onto disk.
     _atomic_write_h5ad(adata_guide, guide_path, _logger)
     _atomic_write_h5ad(adata_gene_embed, gene_path, _logger)
-    return "SUCCESS: Overlays regenerated"
+    chrom_note = f" + {chrom_count} chromosome plot(s)" if chrom_count else ""
+    return f"SUCCESS: Overlays regenerated{chrom_note}"
 
 
 def _fit_umap_one_seed(seed: int, X, nn: int, min_dist: float = 0.1):
@@ -3769,8 +4766,26 @@ def _handle_overlays_only(args, output_dir):
                 subdir = "second_pca_consensus"
             else:
                 subdir = f"second_pca_{int(round(threshold * 100))}"
+            # Honor the chrom-arm-correction suffix used by run_chrom_arm_then_second_pca
+            if getattr(args, "chrom_arm_correct", False):
+                from ops_model.post_process.combination.guide_chrom_arm_correction import (
+                    METHOD_SUFFIX,
+                )
+                method = getattr(args, "chrom_arm_method", "cohesion")
+                subdir = subdir + "_chrom_arm_corr" + METHOD_SUFFIX.get(method, "")
         output_dir = output_dir / subdir
         print(f"Second-pass overlays mode: output → {output_dir}")
+
+    # When --chrom-arm-correct is on but no --chromosome-csv was given,
+    # auto-pipe the shared symbol→arm cache so the chr-arm overlay plot fires.
+    if getattr(args, "chrom_arm_correct", False) and not getattr(args, "chromosome_csv", None):
+        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+            SHARED_MAP_CSV_PATH,
+        )
+        if SHARED_MAP_CSV_PATH is not None and SHARED_MAP_CSV_PATH.is_file():
+            args.chromosome_csv = str(SHARED_MAP_CSV_PATH)
+            print(f"--chrom-arm-correct: auto-piping chromosome overlay from "
+                  f"shared cache {SHARED_MAP_CSV_PATH}")
 
     seed = int(getattr(args, "seed", 42))
     umap_nn = getattr(args, "umap_n_neighbors", None)
@@ -3778,6 +4793,9 @@ def _handle_overlays_only(args, output_dir):
     umap_kwargs = {
         "umap_n_neighbors": int(umap_nn) if umap_nn is not None else None,
         "umap_min_dist": float(umap_md) if umap_md is not None else None,
+        "chromosome_csv": getattr(args, "chromosome_csv", None),
+        "chromosome_only": getattr(args, "chromosome_only", False),
+        "umap_type": getattr(args, "umap_type", "max"),
     }
     if args.slurm:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -3824,20 +4842,41 @@ def _handle_aggregate_only(args, output_dir):
     When a non-default distance metric is used, the per_signal/ h5ads live in
     the *parent* directory (the original cosine sweep output).  We read from
     there but write results into the distance-specific subdirectory.
+
+    The parent symlink fallback is only safe when the per-signal data is
+    interchangeable across the path segment we descended through. That's true
+    for distance metrics (they don't affect Phase 1 outputs) but **NOT** for
+    ``--agg-method`` — median changes the cells→guide reduction, so a median
+    aggregate-only run must point at a per_signal/ that was itself produced
+    with median. We refuse the symlink in that case and tell the user to do a
+    full run first.
     """
     agg_output = str(output_dir)
     agg_subdir = "per_signal"
+    agg_method = getattr(args, "agg_method", "mean")
 
-    # If per_signal/ doesn't exist here but does in the parent, read from parent
     per_signal_dir = Path(agg_output) / agg_subdir
-    if not per_signal_dir.exists() and (Path(agg_output).parent / agg_subdir).exists():
-        # e.g. output_dir = .../all/euclidean, per_signal lives in .../all/per_signal
-        source_subdir = str(Path(agg_output).parent / agg_subdir)
-        print(f"Reading swept h5ads from {source_subdir}")
-        print(f"Writing aggregated results to {agg_output}")
-        # Symlink per_signal into the output dir so aggregate_channels can find it
-        per_signal_dir.parent.mkdir(parents=True, exist_ok=True)
-        per_signal_dir.symlink_to(Path(agg_output).parent / agg_subdir)
+    if not per_signal_dir.exists():
+        parent_per_signal = Path(agg_output).parent / agg_subdir
+        if agg_method != "mean":
+            print(
+                f"\nERROR: --aggregate-only with --agg-method={agg_method} requires "
+                f"per-signal h5ads aggregated with method={agg_method}, but none "
+                f"were found at:\n  {per_signal_dir}\n\n"
+                f"Symlinking from the mean tree at {parent_per_signal} would give "
+                f"wrong cells→guide aggregation (mean, not {agg_method}).\n"
+                f"Run the full pipeline first (drop --aggregate-only) to produce "
+                f"{agg_method}-aggregated per_signal/, then re-run --aggregate-only."
+            )
+            return
+        if parent_per_signal.exists():
+            # e.g. output_dir = .../all/euclidean, per_signal lives in .../all/per_signal
+            source_subdir = str(parent_per_signal)
+            print(f"Reading swept h5ads from {source_subdir}")
+            print(f"Writing aggregated results to {agg_output}")
+            # Symlink per_signal into the output dir so aggregate_channels can find it
+            per_signal_dir.parent.mkdir(parents=True, exist_ok=True)
+            per_signal_dir.symlink_to(parent_per_signal)
 
     second_pca_kwargs = _build_second_pca_kwargs(args)
     if args.slurm:
@@ -3855,9 +4894,12 @@ def _handle_aggregate_only(args, output_dir):
             _make_agg_slurm_params(args),
             "pca_aggregation",
             "pca_agg",
+            agg_method=getattr(args, "agg_method", "mean"),
+            chromosome_csv=getattr(args, "chromosome_csv", None),
             distance=args.distance,
             second_pca_kwargs=second_pca_kwargs,
             random_seed=getattr(args, "seed", 42),
+            umap_type=getattr(args, "umap_type", "max"),
         )
     else:
         result = aggregate_channels(
@@ -3866,6 +4908,9 @@ def _handle_aggregate_only(args, output_dir):
             per_unit_subdir=agg_subdir,
             distance=args.distance,
             random_seed=getattr(args, "seed", 42),
+            agg_method=getattr(args, "agg_method", "mean"),
+            chromosome_csv=getattr(args, "chromosome_csv", None),
+            umap_type=getattr(args, "umap_type", "max"),
         )
         print(result)
         if second_pca_kwargs is not None:
@@ -3873,15 +4918,156 @@ def _handle_aggregate_only(args, output_dir):
             _handle_second_pca(args, output_dir)
 
 
+def run_second_pca_then_chrom_arm(
+    output_dir: str,
+    chrom_arm_kwargs: Dict,
+    second_pca_kwargs: Dict,
+) -> str:
+    """Reverse-order SLURM wrapper: 2nd-pass PCA → chrom-arm correction.
+
+    Step 1: run ``apply_second_pass_pca`` on the uncorrected guide h5ad
+    (re-uses an existing ``second_pca_consensus/`` output when present,
+    otherwise computes it fresh).
+
+    Step 2: load the 2pca'd guide h5ad, apply the chrom-arm correction in
+    the PC space (sPCs become the features being regressed), write the
+    corrected version next to it.
+
+    Step 3: call ``apply_second_pass_pca(..., skip_pca=True)`` on the
+    corrected sPC h5ad to do scoring + aggregation + plots without
+    re-running PCA. Outputs land in
+    ``second_pca_consensus_then_chrom_arm_corr<method>/`` so this never
+    clobbers the standard ``second_pca_consensus_chrom_arm_corr*/`` dirs
+    produced by the original-order wrapper.
+    """
+    from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        run_chrom_arm_correction,
+        METHOD_SUFFIX,
+    )
+
+    output_dir = Path(output_dir)
+    method = chrom_arm_kwargs.get("method", "cohesion")
+    method_suffix = METHOD_SUFFIX.get(method, "")
+
+    # Step 1: 2nd-pass PCA on the uncorrected input. Use the default
+    # second_pca_consensus subdir; if it already exists, reuse it.
+    pca_subdir = output_dir / "second_pca_consensus"
+    pca_guide = pca_subdir / "guide_pca_optimized.h5ad"
+    if not pca_guide.exists():
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"[2pca→chrom-arm] No existing {pca_subdir.name}/; running 2nd-pass PCA..."
+        )
+        spkw = dict(second_pca_kwargs)
+        spkw["subdir"] = None  # force default 'second_pca_consensus'
+        spkw["subdir_suffix"] = ""
+        spkw["input_path"] = None
+        spkw["skip_pca"] = False
+        result = apply_second_pass_pca(**spkw)
+        if "FAILED" in str(result):
+            return result
+    else:
+        logging.getLogger(__name__).info(
+            f"[2pca→chrom-arm] Reusing existing 2pca output at {pca_subdir}"
+        )
+
+    # Step 2: chrom-arm correction on the sPC matrix. Write the corrected
+    # h5ad next to the 2pca'd one with a method-aware suffix so subsequent
+    # methods don't overwrite each other.
+    corrected_out = pca_subdir / (
+        f"guide_pca_optimized_chrom_arm_corr{method_suffix}_after_2pca.h5ad"
+    )
+    corrected_path = run_chrom_arm_correction(
+        pca_guide, output_path=corrected_out, **chrom_arm_kwargs,
+    )
+
+    # Step 3: skip-pca scoring on the corrected sPC matrix. Drop into a
+    # then-corrected subdir under output_dir.
+    spkw = dict(second_pca_kwargs)
+    spkw["input_path"] = str(corrected_path)
+    spkw["skip_pca"] = True
+    spkw["subdir"] = (
+        f"second_pca_consensus_then_chrom_arm_corr{method_suffix}"
+    )
+    spkw["subdir_suffix"] = ""  # we set subdir explicitly above
+    return apply_second_pass_pca(**spkw)
+
+
+def run_chrom_arm_then_second_pca(
+    output_dir: str,
+    chrom_arm_kwargs: Dict,
+    second_pca_kwargs: Dict,
+    skip_pca: bool = False,
+) -> str:
+    """SLURM-picklable wrapper: chrom-arm correct guide h5ad → 2nd-pass PCA.
+
+    Reads ``<output_dir>/guide_pca_optimized.h5ad``, runs the chrom-arm
+    correction (annotation + per-method correction step), writes the
+    corrected guide h5ad next to the original (filename varies by method),
+    then chains ``apply_second_pass_pca`` on that corrected h5ad. Output
+    subdir gets a method-aware suffix so the cohesion run lands in
+    ``second_pca_consensus_chrom_arm_corr/`` and the centering run in
+    ``second_pca_consensus_chrom_arm_corr_centering/`` — never clobber each
+    other.
+
+    Keeping this as a top-level function (not a closure inside
+    ``_handle_second_pca``) so submitit can pickle it for SLURM submission.
+    """
+    from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        run_chrom_arm_correction,
+        METHOD_SUFFIX,
+    )
+
+    output_dir = Path(output_dir)
+    guide_path = output_dir / "guide_pca_optimized.h5ad"
+    if not guide_path.exists():
+        return f"FAILED: {guide_path} not found — run aggregation first"
+
+    method = chrom_arm_kwargs.get("method", "cohesion")
+    corrected_path = run_chrom_arm_correction(guide_path, **chrom_arm_kwargs)
+
+    spkw = dict(second_pca_kwargs)
+    spkw["input_path"] = str(corrected_path)
+    spkw["subdir_suffix"] = "_chrom_arm_corr" + METHOD_SUFFIX.get(method, "")
+    spkw["skip_pca"] = bool(skip_pca)
+    return apply_second_pass_pca(**spkw)
+
+
 def _handle_second_pca(args, output_dir):
-    """Run a second-pass PCA on the existing aggregated guide h5ad."""
+    """Run a second-pass PCA on the existing aggregated guide h5ad.
+
+    With ``--chrom-arm-correct``, first regresses out per-arm cohesion effects
+    from the guide-level h5ad and runs the 2nd-pass on the corrected output;
+    the corrected h5ad and its 2nd-pass subdir both get a ``_chrom_arm_corr``
+    suffix so they never clobber an existing untouched run.
+    """
     sweep_thresholds = None
     if args.second_pca_sweep_thresholds:
         sweep_thresholds = [
             float(t) for t in args.second_pca_sweep_thresholds.split(",") if t.strip()
         ]
 
-    kwargs = dict(
+    # Auto-pipe the shared chrom-arm map into the chromosome overlay plot
+    # whenever the user opts into --chrom-arm-correct but didn't pass an
+    # explicit --chromosome-csv. Without this, the gene-level chromosome
+    # UMAP/PHATE plot silently skips — _compute_and_plot_embeddings only
+    # generates it when chromosome_csv is non-None.
+    chromosome_csv = getattr(args, "chromosome_csv", None)
+    if (
+        not chromosome_csv
+        and getattr(args, "chrom_arm_correct", False)
+    ):
+        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+            SHARED_MAP_CSV_PATH,
+        )
+        if SHARED_MAP_CSV_PATH is not None and SHARED_MAP_CSV_PATH.is_file():
+            chromosome_csv = str(SHARED_MAP_CSV_PATH)
+            print(
+                f"--chrom-arm-correct: auto-piping chromosome overlay from "
+                f"shared cache {SHARED_MAP_CSV_PATH}"
+            )
+
+    second_pca_kwargs = dict(
         output_dir=str(output_dir),
         threshold=args.second_pca_threshold,
         distance=args.distance,
@@ -3890,36 +5076,290 @@ def _handle_second_pca(args, output_dir):
         run_sweep=not args.second_pca_no_sweep,
         sweep_thresholds=sweep_thresholds,
         random_seed=getattr(args, "seed", 42),
+        agg_method=getattr(args, "agg_method", "mean"),
+        chromosome_csv=chromosome_csv,
+        umap_type=getattr(args, "umap_type", "max"),
     )
+
+    chrom_arm = bool(getattr(args, "chrom_arm_correct", False))
+    if chrom_arm:
+        chrom_arm_method = getattr(args, "chrom_arm_method", "cohesion")
+        chrom_arm_skip_2pca = bool(getattr(args, "chrom_arm_skip_second_pca", False))
+        chrom_arm_after_2pca = bool(getattr(args, "chrom_arm_after_second_pca", False))
+        if chrom_arm_skip_2pca and chrom_arm_after_2pca:
+            raise SystemExit(
+                "--chrom-arm-skip-second-pca and --chrom-arm-after-second-pca "
+                "are mutually exclusive (the first runs correction without "
+                "2pca; the second runs 2pca then correction)."
+            )
+        chrom_arm_kwargs = dict(
+            method=chrom_arm_method,
+            k_nn=int(getattr(args, "chrom_arm_knn", 15)),
+            pv_threshold=float(getattr(args, "chrom_arm_qval", 0.01)),
+            min_genes_for_regression=int(getattr(args, "chrom_arm_min_genes", 10)),
+            map_csv_path=getattr(args, "chrom_arm_map_csv", None),
+        )
+        method_suffix = "" if chrom_arm_method == "cohesion" else f"_{chrom_arm_method}"
+        if chrom_arm_after_2pca:
+            wrapped_kwargs = dict(
+                output_dir=str(output_dir),
+                chrom_arm_kwargs=chrom_arm_kwargs,
+                second_pca_kwargs=second_pca_kwargs,
+            )
+            job_name = f"second_pca_then_chrom_arm_corr{method_suffix}"
+            func = run_second_pca_then_chrom_arm
+            kwargs_for_run = wrapped_kwargs
+        else:
+            wrapped_kwargs = dict(
+                output_dir=str(output_dir),
+                chrom_arm_kwargs=chrom_arm_kwargs,
+                second_pca_kwargs=second_pca_kwargs,
+                skip_pca=chrom_arm_skip_2pca,
+            )
+            prefix = "chrom_arm_corr_only" if chrom_arm_skip_2pca else "pca_second_pass_chrom_arm_corr"
+            job_name = f"{prefix}{method_suffix}"
+            func = run_chrom_arm_then_second_pca
+            kwargs_for_run = wrapped_kwargs
+    else:
+        job_name = "pca_second_pass"
+        func = apply_second_pass_pca
+        kwargs_for_run = second_pca_kwargs
 
     if args.slurm:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
         slurm_params = _make_agg_slurm_params(args)
+        suffix = " (chrom-arm corrected)" if chrom_arm else ""
         print(
-            f"Submitting --second-pca as SLURM job "
+            f"Submitting --second-pca{suffix} as SLURM job "
             f"({slurm_params.get('mem')}, {slurm_params.get('timeout_min')}min)..."
         )
         agg_result = submit_parallel_jobs(
             jobs_to_submit=[
                 {
-                    "name": "pca_second_pass",
-                    "func": apply_second_pass_pca,
-                    "kwargs": kwargs,
+                    "name": job_name,
+                    "func": func,
+                    "kwargs": kwargs_for_run,
                 }
             ],
-            experiment="pca_second_pass",
+            experiment=job_name,
             slurm_params=slurm_params,
             log_dir="pca_optimization",
-            manifest_prefix="pca_second_pass",
+            manifest_prefix=job_name,
             wait_for_completion=True,
         )
         if agg_result.get("failed"):
-            print("Second-pass PCA FAILED")
+            print(f"Second-pass PCA{suffix} FAILED")
         else:
-            print("Second-pass PCA complete")
+            print(f"Second-pass PCA{suffix} complete")
     else:
-        print(apply_second_pass_pca(**kwargs))
+        print(func(**kwargs_for_run))
+
+
+def _handle_op(args, output_dir):
+    """OrganelleProfiler mode: one PCA-sweep job per all_cells_*.h5ad file.
+
+    Mirrors :func:`_handle_downsampled` minus the experiment-discovery step —
+    OP h5ads are already one-per-marker with cells pooled inside, so we just
+    list the files and dispatch one ``pca_sweep_op_signal`` per file.
+    """
+    op_root = args.op_root
+    ds_output_dir = output_dir
+    ds_output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "clean", False):
+        import shutil
+
+        per_signal_dir = ds_output_dir / "per_signal"
+        if per_signal_dir.exists():
+            print(f"--clean: removing {per_signal_dir}")
+            shutil.rmtree(per_signal_dir)
+
+    try:
+        pairs = _discover_op_files(op_root)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        return
+    print(f"OP mode: discovered {len(pairs)} marker h5ads under {op_root}")
+
+    target_n_cells = int(getattr(args, "target_n_cells", 0) or 0)
+    if target_n_cells == 0:
+        # OP files are already capped during consolidation; use a generous cap
+        # so we keep ~all of each file (caps in consolidate_all_cells already
+        # bound this to ~2-8M cells / file).
+        target_n_cells = 10_000_000
+
+    skip_phase2 = getattr(args, "preserve_batch", False) or getattr(args, "no_pca", False)
+
+    def _op_job_kwargs(signal: str, path: Path) -> Dict:
+        kwargs = dict(
+            signal=signal,
+            op_path=str(path),
+            output_dir=str(ds_output_dir),
+            target_n_cells=target_n_cells,
+            norm_method=args.norm_method,
+            random_seed=getattr(args, "seed", 42),
+            distance=args.distance,
+            zscore_per_experiment=getattr(args, "zscore_per_experiment", False),
+            exclude_dud_guides=getattr(args, "exclude_dud_guides", True),
+        )
+        if args.fixed_threshold is not None and args.fixed_threshold > 0:
+            kwargs["fixed_threshold"] = args.fixed_threshold
+        if getattr(args, "preserve_batch", False):
+            kwargs["preserve_batch"] = True
+        if getattr(args, "no_pca", False):
+            kwargs["no_pca"] = True
+        if getattr(args, "agg_method", "mean") != "mean":
+            kwargs["agg_method"] = args.agg_method
+        return kwargs
+
+    if not args.slurm:
+        print("\nRunning locally (sequential)...")
+        for signal, path in pairs:
+            result = pca_sweep_op_signal(**_op_job_kwargs(signal, path))
+            print(f"  {result}")
+        if not skip_phase2:
+            result = aggregate_channels(
+                output_dir=str(ds_output_dir),
+                norm_method=args.norm_method,
+                per_unit_subdir="per_signal",
+                distance=args.distance,
+                random_seed=getattr(args, "seed", 42),
+                agg_method=getattr(args, "agg_method", "mean"),
+                chromosome_csv=getattr(args, "chromosome_csv", None),
+                umap_type=getattr(args, "umap_type", "max"),
+            )
+            print(result)
+            if getattr(args, "second_pca", False):
+                print("\nChaining 2nd-pass PCA on aggregate output...")
+                _handle_second_pca(args, ds_output_dir)
+        return
+
+    # SLURM mode — split into high-memory (>4M cells, e.g. Phase) and
+    # standard-memory batches, matching the CP/DINO _handle_downsampled flow.
+    # Cell counts are peeked cheaply via h5py shape[0] (no full load).
+    import h5py
+    from ops_utils.hpc.slurm_batch_utils import (
+        submit_parallel_jobs,
+        wait_for_multiple_job_arrays,
+    )
+
+    # OP signal jobs sweep ~17 PCA thresholds, each running aggregate_to_level
+    # + copairs scoring on 1-4M cells. Observed runtime: ~11 min for the
+    # mid-size reporter signals — 20 min gives a buffer. Phase still gets
+    # the 360-min minimum below.
+    args.slurm_time = max(args.slurm_time, 20)
+
+    HIGH_MEMORY_CELL_THRESHOLD = 4_000_000
+
+    high_mem_jobs = []
+    other_jobs = []
+    for signal, path in pairs:
+        sig_safe = sanitize_signal_filename(signal)[:40]
+        try:
+            with h5py.File(path, "r") as f:
+                n_obs = int(f["X"].shape[0])
+        except Exception:
+            n_obs = 0
+        job = {
+            "name": f"pca_op_{sig_safe}",
+            "func": pca_sweep_op_signal,
+            "kwargs": _op_job_kwargs(signal, path),
+            "metadata": {"signal": signal, "source": str(path), "n_cells": n_obs},
+        }
+        if n_obs > HIGH_MEMORY_CELL_THRESHOLD:
+            high_mem_jobs.append(job)
+        else:
+            other_jobs.append(job)
+
+    slurm_params = _make_slurm_params(args)
+    job_arrays = []
+
+    if other_jobs:
+        print(
+            f"\nSubmitting {len(other_jobs)} OP signal jobs "
+            f"({slurm_params['mem']} each, {slurm_params['timeout_min']}min)..."
+        )
+        result_other = submit_parallel_jobs(
+            jobs_to_submit=other_jobs,
+            experiment="pca_op",
+            slurm_params=slurm_params,
+            log_dir="pca_optimization",
+            manifest_prefix="pca_op",
+            wait_for_completion=False,
+        )
+        if result_other.get("submitted_jobs"):
+            job_arrays.append({
+                "submitted_jobs": result_other["submitted_jobs"],
+                "base_job_id": result_other["base_job_id"],
+                "label": "reporters",
+                "slurm_params": slurm_params,
+            })
+
+    if high_mem_jobs:
+        phase_memory = getattr(args, "phase_memory", "600GB")
+        high_mem_slurm_params = {
+            **slurm_params,
+            "mem": phase_memory,
+            "timeout_min": max(slurm_params.get("timeout_min", 60), 360),
+        }
+        high_mem_names = [j["metadata"]["signal"] for j in high_mem_jobs]
+        print(
+            f"\nSubmitting {len(high_mem_jobs)} high-memory OP signal job(s) "
+            f"({phase_memory}, >4M cells): {', '.join(high_mem_names)}"
+        )
+        result_high = submit_parallel_jobs(
+            jobs_to_submit=high_mem_jobs,
+            experiment="pca_op_high_mem",
+            slurm_params=high_mem_slurm_params,
+            log_dir="pca_optimization",
+            manifest_prefix="pca_op_high",
+            wait_for_completion=False,
+        )
+        if result_high.get("submitted_jobs"):
+            job_arrays.append({
+                "submitted_jobs": result_high["submitted_jobs"],
+                "base_job_id": result_high["base_job_id"],
+                "label": "high_mem",
+                "slurm_params": high_mem_slurm_params,
+            })
+
+    result = {"failed": []}
+    if job_arrays:
+        wait_result = wait_for_multiple_job_arrays(
+            job_arrays,
+            experiment="pca_op",
+        )
+        result["failed"] = wait_result.get("failed", []) or []
+
+    if result.get("failed"):
+        print(f"\n{len(result['failed'])} OP signal jobs failed")
+        return
+    print(f"\nAll {len(other_jobs) + len(high_mem_jobs)} OP signal jobs complete")
+
+    if skip_phase2:
+        print("  Phase 2 aggregation skipped (--preserve-batch or --no-pca mode)")
+        return
+
+    sp_kwargs = _build_second_pca_kwargs(args)
+    msg = "aggregation SLURM job"
+    if sp_kwargs is not None:
+        msg += " (chained with 2nd-pass PCA)"
+    print(f"\nSubmitting {msg}...")
+    _submit_aggregation_slurm(
+        str(ds_output_dir),
+        args.norm_method,
+        "per_signal",
+        _make_agg_slurm_params(args),
+        "pca_op_aggregation",
+        "pca_op_agg",
+        distance=args.distance,
+        second_pca_kwargs=sp_kwargs,
+        random_seed=getattr(args, "seed", 42),
+        agg_method=getattr(args, "agg_method", "mean"),
+        chromosome_csv=getattr(args, "chromosome_csv", None),
+        umap_type=getattr(args, "umap_type", "max"),
+    )
 
 
 def _handle_downsampled(args, output_dir, cp_override):
@@ -4113,6 +5553,51 @@ def _handle_downsampled(args, output_dir, cp_override):
     elif phase_filter == "no_phase":
         signal_groups = {s: p for s, p in signal_groups.items() if s != "Phase"}
 
+    # Apply --signals filter (retry-failed-shards mode). The matcher
+    # normalizes both sides by collapsing all non-alphanumeric runs into a
+    # single underscore and lowercasing, so any of these all match the same
+    # canonical label "actin filament, FastAct_SPY555 Live Cell Dye":
+    #   - canonical channel-map label
+    #   - sanitized filename form
+    #   - SLURM job-name form
+    #   - any space/underscore/comma mix the user happens to type
+    signals_arg = getattr(args, "signals", None)
+    if signals_arg:
+        import re as _re
+
+        def _norm(s: str) -> str:
+            return _re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+        wanted_raw = [s.strip() for s in signals_arg.split(",") if s.strip()]
+        wanted_norm = {_norm(s): s for s in wanted_raw}
+        before = len(signal_groups)
+
+        sig_match: Dict[str, str] = {}  # canonical signal → user input that matched
+        for sig in signal_groups.keys():
+            for key in (_norm(sig), _norm(sanitize_signal_filename(sig))):
+                if key in wanted_norm:
+                    sig_match[sig] = wanted_norm[key]
+                    break
+
+        matched_inputs = set(sig_match.values())
+        missing = [w for w in wanted_raw if w not in matched_inputs]
+        if missing:
+            print(
+                f"WARNING: --signals listed {len(missing)} unknown signal(s) "
+                f"(not in discovered groups): {missing[:5]}\n"
+                f"  Tip: matcher accepts canonical labels, sanitized filenames, "
+                f"and SLURM job-name forms — but the marker name itself must "
+                f"appear in the discovered signal groups."
+            )
+        signal_groups = {s: p for s, p in signal_groups.items() if s in sig_match}
+        print(
+            f"--signals filter: {before} → {len(signal_groups)} signal groups "
+            f"({sorted(signal_groups.keys())[:5]}...)"
+        )
+        if not signal_groups:
+            print("ERROR: no signal groups remain after --signals filter.")
+            return
+
     n_signals = len(signal_groups)
 
     mode_label = (
@@ -4261,6 +5746,8 @@ def _handle_downsampled(args, output_dir, cp_override):
         if getattr(args, "downsample_per_guide", False):
             kwargs["downsample_per_guide"] = True
             kwargs["cells_per_guide"] = int(getattr(args, "cells_per_guide", 250))
+        if getattr(args, "agg_method", "mean") != "mean":
+            kwargs["agg_method"] = args.agg_method
         return kwargs
 
     if not args.slurm:
@@ -4275,6 +5762,9 @@ def _handle_downsampled(args, output_dir, cp_override):
                 per_unit_subdir="per_signal",
                 distance=args.distance,
                 random_seed=getattr(args, "seed", 42),
+                agg_method=getattr(args, "agg_method", "mean"),
+                chromosome_csv=getattr(args, "chromosome_csv", None),
+                umap_type=getattr(args, "umap_type", "max"),
             )
             print(result)
             if getattr(args, "second_pca", False):
@@ -4400,6 +5890,9 @@ def _handle_downsampled(args, output_dir, cp_override):
             distance=args.distance,
             second_pca_kwargs=sp_kwargs,
             random_seed=getattr(args, "seed", 42),
+            agg_method=getattr(args, "agg_method", "mean"),
+            chromosome_csv=getattr(args, "chromosome_csv", None),
+            umap_type=getattr(args, "umap_type", "max"),
         )
 
 
@@ -4449,8 +5942,8 @@ def _build_parser():
     parser.add_argument(
         "--slurm-memory",
         type=str,
-        default="100GB",
-        help="SLURM memory per signal-group job (default: 100GB)",
+        default="200GB",
+        help="SLURM memory per signal-group job (default: 200GB)",
     )
     parser.add_argument(
         "--slurm-time",
@@ -4476,14 +5969,17 @@ def _build_parser():
     parser.add_argument(
         "--slurm-agg-memory",
         type=str,
-        default="500GB",
-        help="SLURM memory for aggregation job (default: 500GB)",
+        default="600GB",
+        help="SLURM memory for aggregation job (default: 600GB)",
     )
     parser.add_argument(
         "--slurm-agg-time",
         type=int,
-        default=60,
-        help="SLURM time limit for aggregation job in minutes (default: 60)",
+        default=180,
+        help="SLURM time limit for aggregation job in minutes (default: 180). "
+             "Phase 2 = concat + score + 2nd-pass PCA + Leiden + GO enrichment "
+             "across ~12 resolutions; the GO enrichment loop is the long pole "
+             "(~5-10 min per resolution at OP/CP scale).",
     )
     parser.add_argument(
         "--clean",
@@ -4526,6 +6022,19 @@ def _build_parser():
         "(forces a refit; default UMAP value is 0.1).",
     )
     parser.add_argument(
+        "--umap-type",
+        type=str,
+        default="max",
+        choices=["max", "gav"],
+        help="UMAP recipe to use for all UMAP fits in this pipeline. "
+        "'max' (default): scanpy sc.pp.neighbors(n_neighbors=8, use_rep='X_pca') + "
+        "sc.tl.umap(min_dist=0.25, alpha=1.0, gamma=1.5, maxiter=2000, "
+        "init_pos=X_pca[:, :2]) — PCA-anchored, biology-aware layout. "
+        "'gav' (legacy): umap-learn UMAP(n_neighbors=min(10, n-1), min_dist=0.25) "
+        "fit directly on the feature matrix with default spectral init. "
+        "The chosen recipe is recorded in adata.uns['umap']['params']['umap_type'].",
+    )
+    parser.add_argument(
         "--sweep-seed",
         action="store_true",
         help="Fit gene-level UMAP at --sweep-seed-n consecutive seeds and "
@@ -4550,10 +6059,11 @@ def _build_parser():
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
+        default=None,
         help="Random seed for UMAP / PHATE / NTC-split, threaded through "
              "aggregate_channels, apply_second_pass_pca, and the SLURM helpers. "
-             "Same seed → bit-identical embeddings (default: 42).",
+             "Same seed → bit-identical embeddings. When unset, resolves "
+             "per --umap-type: 1 for 'max' (Max's recipe), 42 for 'gav' (legacy).",
     )
     parser.add_argument(
         "--second-pca",
@@ -4612,6 +6122,90 @@ def _build_parser():
         "(default: same as DEFAULT_SWEEP_THRESHOLDS).",
     )
     parser.add_argument(
+        "--chrom-arm-correct",
+        action="store_true",
+        help="Before running --second-pca-only, regress out chromosome-arm "
+        "effects from <output_dir>/guide_pca_optimized.h5ad and write the "
+        "corrected guide-level h5ad to "
+        "guide_pca_optimized_chrom_arm_corr.h5ad next to the original. The "
+        "2nd-pass PCA then runs on the corrected h5ad and lands under "
+        "second_pca_consensus_chrom_arm_corr/ (or second_pca_<pct>_chrom_arm_corr/) "
+        "— never clobbers the existing untouched outputs. See "
+        "ops_model/post_process/combination/guide_chrom_arm_correction.py for "
+        "the kNN-cohesion test + per-arm median regression details.",
+    )
+    parser.add_argument(
+        "--chrom-arm-knn",
+        type=int,
+        default=25,
+        help="kNN value for the per-guide arm-cohesion test (default 25). "
+        "Larger k = more statistical power per guide. Notebook uses 15; we "
+        "default to 25 to catch deeper sig populations per arm.",
+    )
+    parser.add_argument(
+        "--chrom-arm-qval",
+        type=float,
+        default=0.05,
+        help="FDR threshold for flagging a guide as significantly "
+        "arm-cohesive (default 0.05). Notebook uses 0.01; we default to "
+        "0.05 for a stronger correction across more guides.",
+    )
+    parser.add_argument(
+        "--chrom-arm-min-genes",
+        type=int,
+        default=10,
+        help="Minimum number of significant guides on an arm before that "
+        "arm's median is regressed out; smaller arms are left untouched "
+        "(default 10).",
+    )
+    parser.add_argument(
+        "--chrom-arm-skip-second-pca",
+        action="store_true",
+        help="With --chrom-arm-correct, skip the 2nd-pass PCA step after the "
+        "correction. Output lands in <output_dir>/chrom_arm_corr<method>/ "
+        "(no second_pca_consensus prefix) with full activity/distinctiveness/"
+        "CORUM/CHAD scoring + plots run directly on the corrected guide "
+        "h5ad.",
+    )
+    parser.add_argument(
+        "--chrom-arm-after-second-pca",
+        action="store_true",
+        help="Reverse the order: run 2nd-pass PCA FIRST (re-uses existing "
+        "second_pca_consensus/ when present), then apply chrom-arm "
+        "correction in the ~29-sPC space, then score. Output lands in "
+        "<output_dir>/second_pca_consensus_then_chrom_arm_corr<method>/. "
+        "Mutually exclusive with --chrom-arm-skip-second-pca.",
+    )
+    parser.add_argument(
+        "--chrom-arm-method",
+        type=str,
+        default="cohesion",
+        choices=["cohesion", "centering", "scanpy_regress"],
+        help="Chromosome-arm correction strategy. 'cohesion' (default, "
+        "notebook): kNN cohesion test flags sig guides, per-arm median is "
+        "subtracted only from sig members (~5%% of guides modified). "
+        "'centering': every arm with ≥--chrom-arm-min-genes members has its "
+        "arm-mean offset replaced with the overall mean (~all annotated "
+        "guides modified). 'scanpy_regress': call sc.pp.regress_out with "
+        "chrom_arm as the categorical covariate (residuals = X minus "
+        "per-arm mean, no global-mean add-back; small/unmapped arms folded "
+        "into an 'unmapped' sentinel that's not part of the regression). "
+        "Each method's outputs land in their own subdir suffix "
+        "(_chrom_arm_corr, _chrom_arm_corr_centering, "
+        "_chrom_arm_corr_scanpy_regress) so methods never clobber each other.",
+    )
+    parser.add_argument(
+        "--chrom-arm-map-csv",
+        type=str,
+        default=None,
+        help="Path to a cached symbol→arm CSV (columns: symbol, chrom_arm). "
+        "When this file exists, the chrom-arm helper skips the mygene "
+        "network call and reads the mapping straight from disk — useful on "
+        "SLURM nodes with no outbound internet. Default: shared cache at "
+        "/hpc/projects/icd.fast.ops/configs/library/chrom_arm_mapping.csv "
+        "(falls back to <input_dir>/chrom_arm_mapping.csv off-cluster).",
+    )
+    parser.add_argument(
         "--downsampled",
         action="store_true",
         help="Equalise cells across signal groups by downsampling to the smallest group "
@@ -4637,16 +6231,53 @@ def _build_parser():
         default="600GB",
         help="SLURM memory for Phase signal job (default: 600GB). Phase ~50M cells needs more.",
     )
+    # Feature-mode flags — exactly one must be passed (no implicit default).
+    parser.add_argument(
+        "--dino",
+        action="store_true",
+        help="Use legacy DINO embeddings (feature_dir=dino_features). "
+             "Output → dino/ subdir.",
+    )
     parser.add_argument(
         "--cell-profiler",
         action="store_true",
-        help="Use CellProfiler morphological features instead of DINO embeddings.",
+        help="Use CellProfiler morphological features. Output → cellprofiler/ subdir.",
     )
     parser.add_argument(
         "--cell-dino",
         action="store_true",
-        help="Use cell-level DINO features (feature_dir=cell_dino_features) instead of default DINO. "
+        help="Use cell-level DINO features (feature_dir=cell_dino_features). "
              "Output → cell_dino/ subdir.",
+    )
+    parser.add_argument(
+        "--dynaclr",
+        action="store_true",
+        help="Use DynaCLR features (feature_dir=dynaclr_features). "
+             "Output → dynaclr/ subdir.",
+    )
+    parser.add_argument(
+        "--subcell",
+        action="store_true",
+        help="Use SubCell features (feature_dir=subcell_features). "
+             "Output → subcell/ subdir.",
+    )
+    parser.add_argument(
+        "--organelle-profiler",
+        "--op",
+        dest="organelle_profiler",
+        action="store_true",
+        help="Use OrganelleProfiler consolidated per-marker h5ads (the output "
+             "of organelle_profiler.feature_extraction.consolidate_all_cells). "
+             "Each all_cells_*.h5ad is treated as one signal group (cells "
+             "already pooled across experiments). Output → organelle_profiler/ "
+             "subdir.",
+    )
+    parser.add_argument(
+        "--op-root",
+        type=str,
+        default=DEFAULT_OP_ROOT,
+        help=f"Directory containing OrganelleProfiler all_cells_*.h5ad files "
+             f"(default: {DEFAULT_OP_ROOT}). Used with --organelle-profiler.",
     )
     parser.add_argument(
         "--exclude-dud-guides", dest="exclude_dud_guides",
@@ -4728,11 +6359,50 @@ def _build_parser():
              "does not filter experiments.",
     )
     parser.add_argument(
+        "--agg-method",
+        type=str,
+        default="mean",
+        choices=["mean", "median"],
+        help="Aggregation method for cells→guides and guides→geneKOs. Default: "
+             "mean. ``median`` swaps both reductions; output is written to a "
+             "separate ``agg_median/`` subdir so existing mean outputs are not "
+             "overwritten. The PCA threshold sweep itself stays on mean so "
+             "threshold selection is not biased by the agg method.",
+    )
+    parser.add_argument(
+        "--chromosome-csv",
+        type=str,
+        default=None,
+        help="Path to a CSV with columns (perturbation, chromosome, chromosome_arm) "
+             "used to color the gene-level UMAP + PHATE by chromosomal location "
+             "(<chromosome><arm>, e.g. '12q'). Coords come from the current run's "
+             "freshly computed embeddings, not from any UMAP1/UMAP2 columns in "
+             "this CSV.",
+    )
+    parser.add_argument(
+        "--chromosome-only",
+        action="store_true",
+        help="Combine with --overlays-only to regenerate ONLY the chromosome "
+             "UMAP + PHATE plots (no seed refit, no other overlays). Requires "
+             "--chromosome-csv. Fast path for restyling the chromosome plot "
+             "after edits to its renderer.",
+    )
+    parser.add_argument(
         "--experiments",
         type=str,
         default=None,
         help="Comma-separated experiment short names (e.g. ops0031,ops0035) to restrict to. "
              "Only these experiments will be included in signal groups. Useful for A/B comparisons.",
+    )
+    parser.add_argument(
+        "--signals",
+        type=str,
+        default=None,
+        help="Comma-separated signal-group names (e.g. \"Phase,5xUPRE,ER_SEC61B\") to "
+             "restrict Phase 1 to. Useful for retrying just the failed shards from a "
+             "prior submission. Successful per_signal/ outputs from the prior run are "
+             "preserved on disk. Names must match the canonical signal labels (the same "
+             "ones used as per_signal/<name>_guide.h5ad filenames).",
     )
     parser.add_argument(
         "--match-v02",
@@ -4746,6 +6416,15 @@ def _build_parser():
         default=None,
         help="Path to custom CHAD annotation YAML for consistency scoring. "
              "Defaults to chad_positive_controls_v5_hierarchy.yml.",
+    )
+    parser.add_argument(
+        "--ebi-annotation",
+        type=str,
+        default="/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_old_gene_names.yaml",
+        help="Path to EBI Complex Portal YAML for the 5th consistency score. "
+             "Each entry is {name, genes:[...]} (same schema as CHAD). The "
+             "score lands in metrics/phenotypic_consistency_ebi.csv with a "
+             "dedicated mAP-vs-p-value volcano at plots/map_ebi_volcano.png.",
     )
     parser.add_argument(
         "--chad-umap-only", action="store_true",
@@ -4798,9 +6477,24 @@ def _build_parser():
 
 
 def main():
-    global CHAD_ANNOTATION_PATH
+    # Force line-buffered stdout so progress prints appear in real time when
+    # launched under `uv run`, `nohup`, or any other wrapper that pipes
+    # stdout. Otherwise multi-minute discovery + submission steps look like
+    # a silent hang.
+    import sys as _sys
+    try:
+        _sys.stdout.reconfigure(line_buffering=True)  # Python 3.7+
+    except (AttributeError, ValueError):
+        pass
+
+    global CHAD_ANNOTATION_PATH, EBI_ANNOTATION_PATH
     args = _build_parser().parse_args()
     CHAD_ANNOTATION_PATH = args.chad_annotation
+    EBI_ANNOTATION_PATH = args.ebi_annotation
+    # --seed default depends on --umap-type: max → 1 (Max's recipe), gav → 42 (legacy).
+    if args.seed is None:
+        args.seed = 1 if getattr(args, "umap_type", "max") == "max" else 42
+        print(f"--seed unset, resolved to {args.seed} (umap_type={args.umap_type})")
     output_dir = Path(args.output_dir)
 
     # --only-4i / --only-cp imply the corresponding --with-* and turn off the
@@ -4835,10 +6529,28 @@ def main():
             _handle_downsampled(args, output_dir, None)
         return
 
-    # Nest output under feature-type subdir: dino/, cellprofiler/, or cell_dino/
+    # Nest output under feature-type subdir. Exactly one feature-mode flag is
+    # required — there is no implicit DINO default, callers must opt in.
     cp_override = None
-    if args.cell_profiler and args.cell_dino:
-        raise ValueError("--cell-profiler and --cell-dino are mutually exclusive")
+    feature_flags = [
+        ("dino", getattr(args, "dino", False)),
+        ("cell_profiler", getattr(args, "cell_profiler", False)),
+        ("cell_dino", getattr(args, "cell_dino", False)),
+        ("dynaclr", getattr(args, "dynaclr", False)),
+        ("subcell", getattr(args, "subcell", False)),
+        ("organelle_profiler", getattr(args, "organelle_profiler", False)),
+    ]
+    active = [name for name, on in feature_flags if on]
+    if len(active) == 0:
+        raise ValueError(
+            "Pass exactly one feature-mode flag: --dino, --cell-dino, "
+            "--cell-profiler, --dynaclr, --subcell, or --organelle-profiler."
+        )
+    if len(active) > 1:
+        raise ValueError(
+            f"Feature-mode flags are mutually exclusive; got: "
+            f"{', '.join('--' + n.replace('_', '-') for n in active)}"
+        )
     if args.cell_profiler:
         cp_override = "cell-profiler"
         output_dir = output_dir / "cellprofiler"
@@ -4854,8 +6566,27 @@ def main():
         output_dir = output_dir / "cell_dino"
         print(f"Cell-DINO mode: features from 3-assembly/cell_dino_features/")
         print(f"Output: {output_dir}")
-    else:
+    elif getattr(args, "dynaclr", False):
+        cp_override = "dynaclr_features"
+        output_dir = output_dir / "dynaclr"
+        print(f"DynaCLR mode: features from 3-assembly/dynaclr_features/")
+        print(f"Output: {output_dir}")
+    elif getattr(args, "subcell", False):
+        cp_override = "subcell_features"
+        output_dir = output_dir / "subcell"
+        print(f"SubCell mode: features from 3-assembly/subcell_features/")
+        print(f"Output: {output_dir}")
+    elif getattr(args, "organelle_profiler", False):
+        cp_override = "organelle_profiler"
+        output_dir = output_dir / "organelle_profiler"
+        print(f"OrganelleProfiler mode: features from {args.op_root}")
+        print(f"Output: {output_dir}")
+    else:  # args.dino
+        # cp_override stays None — _discover_experiment_pairs falls back to
+        # attr_config["feature_dir"] (typically "dino_features").
         output_dir = output_dir / "dino"
+        print(f"DINO mode: features from 3-assembly/dino_features/")
+        print(f"Output: {output_dir}")
 
     # Nest under zscore subdir if requested
     if args.zscore_per_experiment:
@@ -4949,6 +6680,13 @@ def main():
     output_dir = output_dir / args.distance
     print(f"Distance metric: {args.distance} — output → {output_dir}")
 
+    # Aggregation-method subdir: mean is the default and stays at the canonical
+    # path; non-mean (currently only median) gets its own subtree so existing
+    # outputs are never overwritten.
+    if getattr(args, "agg_method", "mean") != "mean":
+        output_dir = output_dir / f"agg_{args.agg_method}"
+        print(f"Aggregation method: {args.agg_method} — output → {output_dir}")
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Dispatch to mode handler. ``--sweep-seed`` is checked first so that
@@ -4966,6 +6704,8 @@ def main():
         _handle_second_pca(args, output_dir)
     elif args.aggregate_only:
         _handle_aggregate_only(args, output_dir)
+    elif getattr(args, "organelle_profiler", False):
+        _handle_op(args, output_dir)
     else:
         _handle_downsampled(args, output_dir, cp_override)
 
