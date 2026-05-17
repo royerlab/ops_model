@@ -13,17 +13,22 @@ Built-in groups (resolved from --output-dir + --paper-v1 + --cell-dino):
   --groups all               → cells.h5ads under paper_v1/with_cp/with_4i/<...>/per_signal/
   --groups matched_livecell  → 7 live-cell signals under paper_v1/all_livecell/<...>/per_signal/
                               (one per CP organelle in --matching-config)
+  --groups livecell          → every cells.h5ad in all_livecell/<...>/per_signal/ (Phase + fluor)
+  --groups phase_only        → Phase_cells.h5ad alone (morphology-only baseline)
+  --groups all_fluor         → all_livecell/<...>/per_signal/ MINUS Phase (every fluor reporter)
   --groups custom + --custom-paths a.h5ad,b.h5ad,...
 
-After --compare cp,4i (or any pair) the script overlays their mean-mAP curves
-in 4 figures (one per metric), in the same style as compare_pca_titration_versions.
+Whenever ``--groups`` lists ≥2 groups the script automatically overlays their
+mean-mAP curves in 4 figures (one per metric), in the same style as
+compare_pca_titration_versions. Use ``--no-compare`` to skip that step and
+``--compare-only`` to re-plot without re-running the per-group titration.
 
 Usage::
 
-    # Run cp + 4i in parallel SLURM, then compare
+    # Run cp + 4i in parallel SLURM; comparison plots emitted automatically.
     python -m ops_model.post_process.combination.pca_combined_titration \\
         --cell-dino --paper-v1 --per-guide-max-titration --slurm \\
-        --groups cp,4i --compare
+        --groups cp,4i
 """
 from __future__ import annotations
 
@@ -44,6 +49,7 @@ from ops_model.features.anndata_utils import (
     hconcat_by_perturbation,
     normalize_guide_adata,
 )
+from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
 from ops_model.post_process.combination.pca_titration import (
     DOWNSAMPLE_RATIO,
     METRICS,
@@ -101,9 +107,18 @@ def _per_signal_dir(args: argparse.Namespace, group: str) -> Path:
         group == "custom"
         or group == BEST_GROUP_NAME
         or group == LIVECELL_ALL_GROUP_NAME
+        or group == PHASE_ONLY_GROUP_NAME
+        or group == ALL_FLUOR_GROUP_NAME
         or _parse_matched_livecell_group(group) is not None
         or _parse_matched_combo_group(group) is not None
     ):
+        # livecell-family groups land under paper_v1/all_livecell/... by
+        # default. Honor the user's --with-cp / --with-4i flags so they can
+        # opt into the joint paper_v1/with_cp/with_4i/all_livecell/ tree,
+        # which is what we want for the phase_only vs all_fluor vs livecell
+        # comparison (57 markers instead of 40).
+        ns.include_cp = bool(getattr(args, "include_cp", False))
+        ns.include_4i = bool(getattr(args, "include_4i", False))
         # No channel-set flags — use the all-livecell dir
         pass
     else:
@@ -210,6 +225,8 @@ _MATCHED_COMBO_RE = re.compile(r"^matched_livecell_combo(\d+)$")
 ALL_COMBOS_KEYWORD = "all_combos"
 BEST_GROUP_NAME = "matched_livecell_best"
 LIVECELL_ALL_GROUP_NAME = "livecell"  # all standard live-cell signals (40 in paper_v1)
+PHASE_ONLY_GROUP_NAME = "phase_only"  # Phase_cells.h5ad alone (morphology baseline)
+ALL_FLUOR_GROUP_NAME = "all_fluor"    # every per_signal/ entry EXCEPT Phase_cells.h5ad
 
 
 def _parse_matched_livecell_group(group: str) -> Optional[int]:
@@ -360,6 +377,25 @@ def _resolve_group_paths(
         if not paths:
             raise SystemExit(f"No *_cells.h5ad found in {per_signal}")
         return paths
+    if group == PHASE_ONLY_GROUP_NAME:
+        per_signal = _per_signal_dir(args, group)
+        paths = sorted(per_signal.glob("Phase_cells.h5ad"))
+        if not paths:
+            raise SystemExit(
+                f"Phase_cells.h5ad not found in {per_signal} — "
+                f"did you build the all_livecell per_signal tree first?"
+            )
+        return paths
+    if group == ALL_FLUOR_GROUP_NAME:
+        per_signal = _per_signal_dir(args, group)
+        paths = [p for p in sorted(per_signal.glob("*_cells.h5ad"))
+                 if p.stem.lower() != "phase_cells"]
+        if not paths:
+            raise SystemExit(
+                f"No fluorescent *_cells.h5ad found in {per_signal} "
+                f"(after excluding Phase)"
+            )
+        return paths
     combo_idx = _parse_matched_combo_group(group)
     if combo_idx is not None:
         combos = _enumerate_marker_combinations(
@@ -423,6 +459,20 @@ def _mode_subdir(sampling_mode: str) -> str:
     }.get(sampling_mode, sampling_mode)
 
 
+def _second_pca_suffix(args: argparse.Namespace) -> str:
+    """Disk-name tag for the active 2nd-pass PCA threshold.
+
+    Returns ``""`` when 2nd-pass is off (so existing no-2nd-pca output dirs
+    stay where they were), and ``_sec<XX>`` (e.g. ``_sec40`` for 0.40) when
+    on. This lets the same group be titrated at multiple thresholds without
+    clobbering each other or invalidating each other's caches.
+    """
+    thr = float(getattr(args, "second_pca_threshold", 0.0) or 0.0)
+    if thr <= 0:
+        return ""
+    return f"_sec{int(round(thr * 100)):02d}"
+
+
 def _resolve_group_output_dir(
     args: argparse.Namespace, group: str, sampling_mode: str = "per_guide",
 ) -> Path:
@@ -431,7 +481,7 @@ def _resolve_group_output_dir(
         _per_signal_dir(args, group).parent
         / "combined_titration"
         / _mode_subdir(sampling_mode)
-        / group
+        / f"{group}{_second_pca_suffix(args)}"
     )
 
 
@@ -484,7 +534,7 @@ def _resolve_compare_dir(
     return (
         base / "combined_titration_compare"
         / _mode_subdir(sampling_mode)
-        / _compact_groups_tag(groups)
+        / f"{_compact_groups_tag(groups)}{_second_pca_suffix(args)}"
     )
 
 
@@ -493,9 +543,9 @@ def _resolve_compare_dir(
 # ---------------------------------------------------------------------------
 
 
-def _per_guide_pool(paths: List[Path]) -> np.ndarray:
-    """Pooled non-NTC sgRNA cell counts across all reporters (or all sgRNAs if no NTC info)."""
-    pooled: List[int] = []
+def _per_reporter_guide_counts(paths: List[Path]) -> List[np.ndarray]:
+    """For each reporter h5ad, return the per-sgRNA cell-count array (non-NTC)."""
+    per_reporter: List[np.ndarray] = []
     for p in paths:
         a = ad.read_h5ad(p, backed="r")
         if "sgRNA" not in a.obs.columns:
@@ -507,8 +557,50 @@ def _per_guide_pool(paths: List[Path]) -> np.ndarray:
         pool = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
         if len(pool) == 0:
             pool = sg_counts
-        pooled.extend(int(v) for v in pool.values)
-    return np.asarray(pooled, dtype=int)
+        per_reporter.append(np.asarray(pool.values, dtype=int))
+    return per_reporter
+
+
+def _per_guide_pool(paths: List[Path]) -> np.ndarray:
+    """Pooled non-NTC sgRNA cell counts across all reporters (or all sgRNAs if no NTC info)."""
+    per_reporter = _per_reporter_guide_counts(paths)
+    if not per_reporter:
+        return np.asarray([], dtype=int)
+    return np.concatenate(per_reporter)
+
+
+# Allowed values for the median-schedule start policy.
+_MEDIAN_START_POLICIES = ("pool", "max_reporter")
+
+
+def _per_guide_median_start(
+    paths: List[Path],
+    policy: str = "pool",
+) -> int:
+    """Start point (cells/guide) for the per-guide-median schedule.
+
+    ``policy='pool'``: median of all per-sgRNA cell counts pooled across
+        every reporter (treats every reporter × guide as one observation).
+        Conservative — when one reporter has many more cells/guide than the
+        others, the median sits in the smaller-reporter cloud.
+
+    ``policy='max_reporter'``: max of per-reporter medians. Lets the schedule
+        climb up to the *biggest* reporter's natural median, with smaller
+        reporters saturating at their own max along the way (each step caps
+        per-reporter at ``min(target, available)``). Use when one reporter
+        in a multi-marker group has substantially more cells per guide than
+        the rest (e.g. Phase in the ``livecell`` group).
+    """
+    if policy not in _MEDIAN_START_POLICIES:
+        raise ValueError(
+            f"policy must be one of {_MEDIAN_START_POLICIES}, got {policy!r}"
+        )
+    per_reporter = _per_reporter_guide_counts(paths)
+    if not per_reporter:
+        return 1
+    if policy == "pool":
+        return int(np.median(np.concatenate(per_reporter)))
+    return int(max(int(np.median(arr)) for arr in per_reporter if arr.size))
 
 
 def _build_per_guide_max_schedule(paths: List[Path]) -> List[int]:
@@ -526,20 +618,84 @@ def _build_per_guide_max_schedule(paths: List[Path]) -> List[int]:
 def _build_per_guide_median_schedule(
     paths: List[Path],
     start_override: Optional[int] = None,
+    policy: str = "pool",
 ) -> List[int]:
     """cells/guide schedule from the MEDIAN of pooled non-NTC sgRNA counts
     down to 1 (mirrors max-mode but caps the high end at median instead of
     p90). ``start_override`` clamps the starting cells/guide value (used to
-    align starts across groups in cross-group comparisons).
+    align starts across groups in cross-group comparisons); when provided,
+    we skip the pool computation entirely (saves opening every h5ad).
+
+    ``policy`` selects the start when no override is given — see
+    :func:`_per_guide_median_start`.
     """
-    pool = _per_guide_pool(paths)
-    start = start_override if start_override is not None else int(np.median(pool))
-    return _build_per_ko_schedule(start)
+    if start_override is not None:
+        return _build_per_ko_schedule(int(start_override))
+    return _build_per_ko_schedule(_per_guide_median_start(paths, policy=policy))
 
 
-def _per_guide_median(paths: List[Path]) -> int:
-    """Median of pooled non-NTC sgRNA cell counts across all reporters in the group."""
-    return int(np.median(_per_guide_pool(paths)))
+def _per_guide_median(paths: List[Path], policy: str = "pool") -> int:
+    """Schedule start point for a group's per-guide-median titration.
+
+    See :func:`_per_guide_median_start` for the semantics of ``policy``.
+    """
+    return _per_guide_median_start(paths, policy=policy)
+
+
+# ─── SLURM-prep worker: compute medians for one group on a compute node ────
+# Top-level so cloudpickle can pickle it for submit_parallel_jobs. Mirrors
+# `_per_guide_median_start` but emits BOTH start policies (pool + max_reporter)
+# plus per-reporter medians so the login node can compute shared/per-group
+# starts later without reopening any h5ad.
+def _prep_schedule_worker(
+    group: str,
+    cells_h5ad_paths: List[str],
+    sampling_mode: str,
+    median_start_policy: str,
+    cache_path: str,
+) -> dict:
+    """Open this group's h5ads in backed mode, compute per-reporter sgRNA
+    cell-count arrays, then cache the medians (both ``pool`` and
+    ``max_reporter`` policies) to ``cache_path`` as JSON.
+
+    The big-Phase group dominates median-computation wall time because
+    Phase's 60M-row obs frame takes ~minutes to groupby. Running 1
+    prep job per group in parallel converts that into max(group_times)
+    instead of sum, while writing a tiny cache file so re-runs at the
+    same (sampling_mode, median_start_policy) skip the prep entirely.
+    """
+    import json
+    from pathlib import Path as _Path
+
+    cache_p = _Path(cache_path)
+    cache_p.parent.mkdir(parents=True, exist_ok=True)
+    paths = [_Path(p) for p in cells_h5ad_paths]
+
+    counts_per_reporter = _per_reporter_guide_counts(paths)
+    per_reporter_medians = [
+        int(np.median(arr)) if arr.size else 1 for arr in counts_per_reporter
+    ]
+    if counts_per_reporter:
+        pooled = np.concatenate(counts_per_reporter)
+        median_pool = int(np.median(pooled)) if pooled.size else 1
+    else:
+        median_pool = 1
+    median_max_reporter = (
+        max(per_reporter_medians) if per_reporter_medians else 1
+    )
+
+    payload = {
+        "group": group,
+        "sampling_mode": sampling_mode,
+        "median_start_policy": median_start_policy,
+        "n_reporters": len(paths),
+        "per_reporter_medians": per_reporter_medians,
+        "median_pool": median_pool,
+        "median_max_reporter": median_max_reporter,
+    }
+    cache_p.write_text(json.dumps(payload, indent=2))
+    print(f"[prep] {group}: medians cached → {cache_p}", flush=True)
+    return payload
 
 
 def _build_per_ko_max_schedule(paths: List[Path]) -> List[int]:
@@ -587,23 +743,105 @@ def _subsample_one(
     return _subsample_and_aggregate(adata_cells, target, rng)
 
 
+def _apply_fixed_second_pca(
+    adata_guide: ad.AnnData,
+    threshold: float,
+    _logger: Optional[logging.Logger] = None,
+) -> ad.AnnData:
+    """Fit a fixed-threshold 2nd-pass PCA on the hconcat'd guide feature matrix.
+
+    Returns a new guide-level AnnData whose features are the top PCs covering
+    ``threshold`` cumulative variance (var_names ``sPC0``, ``sPC1``, …). This
+    is the same operation ``pca_optimization.apply_second_pass_pca`` performs
+    in fixed-pct mode, but in-memory and per-titration-step.
+
+    No-op when the matrix is too small to PCA (n_obs < 2 or n_features < 2).
+    """
+    X = np.asarray(adata_guide.X, dtype=np.float32)
+    n_obs, n_feat = X.shape
+    if n_obs < 2 or n_feat < 2:
+        if _logger is not None:
+            _logger.warning(
+                f"  2nd-pass PCA skipped: matrix shape {n_obs}x{n_feat} too small"
+            )
+        return adata_guide
+    X_pcs, cumvar, _model = fit_pca(X)
+    n_keep = max(min(n_pcs_for_threshold(cumvar, threshold), X_pcs.shape[1]), 1)
+    if _logger is not None:
+        _logger.info(
+            f"  2nd-pass PCA: {n_feat} → {n_keep} PCs "
+            f"(cumvar ≥ {threshold:.2f}; covered = {cumvar[n_keep-1]:.3f})"
+        )
+    X_keep = X_pcs[:, :n_keep].astype(np.float32)
+    new_var = pd.DataFrame(index=[f"sPC{i}" for i in range(n_keep)])
+    return ad.AnnData(X=X_keep, obs=adata_guide.obs.copy(), var=new_var)
+
+
 def _build_combined_at_target(
     cells_blocks: List[ad.AnnData],
     target: int,
     sampling_mode: str,
     norm_method: str,
     rng: np.random.RandomState,
+    *,
+    second_pca_threshold: float = 0.0,
+    n_workers: int = 1,
+    _logger: Optional[logging.Logger] = None,
 ) -> ad.AnnData:
-    """For each reporter: subsample → aggregate → NTC-normalize, then h-concat."""
-    blocks = []
-    for adata in cells_blocks:
-        g_sub = _subsample_one(adata, target, sampling_mode, rng)
+    """For each reporter: subsample → aggregate → NTC-normalize, then h-concat.
+
+    The per-reporter prep loop (subsample + aggregate + z-score) is the
+    dominant cost of a titration step (~70% of wall time at large reporter
+    counts) and embarrassingly parallel — each reporter is its own file,
+    its own NTC pool, its own feature space. ``n_workers`` > 1 parallelizes
+    that loop with a ThreadPoolExecutor. Numpy/pandas/anndata release the
+    GIL on the heavy ops, so threads beat processes here (no pickling of
+    AnnData blocks). Per-reporter RNGs are derived from the parent ``rng``
+    *before* the parallel section so reproducibility holds regardless of
+    completion order.
+
+    When ``second_pca_threshold > 0`` AND the group has > 1 reporter, the
+    concatenated guide matrix is passed through ``_apply_fixed_second_pca``
+    before being returned — same as the standard pca_optimization pipeline
+    consensus step, but with a fixed variance threshold per titration step.
+    """
+    # Pre-draw per-reporter seeds so parallel completion order can't change
+    # the bootstrap result. Done sequentially on the parent rng.
+    reporter_seeds = [
+        int(rng.randint(0, 2**31 - 1)) for _ in range(len(cells_blocks))
+    ]
+
+    def _prep_one(idx_adata: Tuple[int, ad.AnnData]) -> ad.AnnData:
+        idx, adata = idx_adata
+        local_rng = np.random.RandomState(reporter_seeds[idx])
+        g_sub = _subsample_one(adata, target, sampling_mode, local_rng)
         g_norm = normalize_guide_adata(g_sub, norm_method)
-        # Tag features so concat doesn't collide
         sig = str(adata.obs.get("signal", pd.Series(["?"])).iloc[0])
         g_norm.var_names = [f"{sig}::{v}" for v in g_norm.var_names]
-        blocks.append(g_norm)
-    return hconcat_by_perturbation(blocks, level="guide")
+        return g_norm
+
+    n_workers = max(1, min(int(n_workers), len(cells_blocks)))
+    if n_workers == 1 or len(cells_blocks) == 1:
+        blocks = [_prep_one((i, a)) for i, a in enumerate(cells_blocks)]
+    else:
+        from concurrent.futures import ThreadPoolExecutor  # noqa: WPS433
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            # map preserves input order — important for deterministic concat.
+            blocks = list(pool.map(_prep_one, list(enumerate(cells_blocks))))
+
+    combined = hconcat_by_perturbation(blocks, level="guide")
+    # 2nd-pass PCA only makes sense for MULTI-reporter groups — it reduces
+    # the dimensionality of the cross-reporter concat to balance variance
+    # contributions. For a single-reporter group (e.g. phase_only) the
+    # input is already the per-reporter PC space; running PCA on it again
+    # just drops components and adds noise without doing the cross-reporter
+    # rebalancing the step was designed for. Skip when there's only one
+    # block, regardless of threshold.
+    if second_pca_threshold > 0 and len(cells_blocks) > 1:
+        combined = _apply_fixed_second_pca(
+            combined, second_pca_threshold, _logger=_logger,
+        )
+    return combined
 
 
 def run_combined_titration(
@@ -617,6 +855,10 @@ def run_combined_titration(
     schedule: Optional[List[int]] = None,
     group_label: str = "combined",
     cache: bool = True,
+    second_pca_threshold: float = 0.0,
+    schedule_start_override: Optional[int] = None,
+    median_start_policy: str = "pool",
+    n_workers: int = 1,
 ) -> str:
     """Run the combined-titration loop for one group and write CSV + plots.
 
@@ -624,7 +866,15 @@ def run_combined_titration(
         targets as cells/sgRNA, cells/perturbation, or absolute n_cells.
     cache: when True (default), reuse already-scored rows from any existing
         combined_titration_<group>.csv and only score the missing schedule
-        targets. Pass --no-cache (CLI) to force a full recompute.
+        targets. Pass --no-cache (CLI) to force a full recompute. Cached rows
+        whose ``second_pca_threshold`` column disagrees with the requested
+        value are dropped so the cache stays consistent across threshold
+        changes without renaming the CSV.
+    second_pca_threshold: when > 0 AND the group has > 1 reporter, fit a
+        2nd-pass PCA on the hconcat'd guide matrix at each titration step and
+        keep components up to this cumulative-variance threshold. Set to 0
+        (default) to disable. Single-reporter groups always skip this step,
+        regardless of the threshold value.
     """
     _logger = logging.getLogger(f"combined_titration.{group_label}")
     if not _logger.handlers:
@@ -638,9 +888,22 @@ def run_combined_titration(
     out_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.RandomState(random_seed)
 
+    # 2nd-pass PCA is a multi-reporter dim-reduction step; single-reporter
+    # groups (phase_only) skip it inside `_build_combined_at_target`. We
+    # still pass the threshold through for cache-key consistency, but the
+    # actual transform only runs when len(cells_blocks) > 1.
+    effective_second_pca = float(second_pca_threshold) if second_pca_threshold > 0 else 0.0
+    if effective_second_pca > 0:
+        _logger.info(
+            f"[{group_label}] 2nd-pass PCA on at every titration step "
+            f"(fixed threshold = {effective_second_pca:.2f})."
+        )
+
+    eff_workers = max(1, min(int(n_workers), len(paths)))
     _logger.info(
         f"[{group_label}] Loading {len(paths)} reporter cells.h5ads "
-        f"(mode={sampling_mode}, bootstrap={n_bootstraps})..."
+        f"(mode={sampling_mode}, bootstrap={n_bootstraps}, "
+        f"prep_threads={eff_workers})..."
     )
     cells_blocks: List[ad.AnnData] = []
     for p in paths:
@@ -655,7 +918,11 @@ def run_combined_titration(
         if sampling_mode == "per_guide":
             schedule = _build_per_guide_max_schedule(paths)
         elif sampling_mode == "per_guide_median":
-            schedule = _build_per_guide_median_schedule(paths)
+            schedule = _build_per_guide_median_schedule(
+                paths,
+                start_override=schedule_start_override,
+                policy=median_start_policy,
+            )
         elif sampling_mode == "per_ko":
             schedule = _build_per_ko_max_schedule(paths)
         else:
@@ -674,6 +941,22 @@ def run_combined_titration(
         try:
             df_old = pd.read_csv(csv_path)
             if target_col in df_old.columns:
+                # Cache-by-threshold: drop any cached row whose stored
+                # ``second_pca_threshold`` disagrees with the requested value
+                # (treat missing column as 0.0 = legacy no-second-pca run).
+                stored = (
+                    df_old.get("second_pca_threshold", pd.Series([0.0] * len(df_old)))
+                          .fillna(0.0).astype(float)
+                )
+                keep_mask = np.isclose(stored.to_numpy(),
+                                       float(effective_second_pca), atol=1e-6)
+                n_dropped = int((~keep_mask).sum())
+                df_old = df_old.loc[keep_mask].reset_index(drop=True)
+                if n_dropped:
+                    _logger.info(
+                        f"[{group_label}] Dropping {n_dropped} cached rows whose "
+                        f"second_pca_threshold ≠ {effective_second_pca:.2f}"
+                    )
                 done = {int(v) for v in df_old[target_col].dropna().astype(int).tolist()}
                 cached_rows = df_old.to_dict(orient="records")
                 targets_to_run = [t for t in schedule if int(t) not in done]
@@ -716,6 +999,9 @@ def run_combined_titration(
             draw_rng = np.random.RandomState(base_seed + b * 9973 + target)
             combined = _build_combined_at_target(
                 cells_blocks, target, sampling_mode, norm_method, draw_rng,
+                second_pca_threshold=effective_second_pca,
+                n_workers=int(n_workers),
+                _logger=_logger,
             )
             scores_b = _score_all_metrics(combined, _logger)
             draws.append(scores_b)
@@ -772,6 +1058,7 @@ def run_combined_titration(
         scores["n_reporters"] = n_reporters
         scores["n_bootstraps"] = n_bootstraps
         scores["group"] = group_label
+        scores["second_pca_threshold"] = float(effective_second_pca)
         rows.append(scores)
 
         _logger.info(
@@ -1409,6 +1696,12 @@ def _build_parser() -> argparse.ArgumentParser:
     """Reuse pca_titration's parser to share path-resolution flags, then add ours."""
     p = _titr_parser()
     p.description = "Combined-reporter cell-count titration."
+    # Combined-titration parallelizes the per-reporter prep loop across CPUs;
+    # 32 is the sweet spot on 50+ reporter groups (per Amdahl's analysis on
+    # ~35s of serial scoring vs ~225s of parallelizable prep). Override the
+    # upstream pca_titration default (8) which was tuned for the 1-reporter
+    # per-job case. Users can still pass --slurm-cpus to override.
+    p.set_defaults(slurm_cpus=32)
     p.add_argument(
         "--groups", type=str, default="cp,4i,matched_livecell",
         help="Comma-separated groups to titrate. Built-ins: cp, 4i, all, "
@@ -1439,9 +1732,66 @@ def _build_parser() -> argparse.ArgumentParser:
              "own median instead of the smallest median across groups (default: "
              "share the start so curves align at the top).",
     )
+    p.add_argument(
+        "--median-start-policy", type=str, default="pool",
+        choices=list(_MEDIAN_START_POLICIES),
+        help="Start point for --per-guide-median-titration schedules. "
+             "'pool' (default): median of all per-sgRNA cell counts pooled "
+             "across reporters in the group. Conservative — dominated by the "
+             "more numerous reporters when one reporter has many more "
+             "cells/guide. 'max_reporter': max of per-reporter medians. Lets "
+             "the schedule climb up to the biggest reporter's natural median, "
+             "with smaller reporters saturating at their own max along the "
+             "way. Use 'max_reporter' for groups where one reporter (e.g. "
+             "Phase) has substantially more cells/guide than the others.",
+    )
+    p.add_argument(
+        "--n-workers", type=int, default=None,
+        help="Threads for the per-reporter subsample/aggregate/normalize loop "
+             "inside each titration step. Default: --slurm-cpus when --slurm "
+             "is set, else os.cpu_count(). Each thread handles one reporter "
+             "at a time; numpy releases the GIL on the heavy ops so 8 threads "
+             "≈ 5× faster than serial on a 56-reporter group.",
+    )
+    p.add_argument(
+        "--second-pca-threshold", type=float, default=0.0,
+        help="Cumulative-variance threshold for a 2nd-pass PCA applied to the "
+             "h-concatenated guide matrix at every titration step. Default 0 "
+             "(off). Set e.g. 0.40 to match the fixed-pct second-pass that "
+             "pca_optimization runs on multi-marker groups — this puts "
+             "all_fluor and livecell on the same dimensional footing as the "
+             "rest of the paper_v1 pipeline. Single-reporter groups always "
+             "skip this step regardless of the threshold value (e.g. "
+             "phase_only stays untouched).",
+    )
     # --no-cache is inherited from pca_titration's parser (same semantics).
     p.add_argument(
         "--seed", type=int, default=42, help="Random seed for cell subsampling",
+    )
+    # ── Per-target SLURM fan-out (huge speedup on multi-reporter groups) ──
+    p.add_argument(
+        "--per-target-slurm", action="store_true",
+        help="Submit one SLURM task per (group, schedule_target) instead of "
+             "one long-running job per group. Inside the default per-group "
+             "job the schedule's ~35 targets run serially, so wall time is "
+             "dominated by the largest target × the geometric sum of the "
+             "downsample ladder (~4× T_top). With --per-target-slurm the "
+             "tasks run in parallel subject to cluster slot availability — "
+             "for the 3-group phase_only/all_fluor/livecell run this turns a "
+             "~4-hour serial job into ~30 min of parallel work. Each task "
+             "reloads its cells.h5ad set, so the trade-off is extra h5ad "
+             "I/O per task vs. wall-clock parallelism. Uses --slurm-time as "
+             "the per-task timeout (default 30 min — bump for Phase-heavy "
+             "groups whose largest target plus h5ad load exceeds that).",
+    )
+    p.add_argument(
+        "--max-schedule-points", type=int, default=None,
+        help="Cap each group's schedule to its top N points (largest "
+             "cells/guide first). The downsample ladder spans ~35 targets "
+             "from the median down to 1 cell/guide; for a 'does this curve "
+             "plateau at X?' diagnostic the bottom of the curve adds little "
+             "and the top ~8-12 points already show the asymptote. Combine "
+             "with --per-target-slurm for maximum parallel speedup.",
     )
     return p
 
@@ -1509,32 +1859,175 @@ def main():
     # own median instead. Every group titrates down to 1 cell/guide regardless.
     # In --compare-only mode we never run the schedule, so skip the expensive
     # median computation (which opens every reporter h5ad in backed mode).
+    # Schedule construction is deferred to each SLURM worker so the login node
+    # doesn't open every h5ad in backed mode for every group. When
+    # ``--shared-start`` (default) is on we still need ONE pool computation per
+    # group on the login node to find the min median across groups; that
+    # number is then passed as ``schedule_start_override`` to each worker, and
+    # the worker builds its own schedule with that override (no extra reads).
+    # When ``--no-shared-start`` is set, the login node does zero schedule
+    # work — every worker independently computes its own median and schedule.
     group_schedules: Dict[str, Optional[List[int]]] = {g: None for g in groups}
-    if (
+    schedule_start_overrides: Dict[str, Optional[int]] = {g: None for g in groups}
+
+    # ── SLURM-prep stage: fan out median computation in parallel ─────────
+    # When --per-target-slurm is on we'd otherwise open every reporter
+    # h5ad on the login node (sequential per group) just to compute medians
+    # for the schedule. That's slow on big-Phase groups (livecell takes
+    # ~5-10 min on its own). Submit 1 prep job per group, cache per-group
+    # medians as JSON, and let the login node read them back in O(ms).
+    # Cache is keyed on (sampling_mode, median_start_policy, n_reporters)
+    # so reruns with identical args skip the prep entirely.
+    needs_slurm_prep = (
+        args.slurm
+        and args.per_target_slurm
+        and sampling_mode == "per_guide_median"
+        and not getattr(args, "compare_only", False)
+    )
+    prep_payloads: Dict[str, dict] = {}
+    if needs_slurm_prep:
+        import json as _json
+        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs as _spj
+        prep_jobs = []
+        for g in groups:
+            cache_p = group_outdirs[g] / "schedule_cache.json"
+            if args.cache and cache_p.is_file():
+                try:
+                    p = _json.loads(cache_p.read_text())
+                    if (p.get("sampling_mode") == sampling_mode
+                            and p.get("median_start_policy") == args.median_start_policy
+                            and p.get("n_reporters") == len(group_paths[g])):
+                        prep_payloads[g] = p
+                        print(f"[prep cache hit] {g}: medians from {cache_p}")
+                        continue
+                except Exception:
+                    pass
+            prep_jobs.append({
+                "name": f"prep_{g}",
+                "func": _prep_schedule_worker,
+                "kwargs": {
+                    "group": g,
+                    "cells_h5ad_paths": [str(p) for p in group_paths[g]],
+                    "sampling_mode": sampling_mode,
+                    "median_start_policy": args.median_start_policy,
+                    "cache_path": str(cache_p),
+                },
+                "metadata": {"group": g, "cache_path": str(cache_p)},
+            })
+        if prep_jobs:
+            # Prep is I/O-bound (groupby on backed h5ad obs). 8 CPUs is
+            # plenty; reuse phase_slurm_time as the budget since the
+            # big-Phase group is the long-pole here.
+            prep_params = {
+                "mem": args.slurm_memory,
+                "cpus_per_task": min(int(args.slurm_cpus), 8),
+                "slurm_partition": args.slurm_partition,
+                "timeout_min": min(int(args.phase_slurm_time), 90),
+            }
+            print(
+                f"\n[prep] {len(prep_jobs)} schedule-prep SLURM job(s) "
+                f"({prep_params['timeout_min']}min × {prep_params['cpus_per_task']} CPUs)..."
+            )
+            _spj(
+                jobs_to_submit=prep_jobs,
+                experiment="pca_combined_titration",
+                slurm_params=prep_params,
+                log_dir="pca_optimization",
+                manifest_prefix="pca_combtitr_prep",
+                wait_for_completion=True,
+                verbose=True,
+            )
+            for j in prep_jobs:
+                cache_p = Path(j["metadata"]["cache_path"])
+                if cache_p.is_file():
+                    prep_payloads[j["metadata"]["group"]] = _json.loads(
+                        cache_p.read_text()
+                    )
+                else:
+                    print(f"  [warn] prep job {j['name']} produced no cache file")
+
+        # Resolve schedule_start_overrides from cached medians.
+        if prep_payloads:
+            policy = args.median_start_policy
+            starts = {
+                g: (p["median_max_reporter"] if policy == "max_reporter" else p["median_pool"])
+                for g, p in prep_payloads.items()
+            }
+            if args.shared_start and len(groups) > 1:
+                shared_start = min(starts.values())
+                print(
+                    f"[prep] shared start (policy={policy}) = {shared_start} "
+                    f"(per-group: {starts})"
+                )
+                for g in groups:
+                    schedule_start_overrides[g] = int(shared_start)
+            else:
+                print(f"[prep] per-group starts (policy={policy}): {starts}")
+                for g, v in starts.items():
+                    schedule_start_overrides[g] = int(v)
+
+    if not needs_slurm_prep and (
         sampling_mode == "per_guide_median"
         and len(groups) > 1
         and not getattr(args, "compare_only", False)
+        and args.shared_start
     ):
-        medians = {g: _per_guide_median(group_paths[g]) for g in groups}
-        if args.shared_start:
-            shared_start = min(medians.values())
-            print(
-                f"\nMedian-mode shared start: min median across groups = "
-                f"{shared_start} (per-group medians: {medians})"
-            )
-            for g in groups:
-                group_schedules[g] = _build_per_guide_median_schedule(
-                    group_paths[g], start_override=shared_start,
+        medians = {
+            g: _per_guide_median(group_paths[g], policy=args.median_start_policy)
+            for g in groups
+        }
+        shared_start = min(medians.values())
+        print(
+            f"\nMedian-mode shared start (policy={args.median_start_policy}): "
+            f"min start across groups = {shared_start} "
+            f"(per-group starts: {medians})"
+        )
+        for g in groups:
+            schedule_start_overrides[g] = int(shared_start)
+    elif not needs_slurm_prep and (
+        sampling_mode == "per_guide_median"
+        and not getattr(args, "compare_only", False)
+        and not args.shared_start
+    ):
+        print(
+            f"\nMedian-mode per-group starts (policy={args.median_start_policy}): "
+            "each group runs from its own start to 1 (computed inside each "
+            "worker — no login-node reads)."
+        )
+
+    # ── Pre-build per-group schedules on the login node when needed ──────
+    # The per-target SLURM path needs the exact schedule up front (it fans
+    # out one task per target), and --max-schedule-points wants the schedule
+    # trimmed before workers ever see it. We only pay this cost when either
+    # flag is set so the default path stays cheap (worker-side schedule build,
+    # no extra login-node h5ad reads).
+    if not compare_only and (args.per_target_slurm or args.max_schedule_points):
+        print("\nBuilding per-group schedules on login node...")
+        for g in groups:
+            paths = group_paths[g]
+            if sampling_mode == "per_guide_median":
+                sched = _build_per_guide_median_schedule(
+                    paths,
+                    start_override=schedule_start_overrides[g],
+                    policy=args.median_start_policy,
                 )
-                print(f"  [{g}] schedule ({len(group_schedules[g])} pts): {group_schedules[g]}")
-        else:
+            elif sampling_mode == "per_guide":
+                sched = _build_per_guide_max_schedule(paths)
+            elif sampling_mode == "per_ko":
+                sched = _build_per_ko_max_schedule(paths)
+            else:
+                sched = _build_total_schedule(paths)
+            sched = list(sched)
+            if args.max_schedule_points and args.max_schedule_points > 0:
+                # Schedules are in descending order (largest target first),
+                # so the top-N slice = the high-cells-per-guide head of the
+                # curve, which is where mAP changes are visible.
+                sched = sched[: int(args.max_schedule_points)]
+            group_schedules[g] = sched
             print(
-                f"\nMedian-mode per-group starts: each group runs from its own "
-                f"median to 1 (medians: {medians})"
+                f"  {g}: {len(sched)} target(s) "
+                f"(head: {sched[:3]}{', tail: ' + str(sched[-2:]) if len(sched) > 3 else ''})"
             )
-            for g in groups:
-                group_schedules[g] = _build_per_guide_median_schedule(group_paths[g])
-                print(f"  [{g}] schedule ({len(group_schedules[g])} pts): {group_schedules[g]}")
 
     # Run each group (locally or in parallel SLURM)
     csvs_by_group: Dict[str, Path] = {}
@@ -1555,6 +2048,126 @@ def main():
                 + (f"\n  ... (+{len(missing) - 10} more)" if len(missing) > 10 else "")
             )
         print(f"\n--compare-only: skipping per-group step; loading {len(csvs_by_group)} cached CSVs.")
+    elif args.slurm and args.per_target_slurm:
+        # ── Per-target SLURM fan-out ─────────────────────────────────────
+        # One array task per (group, target). Each task reloads its
+        # cells.h5ad set (the I/O cost) but computes only ONE schedule
+        # point; on a livecell-sized group this turns the inner ~35-target
+        # serial loop into N_targets-way parallelism, gated only by
+        # cluster slots. We submit ALL (group, target) jobs in one
+        # submit_parallel_jobs call so SLURM sees them as a single array.
+        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+        target_col = (
+            "cells_per_guide" if sampling_mode in ("per_guide", "per_guide_median")
+            else "cells_per_perturbation" if sampling_mode == "per_ko"
+            else "n_cells"
+        )
+        n_workers = (
+            int(args.n_workers) if args.n_workers is not None
+            else int(args.slurm_cpus)
+        )
+        thr = float(args.second_pca_threshold)
+
+        all_jobs = []
+        skipped_cache = 0
+        for g in groups:
+            paths = group_paths[g]
+            for target in group_schedules[g] or []:
+                shard_label = f"{g}_t{int(target)}"
+                out_csv = group_outdirs[g] / f"combined_titration_{shard_label}.csv"
+                # Cache short-circuit: if this exact (group, target,
+                # second_pca_threshold) was already computed, skip the
+                # task entirely. Cheaper than letting the worker open
+                # h5ads just to no-op via the in-worker cache logic.
+                if args.cache and out_csv.is_file():
+                    try:
+                        d = pd.read_csv(out_csv)
+                        stored_thr = (
+                            float(d.get("second_pca_threshold", pd.Series([0.0])).iloc[0])
+                            if len(d) else None
+                        )
+                        if stored_thr is not None and np.isclose(stored_thr, thr, atol=1e-6):
+                            skipped_cache += 1
+                            continue
+                    except Exception:
+                        pass
+                all_jobs.append({
+                    "name": f"combtitr_{shard_label}",
+                    "func": run_combined_titration,
+                    "kwargs": {
+                        "cells_h5ad_paths": [str(p) for p in paths],
+                        "output_dir": str(group_outdirs[g]),
+                        "sampling_mode": sampling_mode,
+                        "norm_method": args.norm_method,
+                        "distance": args.distance,
+                        "n_bootstraps": int(args.bootstrap),
+                        "random_seed": int(args.seed),
+                        "group_label": shard_label,
+                        # We pre-filtered cache hits above, so let the
+                        # worker recompute unconditionally for its slice.
+                        "cache": False,
+                        "schedule": [int(target)],
+                        "schedule_start_override": None,
+                        "median_start_policy": args.median_start_policy,
+                        "second_pca_threshold": thr,
+                        "n_workers": int(n_workers),
+                    },
+                    "metadata": {"group": g, "target": int(target),
+                                  "shard_csv": str(out_csv)},
+                })
+        n_planned = sum(len(group_schedules[g] or []) for g in groups)
+        print(
+            f"\n[per-target] {len(all_jobs)} task(s) to submit "
+            f"({skipped_cache} cached / {n_planned} planned across "
+            f"{len(groups)} groups)..."
+        )
+        if all_jobs:
+            slurm_params = {
+                "mem": args.slurm_memory,
+                "cpus_per_task": args.slurm_cpus,
+                "slurm_partition": args.slurm_partition,
+                # Each task does (h5ad load) + (one target). For Phase-heavy
+                # groups, h5ad load dominates if the user kept --slurm-time
+                # at 30; we honor the explicit value, only warning if the
+                # group has Phase.
+                "timeout_min": args.slurm_time,
+            }
+            print(
+                f"  slurm: {args.slurm_time}min, {args.slurm_memory}, "
+                f"{args.slurm_cpus} CPUs per task; partition={args.slurm_partition}"
+            )
+            submit_parallel_jobs(
+                jobs_to_submit=all_jobs,
+                experiment="pca_combined_titration",
+                slurm_params=slurm_params,
+                log_dir="pca_optimization",
+                manifest_prefix="pca_combtitr_per_target",
+                wait_for_completion=True,
+                verbose=True,
+            )
+
+        # ── Merge per-target shards into per-group canonical CSVs ────────
+        for g in groups:
+            parts = []
+            for target in group_schedules[g] or []:
+                p = group_outdirs[g] / f"combined_titration_{g}_t{int(target)}.csv"
+                if p.is_file():
+                    try:
+                        parts.append(pd.read_csv(p))
+                    except pd.errors.EmptyDataError:
+                        continue
+            if not parts:
+                print(f"[merge] {g}: no per-target CSVs produced — skipping group")
+                continue
+            merged = pd.concat(parts, ignore_index=True)
+            if target_col in merged.columns:
+                merged = (merged.drop_duplicates(subset=[target_col])
+                                .sort_values(target_col, ascending=False)
+                                .reset_index(drop=True))
+            canonical = group_outdirs[g] / f"combined_titration_{g}.csv"
+            merged.to_csv(canonical, index=False)
+            csvs_by_group[g] = canonical
+            print(f"[merge] {g}: {len(merged)} rows → {canonical}")
     elif args.slurm:
         from ops_utils.hpc.slurm_batch_utils import (
             submit_parallel_jobs,
@@ -1566,6 +2179,11 @@ def main():
             "cpus_per_task": args.slurm_cpus,
             "slurm_partition": args.slurm_partition,
         }
+        # Default to one prep-thread per allocated CPU when on SLURM.
+        n_workers = (
+            int(args.n_workers) if args.n_workers is not None
+            else int(args.slurm_cpus)
+        )
         # Auto-bump timeout for any group that includes the Phase reporter
         # (~60M cells / 25GB) to args.phase_slurm_time (default 240min). All
         # reporters in a combined-titration group are h-concatted into one job,
@@ -1573,13 +2191,28 @@ def main():
         def _has_phase(paths: List[Path]) -> bool:
             return any("phase" in p.stem.lower() for p in paths)
 
+        # Combined-titration runtime scales with reporter count (each
+        # reporter is z-score-normalized + h-concatted at every schedule
+        # point), not just Phase presence. Treat any group with ≥10 markers
+        # OR Phase as a "big" group and use the larger budget.
+        _BIG_GROUP_MIN_MARKERS = 10
+
         job_arrays = []
+        slurm_time_user_set = args.slurm_time != parser.get_default("slurm_time")
         for g in groups:
+            n_markers = len(group_paths[g])
             phase_in_group = _has_phase(group_paths[g])
-            timeout_min = args.phase_slurm_time if phase_in_group else args.slurm_time
-            # Mirror pca_titration's bootstrap autoscaling for the Phase budget
+            is_big_group = phase_in_group or n_markers >= _BIG_GROUP_MIN_MARKERS
+            if slurm_time_user_set:
+                # Explicit --slurm-time always wins.
+                timeout_min = args.slurm_time
+            elif is_big_group:
+                timeout_min = args.phase_slurm_time
+            else:
+                timeout_min = args.slurm_time
+            # Mirror pca_titration's bootstrap autoscaling for the big-group budget
             if (
-                phase_in_group and args.bootstrap > 1
+                is_big_group and args.bootstrap > 1
                 and timeout_min == parser.get_default("phase_slurm_time")
             ):
                 timeout_min = timeout_min * int(args.bootstrap)
@@ -1598,12 +2231,21 @@ def main():
                     "group_label": g,
                     "cache": bool(args.cache),
                     "schedule": group_schedules[g],
+                    "schedule_start_override": schedule_start_overrides[g],
+                    "median_start_policy": args.median_start_policy,
+                    "second_pca_threshold": float(args.second_pca_threshold),
+                    "n_workers": int(n_workers),
                 },
             }
-            phase_tag = " (Phase reporter present — bumped time)" if phase_in_group else ""
+            if phase_in_group:
+                big_reason = " (Phase reporter present — bumped time)"
+            elif is_big_group:
+                big_reason = f" ({n_markers} markers ≥ {_BIG_GROUP_MIN_MARKERS} — bumped time)"
+            else:
+                big_reason = ""
             print(
                 f"\nSubmitting combined-titration SLURM job for group={g} "
-                f"({timeout_min}min, {args.slurm_memory}){phase_tag}..."
+                f"({timeout_min}min, {args.slurm_memory}){big_reason}..."
             )
             result = submit_parallel_jobs(
                 jobs_to_submit=[job],
@@ -1627,6 +2269,13 @@ def main():
         if job_arrays:
             wait_for_multiple_job_arrays(job_arrays, experiment="pca_combined_titration")
     else:
+        # Default thread pool size for local mode: --n-workers if set,
+        # else os.cpu_count() (capped per group inside _build_combined_at_target).
+        import os as _os  # noqa: WPS433
+        n_workers_local = (
+            int(args.n_workers) if args.n_workers is not None
+            else max(1, _os.cpu_count() or 1)
+        )
         for g in groups:
             run_combined_titration(
                 cells_h5ad_paths=[str(p) for p in group_paths[g]],
@@ -1639,6 +2288,10 @@ def main():
                 group_label=g,
                 cache=bool(args.cache),
                 schedule=group_schedules[g],
+                schedule_start_override=schedule_start_overrides[g],
+                median_start_policy=args.median_start_policy,
+                second_pca_threshold=float(args.second_pca_threshold),
+                n_workers=int(n_workers_local),
             )
             csvs_by_group[g] = group_outdirs[g] / f"combined_titration_{g}.csv"
 
