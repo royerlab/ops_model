@@ -617,19 +617,148 @@ def compare_maps(output_dir: str) -> None:
             )
 
 
+_DEFAULT_COMPARISON_COLOURS = ("#2E7D32", "#6A1B9A")  # green, purple
+
+
+def _compare_pair(
+    path_a: Path,
+    path_b: Path,
+    output_dir: Path,
+    label_a: str,
+    label_b: str,
+    tag: Optional[str],
+    comparison: str,
+    col_a_override: Optional[str] = None,
+    col_b_override: Optional[str] = None,
+) -> List[dict]:
+    """Compare two paths directly. Each path may be a metrics/ dir, its parent,
+    or an h5ad file living next to a metrics/ dir."""
+
+    def _resolve_metrics(p: Path) -> Path:
+        if p.is_file():
+            p = p.parent
+        if p.name == "metrics" and p.is_dir():
+            return p
+        m = _find_metrics_dir(p)
+        if m is None:
+            raise FileNotFoundError(f"No metrics/ directory found at or under {p}")
+        return m
+
+    dir_a = _resolve_metrics(path_a)
+    dir_b = _resolve_metrics(path_b)
+
+    col_a, col_b = _COMPARISON_COLOURS.get(comparison, _DEFAULT_COMPARISON_COLOURS)
+    if col_a_override:
+        col_a = col_a_override
+    if col_b_override:
+        col_b = col_b_override
+    if tag is None:
+        tag = f"{label_a}_vs_{label_b}".lower().replace(" ", "_").replace("/", "_")
+
+    cfg = dict(
+        group=comparison.replace("-", "_"),
+        tag=tag,
+        label_a=label_a,
+        label_b=label_b,
+        col_a=col_a,
+        col_b=col_b,
+        dir_a=dir_a,
+        dir_b=dir_b,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"\n=== {tag}: {label_a} vs {label_b} ===")
+    logger.info(f"  A: {dir_a}")
+    logger.info(f"  B: {dir_b}")
+    rows = _run_comparison(cfg, output_dir)
+    if rows:
+        pd.DataFrame(rows).to_csv(output_dir / f"{tag}_summary.csv", index=False)
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Auto-discover and compare phenotypic mAP scores across feature types and channel subsets"
+        description="Compare phenotypic mAP scores. Either auto-discover pairs "
+        "under a root directory, or compare two specific paths."
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         type=str,
         default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
-        help="Root output directory containing dino/ and cellprofiler/ subdirs",
+        help="Auto-discover mode: root directory containing dino/ and "
+        "cellprofiler/ subdirs. Output written to <root>/comparison/.",
+    )
+    parser.add_argument(
+        "-a",
+        "--path-a",
+        type=str,
+        help="Two-path mode: path A. May be a metrics/ dir, its parent, or an "
+        "h5ad file next to a metrics/ dir. Requires --path-b.",
+    )
+    parser.add_argument(
+        "-b",
+        "--path-b",
+        type=str,
+        help="Two-path mode: path B (see --path-a).",
+    )
+    parser.add_argument(
+        "--label-a", type=str, default="A", help="Display label for path A."
+    )
+    parser.add_argument(
+        "--label-b", type=str, default="B", help="Display label for path B."
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Filename prefix for outputs. Defaults to slug from labels.",
+    )
+    parser.add_argument(
+        "--comparison",
+        type=str,
+        default="phase-vs-nophase",
+        help=f"Free-form group/colour-preset name. Known presets: "
+        f"{list(_COMPARISON_COLOURS.keys())}. Unknown names use a default "
+        f"green/purple pair; override with --col-a/--col-b.",
+    )
+    parser.add_argument(
+        "--col-a", type=str, default=None, help="Hex colour for side A (overrides preset)."
+    )
+    parser.add_argument(
+        "--col-b", type=str, default=None, help="Hex colour for side B (overrides preset)."
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="Two-path mode: output directory (default: <path-a parent>/comparison/).",
     )
     args = parser.parse_args()
-    compare_maps(args.output_dir)
+
+    if args.path_a or args.path_b:
+        if not (args.path_a and args.path_b):
+            parser.error("--path-a and --path-b must be given together")
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+        )
+        path_a = Path(args.path_a)
+        out = Path(args.out) if args.out else (
+            (path_a.parent if path_a.is_file() else path_a) / "comparison"
+        )
+        _compare_pair(
+            path_a,
+            Path(args.path_b),
+            out,
+            args.label_a,
+            args.label_b,
+            args.tag,
+            args.comparison,
+            col_a_override=args.col_a,
+            col_b_override=args.col_b,
+        )
+    else:
+        compare_maps(args.output_dir)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ Scipt to store paths to complete datasets
 
 """
 
+import os
 from pathlib import Path
 
 
@@ -14,11 +15,22 @@ class OpsPaths:
         else:
             self.well_prefix = None
 
-        self.base = Path("/hpc/projects/icd.fast.ops")
+        # Allow override of base directory via environment variable
+        self.base = Path(
+            os.environ.get(
+                "OPS_OUTPUT_BASE_DIR",
+                "/hpc/projects/icd.fast.ops",
+            )
+        )
+
+        # Allow override of fast_ops base directory (defaults to base)
+        fast_base = Path(
+            os.environ.get("OPS_FAST_OUTPUT_BASE_DIR", str(self.base))
+        )
 
         self.stores = {
             "phenotyping": self.base / self.experiment / "3-assembly/phenotyping.zarr",
-            "phenotyping_v3": Path("/hpc/projects/icd.fast.ops")
+            "phenotyping_v3": fast_base
             / self.experiment
             / "3-assembly/phenotyping_v3.zarr",
         }

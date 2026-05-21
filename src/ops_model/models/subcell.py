@@ -337,9 +337,9 @@ class ViTPoolClassifier(nn.Module):
             status = self.classifiers[i].load_state_dict(classifier_ckpt)
             logger.info(f"Classifier {i + 1} status: {status}")
 
-    def forward(self, x: torch.Tensor) -> ViTPoolModelOutput:
+    def forward(self, x: torch.Tensor, output_attentions: bool = False) -> ViTPoolModelOutput:
         b, c, h, w = x.shape
-        outputs = self.encoder(x, output_attentions=True, interpolate_pos_encoding=True)
+        outputs = self.encoder(x, output_attentions=output_attentions, interpolate_pos_encoding=True)
 
         if self.pool_model:
             pool_op, pool_attn = self.pool_model(outputs.last_hidden_state)
@@ -358,17 +358,18 @@ class ViTPoolClassifier(nn.Module):
                 pool_op.shape[0], self.num_classes, device=pool_op.device
             )
 
-        h_feat = h // self.vit_config.patch_size
-        w_feat = w // self.vit_config.patch_size
-
-        attentions = outputs.attentions[-1][:, :, 0, 1:].reshape(
-            b, self.vit_config.num_attention_heads, h_feat, w_feat
-        )
-
-        if pool_attn is not None:
-            pool_attn = pool_attn[:, :, 1:].reshape(
-                b, self.pool_model.num_heads, h_feat, w_feat
+        if output_attentions:
+            h_feat = h // self.vit_config.patch_size
+            w_feat = w // self.vit_config.patch_size
+            attentions = outputs.attentions[-1][:, :, 0, 1:].reshape(
+                b, self.vit_config.num_attention_heads, h_feat, w_feat
             )
+            if pool_attn is not None:
+                pool_attn = pool_attn[:, :, 1:].reshape(
+                    b, self.pool_model.num_heads, h_feat, w_feat
+                )
+        else:
+            attentions = None
 
         return ViTPoolModelOutput(
             last_hidden_state=outputs.last_hidden_state,

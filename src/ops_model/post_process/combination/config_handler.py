@@ -73,6 +73,12 @@ class CombinationConfig:
     downsampling: Dict[str, Any] = field(default_factory=dict)
     slurm: Dict[str, Any] = field(default_factory=dict)
     output_filename: Optional[str] = None
+    preserve_batch: bool = False
+    no_pca: bool = False
+    save_cell_level: bool = False
+
+    # Cell-level filters applied after loading, before PCA/aggregation
+    cell_filters: List[Dict[str, Any]] = field(default_factory=list)
 
     # Embedding Configs
     embeddings: Dict[str, EmbeddingConfig] = field(default_factory=dict)

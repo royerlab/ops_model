@@ -114,11 +114,17 @@ def run_combination(config: CombinationConfig):
         combiner = PcaOptimizationCombiner(config)
         adata_guide, adata_gene = combiner.combine()
 
-        if config.output_path:
+        if adata_guide is not None and config.output_path:
             output_dir = Path(config.output_path)
-            stem = config.output_filename or "combined"
-            validate_and_save(adata_guide, output_dir / f"{stem}_guide.h5ad", level="multi_experiment")
-            validate_and_save(adata_gene,  output_dir / f"{stem}_gene.h5ad",  level="multi_experiment")
+            stem = Path(config.output_filename or "combined").stem
+            validate_and_save(
+                adata_guide, output_dir / f"{stem}_guide.h5ad", level="multi_experiment"
+            )
+            validate_and_save(
+                adata_gene, output_dir / f"{stem}_gene.h5ad", level="multi_experiment"
+            )
+        elif adata_guide is None:
+            logger.info("Phase 2 was skipped — no combined output to save.")
         else:
             logger.warning("output_path is not set. Skipping save.")
 

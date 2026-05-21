@@ -260,6 +260,8 @@ def _process_signal_group(
     random_seed: int = 42,
     preserve_batch: bool = False,
     no_pca: bool = False,
+    cell_filter: Optional[Any] = None,
+    save_cell_level: bool = False,
 ) -> str:
     """Phase 1: pool cells for one biological signal, fit PCA, select n_pcs, save h5ads.
 
@@ -351,6 +353,14 @@ def _process_signal_group(
         adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
         if adata is None:
             continue
+
+        if cell_filter is not None:
+            n_before = adata.n_obs
+            adata = cell_filter(adata)
+            if adata.n_obs == 0:
+                _logger.warning(f"  {exp}/{ch}: all cells removed by filter, skipping")
+                continue
+            _logger.info(f"  {exp}/{ch}: {n_before} → {adata.n_obs} cells after filtering")
 
         if inferred_cell_type is None:
             inferred_cell_type = adata.uns.get("cell_type", "cell")
@@ -517,6 +527,13 @@ def _process_signal_group(
     )
     del X_reduced
 
+    if save_cell_level:
+        adata_cell = ad.AnnData(
+            X=adata_reduced.X,
+            obs=obs_full.copy(),
+            var=adata_reduced.var.copy(),
+        )
+
     g = aggregate_to_level(
         adata_reduced, level="guide", method="mean", preserve_batch_info=preserve_batch
     )
@@ -565,6 +582,9 @@ def _process_signal_group(
     for adata in [g, e]:
         adata.uns.update(uns)
 
+    if save_cell_level:
+        adata_cell.uns.update(uns)
+
     from ops_model.post_process.anndata_processing.anndata_validator import (
         AnndataValidator,
     )
@@ -585,6 +605,11 @@ def _process_signal_group(
     output_suffix = ("_nopca" if no_pca else "") + ("_batch" if preserve_batch else "")
     g.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_guide.h5ad")
     e.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_gene.h5ad")
+    if save_cell_level:
+        adata_cell.write_h5ad(per_channel_dir / f"{file_prefix}{output_suffix}_cell.h5ad")
+        _logger.info(
+            f"  {signal}: saved cell-level AnnData ({adata_cell.n_obs:,} cells × {adata_cell.n_vars} features)"
+        )
     if sweep_rows:
         pd.DataFrame(sweep_rows).to_csv(
             per_channel_dir / f"{file_prefix}{output_suffix}_sweep.csv", index=False
@@ -752,6 +777,8 @@ class PcaOptimizationCombiner:
         signal_groups: Dict[str, List[Tuple[str, str]]],
         output_dir: Path,
         downsampling_config: Dict[str, Any],
+        cell_filter: Optional[Any] = None,
+        save_cell_level: bool = False,
     ) -> None:
         """Run Phase 1 sequentially in the calling process."""
         pca_cfg = self._build_pca_config()
@@ -769,6 +796,8 @@ class PcaOptimizationCombiner:
                 norm_method=norm_method,
                 preserve_batch=self.config.preserve_batch,
                 no_pca=self.config.no_pca,
+                cell_filter=cell_filter,
+                save_cell_level=save_cell_level,
             )
             logger.info(f"  {result}")
 
@@ -777,6 +806,8 @@ class PcaOptimizationCombiner:
         signal_groups: Dict[str, List[Tuple[str, str]]],
         output_dir: Path,
         downsampling_config: Dict[str, Any],
+        cell_filter: Optional[Any] = None,
+        save_cell_level: bool = False,
     ) -> None:
         """Submit Phase 1 as parallel SLURM jobs and wait for completion."""
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -811,6 +842,8 @@ class PcaOptimizationCombiner:
                         "norm_method": norm_method,
                         "preserve_batch": self.config.preserve_batch,
                         "no_pca": self.config.no_pca,
+                        "cell_filter": cell_filter,
+                        "save_cell_level": save_cell_level,
                     },
                 }
             )
@@ -832,6 +865,52 @@ class PcaOptimizationCombiner:
     # ------------------------------------------------------------------
     # Phase 2
     # ------------------------------------------------------------------
+
+    def _join_gene_panel_metadata(
+        self,
+        adata: "ad.AnnData",
+        panel_csv: Path = Path(
+            "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
+        ),
+        join_col: str = "perturbation",
+    ) -> None:
+        """Annotate ``adata.obs`` in-place with per-gene metadata from the
+        annotated_gene_panel CSV, joined on ``obs[join_col]`` (gene name) ==
+        CSV ``Gene.name``. R-style column names (e.g. ``Priority..smaller.is.higher.``)
+        are normalized to underscores. Rows whose perturbation isn't in the
+        panel (e.g. NTCs, off-panel genes) get NaN."""
+        import pandas as pd
+
+        if not panel_csv.exists():
+            logger.warning(f"  Gene panel CSV not found: {panel_csv} — skipping")
+            return
+        if join_col not in adata.obs.columns:
+            logger.warning(f"  adata.obs missing '{join_col}' — skipping panel metadata join")
+            return
+        panel = pd.read_csv(panel_csv)
+        if "Gene.name" not in panel.columns:
+            logger.warning("  Gene panel CSV missing 'Gene.name' — skipping")
+            return
+        # Drop the unnamed row-index column the CSV carries.
+        panel = panel.drop(columns=[c for c in panel.columns if c.startswith("Unnamed:")])
+        panel = panel.drop_duplicates(subset=["Gene.name"])
+        panel.columns = [
+            c.replace("..", "_").replace(".", "_").rstrip("_")
+            for c in panel.columns
+        ]
+        panel = panel.set_index("Gene_name")
+        keys = adata.obs[join_col].astype(str).values
+        aligned = panel.reindex(keys)
+        aligned.index = adata.obs.index
+        n_matched = int(aligned.notna().any(axis=1).sum())
+        logger.info(
+            f"  Joined gene panel ({len(panel)} genes × {len(panel.columns)} cols): "
+            f"{n_matched}/{len(adata.obs)} obs rows matched on '{join_col}'"
+        )
+        for col in aligned.columns:
+            if col in adata.obs.columns:
+                logger.debug(f"  panel column '{col}' already in obs — overwriting")
+            adata.obs[col] = aligned[col].values
 
     def _compute_embeddings(self, adata: "ad.AnnData", embedding_config) -> None:
         """Compute UMAP and/or PHATE directly (not via scanpy) and store in obsm."""
@@ -1013,6 +1092,14 @@ class PcaOptimizationCombiner:
         if embedding_config is not None and embedding_config.compute_embeddings:
             self._compute_embeddings(adata_gene, embedding_config)
 
+        # Annotate obs with per-gene panel metadata (Funk/Ramezani/Replogle map
+        # coords, CORUM/REACT/GO membership, Gene_Category, NCBI_ID, …) on both
+        # levels. Guide-level joins via the guide's target gene in obs["perturbation"].
+        logger.info("Joining annotated_gene_panel metadata into obs...")
+        for _adata, _level in [(adata_guide, "guide"), (adata_gene, "gene")]:
+            logger.info(f"  ({_level} level)")
+            self._join_gene_panel_metadata(_adata)
+
         return adata_guide, adata_gene
 
     # ------------------------------------------------------------------
@@ -1039,11 +1126,16 @@ class PcaOptimizationCombiner:
             )
 
         # 3. Phase 1: PCA sweep per signal group
+        from .cell_filters import build_cell_filter
+
+        cell_filter = build_cell_filter(self.config.cell_filters)
+        save_cell_level = self.config.save_cell_level
+
         slurm_enabled = self.config.slurm.get("enabled", False)
         if slurm_enabled:
-            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config)
+            self._run_phase1_slurm(signal_groups, output_dir, downsampling_config, cell_filter, save_cell_level)
         else:
-            self._run_phase1_local(signal_groups, output_dir, downsampling_config)
+            self._run_phase1_local(signal_groups, output_dir, downsampling_config, cell_filter, save_cell_level)
 
         # 4. Phase 2: aggregate, normalize, embed
         if self.config.preserve_batch or self.config.no_pca:

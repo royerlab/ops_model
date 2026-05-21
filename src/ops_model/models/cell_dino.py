@@ -15,6 +15,7 @@ from monai.transforms import (
 )
 
 from ops_model.data import data_loader
+from ops_model.data.labels import load_immunostaining_labels, SOURCE_FILENAME_TEMPLATES
 
 REPO_DIR = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/dinov2"
 CHECKPOINT = "/hpc/projects/icd.ops/models/model_checkpoints/cell_dino/channel_adaptive_dino_vitl16_pretrain_cells-ef7c17ff.pth"
@@ -88,6 +89,17 @@ def extract_cell_dino_features(
     print(
         f"Extracting Cell-DINO features for {list(config['data_manager']['experiments'].keys())}"
     )
+
+    csv_source = config.get("csv_source", "standard")
+    labels_df = None
+    if csv_source in ("cell_painting", "four_i", "immunostaining"):
+        filename_template = config.get("filename_template") or SOURCE_FILENAME_TEMPLATES.get(csv_source)
+        labels_df = load_immunostaining_labels(
+            experiments=config["data_manager"]["experiments"],
+            filename_template=filename_template,
+            base_path=config.get("base_path"),
+        )
+
     dm = data_loader.OpsDataManager(
         experiments=config["data_manager"]["experiments"],
         batch_size=config["data_manager"]["batch_size"],
@@ -99,6 +111,7 @@ def extract_cell_dino_features(
         verbose=False,
     )
     dm.construct_dataloaders(
+        labels_df=labels_df,
         num_workers=config["data_manager"]["num_workers"],
         dataset_type=config["dataset_type"],
         basic_kwargs={
