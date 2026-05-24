@@ -50,16 +50,32 @@ DISCORDANCE_THRESHOLD = 0.15
 TOP_N_LABELS = 10
 SLOPE_MAX_BG = 120
 
-METRICS: Dict[str, Tuple[str, str, str]] = {
-    # key: (csv_filename, display_label, id_column)
-    "activity": ("phenotypic_activity.csv", "Activity", "perturbation"),
+_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+_EBI_YAML = (
+    "/hpc/projects/icd.fast.ops/configs/gene_clusters/"
+    "EBI_complexes_v1_old_gene_names.yaml"
+)
+
+METRICS: Dict[str, Tuple[str, str, str, Optional[str]]] = {
+    # key: (csv_filename, display_label, id_column, name_yaml_or_None)
+    "activity": ("phenotypic_activity.csv", "Activity", "perturbation", None),
     "distinctiveness": (
         "phenotypic_distinctiveness.csv",
         "Distinctiveness",
         "perturbation",
+        None,
     ),
-    "corum": ("phenotypic_consistency_corum.csv", "Consistency\n(CORUM)", "complex_id"),
-    "chad": ("phenotypic_consistency_manual.csv", "Consistency\n(CHAD)", "complex_num"),
+    "corum": (
+        "phenotypic_consistency_corum.csv", "Consistency\n(CORUM)", "complex_id", None,
+    ),
+    "chad": (
+        "phenotypic_consistency_manual.csv", "Consistency\n(CHAD)", "complex_num",
+        _CHAD_YAML,
+    ),
+    "ebi": (
+        "phenotypic_consistency_ebi.csv", "Consistency\n(EBI)", "complex_num",
+        _EBI_YAML,
+    ),
 }
 
 _COL_SIG_BOTH = "#2196F3"
@@ -157,15 +173,13 @@ def _auto_discover_configs(root: Path) -> List[dict]:
 # I/O helpers
 # ----------------------------------------------------------------------------
 
-_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
 
-
-def _chad_num_to_name() -> dict:
-    """Load CHAD YAML and return {int_key: name} lookup."""
+def _complex_num_to_name(yaml_path: str) -> dict:
+    """Load a complex YAML (CHAD / EBI) and return {int_key: name} lookup."""
     try:
         import yaml
 
-        with open(_CHAD_YAML) as f:
+        with open(yaml_path) as f:
             d = yaml.safe_load(f)
         return {
             k: v["name"] for k, v in d.items() if isinstance(v, dict) and "name" in v
@@ -174,7 +188,9 @@ def _chad_num_to_name() -> dict:
         return {}
 
 
-def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
+def _load_metric_csv(
+    path: Path, id_col: str, name_yaml: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
     if not path.exists():
         return None
     df = pd.read_csv(path)
@@ -185,8 +201,8 @@ def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
         return None
     if id_col == "perturbation":
         df = df[~df[id_col].str.contains("NTC|non-targeting", case=False, na=False)]
-    if id_col == "complex_num":
-        name_map = _chad_num_to_name()
+    if id_col == "complex_num" and name_yaml is not None:
+        name_map = _complex_num_to_name(name_yaml)
         if name_map:
             df[id_col] = df[id_col].map(
                 lambda x: name_map.get(x, name_map.get(int(x), x))
@@ -421,7 +437,7 @@ def _ax_violin(
     col_b: str,
 ) -> None:
     labels, data, pvals = [], [], []
-    for key, (_, label, _id) in METRICS.items():
+    for key, (_, label, _id, _yaml) in METRICS.items():
         if key not in metric_deltas:
             continue
         d = metric_deltas[key]
@@ -503,9 +519,9 @@ def _run_comparison(cfg: dict, comp_dir: Path) -> List[dict]:
     dir_a, dir_b = cfg["dir_a"], cfg["dir_b"]
 
     available = {}
-    for key, (csv_name, metric_label, id_col) in METRICS.items():
-        df_a = _load_metric_csv(dir_a / csv_name, id_col)
-        df_b = _load_metric_csv(dir_b / csv_name, id_col)
+    for key, (csv_name, metric_label, id_col, name_yaml) in METRICS.items():
+        df_a = _load_metric_csv(dir_a / csv_name, id_col, name_yaml=name_yaml)
+        df_b = _load_metric_csv(dir_b / csv_name, id_col, name_yaml=name_yaml)
         if df_a is not None and df_b is not None:
             merged = _merge_pair(df_a, df_b)
             if len(merged) >= 3:
