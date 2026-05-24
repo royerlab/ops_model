@@ -175,19 +175,22 @@ def _compute_and_plot_embeddings(
             import phate
 
             def _fit(X, n_obs, level, adata=None):
-                knn = min(15 if n_obs > 2000 else 10, n_obs - 1)
+                # GRASSP-canonical PHATE: knn=8, decay=10. For tiny levels
+                # (n_obs <= 8) we fall back to (n_obs - 1) so PHATE still fits.
+                knn = min(8, n_obs - 1)
                 if knn < 2:
                     return None, {}
+                decay = 10
                 coords = phate.PHATE(
                     n_components=2,
                     knn=knn,
-                    decay=15,
+                    decay=decay,
                     t="auto",
                     n_jobs=-1,
                     random_state=random_seed,
                     verbose=0,
                 ).fit_transform(X)
-                params = {"knn": knn, "decay": 15, "t": "auto", "random_state": random_seed}
+                params = {"knn": knn, "decay": decay, "t": "auto", "random_state": random_seed}
                 return coords, params
 
             return _fit
@@ -379,6 +382,7 @@ def _score_consistency(
     try:
         from ops_utils.analysis.map_scores import (
             phenotypic_consistency_corum,
+            phenotypic_consistency_ebi,
             phenotypic_consistency_manual_annotation,
         )
 
@@ -412,15 +416,13 @@ def _score_consistency(
         _logger.info(f"  Manual CHAD ({label}): {consistency_manual_ratio:.1%}")
 
         _logger.info(f"Running EBI consistency ({label})...")
-        consistency_ebi_map, consistency_ebi_ratio = (
-            phenotypic_consistency_manual_annotation(
-                adata_gene,
-                plot_results=False,
-                null_size=100_000,
-                cache_similarity=True,
-                distance=distance,
-                annotation_path=EBI_ANNOTATION_PATH,
-            )
+        consistency_ebi_map, consistency_ebi_ratio = phenotypic_consistency_ebi(
+            adata_gene,
+            plot_results=False,
+            null_size=100_000,
+            cache_similarity=True,
+            distance=distance,
+            annotation_path=EBI_ANNOTATION_PATH,
         )
         consistency_ebi_map.to_csv(
             metrics_dir / f"phenotypic_consistency_ebi{suffix}.csv", index=False

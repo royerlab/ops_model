@@ -325,7 +325,8 @@ def pca_sweep_op_signal(
         consensus_r = result["consensus_r"]
         consensus_a = result["consensus_a"]
         metric_peaks = {
-            k: result[k] for k in ("peak_act_t", "peak_dist_t", "peak_chad_t")
+            k: result.get(k)
+            for k in ("peak_act_t", "peak_dist_t", "peak_ebi_t")
         }
         sweep_peak_t = consensus_t
         selected_t, selected_n, selected_r, selected_a = (
