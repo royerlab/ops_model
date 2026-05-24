@@ -1693,9 +1693,15 @@ def _handle_downsampled(args, output_dir, cp_override):
         print(f"  {'Signal':<45} {'Exps':>5} {'Cells':>10} {'sgRNAs':>7} {'-> Expected':>15}")
         print(f"  {'-'*45} {'-'*5} {'-'*10} {'-'*7} {'-'*15}")
     elif args.downsampled:
-        # Equalise: all groups target the smallest group (floor 750k)
-        MIN_CELLS_FLOOR = 750_000
-        global_target = max(min(cell_counts.values()), MIN_CELLS_FLOOR)
+        # Equalise: all groups target the smallest group (floor 750k), unless
+        # --target-cells is set, in which case use that exact value.
+        forced = getattr(args, "target_cells", None)
+        if forced is not None and forced > 0:
+            global_target = int(forced)
+            print(f"\n  --target-cells override: using {global_target:,} cells/signal")
+        else:
+            MIN_CELLS_FLOOR = 750_000
+            global_target = max(min(cell_counts.values()), MIN_CELLS_FLOOR)
         per_signal_target = {s: global_target for s in cell_counts}
         small_groups = {s: n for s, n in cell_counts.items() if n < global_target}
         if small_groups:

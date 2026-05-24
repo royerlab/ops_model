@@ -331,6 +331,15 @@ def _build_parser():
         "(floor 750k). Default mode uses all cells per group. Output → downsampled/.",
     )
     parser.add_argument(
+        "--target-cells",
+        dest="target_cells",
+        type=int,
+        default=None,
+        help="Force every signal group to this exact cell count under --downsampled, "
+             "overriding the auto-computed `max(min_signal_count, 750k)` target. "
+             "Useful for cross-run matching (e.g. CP and live-cell at the same N).",
+    )
+    parser.add_argument(
         "--downsample-per-guide",
         dest="downsample_per_guide",
         action="store_true",
