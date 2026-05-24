@@ -38,7 +38,7 @@ from ops_model.features.anndata_utils import (
 from ops_utils.analysis.map_scores import (
     compute_auc_score,
     phenotypic_activity_assesment,
-    phenotypic_consistency_manual_annotation,
+    phenotypic_consistency_ebi,
     phenotypic_distinctivness,
 )
 from ops_utils.analysis.pca import n_pcs_for_threshold
@@ -105,17 +105,20 @@ def _run_threshold_sweep(
     _logger,
     distance: str = "cosine",
 ) -> Optional[Dict]:
-    """Sweep variance thresholds, score activity + distinctiveness_all + chad_all at each.
+    """Sweep variance thresholds, score activity + distinctiveness_all + ebi_all at each.
 
     Returns dict with keys:
         sweep_rows, consensus_t, consensus_n, consensus_r, consensus_a,
-        peak_act_t, peak_dist_t, peak_chad_t
+        peak_act_t, peak_dist_t, peak_ebi_t
     or None if no valid threshold found.
 
-    consensus_t is the threshold maximizing the normalized sum of all 3 mAP ratios.
+    consensus_t is the threshold maximizing the normalized sum of
+    activity + distinctiveness_all + ebi_all. CHAD/CORUM are NOT computed
+    in the sweep — they're computed once at the final consensus output by
+    the downstream aggregation step, not at every sweep threshold.
     """
     from ops_model.post_process.combination.pca_optimization import (
-        CHAD_ANNOTATION_PATH,
+        EBI_ANNOTATION_PATH,
         MIN_PCS,
     )
 
@@ -149,7 +152,7 @@ def _run_threshold_sweep(
         del guide_tmp, gene_tmp
 
         r, a = 0.0, 0.0
-        dist_all, chad_all = 0.0, 0.0
+        dist_all, ebi_all = 0.0, 0.0
         try:
             r, a = _score_activity_per_threshold(guide_norm, distance=distance)
             g_cp = _prepare_for_copairs(guide_norm.copy())
@@ -160,13 +163,13 @@ def _run_threshold_sweep(
                 null_size=100_000,
                 distance=distance,
             )
-            _, chad_all = phenotypic_consistency_manual_annotation(
+            _, ebi_all = phenotypic_consistency_ebi(
                 e_cp,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
                 distance=distance,
-                annotation_path=CHAD_ANNOTATION_PATH,
+                annotation_path=EBI_ANNOTATION_PATH,
             )
         except Exception as e:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {e}")
@@ -178,14 +181,15 @@ def _run_threshold_sweep(
             "activity": r,
             "auc": a,
             "distinctiveness_all": dist_all,
-            "chad_all": chad_all,
+            "ebi_all": ebi_all,
         }
         row.update(extra_sweep_cols)
         sweep_rows.append(row)
 
         skip = " [skipped for peak]" if n_pcs < MIN_PCS else ""
         _logger.info(
-            f"  {threshold:.0%}: {n_pcs} PCs — act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%}{skip}"
+            f"  {threshold:.0%}: {n_pcs} PCs — act={r:.1%} "
+            f"dist_all={dist_all:.1%} ebi_all={ebi_all:.1%}{skip}"
         )
 
     # Only consider thresholds with enough PCs for peak selection
@@ -201,16 +205,17 @@ def _run_threshold_sweep(
 
     peak_act_t, _ = _peak_threshold("activity")
     peak_dist_t, _ = _peak_threshold("distinctiveness_all")
-    peak_chad_t, _ = _peak_threshold("chad_all")
+    peak_ebi_t, _ = _peak_threshold("ebi_all")
 
-    # Consensus: normalize each metric to [0,1] across valid thresholds, sum, pick argmax
+    # Consensus: normalize each metric to [0,1] across valid thresholds, sum, pick argmax.
+    # Uses activity + distinctiveness + EBI.
     def _norm(col):
         vals = valid_df[col].values.astype(float)
         vmin, vmax = vals.min(), vals.max()
         return (vals - vmin) / (vmax - vmin) if vmax > vmin else np.ones_like(vals)
 
     consensus_scores = (
-        _norm("activity") + _norm("distinctiveness_all") + _norm("chad_all")
+        _norm("activity") + _norm("distinctiveness_all") + _norm("ebi_all")
     )
     best_idx = int(np.argmax(consensus_scores))
     consensus_t = valid_df.iloc[best_idx]["threshold"]
@@ -220,9 +225,10 @@ def _run_threshold_sweep(
 
     _logger.info(f"  Peak activity:       {peak_act_t:.0%}")
     _logger.info(f"  Peak distinctiveness:{peak_dist_t:.0%}")
-    _logger.info(f"  Peak CHAD:           {peak_chad_t:.0%}")
+    _logger.info(f"  Peak EBI:            {peak_ebi_t:.0%}")
     _logger.info(
         f"  Consensus peak:      {consensus_t:.0%} ({consensus_n} PCs) → act={consensus_r:.1%}"
+        f"  [act+dist+EBI]"
     )
 
     return {
@@ -233,7 +239,7 @@ def _run_threshold_sweep(
         "consensus_a": consensus_a,
         "peak_act_t": peak_act_t,
         "peak_dist_t": peak_dist_t,
-        "peak_chad_t": peak_chad_t,
+        "peak_ebi_t": peak_ebi_t,
     }
 
 
@@ -248,13 +254,16 @@ def _run_guide_threshold_sweep(
     """Sweep variance thresholds at *guide* level — input is assumed already
     NTC-normalized (e.g. the output of ``aggregate_channels``). For each
     threshold, slice the second-pass PCs, aggregate to gene, and score
-    activity / distinctiveness / chad. No further normalization is applied.
+    activity / distinctiveness / ebi. No further normalization is applied.
+
+    Consensus uses activity + distinctiveness + EBI. CHAD/CORUM are NOT
+    computed during the sweep — only at the final consensus output.
 
     Returns the same dict shape as :func:`_run_threshold_sweep` so
     :func:`plot_pca_sweep` can be reused.
     """
     from ops_model.post_process.combination.pca_optimization import (
-        CHAD_ANNOTATION_PATH,
+        EBI_ANNOTATION_PATH,
         MIN_PCS,
     )
 
@@ -280,7 +289,7 @@ def _run_guide_threshold_sweep(
         gene_tmp = _prepare_for_copairs(gene_tmp)
 
         r, a = 0.0, 0.0
-        dist_all, chad_all = 0.0, 0.0
+        dist_all, ebi_all = 0.0, 0.0
         try:
             activity_map, r = phenotypic_activity_assesment(
                 guide_tmp,
@@ -295,13 +304,13 @@ def _run_guide_threshold_sweep(
                 null_size=100_000,
                 distance=distance,
             )
-            _, chad_all = phenotypic_consistency_manual_annotation(
+            _, ebi_all = phenotypic_consistency_ebi(
                 gene_tmp,
                 plot_results=False,
                 null_size=100_000,
                 cache_similarity=True,
                 distance=distance,
-                annotation_path=CHAD_ANNOTATION_PATH,
+                annotation_path=EBI_ANNOTATION_PATH,
             )
         except Exception as exc:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {exc}")
@@ -314,13 +323,13 @@ def _run_guide_threshold_sweep(
                 "activity": float(r),
                 "auc": float(a),
                 "distinctiveness_all": float(dist_all),
-                "chad_all": float(chad_all),
+                "ebi_all": float(ebi_all),
             }
         )
         skip = " [skipped for peak]" if n_pcs < MIN_PCS else ""
         _logger.info(
             f"  {threshold:.0%}: {n_pcs} PCs — "
-            f"act={r:.1%} dist_all={dist_all:.1%} chad_all={chad_all:.1%}{skip}"
+            f"act={r:.1%} dist_all={dist_all:.1%} ebi_all={ebi_all:.1%}{skip}"
         )
 
     valid = [row for row in sweep_rows if row["n_pcs"] >= MIN_PCS]
@@ -334,15 +343,16 @@ def _run_guide_threshold_sweep(
 
     peak_act_t, _ = _peak_threshold("activity")
     peak_dist_t, _ = _peak_threshold("distinctiveness_all")
-    peak_chad_t, _ = _peak_threshold("chad_all")
+    peak_ebi_t, _ = _peak_threshold("ebi_all")
 
     def _norm(col):
         vals = valid_df[col].values.astype(float)
         vmin, vmax = vals.min(), vals.max()
         return (vals - vmin) / (vmax - vmin) if vmax > vmin else np.ones_like(vals)
 
+    # Consensus uses activity + distinctiveness + EBI.
     consensus_scores = (
-        _norm("activity") + _norm("distinctiveness_all") + _norm("chad_all")
+        _norm("activity") + _norm("distinctiveness_all") + _norm("ebi_all")
     )
     best_idx = int(np.argmax(consensus_scores))
     consensus_t = float(valid_df.iloc[best_idx]["threshold"])
@@ -350,8 +360,8 @@ def _run_guide_threshold_sweep(
 
     _logger.info(f"  Peak activity:        {peak_act_t:.0%}")
     _logger.info(f"  Peak distinctiveness: {peak_dist_t:.0%}")
-    _logger.info(f"  Peak CHAD:            {peak_chad_t:.0%}")
-    _logger.info(f"  Consensus peak:       {consensus_t:.0%} ({consensus_n} PCs)")
+    _logger.info(f"  Peak EBI:             {peak_ebi_t:.0%}")
+    _logger.info(f"  Consensus peak:       {consensus_t:.0%} ({consensus_n} PCs) [act+dist+EBI]")
 
     return {
         "sweep_rows": sweep_rows,
@@ -359,7 +369,7 @@ def _run_guide_threshold_sweep(
         "consensus_n": consensus_n,
         "peak_act_t": peak_act_t,
         "peak_dist_t": peak_dist_t,
-        "peak_chad_t": peak_chad_t,
+        "peak_ebi_t": peak_ebi_t,
     }
 
 

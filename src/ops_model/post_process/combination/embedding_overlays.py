@@ -310,10 +310,12 @@ def _apply_overlay_maps_to_adata(
     overlay_maps: Dict[str, Dict[str, str]],
     _logger=logger,
 ) -> None:
-    """Add CHAD cluster, CORUM complex, and super-category as obs columns.
+    """Add CHAD cluster, CORUM complex, super-category, and chromosome-arm
+    annotations as obs columns.
 
-    Uses ``perturbation`` to look up annotations; missing genes get NaN.
-    Stored as categoricals so downstream viewers handle them naturally.
+    Uses ``perturbation`` (or fallbacks) to look up annotations; missing
+    genes get NaN. Stored as categoricals so downstream viewers handle
+    them naturally.
     """
     pert_col = "perturbation" if "perturbation" in adata.obs.columns else None
     if pert_col is None:
@@ -332,12 +334,55 @@ def _apply_overlay_maps_to_adata(
         n_assigned = labels.notna().sum()
         _logger.info(f"  Annotated {n_assigned}/{adata.n_obs} genes with {col_name}")
 
+    # chrom_arm — added universally so every embedding carries chromosome-arm
+    # metadata available for downstream plots / artifact-detection.
+    _annotate_chrom_arm(adata, _logger=_logger)
+
+
+def _annotate_chrom_arm(adata, _logger=logger) -> None:
+    """Add ``adata.obs['chrom_arm']`` from the shared gene→chrom-arm mapping.
+
+    Lookup key priority: ``perturbation`` → ``geneKO_name`` → ``obs_names``.
+    Idempotent: skips if ``chrom_arm`` is already present. Silently no-ops
+    if the shared mapping file isn't reachable (e.g. off-cluster runs).
+    """
+    if "chrom_arm" in adata.obs.columns:
+        return
+    try:
+        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+            SHARED_MAP_CSV_PATH,
+            _load_symbol_to_arm_from_csv,
+        )
+    except ImportError as exc:
+        _logger.warning(f"  chrom_arm annotation skipped (import failed): {exc}")
+        return
+    if SHARED_MAP_CSV_PATH is None or not SHARED_MAP_CSV_PATH.is_file():
+        _logger.info(
+            f"  chrom_arm map not found at {SHARED_MAP_CSV_PATH} — skipping"
+        )
+        return
+    try:
+        mapping = _load_symbol_to_arm_from_csv(SHARED_MAP_CSV_PATH)
+    except Exception as exc:
+        _logger.warning(f"  chrom_arm map unreadable ({exc}) — skipping")
+        return
+    if "perturbation" in adata.obs.columns:
+        keys = adata.obs["perturbation"].astype(str).values
+    elif "geneKO_name" in adata.obs.columns:
+        keys = adata.obs["geneKO_name"].astype(str).values
+    else:
+        keys = np.asarray(adata.obs_names, dtype=str)
+    arms = [mapping.get(k) for k in keys]
+    adata.obs["chrom_arm"] = pd.Categorical(arms)
+    n_assigned = int(sum(1 for a in arms if a))
+    _logger.info(f"  Annotated {n_assigned}/{adata.n_obs} genes with chrom_arm")
+
 
 def _apply_leiden_to_adata(
     adata,
     leiden_results: Dict[str, np.ndarray],
     _logger=logger,
-    n_neighbors: int = 15,
+    n_neighbors: int = 8,
 ) -> None:
     """Apply cached leiden labels back onto adata.obs and ensure the neighbors
     graph (obsp.connectivities, obsp.distances, uns.neighbors) is populated.
@@ -362,7 +407,7 @@ def _apply_leiden_to_adata(
 def run_leiden_clustering(
     adata,
     resolutions: Tuple[float, ...] = DEFAULT_LEIDEN_RESOLUTIONS,
-    n_neighbors: int = 15,
+    n_neighbors: int = 8,
 ) -> Dict[str, np.ndarray]:
     """Run scanpy Leiden at each resolution. Returns {col_name: labels_array}.
 
@@ -2562,7 +2607,7 @@ def save_canonical_leiden_panels(
 # =============================================================================
 
 
-_LEIDEN_CACHE_VERSION = 1
+_LEIDEN_CACHE_VERSION = 2  # bump: caches built at n_neighbors=15 must be invalidated for the knn=8 default
 
 
 def _leiden_cache_path(plots_dir: Path) -> Path:
@@ -2615,6 +2660,13 @@ def _cache_is_valid_for_level(
     return needed_cols.issubset(cached_cols)
 
 
+# Resolutions whose cluster counts get so large that Enrichr enrichment is
+# both slow (hundreds of clusters × 10 libraries each = many HTTP calls)
+# and uninformative (tiny clusters rarely produce statistically significant
+# terms). Skip these in both gene + guide level enrichment loops.
+_ENRICHMENT_SKIP_RESOLUTIONS: Tuple[str, ...] = ("leiden_r100",)
+
+
 def _enrichment_for_gene_level(
     adata_gene_embed, leiden_results, enrichr_libraries, _logger,
 ) -> Dict[str, Dict[str, Dict]]:
@@ -2628,6 +2680,11 @@ def _enrichment_for_gene_level(
     )
     background = [str(p) for p in perts_g if not str(p).startswith("NTC")]
     for col, labels in leiden_results.items():
+        if col in _ENRICHMENT_SKIP_RESOLUTIONS:
+            _logger.info(
+                "  Skipping GO enrichment for %s (too many clusters to enrich)", col,
+            )
+            continue
         cluster_to_genes: Dict[str, List[str]] = {}
         for i, p in enumerate(perts_g):
             cluster_to_genes.setdefault(f"cluster_{labels[i]}", []).append(str(p))
@@ -2655,6 +2712,11 @@ def _enrichment_for_guide_level(
     )
     background_guide = sorted({str(p) for p in perts_guide if not str(p).startswith("NTC")})
     for col, labels in leiden_guide_results.items():
+        if col in _ENRICHMENT_SKIP_RESOLUTIONS:
+            _logger.info(
+                "  Skipping GO enrichment for guide-level %s (too many clusters to enrich)", col,
+            )
+            continue
         cluster_to_genes: Dict[str, List[str]] = {}
         for i, p in enumerate(perts_guide):
             cluster_to_genes.setdefault(f"cluster_{labels[i]}", []).append(str(p))

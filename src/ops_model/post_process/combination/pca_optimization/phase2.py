@@ -857,7 +857,7 @@ def apply_second_pass_pca(
                 metric_peaks={
                     "peak_act_t": sweep_result["peak_act_t"],
                     "peak_dist_t": sweep_result["peak_dist_t"],
-                    "peak_chad_t": sweep_result["peak_chad_t"],
+                    "peak_ebi_t": sweep_result.get("peak_ebi_t"),
                 },
             )
             _logger.info("  Saved plots/second_pca_sweep.png")

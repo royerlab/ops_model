@@ -977,6 +977,7 @@ def run_combined_titration(
         "distinctiveness_ratio", "distinctiveness_map_mean",
         "corum_ratio", "corum_map_mean",
         "chad_ratio", "chad_map_mean",
+        "ebi_ratio", "ebi_map_mean",
     ]
     base_seed = int(rng.randint(0, 2**31 - 1))
     rows = []
@@ -1066,6 +1067,7 @@ def run_combined_titration(
             f"dist={scores['distinctiveness_map_mean']:.3f} "
             f"corum={scores['corum_map_mean']:.3f} "
             f"chad={scores['chad_map_mean']:.3f} "
+            f"ebi={scores['ebi_map_mean']:.3f} "
             f"({time.time() - t_step:.0f}s)"
         )
 
@@ -1118,8 +1120,9 @@ def _plot_group_curves(
     x = df[x_col].values
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    n_metrics = len(METRICS)
     for scale in SCALES:
-        fig, axes = plt.subplots(1, 4, figsize=(22, 5), sharex=True)
+        fig, axes = plt.subplots(1, n_metrics, figsize=(5.5 * n_metrics, 5), sharex=True)
         for ax, metric in zip(axes, METRICS):
             ycol = f"{metric}_map_mean"
             sem_col = f"{ycol}_sem"
@@ -1227,7 +1230,7 @@ def plot_group_comparison(
     ])
 
     for scale in SCALES:
-        fig, axes = plt.subplots(1, 4, figsize=(22, 6), sharex=True)
+        fig, axes = plt.subplots(1, len(METRICS), figsize=(5.5 * len(METRICS), 6), sharex=True)
         for ax, metric in zip(axes, METRICS):
             ycol = f"{metric}_map_mean"
             sem_col = f"{ycol}_sem"
@@ -1394,7 +1397,7 @@ def _plot_combo_envelope(
     # Long-format CSV with combo aggregate stats + named-group raw points
     long_rows: List[Dict] = []
     for scale in SCALES:
-        fig, axes = plt.subplots(1, 4, figsize=(22, 6), sharex=True)
+        fig, axes = plt.subplots(1, len(METRICS), figsize=(5.5 * len(METRICS), 6), sharex=True)
         for ax, metric in zip(axes, METRICS):
             ycol = f"{metric}_map_mean"
             stack = np.vstack([_series_at_grid(d, ycol) for d in combo_dfs.values()])
@@ -1638,7 +1641,7 @@ def _plot_combo_by_swap_count(
     ]).to_csv(output_dir / "compare_by_swap_count.csv", index=False)
 
     for scale in SCALES:
-        fig, axes = plt.subplots(1, 4, figsize=(22, 6), sharex=True)
+        fig, axes = plt.subplots(1, len(METRICS), figsize=(5.5 * len(METRICS), 6), sharex=True)
         for ax, metric in zip(axes, METRICS):
             ycol = f"{metric}_map_mean"
             for g, df in combo_dfs.items():
@@ -1768,22 +1771,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--seed", type=int, default=42, help="Random seed for cell subsampling",
     )
-    # ── Per-target SLURM fan-out (huge speedup on multi-reporter groups) ──
-    p.add_argument(
-        "--per-target-slurm", action="store_true",
-        help="Submit one SLURM task per (group, schedule_target) instead of "
-             "one long-running job per group. Inside the default per-group "
-             "job the schedule's ~35 targets run serially, so wall time is "
-             "dominated by the largest target × the geometric sum of the "
-             "downsample ladder (~4× T_top). With --per-target-slurm the "
-             "tasks run in parallel subject to cluster slot availability — "
-             "for the 3-group phase_only/all_fluor/livecell run this turns a "
-             "~4-hour serial job into ~30 min of parallel work. Each task "
-             "reloads its cells.h5ad set, so the trade-off is extra h5ad "
-             "I/O per task vs. wall-clock parallelism. Uses --slurm-time as "
-             "the per-task timeout (default 30 min — bump for Phase-heavy "
-             "groups whose largest target plus h5ad load exceeds that).",
-    )
+    # --per-target-slurm is inherited from pca_titration's parser; both
+    # scripts use identical (action="store_true") semantics — one task per
+    # schedule target.
     p.add_argument(
         "--max-schedule-points", type=int, default=None,
         help="Cap each group's schedule to its top N points (largest "

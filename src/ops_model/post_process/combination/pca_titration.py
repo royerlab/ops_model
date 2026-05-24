@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 DOWNSAMPLE_RATIO = 0.75  # multiply cell count by this each step
 MIN_CELLS = 5_000  # stop titrating below this
 NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
-METRICS = ("activity", "distinctiveness", "corum", "chad")
+METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
 # Shared plot styling / labels (used by compare_pca_titration_versions and below)
@@ -66,18 +66,21 @@ TITRATION_METRIC_COLORS = {
     "distinctiveness": "mediumseagreen",
     "corum": "mediumpurple",
     "chad": "darkorange",
+    "ebi": "crimson",
 }
 TITRATION_RATIO_LABELS = {
     "activity": "% Active",
     "distinctiveness": "% Distinctive",
     "corum": "% CORUM consistent",
     "chad": "% CHAD consistent",
+    "ebi": "% EBI consistent",
 }
 TITRATION_MAP_LABELS = {
     "activity": "Activity mAP",
     "distinctiveness": "Distinctiveness mAP",
     "corum": "CORUM mAP",
     "chad": "CHAD mAP",
+    "ebi": "EBI mAP",
 }
 SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
@@ -316,6 +319,7 @@ def _score_all_metrics(
     from ops_utils.analysis.map_scores import (
         phenotypic_distinctivness,
         phenotypic_consistency_corum,
+        phenotypic_consistency_ebi,
         phenotypic_consistency_manual_annotation,
     )
 
@@ -328,6 +332,8 @@ def _score_all_metrics(
         "corum_map_mean": math.nan,
         "chad_ratio": math.nan,
         "chad_map_mean": math.nan,
+        "ebi_ratio": math.nan,
+        "ebi_map_mean": math.nan,
     }
 
     try:
@@ -416,6 +422,25 @@ def _score_all_metrics(
                 result["chad_map_mean"] = float(
                     chad_map["mean_average_precision"].mean()
                 )
+
+        ebi_map, ebi_ratio = phenotypic_consistency_ebi(
+            e_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            cache_similarity=True,
+            distance=distance,
+        )
+        if subset_targets is not None:
+            filt = _filter_map_to_targets(ebi_map, subset_targets)
+            result["ebi_ratio"], result["ebi_map_mean"] = _ratio_and_mean_from_map(
+                filt
+            )
+        else:
+            result["ebi_ratio"] = float(ebi_ratio)
+            if ebi_map is not None and "mean_average_precision" in ebi_map.columns:
+                result["ebi_map_mean"] = float(
+                    ebi_map["mean_average_precision"].mean()
+                )
     except Exception as exc:
         _logger.warning(f"    Consistency scoring failed: {exc}")
 
@@ -468,6 +493,7 @@ def _run_titration_points(
         "distinctiveness_ratio", "distinctiveness_map_mean",
         "corum_ratio", "corum_map_mean",
         "chad_ratio", "chad_map_mean",
+        "ebi_ratio", "ebi_map_mean",
     ]
 
     rows = []
@@ -562,6 +588,7 @@ def _run_titration_points(
             f"dist={scores['distinctiveness_ratio']:.1%}±{scores.get('distinctiveness_ratio_sem', 0):.1%} "
             f"corum={scores['corum_ratio']:.1%}±{scores.get('corum_ratio_sem', 0):.1%} "
             f"chad={scores['chad_ratio']:.1%}±{scores.get('chad_ratio_sem', 0):.1%} "
+            f"ebi={scores['ebi_ratio']:.1%}±{scores.get('ebi_ratio_sem', 0):.1%} "
             f"({time.time() - t_step:.0f}s)"
         )
     return pd.DataFrame(rows)
@@ -1170,6 +1197,7 @@ def _plot_combined_titration(
         ("distinctiveness", "% Distinctive", "mediumseagreen"),
         ("corum", "% CORUM", "mediumpurple"),
         ("chad", "% CHAD", "darkorange"),
+        ("ebi", "% EBI", "crimson"),
     ]
 
     _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
@@ -1180,8 +1208,9 @@ def _plot_combined_titration(
         x_all = combined[x_col].values
         x_min, x_max = float(x_all.min()), float(x_all.max())
 
+        n_metrics_plot = len(metric_info)
         for scale in SCALES:
-            fig, axes = plt.subplots(2, 4, figsize=(56, 18))
+            fig, axes = plt.subplots(2, n_metrics_plot, figsize=(14 * n_metrics_plot, 18))
             xlabel = f"{x_label_base} ({_scale_label[scale]})"
 
             def _style_combined_axis(ax, _scale=scale, _xmin=x_min, _xmax=x_max):
@@ -1399,6 +1428,18 @@ def _build_parser():
     parser.add_argument("--no-cache", dest="cache", action="store_false", default=True,
                         help="Disable row-level caching (recompute every titration point even "
                              "if an existing <reporter>_titration.csv already has it).")
+    parser.add_argument(
+        "--per-target-slurm", action="store_true",
+        help="Fan out ONE SLURM task per (reporter, target) bin instead of one "
+             "per reporter. Mirrors pca_combined_titration --per-target-slurm: "
+             "schedules are pre-built on the login node (backed-mode reads), each "
+             "task scores its single target and writes a shard CSV "
+             "(<reporter>_titration_t<target>.csv), and shards are merged into "
+             "the canonical <reporter>_titration.csv after all tasks complete. "
+             "Requires --slurm. Trades extra h5ad-load I/O per task for "
+             "wall-clock parallelism. NOTE: --minibinder-subset is not supported "
+             "in this mode (only the full titration is sharded)."
+    )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
     phase_group.add_argument("--no-phase", action="store_true")
@@ -1601,6 +1642,183 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             )
 
 
+# ---------------------------------------------------------------------------
+# Per-target SLURM helpers (picklable top-level functions for submitit)
+# ---------------------------------------------------------------------------
+
+
+def _build_schedule_for_cells_path(
+    cells_h5ad_path: Path,
+    per_guide_min: bool,
+    per_guide_max: bool,
+    per_guide_median: bool,
+    per_ko_min: bool,
+    per_ko_max: bool,
+) -> List[int]:
+    """Build the titration schedule for one reporter using backed-mode read.
+
+    Mirrors the schedule-building branches in ``titrate_single_reporter`` but
+    only touches ``obs`` (no X load), so it's cheap enough to call on a login
+    node before fanning out per-target SLURM tasks.
+    """
+    a = ad.read_h5ad(cells_h5ad_path, backed="r")
+    if per_guide_min or per_guide_max or per_guide_median:
+        if "sgRNA" not in a.obs.columns:
+            raise ValueError(
+                f"{cells_h5ad_path.name}: per-guide titration requires 'sgRNA' obs col"
+            )
+        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
+        sg_counts = a.obs.groupby("sgRNA", observed=True).size()
+        sg_to_pert = a.obs.groupby("sgRNA", observed=True)[pert_col].first()
+        non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
+        non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
+        pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
+        if per_guide_median:
+            start = int(np.median(pool.values))
+        elif per_guide_max:
+            start = int(np.percentile(pool.values, 90))
+        else:  # per_guide_min
+            start = (
+                int(non_ntc_counts.min())
+                if len(non_ntc_counts) else int(sg_counts.min())
+            )
+        return _build_per_ko_schedule(start)
+    if per_ko_min or per_ko_max:
+        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
+        counts = a.obs[pert_col].value_counts()
+        non_ntc_counts = counts[~counts.index.astype(str).str.startswith("NTC")]
+        if per_ko_max:
+            pool = non_ntc_counts if len(non_ntc_counts) else counts
+            start = int(np.percentile(pool.values, 90))
+        else:  # per_ko_min
+            start = (
+                int(non_ntc_counts.min())
+                if len(non_ntc_counts) else int(counts.min())
+            )
+        return _build_per_ko_schedule(start)
+    return _build_titration_schedule(a.n_obs)
+
+
+def titrate_single_target_for_reporter(
+    cells_h5ad_path: str,
+    output_dir: str,
+    target: int,
+    norm_method: str = "ntc",
+    random_seed: int = 42,
+    min_exp: bool = False,
+    per_ko: bool = False,
+    per_guide: bool = False,
+    n_bootstraps: int = 1,
+) -> str:
+    """Score one reporter at ONE schedule target; write a shard CSV.
+
+    Top-level + picklable so ``submit_parallel_jobs`` can fan out one task
+    per (reporter, target) pair. The shard goes to
+    ``<output_dir>/<reporter>/<reporter>_titration_t<target>.csv`` and is
+    merged into the canonical CSV by :func:`_merge_per_target_shards` once
+    every shard for a reporter has been written.
+    """
+    _logger = _init_logger()
+    t_start = time.time()
+    cells_h5ad_path = Path(cells_h5ad_path)
+    output_dir = Path(output_dir)
+    rng = np.random.RandomState(random_seed + int(target))
+
+    adata_cells = ad.read_h5ad(cells_h5ad_path)
+    signal = adata_cells.obs.get(
+        "signal", pd.Series([cells_h5ad_path.stem.replace("_cells", "")])
+    ).iloc[0]
+    if isinstance(signal, float):
+        signal = cells_h5ad_path.stem.replace("_cells", "")
+
+    from ops_utils.data.feature_discovery import sanitize_signal_filename
+    sig_safe = sanitize_signal_filename(signal)[:40]
+    reporter_dir = output_dir / sig_safe
+    reporter_dir.mkdir(parents=True, exist_ok=True)
+
+    df = _run_titration_points(
+        adata_cells.copy(),
+        [int(target)],
+        norm_method,
+        signal,
+        rng,
+        _logger,
+        min_exp=min_exp,
+        per_ko=per_ko,
+        per_guide=per_guide,
+        n_bootstraps=n_bootstraps,
+    )
+    shard_csv = reporter_dir / f"{sig_safe}_titration_t{int(target)}.csv"
+    df.to_csv(shard_csv, index=False)
+    return f"SUCCESS: {signal} @ {target:,} → {shard_csv} ({time.time() - t_start:.0f}s)"
+
+
+def _merge_per_target_shards(
+    titration_dir: Path, target_col: str, _logger,
+) -> List[Path]:
+    """Concat all per-target shards into per-reporter canonical CSVs + plots.
+
+    For each reporter dir under ``titration_dir``, concatenate every
+    ``*_titration_t*.csv`` shard, dedupe on ``target_col``, sort by it
+    (descending), and write ``<reporter>_titration.csv``. Returns the list
+    of canonical CSV paths produced.
+    """
+    titration_dir = Path(titration_dir)
+    written: List[Path] = []
+    for reporter_dir in sorted(titration_dir.iterdir()):
+        if not reporter_dir.is_dir():
+            continue
+        sig_safe = reporter_dir.name
+        shards = sorted(reporter_dir.glob(f"{sig_safe}_titration_t*.csv"))
+        if not shards:
+            continue
+        dfs = []
+        for s in shards:
+            try:
+                d = pd.read_csv(s)
+                if not d.empty:
+                    dfs.append(d)
+            except pd.errors.EmptyDataError:
+                continue
+        if not dfs:
+            continue
+        merged = pd.concat(dfs, ignore_index=True)
+        # Honor any pre-existing canonical rows (e.g. from a prior non-per-target run)
+        canonical = reporter_dir / f"{sig_safe}_titration.csv"
+        if canonical.is_file():
+            try:
+                prior = pd.read_csv(canonical)
+                if not prior.empty:
+                    merged = pd.concat([prior, merged], ignore_index=True)
+            except Exception:
+                pass
+        if target_col in merged.columns:
+            merged = (
+                merged.dropna(subset=[target_col])
+                      .drop_duplicates(subset=[target_col], keep="last")
+                      .sort_values(target_col, ascending=False)
+                      .reset_index(drop=True)
+            )
+        merged.to_csv(canonical, index=False)
+        written.append(canonical)
+        _logger.info(
+            f"[merge] {sig_safe}: {len(merged)} rows ({len(shards)} shards) → {canonical}"
+        )
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            signal = (
+                str(merged["signal"].iloc[0])
+                if "signal" in merged.columns and len(merged)
+                else sig_safe
+            )
+            _plot_titration(merged, signal, reporter_dir, sig_safe, plt)
+        except Exception as exc:
+            _logger.warning(f"  Plotting {sig_safe} failed: {exc}")
+    return written
+
+
 def main():
     parser = _build_parser()
     args = parser.parse_args()
@@ -1675,6 +1893,153 @@ def main():
 
     print(f"Found {len(cells_files)} reporters in {per_signal_dir}")
     print(f"Titration output: {titration_dir}")
+
+    if args.per_target_slurm and not args.slurm:
+        parser.error("--per-target-slurm requires --slurm")
+    if args.per_target_slurm and args.minibinder_subset:
+        parser.error(
+            "--per-target-slurm does not support --minibinder-subset "
+            "(only the full titration is sharded). Run minibinder separately "
+            "with the non-per-target SLURM mode."
+        )
+
+    if args.per_target_slurm:
+        from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+        target_col = (
+            "cells_per_guide"
+            if (args.per_guide_min_titration or args.per_guide_max_titration
+                or args.per_guide_median_titration)
+            else "cells_per_perturbation"
+            if (args.per_ko_min_titration or args.per_ko_max_titration)
+            else "n_cells"
+        )
+
+        print(f"\nBuilding per-reporter schedules on login node ({len(cells_files)} reporters)...")
+        per_reporter_schedule: Dict[Path, List[int]] = {}
+        for cf in cells_files:
+            sched = _build_schedule_for_cells_path(
+                cf,
+                per_guide_min=args.per_guide_min_titration,
+                per_guide_max=args.per_guide_max_titration,
+                per_guide_median=args.per_guide_median_titration,
+                per_ko_min=args.per_ko_min_titration,
+                per_ko_max=args.per_ko_max_titration,
+            )
+            per_reporter_schedule[cf] = sched
+            print(f"  {cf.stem.replace('_cells', '')}: {len(sched)} target(s) "
+                  f"(head: {sched[:3]}, tail: {sched[-2:]})" if len(sched) > 3
+                  else f"  {cf.stem.replace('_cells', '')}: {sched}")
+
+        # Cache short-circuit: if a canonical CSV already has this target, skip.
+        # A row counts as "cached" only when every metric is actually scored —
+        # an old CSV that has the target but is missing EBI columns (added
+        # after CHAD on 2026-05-19) should NOT be skipped.
+        required_metric_cols = [f"{m}_map_mean" for m in METRICS]
+
+        def _fully_scored_targets(df: pd.DataFrame) -> set:
+            if target_col not in df.columns:
+                return set()
+            missing = [c for c in required_metric_cols if c not in df.columns]
+            if missing:
+                return set()
+            mask = df[required_metric_cols].notna().all(axis=1)
+            return {
+                int(v) for v in df.loc[mask, target_col].dropna().astype(int).tolist()
+            }
+
+        all_jobs = []
+        skipped_cache = 0
+        n_planned = 0
+        from ops_utils.data.feature_discovery import sanitize_signal_filename
+        for cf in cells_files:
+            sig = cf.stem.replace("_cells", "")
+            sig_safe = sanitize_signal_filename(sig)[:40]
+            reporter_dir = titration_dir / sig_safe
+            canonical = reporter_dir / f"{sig_safe}_titration.csv"
+            cached_targets: set = set()
+            if args.cache and canonical.is_file():
+                try:
+                    cached_targets = _fully_scored_targets(pd.read_csv(canonical))
+                except Exception:
+                    cached_targets = set()
+            for target in per_reporter_schedule[cf]:
+                n_planned += 1
+                if int(target) in cached_targets:
+                    skipped_cache += 1
+                    continue
+                # Skip if a complete shard already exists (idempotent re-submits).
+                # A shard from a pre-EBI run won't have ebi_map_mean so it
+                # falls through and gets re-scored.
+                shard = reporter_dir / f"{sig_safe}_titration_t{int(target)}.csv"
+                if args.cache and shard.is_file():
+                    try:
+                        if int(target) in _fully_scored_targets(pd.read_csv(shard)):
+                            skipped_cache += 1
+                            continue
+                    except Exception:
+                        pass
+                all_jobs.append({
+                    "name": f"titr_{sig_safe}_t{int(target)}",
+                    "func": titrate_single_target_for_reporter,
+                    "kwargs": {
+                        "cells_h5ad_path": str(cf),
+                        "output_dir": str(titration_dir),
+                        "target": int(target),
+                        "norm_method": args.norm_method,
+                        "min_exp": args.min_exp_titration,
+                        "per_ko": (args.per_ko_min_titration or args.per_ko_max_titration),
+                        "per_guide": (
+                            args.per_guide_min_titration
+                            or args.per_guide_max_titration
+                            or args.per_guide_median_titration
+                        ),
+                        "n_bootstraps": int(args.bootstrap),
+                    },
+                })
+
+        print(
+            f"\n[per-target] {len(all_jobs)} task(s) to submit "
+            f"({skipped_cache} cached / {n_planned} planned across "
+            f"{len(cells_files)} reporters)..."
+        )
+
+        if all_jobs:
+            slurm_params = {
+                "mem": args.slurm_memory,
+                "cpus_per_task": args.slurm_cpus,
+                "slurm_partition": args.slurm_partition,
+                "timeout_min": args.slurm_time,
+            }
+            print(
+                f"  slurm: {args.slurm_time}min, {args.slurm_memory}, "
+                f"{args.slurm_cpus} CPUs per task; partition={args.slurm_partition}"
+            )
+            submit_parallel_jobs(
+                jobs_to_submit=all_jobs,
+                experiment="pca_titration",
+                slurm_params=slurm_params,
+                log_dir="pca_optimization",
+                manifest_prefix="pca_titration_per_target",
+                wait_for_completion=True,
+                verbose=True,
+            )
+
+        print("\nMerging per-target shards into canonical reporter CSVs...")
+        _merge_per_target_shards(titration_dir, target_col, _logger)
+
+        # Combined plot across reporters
+        print("Generating combined titration plot...")
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _plot_combined_titration(titration_dir, plt)
+        print(
+            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
+        )
+        return
 
     if args.slurm:
         from ops_utils.hpc.slurm_batch_utils import (
