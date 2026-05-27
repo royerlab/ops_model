@@ -679,11 +679,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--phate-decay", default=",".join(str(v) for v in DEFAULT_PHATE_DECAY))
     p.add_argument("--phate-t-list", default=",".join(str(v) for v in DEFAULT_PHATE_T))
     p.add_argument("--phate-gamma-list", default=",".join(str(v) for v in DEFAULT_PHATE_GAMMA))
+    # Held-constant ("canonical") values used in the secondary sweep when
+    # the corresponding axis is NOT being swept. Default to CANONICAL_PHATE.
+    p.add_argument("--phate-canonical-knn", type=int, default=CANONICAL_PHATE["knn"],
+                   help="Override the held knn used in the PHATE secondary sweep "
+                        "AND highlighted as the 'pipeline default' in the primary "
+                        f"sweep (default: {CANONICAL_PHATE['knn']}).")
+    p.add_argument("--phate-canonical-decay", type=float, default=CANONICAL_PHATE["decay"],
+                   help="Override the held decay used in the PHATE secondary sweep "
+                        "AND highlighted in the primary sweep "
+                        f"(default: {CANONICAL_PHATE['decay']}).")
 
     return p
 
 
 def _cfg_from_args(args: argparse.Namespace) -> Dict:
+    # Allow callers to override the "canonical / pipeline default" PHATE
+    # knn + decay so the secondary sweep (t × gamma) and the highlighted
+    # default tile in the primary sweep both track the user-chosen values.
+    if hasattr(args, "phate_canonical_knn"):
+        CANONICAL_PHATE["knn"] = int(args.phate_canonical_knn)
+    if hasattr(args, "phate_canonical_decay"):
+        CANONICAL_PHATE["decay"] = float(args.phate_canonical_decay)
     # Auto-resolve cluster annotations: if the run-dir path includes
     # ``with_cp/with_4i`` use the joint flavour, else the live-cell-only one.
     if args.no_cluster_overlay:
