@@ -1377,6 +1377,12 @@ def _build_parser():
         default=None,
         help="Look under paper_v1/ (same as pca_optimization --paper-v1).",
     )
+    parser.add_argument(
+        "--run-tag", type=str, default=None,
+        help="Match pca_optimization --run-tag: inserts an extra subfolder "
+             "after paper_v1/ and before the channel-set subdir (e.g. "
+             "'corrected' resolves to paper_v1/corrected/phase_only/...).",
+    )
     parser.add_argument("--minibinder-subset", action="store_true",
                         help="Also run titration on the 20 minibinder geneKO targets "
                              "and produce comparison overlay plots")
@@ -1429,16 +1435,26 @@ def _build_parser():
                         help="Disable row-level caching (recompute every titration point even "
                              "if an existing <reporter>_titration.csv already has it).")
     parser.add_argument(
-        "--per-target-slurm", action="store_true",
-        help="Fan out ONE SLURM task per (reporter, target) bin instead of one "
-             "per reporter. Mirrors pca_combined_titration --per-target-slurm: "
-             "schedules are pre-built on the login node (backed-mode reads), each "
-             "task scores its single target and writes a shard CSV "
-             "(<reporter>_titration_t<target>.csv), and shards are merged into "
-             "the canonical <reporter>_titration.csv after all tasks complete. "
-             "Requires --slurm. Trades extra h5ad-load I/O per task for "
-             "wall-clock parallelism. NOTE: --minibinder-subset is not supported "
-             "in this mode (only the full titration is sharded)."
+        "--per-target-slurm", dest="per_target_slurm",
+        action="store_true", default=True,
+        help="(Default: ON) Fan out ONE SLURM task per (reporter, target) bin "
+             "instead of one per reporter. Mirrors pca_combined_titration "
+             "--per-target-slurm: schedules are pre-built on the login node "
+             "(backed-mode reads), each task scores its single target and "
+             "writes a shard CSV (<reporter>_titration_t<target>.csv), and "
+             "shards are merged into the canonical <reporter>_titration.csv "
+             "after all tasks complete. Requires --slurm. Trades extra "
+             "h5ad-load I/O per task for wall-clock parallelism. "
+             "NOTE: --minibinder-subset is not supported in this mode (only "
+             "the full titration is sharded) — pass --no-per-target-slurm to "
+             "fall back to one-job-per-reporter when running with "
+             "--minibinder-subset.",
+    )
+    parser.add_argument(
+        "--no-per-target-slurm", dest="per_target_slurm", action="store_false",
+        help="Disable per-(reporter,target) SLURM fan-out and revert to "
+             "one job per reporter. Required when pairing with "
+             "--minibinder-subset.",
     )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
@@ -1469,6 +1485,9 @@ def _resolve_output_dir(args) -> Path:
 
     if getattr(args, "paper_v1", None):
         output_dir = output_dir / "paper_v1"
+
+    if getattr(args, "run_tag", None):
+        output_dir = output_dir / args.run_tag
 
     if getattr(args, "include_cellpainting", False):
         output_dir = output_dir / "with_cellpainting"
@@ -1894,14 +1913,16 @@ def main():
     print(f"Found {len(cells_files)} reporters in {per_signal_dir}")
     print(f"Titration output: {titration_dir}")
 
+    # --per-target-slurm is the default; silently fall back to
+    # one-job-per-reporter for the two cases where it isn't compatible.
     if args.per_target_slurm and not args.slurm:
-        parser.error("--per-target-slurm requires --slurm")
+        print("[info] --per-target-slurm is the default but only takes effect "
+              "under --slurm; running locally (one reporter at a time).")
+        args.per_target_slurm = False
     if args.per_target_slurm and args.minibinder_subset:
-        parser.error(
-            "--per-target-slurm does not support --minibinder-subset "
-            "(only the full titration is sharded). Run minibinder separately "
-            "with the non-per-target SLURM mode."
-        )
+        print("[info] --minibinder-subset doesn't support per-target fan-out; "
+              "falling back to one SLURM job per reporter for this run.")
+        args.per_target_slurm = False
 
     if args.per_target_slurm:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
