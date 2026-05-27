@@ -52,6 +52,7 @@ def pca_sweep_pooled_signal(
     downsample_per_guide: bool = False,
     cells_per_guide: int = 250,
     agg_method: str = "mean",
+    apply_iss_sidecar: bool = False,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -231,7 +232,23 @@ def pca_sweep_pooled_signal(
         if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
             continue
 
-        adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
+        if apply_iss_sidecar:
+            # Load via the ISS-drift-fix sidecar so obs[perturbation]/[sgRNA]
+            # reflect the current 3-assembly linked_pheno_iss.csv calls, not
+            # the stale frozen models/link_csvs/ snapshot. Orphans (cells the
+            # ISS re-run dropped entirely) are dropped here so they don't
+            # carry stale labels into PCA + aggregation. See
+            # ops_model.data.iss_drift_fix for how the sidecars are built.
+            from ops_model.features.anndata_utils import load_features_corrected
+            cell_path = find_cell_h5ad_path(
+                exp, ch, storage_roots, feature_dir, maps_path
+            )
+            adata = (
+                load_features_corrected(cell_path, drop_orphans=True)
+                if cell_path is not None else None
+            )
+        else:
+            adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
         if adata is None:
             continue
 

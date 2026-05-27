@@ -76,6 +76,7 @@ class CombinationConfig:
     preserve_batch: bool = False
     no_pca: bool = False
     save_cell_level: bool = False
+    apply_iss_sidecar: bool = False  # use ops_model.data.iss_drift_fix sidecars when loading cell h5ads
 
     # Cell-level filters applied after loading, before PCA/aggregation
     cell_filters: List[Dict[str, Any]] = field(default_factory=list)

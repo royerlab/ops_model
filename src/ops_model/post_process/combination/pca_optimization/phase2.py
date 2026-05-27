@@ -36,6 +36,7 @@ from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
 from ops_utils.analysis.pca_sweep_plots import (
     plot_channel_peaks_bar,
     plot_metric_map_bar,
+    plot_metric_violins,
     plot_pca_sweep,
     plot_sweep_curves_summary,
 )
@@ -322,6 +323,25 @@ def aggregate_channels(
             _logger,
         )
 
+    # Summary violin: per-item mAP distribution per metric (1st-pass).
+    try:
+        plot_metric_violins(
+            metric_maps={
+                "Activity": activity_map,
+                "Distinctiveness": dist_map,
+                "EBI": ebi_map,
+                "CHAD": chad_map,
+                "CORUM": corum_map,
+            },
+            plots_dir=plots_dir,
+            plt=plt,
+            _logger=_logger,
+            filename="violin_metric_mAPs.png",
+            suptitle="1st-pass mAP distributions",
+        )
+    except Exception as exc:
+        _logger.warning(f"  1st-pass metric violin plot failed: {exc}")
+
     _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
@@ -599,6 +619,8 @@ def apply_second_pass_pca(
     subdir_suffix: str = "",
     skip_pca: bool = False,
     umap_type: str = "max",
+    consensus_metrics=None,
+    sweep_metric: str = "mean_map",
 ) -> str:
     """Second-pass PCA on the already-concatenated NTC-normalized guide features.
 
@@ -626,8 +648,37 @@ def apply_second_pass_pca(
     t_start = time.time()
     output_dir = Path(output_dir)
 
+    # Resolve the consensus_metrics list into a canonical tuple + a subdir tag.
+    # Tag = "" for the default {activity, distinctiveness, ebi}; otherwise
+    # "_ACT" / "_CHAD" / "_DIST_EBI" / "_ACT_DIST_CHAD" / etc. — based on
+    # which subset is in the list. Lets a single second_pca_consensus*/ dir
+    # per metric-subset coexist as siblings without clobbering.
+    from ops_model.post_process.combination.pca_optimization.sweep_core import (
+        _normalize_consensus_metrics,
+        consensus_metrics_subdir_tag,
+    )
+    try:
+        consensus_metrics = _normalize_consensus_metrics(consensus_metrics)
+    except ValueError as e:
+        return f"FAILED: {e}"
+    metric_subdir_tag = consensus_metrics_subdir_tag(consensus_metrics)
+
+    # sweep_metric ("mean_map" default, "ratio" alternative) controls whether
+    # per-threshold scores in the sweep are continuous means of per-item mAP
+    # (the historical pre-May-23 behavior; more stable) or fraction-significant
+    # counts. To avoid clobbering existing canonical second_pca_consensus/
+    # output that was generated under the ratio picker, mean_map output lands
+    # in a sibling "_MEANMAP" subdir. ratio output stays at the canonical
+    # path (no suffix).
+    sweep_metric = (sweep_metric or "mean_map").lower()
+    if sweep_metric not in ("ratio", "mean_map"):
+        return f"FAILED: sweep_metric must be 'ratio' or 'mean_map', got {sweep_metric!r}"
+    if sweep_metric == "mean_map":
+        metric_subdir_tag += "_MEANMAP"
+
     # threshold <= 0 means "consensus sweep" — pick the threshold that maximizes the
-    # normalized sum of activity + distinctiveness + chad. Forces the sweep on.
+    # normalized sum of activity + distinctiveness + (EBI or CHAD, configurable).
+    # Forces the sweep on.
     use_consensus = threshold is None or threshold <= 0
     if skip_pca:
         # No PCA fit → no sweep + a different subdir prefix. The wrapper passes
@@ -641,10 +692,10 @@ def apply_second_pass_pca(
     elif use_consensus:
         run_sweep = True
         if subdir is None:
-            subdir = f"second_pca_consensus{subdir_suffix}"
+            subdir = f"second_pca_consensus{metric_subdir_tag}{subdir_suffix}"
     else:
         if subdir is None:
-            subdir = f"second_pca_{int(round(threshold * 100)):02d}{subdir_suffix}"
+            subdir = f"second_pca_{int(round(threshold * 100)):02d}{metric_subdir_tag}{subdir_suffix}"
     out_dir = output_dir / subdir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -716,6 +767,8 @@ def apply_second_pass_pca(
                 thresholds,
                 _logger=_logger,
                 distance=distance,
+                consensus_metrics=consensus_metrics,
+                sweep_metric=sweep_metric,
             )
             _logger.info(f"  Sweep done in {time.time() - t_sweep:.0f}s")
 
@@ -848,7 +901,9 @@ def apply_second_pass_pca(
                     f"2nd-pass PCA sweep — {n_feats_in} concat features → "
                     f"chosen={n_pcs} PCs @ {threshold:.0%} "
                     f"(consensus={sweep_result['consensus_t']:.0%} = "
-                    f"{sweep_result['consensus_n']} PCs)"
+                    f"{sweep_result['consensus_n']} PCs"
+                    + (f", sweep_metric={sweep_metric}" if sweep_metric != 'ratio' else "")
+                    + ")"
                 ),
                 plots_dir=plots_dir,
                 file_prefix="second_pca",
@@ -859,6 +914,7 @@ def apply_second_pass_pca(
                     "peak_dist_t": sweep_result["peak_dist_t"],
                     "peak_ebi_t": sweep_result.get("peak_ebi_t"),
                 },
+                sweep_metric=sweep_metric,
             )
             _logger.info("  Saved plots/second_pca_sweep.png")
         except Exception as exc:
@@ -971,6 +1027,25 @@ def apply_second_pass_pca(
             plt,
             _logger,
         )
+
+    # Summary violin: per-item mAP distribution per metric, mean annotated.
+    try:
+        plot_metric_violins(
+            metric_maps={
+                "Activity": activity_map,
+                "Distinctiveness": dist_map,
+                "EBI": ebi_map,
+                "CHAD": chad_map,
+                "CORUM": corum_map,
+            },
+            plots_dir=plots_dir,
+            plt=plt,
+            _logger=_logger,
+            filename="violin_metric_mAPs.png",
+            suptitle=f"2nd-pass mAP distributions (n_pcs={n_pcs} @ {threshold:.0%})",
+        )
+    except Exception as exc:
+        _logger.warning(f"  Metric violin plot failed: {exc}")
 
     _chad_path = (
         CHAD_ANNOTATION_PATH

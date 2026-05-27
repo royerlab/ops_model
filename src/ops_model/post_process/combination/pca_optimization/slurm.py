@@ -54,10 +54,18 @@ def _aggregate_then_second_pca(
     agg_method: str = "mean",
     chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
+    consensus_metrics=None,
+    sweep_metric: str = "mean_map",
 ) -> str:
     """Run Phase 2 aggregation and the 2nd-pass PCA back-to-back.
 
     Top-level (picklable) helper for SLURM jobs that want both steps in one slot.
+    ``consensus_metrics`` is a list (or comma-separated string) of metric names
+    drawn from ``{activity, distinctiveness, ebi, chad}`` that drives the
+    2nd-pass PCA consensus threshold pick. Default (``None``) =
+    ``(activity, distinctiveness, ebi)``. Non-default sets land in
+    ``second_pca_consensus_<TAG>/`` siblings so each subset keeps its own
+    output without clobbering the canonical one.
     """
     from ops_model.post_process.combination.pca_optimization import (
         aggregate_channels,
@@ -88,6 +96,8 @@ def _aggregate_then_second_pca(
         agg_method=agg_method,
         chromosome_csv=chromosome_csv,
         umap_type=umap_type,
+        consensus_metrics=consensus_metrics,
+        sweep_metric=sweep_metric,
     )
     return f"{agg_result} | 2nd-pca: {second_result}"
 
@@ -121,6 +131,8 @@ def _submit_aggregation_slurm(
     agg_method: str = "mean",
     chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
+    consensus_metrics=None,
+    sweep_metric: str = "mean_map",
 ):
     """Submit a single aggregation SLURM job (optionally chained with 2nd-pass PCA)."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
@@ -136,6 +148,8 @@ def _submit_aggregation_slurm(
             "agg_method": agg_method,
             "chromosome_csv": chromosome_csv,
             "umap_type": umap_type,
+            "consensus_metrics": consensus_metrics,
+            "sweep_metric": sweep_metric,
             **second_pca_kwargs,
         }
         job_name = f"{manifest_prefix}_aggregate_2pca"
@@ -206,6 +220,8 @@ def _submit_phase1_slurm(
             agg_method=getattr(args, "agg_method", "mean"),
             chromosome_csv=getattr(args, "chromosome_csv", None),
             umap_type=getattr(args, "umap_type", "max"),
+            consensus_metrics=getattr(args, "second_pca_consensus_metrics", None),
+            sweep_metric=getattr(args, "sweep_metric", "mean_map"),
         )
 
     print(f"\nSubmitting {len(jobs)} {unit_label} SLURM jobs...")

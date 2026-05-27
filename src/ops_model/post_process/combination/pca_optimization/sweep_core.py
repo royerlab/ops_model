@@ -39,6 +39,7 @@ from ops_utils.analysis.map_scores import (
     compute_auc_score,
     phenotypic_activity_assesment,
     phenotypic_consistency_ebi,
+    phenotypic_consistency_manual_annotation,
     phenotypic_distinctivness,
 )
 from ops_utils.analysis.pca import n_pcs_for_threshold
@@ -243,6 +244,61 @@ def _run_threshold_sweep(
     }
 
 
+CONSENSUS_METRIC_CHOICES: Tuple[str, ...] = ("activity", "distinctiveness", "ebi", "chad")
+DEFAULT_CONSENSUS_METRICS: Tuple[str, ...] = ("activity", "distinctiveness", "ebi")
+
+
+def _normalize_consensus_metrics(metrics) -> Tuple[str, ...]:
+    """Coerce input (str, list/tuple, or None) to a validated canonical tuple
+    preserving the user's order, lowercased."""
+    if metrics is None:
+        return DEFAULT_CONSENSUS_METRICS
+    if isinstance(metrics, str):
+        items = [m.strip().lower() for m in metrics.split(",") if m.strip()]
+    else:
+        items = [str(m).strip().lower() for m in metrics if str(m).strip()]
+    invalid = [m for m in items if m not in CONSENSUS_METRIC_CHOICES]
+    if invalid:
+        raise ValueError(
+            f"consensus_metrics has invalid entries {invalid}; "
+            f"choices are {list(CONSENSUS_METRIC_CHOICES)}"
+        )
+    if not items:
+        raise ValueError("consensus_metrics is empty — at least one metric required")
+    # Deduplicate while preserving order
+    seen = set()
+    canon = []
+    for m in items:
+        if m not in seen:
+            seen.add(m)
+            canon.append(m)
+    return tuple(canon)
+
+
+def consensus_metrics_subdir_tag(metrics) -> str:
+    """Build the subdir suffix tag for a consensus_metrics list.
+
+    Returns "" for the canonical default (activity+distinctiveness+ebi) so
+    legacy callers writing to ``second_pca_consensus/`` are unaffected.
+    Otherwise returns ``"_ABBREV1_ABBREV2..."`` where each abbreviation comes
+    from a fixed canonical order so subdirs are deterministic regardless of
+    user input order.
+    """
+    cms = set(_normalize_consensus_metrics(metrics))
+    default = set(DEFAULT_CONSENSUS_METRICS)
+    if cms == default:
+        return ""
+    abbrev = {
+        "activity": "ACT",
+        "distinctiveness": "DIST",
+        "ebi": "EBI",
+        "chad": "CHAD",
+    }
+    # Canonical ordering for the suffix (independent of user-provided order)
+    parts = [abbrev[m] for m in CONSENSUS_METRIC_CHOICES if m in cms]
+    return "_" + "_".join(parts)
+
+
 def _run_guide_threshold_sweep(
     X_pcs: np.ndarray,
     cumvar: np.ndarray,
@@ -250,22 +306,51 @@ def _run_guide_threshold_sweep(
     thresholds: List[float],
     _logger,
     distance: str = "cosine",
+    consensus_metrics=DEFAULT_CONSENSUS_METRICS,
+    sweep_metric: str = "mean_map",
 ) -> Optional[Dict]:
     """Sweep variance thresholds at *guide* level — input is assumed already
     NTC-normalized (e.g. the output of ``aggregate_channels``). For each
     threshold, slice the second-pass PCs, aggregate to gene, and score
-    activity / distinctiveness / ebi. No further normalization is applied.
+    whichever metrics are listed in ``consensus_metrics`` (subset of
+    ``{activity, distinctiveness, ebi, chad}``). The consensus pick is the
+    threshold that maximizes the joint normalized sum of those metrics.
 
-    Consensus uses activity + distinctiveness + EBI. CHAD/CORUM are NOT
-    computed during the sweep — only at the final consensus output.
+    Metrics not in the list are NOT computed in the sweep — kept cheap.
 
-    Returns the same dict shape as :func:`_run_threshold_sweep` so
-    :func:`plot_pca_sweep` can be reused.
+    Returns the same dict shape callers expect (``sweep_rows``,
+    ``consensus_t``, ``consensus_n``, plus the per-metric peak
+    thresholds). The 3rd-metric column is always named ``ebi_all`` for
+    plot compatibility, even when CHAD was the configured 3rd metric —
+    the dict's ``consensus_metrics`` field records which metrics were
+    actually in the consensus.
     """
     from ops_model.post_process.combination.pca_optimization import (
+        CHAD_ANNOTATION_PATH,
         EBI_ANNOTATION_PATH,
         MIN_PCS,
     )
+
+    cms = _normalize_consensus_metrics(consensus_metrics)
+    need_act = "activity" in cms
+    need_dist = "distinctiveness" in cms
+    need_ebi = "ebi" in cms
+    need_chad = "chad" in cms
+    metric_label = "+".join(m.upper()[:4] if m != "distinctiveness" else "DIST" for m in cms)
+
+    sweep_metric = sweep_metric.lower()
+    if sweep_metric not in ("ratio", "mean_map"):
+        raise ValueError(
+            f"sweep_metric must be 'ratio' or 'mean_map', got {sweep_metric!r}"
+        )
+
+    def _score_from(map_df, ratio_val):
+        """Pick ratio (fraction significant) or mean mAP from a copairs result."""
+        if sweep_metric == "ratio":
+            return float(ratio_val)
+        if map_df is None or len(map_df) == 0:
+            return 0.0
+        return float(map_df["mean_average_precision"].mean())
 
     sweep_rows: List[Dict] = []
 
@@ -288,33 +373,65 @@ def _run_guide_threshold_sweep(
         )
         gene_tmp = _prepare_for_copairs(gene_tmp)
 
-        r, a = 0.0, 0.0
-        dist_all, ebi_all = 0.0, 0.0
+        # Default 0.0 for un-requested metrics — they won't drive the
+        # consensus pick because they get excluded from the sum below.
+        r, a, dist_all = 0.0, 0.0, 0.0
+        ebi_all, chad_all = 0.0, 0.0
         try:
-            activity_map, r = phenotypic_activity_assesment(
-                guide_tmp,
-                plot_results=False,
-                null_size=100_000,
-                distance=distance,
-            )
-            a = compute_auc_score(activity_map)
-            _, dist_all = phenotypic_distinctivness(
-                guide_tmp,
-                plot_results=False,
-                null_size=100_000,
-                distance=distance,
-            )
-            _, ebi_all = phenotypic_consistency_ebi(
-                gene_tmp,
-                plot_results=False,
-                null_size=100_000,
-                cache_similarity=True,
-                distance=distance,
-                annotation_path=EBI_ANNOTATION_PATH,
-            )
+            if need_act:
+                activity_map, r_ratio = phenotypic_activity_assesment(
+                    guide_tmp,
+                    plot_results=False,
+                    null_size=100_000,
+                    distance=distance,
+                )
+                # 'a' (AUC) is always continuous regardless of sweep_metric;
+                # 'r' switches between ratio and mean mAP per the flag.
+                a = compute_auc_score(activity_map)
+                r = _score_from(activity_map, r_ratio)
+            if need_dist:
+                dist_map, dist_ratio = phenotypic_distinctivness(
+                    guide_tmp,
+                    plot_results=False,
+                    null_size=100_000,
+                    distance=distance,
+                )
+                dist_all = _score_from(dist_map, dist_ratio)
+            if need_ebi:
+                ebi_map, ebi_ratio = phenotypic_consistency_ebi(
+                    gene_tmp,
+                    plot_results=False,
+                    null_size=100_000,
+                    cache_similarity=True,
+                    distance=distance,
+                    annotation_path=EBI_ANNOTATION_PATH,
+                )
+                ebi_all = _score_from(ebi_map, ebi_ratio)
+            if need_chad:
+                chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
+                    gene_tmp,
+                    plot_results=False,
+                    null_size=100_000,
+                    cache_similarity=True,
+                    distance=distance,
+                    annotation_path=CHAD_ANNOTATION_PATH,
+                )
+                chad_all = _score_from(chad_map, chad_ratio)
         except Exception as exc:
             _logger.warning(f"  Scoring failed at {threshold:.0%}: {exc}")
         del guide_tmp, gene_tmp
+
+        # 'ebi_all' column = whichever 3rd metric was in the consensus.
+        # When BOTH ebi and chad are in the list we put EBI here and CHAD
+        # into 'chad_all' so plot_pca_sweep (which reads 'ebi_all') stays
+        # consistent with the legacy default. Otherwise put the single
+        # third metric into 'ebi_all' for plot reuse.
+        if need_ebi and need_chad:
+            third_for_plot = ebi_all
+        elif need_chad and not need_ebi:
+            third_for_plot = chad_all
+        else:
+            third_for_plot = ebi_all
 
         sweep_rows.append(
             {
@@ -323,14 +440,17 @@ def _run_guide_threshold_sweep(
                 "activity": float(r),
                 "auc": float(a),
                 "distinctiveness_all": float(dist_all),
-                "ebi_all": float(ebi_all),
+                "ebi_all": float(third_for_plot),
+                "chad_all": float(chad_all),
             }
         )
         skip = " [skipped for peak]" if n_pcs < MIN_PCS else ""
-        _logger.info(
-            f"  {threshold:.0%}: {n_pcs} PCs — "
-            f"act={r:.1%} dist_all={dist_all:.1%} ebi_all={ebi_all:.1%}{skip}"
-        )
+        parts = []
+        if need_act: parts.append(f"act={r:.1%}")
+        if need_dist: parts.append(f"dist={dist_all:.1%}")
+        if need_ebi: parts.append(f"ebi={ebi_all:.1%}")
+        if need_chad: parts.append(f"chad={chad_all:.1%}")
+        _logger.info(f"  {threshold:.0%}: {n_pcs} PCs — " + " ".join(parts) + skip)
 
     valid = [row for row in sweep_rows if row["n_pcs"] >= MIN_PCS]
     if not valid:
@@ -341,27 +461,43 @@ def _run_guide_threshold_sweep(
         idx = valid_df[col].idxmax()
         return valid_df.loc[idx, "threshold"], int(valid_df.loc[idx, "n_pcs"])
 
-    peak_act_t, _ = _peak_threshold("activity")
-    peak_dist_t, _ = _peak_threshold("distinctiveness_all")
-    peak_ebi_t, _ = _peak_threshold("ebi_all")
+    peak_act_t, _ = _peak_threshold("activity") if need_act else (None, None)
+    peak_dist_t, _ = _peak_threshold("distinctiveness_all") if need_dist else (None, None)
+    peak_third_t, _ = _peak_threshold("ebi_all") if (need_ebi or need_chad) else (None, None)
 
     def _norm(col):
         vals = valid_df[col].values.astype(float)
         vmin, vmax = vals.min(), vals.max()
         return (vals - vmin) / (vmax - vmin) if vmax > vmin else np.ones_like(vals)
 
-    # Consensus uses activity + distinctiveness + EBI.
-    consensus_scores = (
-        _norm("activity") + _norm("distinctiveness_all") + _norm("ebi_all")
-    )
+    # Joint consensus = sum of normalized scores for ONLY the requested metrics.
+    consensus_scores = np.zeros(len(valid_df), dtype=float)
+    if need_act:
+        consensus_scores = consensus_scores + _norm("activity")
+    if need_dist:
+        consensus_scores = consensus_scores + _norm("distinctiveness_all")
+    if need_ebi:
+        consensus_scores = consensus_scores + _norm("ebi_all")
+    if need_chad:
+        # When both EBI and CHAD are in the list, we need to use the separate
+        # chad_all column for CHAD's contribution (ebi_all holds EBI).
+        col = "chad_all" if need_ebi else "ebi_all"
+        consensus_scores = consensus_scores + _norm(col)
+
     best_idx = int(np.argmax(consensus_scores))
     consensus_t = float(valid_df.iloc[best_idx]["threshold"])
     consensus_n = int(valid_df.iloc[best_idx]["n_pcs"])
 
-    _logger.info(f"  Peak activity:        {peak_act_t:.0%}")
-    _logger.info(f"  Peak distinctiveness: {peak_dist_t:.0%}")
-    _logger.info(f"  Peak EBI:             {peak_ebi_t:.0%}")
-    _logger.info(f"  Consensus peak:       {consensus_t:.0%} ({consensus_n} PCs) [act+dist+EBI]")
+    if need_act:
+        _logger.info(f"  Peak activity:        {peak_act_t:.0%}")
+    if need_dist:
+        _logger.info(f"  Peak distinctiveness: {peak_dist_t:.0%}")
+    if need_ebi or need_chad:
+        _logger.info(f"  Peak 3rd-metric:      {peak_third_t:.0%}")
+    _logger.info(
+        f"  Consensus peak:       {consensus_t:.0%} ({consensus_n} PCs) "
+        f"[{metric_label}]"
+    )
 
     return {
         "sweep_rows": sweep_rows,
@@ -369,7 +505,9 @@ def _run_guide_threshold_sweep(
         "consensus_n": consensus_n,
         "peak_act_t": peak_act_t,
         "peak_dist_t": peak_dist_t,
-        "peak_ebi_t": peak_ebi_t,
+        "peak_ebi_t": peak_third_t,  # name kept for plot compat
+        "consensus_metrics": list(cms),
+        "sweep_metric": sweep_metric,
     }
 
 

@@ -241,6 +241,31 @@ def _build_parser():
         "(default: same as DEFAULT_SWEEP_THRESHOLDS).",
     )
     parser.add_argument(
+        "--second-pca-consensus-metrics",
+        type=str,
+        default=None,
+        help="Comma-separated subset of {activity, distinctiveness, ebi, chad} "
+             "to use for the 2nd-pass PCA threshold consensus pick. Default: "
+             "activity,distinctiveness,ebi (writes to canonical "
+             "second_pca_consensus/). Any non-default subset writes to "
+             "second_pca_consensus_<TAG>/ where TAG is a "
+             "deterministic ABBREV_ABBREV concat (e.g. activity,distinctiveness,"
+             "chad → _ACT_DIST_CHAD ; activity alone → _ACT ; "
+             "distinctiveness,ebi → _DIST_EBI).",
+    )
+    parser.add_argument(
+        "--sweep-metric",
+        type=str,
+        default="mean_map",
+        choices=["ratio", "mean_map"],
+        help="Per-threshold scoring mode for the 2nd-pass PCA sweep. "
+             "'mean_map' (default): continuous mean of per-item mAP — more "
+             "stable near close threshold ties, lands in a sibling "
+             "second_pca_consensus_MEANMAP/ subdir so it doesn't clobber any "
+             "existing ratio-based output. 'ratio': fraction-significant "
+             "counts (coarser), lands in the canonical second_pca_consensus/.",
+    )
+    parser.add_argument(
         "--chrom-arm-correct",
         action="store_true",
         help="Before running --second-pca-only, regress out chromosome-arm "
@@ -600,5 +625,17 @@ def _build_parser():
         action="store_true",
         help="Skip PCA reduction entirely; export the full feature matrix. "
         "Phase 2 aggregation is skipped. Output → no_pca/ subdir.",
+    )
+    parser.add_argument(
+        "--apply-iss-sidecar",
+        action="store_true",
+        help="When loading each per-experiment cell h5ad, apply the "
+        "`<h5ad>_obs_corrected.parquet` sidecar produced by "
+        "`ops_model.data.iss_drift_fix` so `obs[\"perturbation\"]` / "
+        "`obs[\"sgRNA\"]` reflect the current ISS calls instead of the "
+        "stale frozen snapshot. Cells flagged as `orphan_in_h5ad` are "
+        "dropped (their seg_id is gone from the current ISS calls). "
+        "Recommended for new analyses; pair with a dedicated output_path "
+        "(e.g. paper_v1/phase_only_corrected/) to keep stale baselines intact.",
     )
     return parser

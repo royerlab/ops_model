@@ -945,6 +945,8 @@ def _handle_aggregate_only(args, output_dir):
             second_pca_kwargs=second_pca_kwargs,
             random_seed=getattr(args, "seed", 42),
             umap_type=getattr(args, "umap_type", "max"),
+            consensus_metrics=getattr(args, "second_pca_consensus_metrics", None),
+            sweep_metric=getattr(args, "sweep_metric", "mean_map"),
         )
     else:
         result = aggregate_channels(
@@ -1124,6 +1126,8 @@ def _handle_second_pca(args, output_dir):
         agg_method=getattr(args, "agg_method", "mean"),
         chromosome_csv=chromosome_csv,
         umap_type=getattr(args, "umap_type", "max"),
+        consensus_metrics=getattr(args, "second_pca_consensus_metrics", None),
+        sweep_metric=getattr(args, "sweep_metric", "mean_map"),
     )
 
     chrom_arm = bool(getattr(args, "chrom_arm_correct", False))
@@ -1404,6 +1408,7 @@ def _handle_op(args, output_dir):
         agg_method=getattr(args, "agg_method", "mean"),
         chromosome_csv=getattr(args, "chromosome_csv", None),
         umap_type=getattr(args, "umap_type", "max"),
+        consensus_metrics=getattr(args, "second_pca_consensus_metrics", None),
     )
 
 
@@ -1804,6 +1809,8 @@ def _handle_downsampled(args, output_dir, cp_override):
             kwargs["cells_per_guide"] = int(getattr(args, "cells_per_guide", 250))
         if getattr(args, "agg_method", "mean") != "mean":
             kwargs["agg_method"] = args.agg_method
+        if getattr(args, "apply_iss_sidecar", False):
+            kwargs["apply_iss_sidecar"] = True
         return kwargs
 
     if not args.slurm:
