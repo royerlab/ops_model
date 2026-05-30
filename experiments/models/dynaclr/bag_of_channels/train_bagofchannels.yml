@@ -1,0 +1,133 @@
+model_type: dynaclr
+run_name: &run_name 'ops_bagofchannels_self_256proj_373genes_convnext_tiny_temp0p1_512bs_fix_sampler'
+dataset_type: contrastive
+
+trainer:
+  max_epochs: 300
+  fast_dev_run: false
+  use_distributed_sampler: false
+  num_sanity_val_steps: 0
+  # enable_model_summary: false
+  limit_train_batches: 2000
+  limit_val_batches: 200
+  precision: "bf16-mixed"
+  gradient_clip_val: 1.0
+  accelerator: "gpu"
+  strategy: "auto"
+  devices: 4
+  num_nodes: 1
+  log_every_n_steps: 5
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: loss/val_epoch
+        every_n_epochs: 1
+        save_top_k: 4
+        save_last: true
+        auto_insert_metric_name: false
+        filename: "epoch={epoch:03d}-loss={loss/val_epoch:.3f}"
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: "step"
+  logger:
+      class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: /hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr
+        name: *run_name
+
+data_manager:
+  batch_size: 512
+  data_split: 
+    - 0.80
+    - 0.20
+    - 0.00
+  initial_yx_patch_size:
+    - 1
+    - 224
+    - 224
+  final_yx_patch_size:
+    - 1
+    - 128
+    - 128
+  num_workers: 16
+  pin_memory: True
+  prefetch_factor: 2
+  balanced_sampling: True
+  balanced_sampling_val: False
+  balance_col: reporter
+  labels_df_path: /home/eduardo.hirata/repos/ops_model/experiments/models/dynaclr/test/373genes_filtered.parquet
+  contrastive_kwargs:
+    positive_source: "self"
+    use_negative: False
+    cell_masks: False
+    transforms:
+      - class_path: monai.transforms.RandAffined
+        init_args:
+          keys: ["data"]
+          prob: 0.8
+          rotate_range: [3.14, 0.0,0.0]  # Full rotation on first axis, none on second
+          scale_range: [0.0, 0.1, 0.1] 
+          shear_range: [0.0, 0.0, 0.0]
+          padding_mode: "zeros"
+      - class_path: monai.transforms.CenterSpatialCropd
+        init_args:
+          keys: ["data"]
+          roi_size: [1, 128, 128]  # Must match final_yx_patch_size
+      - class_path: monai.transforms.RandFlipd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          spatial_axis: -1  # Horizontal flip
+      - class_path: monai.transforms.RandFlipd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          spatial_axis: -2  # Vertical flip
+      - class_path: viscy.transforms.RandAdjustContrastd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          gamma: [0.8, 1.2]
+      - class_path: viscy.transforms.RandScaleIntensityd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          factors: 0.5
+      - class_path: monai.transforms.RandGaussianSmoothd
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          sigma_x: [0.2, 0.5]
+          sigma_y: [0.2, 0.5]
+          sigma_z: [0, 0]
+      - class_path: viscy.transforms.RandGaussianNoised
+        init_args:
+          keys: ["data"]
+          prob: 0.5
+          mean: 0.0
+          std: 0.08
+      - class_path: monai.transforms.ToTensord
+        init_args:
+          keys: ["data"]
+    
+
+model:
+  lr: 0.0002
+  schedule: WarmupCosine
+  warmup_epochs: 10
+  log_batches_per_epoch: 8
+  log_samples_per_batch: 1
+  log_embeddings: True
+  temperature: 0.1
+  encoder:
+    backbone: "convnext_tiny"
+    in_channels: 1
+    in_stack_depth: 1
+    stem_kernel_size: [1, 4, 4]
+    stem_stride: [1, 4, 4]
+    embedding_dim: 768
+    projection_dim: 256
+    drop_path_rate: 0.1
+
+resume_training: false
+# ckpt_path: "/hpc/projects/intracellular_dashboard/ops/models/logs/dynaclr/ops_bagofchannels_self_256proj_10k_n_NTC/version_0/checkpoints/epoch=010-loss=5.254.ckpt"
