@@ -235,39 +235,12 @@ def aggregate_channels(
         chad_ratio=chad_ratio,
     )
 
-    # Per-reporter bar chart — unfiltered (all genes, not just active)
-    dist_ratio_all, corum_ratio_all, chad_ratio_all = None, None, None
-    try:
-        from ops_utils.analysis.map_scores import (
-            phenotypic_distinctivness,
-            phenotypic_consistency_corum,
-            phenotypic_consistency_manual_annotation,
-        )
-
-        _, dist_ratio_all = phenotypic_distinctivness(
-            adata_guide,
-            plot_results=False,
-            null_size=100_000,
-            distance=distance,
-        )
-        _, corum_ratio_all = phenotypic_consistency_corum(
-            adata_gene,
-            plot_results=False,
-            cache_similarity=True,
-            distance=distance,
-        )
-        _, chad_ratio_all = phenotypic_consistency_manual_annotation(
-            adata_gene,
-            plot_results=False,
-            cache_similarity=True,
-            distance=distance,
-            annotation_path=CHAD_ANNOTATION_PATH,
-        )
-        _logger.info(
-            f"  Unfiltered aggregate baselines: dist={dist_ratio_all:.1%} corum={corum_ratio_all:.1%} chad={chad_ratio_all:.1%}"
-        )
-    except Exception as e:
-        _logger.warning(f"  Unfiltered aggregate baselines failed: {e}")
+    # Per-reporter bar chart — unfiltered (all genes, not just active).
+    # _score_distinctiveness / _score_consistency above already run with
+    # active_only=False (the default), so reuse those ratios verbatim.
+    dist_ratio_all = dist_ratio
+    corum_ratio_all = corum_ratio
+    chad_ratio_all = chad_ratio
 
     # Build report rows remapped to the _all columns for the unfiltered plot
     unfiltered_rows = []
