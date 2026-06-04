@@ -3,17 +3,18 @@
 Three additions on top of ``_compute_and_plot_embeddings``:
 
 1. ``save_supercluster_overlays`` — static matplotlib PNGs duplicating each
-   existing UMAP/PHATE plot, recolored by gene super-category (CHAD-boosted)
-   and by direct CHAD cluster name.
+   existing UMAP/PHATE plot, recolored by gene super-category (CHAD-boosted),
+   by direct CHAD cluster name, by EBI complex (per-complex unique color+marker
+   pairs), and by EBI panel membership (binary in/not-in).
 2. ``save_leiden_overlays`` — runs scanpy Leiden at several resolutions and
    saves per-resolution static PNGs plus a CSV of (gene, cluster) per
    resolution. Outputs land under ``plots/leiden/{level}/{png|csv}/`` so
    guide/gene live in their own folders and PNGs/CSVs are split.
 3. ``save_interactive_html`` — Plotly HTML (one per level x embedding) with
    hover showing perturbation, all 4 mAP metrics, super-category, CHAD
-   cluster, CORUM complex, and a dropdown to switch the color overlay
-   between super-category, CHAD cluster, CORUM complex, and each Leiden
-   resolution.
+   cluster, EBI complex, CORUM complex, and a dropdown to switch the color
+   overlay between super-category, CHAD cluster, EBI complex, CORUM complex,
+   and each Leiden resolution.
 
 All helpers are best-effort: a missing dependency or scoring map degrades
 gracefully (logged warning, partial output saved).
@@ -58,11 +59,12 @@ def load_overlay_maps(
     supercategory_config_path: Optional[Path] = None,
     chad_path_override: Optional[Path] = None,
 ) -> Dict[str, Dict[str, str]]:
-    """Build the three gene → annotation dicts used for overlay coloring.
+    """Build the four gene → annotation dicts used for overlay coloring.
 
-    Returns ``{"super": ..., "chad": ..., "corum": ...}`` where each value is
-    a ``gene_name -> annotation`` dict. Genes without an annotation are not
-    present in the returned dict (callers default them to ``"Uncategorized"``).
+    Returns ``{"super": ..., "chad": ..., "corum": ..., "ebi": ...}`` where each
+    value is a ``gene_name -> annotation`` dict. Genes without an annotation
+    are not present in the returned dict (callers default them to
+    ``"Uncategorized"``).
 
     ``chad_path_override`` (optional): explicit CHAD hierarchy YAML to use for
     the cluster overlay. When set, takes precedence over the
@@ -70,7 +72,7 @@ def load_overlay_maps(
     runs against gene libraries that don't share the paper_v1 v5 hierarchy
     (e.g. ``val_library_chad_positive_controls_v1.yml`` for validation_500).
     """
-    out: Dict[str, Dict[str, str]] = {"super": {}, "chad": {}, "corum": {}}
+    out: Dict[str, Dict[str, str]] = {"super": {}, "chad": {}, "corum": {}, "ebi": {}}
 
     cfg_path = Path(supercategory_config_path or DEFAULT_SUPERCATEGORY_CONFIG)
     cfg: dict = {}
@@ -135,6 +137,31 @@ def load_overlay_maps(
         logger.info("  Loaded CORUM complex map: %d genes", len(out["corum"]))
     except Exception as exc:
         logger.warning("  CORUM map load failed: %s", exc)
+
+    try:
+        # EBI Complex Portal hierarchy — same {id: {name, genes}} YAML format as CHAD.
+        # Sourced from the canonical EBI_complexes_v1_old_gene_names.yaml used by
+        # phenotypic_consistency_ebi for the mAP metric.
+        import yaml
+        ebi_path = Path("/hpc/projects/icd.fast.ops/configs/gene_clusters/"
+                        "EBI_complexes_v1_old_gene_names.yaml")
+        if ebi_path.exists():
+            with open(ebi_path) as f:
+                ebi_hier = yaml.safe_load(f) or {}
+            gene_to_complex: Dict[str, str] = {}
+            for _id, cluster in ebi_hier.items():
+                if not isinstance(cluster, dict) or "name" not in cluster:
+                    continue
+                cname = cluster["name"]
+                for gene in cluster.get("genes", []):
+                    gene_to_complex.setdefault(gene, cname)
+            out["ebi"] = gene_to_complex
+            logger.info(
+                "  Loaded EBI complex map: %d genes across %d complexes",
+                len(gene_to_complex), len(set(gene_to_complex.values())),
+            )
+    except Exception as exc:
+        logger.warning("  EBI complex map load failed: %s", exc)
 
     return out
 
@@ -324,6 +351,7 @@ def _apply_overlay_maps_to_adata(
     col_map = [
         ("chad_cluster", overlay_maps.get("chad") or {}),
         ("corum_complex", overlay_maps.get("corum") or {}),
+        ("ebi_complex", overlay_maps.get("ebi") or {}),
         ("supercategory", overlay_maps.get("super") or {}),
     ]
     for col_name, lookup in col_map:
@@ -649,6 +677,177 @@ def save_supercluster_overlays(
                 _logger.info("  Saved %s", out.name)
             except Exception as exc:
                 _logger.warning("  CHAD overlay failed (%s): %s", out.name, exc)
+
+        # EBI overlays are produced once at gene level, in a single dual-panel
+        # figure (UMAP + PHATE side-by-side) — done after the per-(level,embed)
+        # loop by save_ebi_dual_overlays. We skip them inside this loop.
+
+
+# =============================================================================
+# EBI complex overlays — dual-panel (UMAP + PHATE) with compact side legend
+# =============================================================================
+
+
+def save_ebi_dual_overlays(
+    adata_gene_embed,
+    overlay_maps: Dict[str, Dict[str, str]],
+    plots_dir: Path,
+    plt,
+    _logger=logger,
+) -> None:
+    """Two gene-level PNGs: UMAP + PHATE side-by-side, colored by EBI complex
+    membership. Two flavours land in ``plots/``:
+
+    * ``gene_ebi_complex_overlay.png`` — per-complex. Each EBI complex gets a
+      unique ``(color, marker)`` combination via ``_categorical_palette`` +
+      ``_categorical_markers`` (39 colors × 10 marker shapes = 390 unique
+      combos, more than enough for the 98 EBI complexes). Non-EBI-panel
+      genes drawn faded gray.
+    * ``gene_ebi_binary_overlay.png`` — collapse to two categories: in-EBI-panel
+      (red) vs not (gray). Quick test of whether the embedding clusters track
+      panel membership.
+
+    Both figures keep the UMAP and PHATE panels in equal square axes with a
+    single shared legend on the right.
+    """
+    import matplotlib.patches as mpatches
+    import matplotlib.lines as mlines
+
+    if adata_gene_embed is None:
+        return
+    if "X_umap" not in adata_gene_embed.obsm or "X_phate" not in adata_gene_embed.obsm:
+        _logger.info("  EBI dual overlays: gene h5ad missing X_umap/X_phate — skipping")
+        return
+    ebi_map = overlay_maps.get("ebi") or {}
+    if not ebi_map:
+        _logger.info("  EBI dual overlays: no EBI map loaded — skipping")
+        return
+
+    plots_dir = Path(plots_dir)
+    umap = np.asarray(adata_gene_embed.obsm["X_umap"])
+    phate = np.asarray(adata_gene_embed.obsm["X_phate"])
+    perts = (
+        adata_gene_embed.obs["perturbation"].astype(str).values
+        if "perturbation" in adata_gene_embed.obs.columns
+        else adata_gene_embed.obs_names.astype(str).values
+    )
+    is_ntc = np.array([str(p).startswith("NTC") for p in perts])
+    cats = np.array([ebi_map.get(p, "Not in EBI panel") for p in perts])
+    in_panel = (cats != "Not in EBI panel") & ~is_ntc
+    not_in_panel = (~in_panel) & ~is_ntc   # gray dots; excludes NTCs
+    n_in = int(in_panel.sum())
+    n_out = int(not_in_panel.sum())
+    n_ntc = int(is_ntc.sum())
+    DARK_GRAY = "#999999"
+
+    # ---- 1) Per-complex (color × shape) ----
+    unique_complexes = sorted(set(cats[in_panel]))
+    palette = _categorical_palette(unique_complexes)
+    markers = _categorical_markers(unique_complexes)
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7))
+    for ax, coords, name in [(axes[0], umap, "UMAP"), (axes[1], phate, "PHATE")]:
+        # 1) non-EBI gene-KO genes — darker gray
+        ax.scatter(
+            coords[not_in_panel, 0], coords[not_in_panel, 1],
+            s=12, c=DARK_GRAY, alpha=0.5, linewidths=0,
+        )
+        # 2) per-complex points with unique (color, marker)
+        for c in unique_complexes:
+            mask = (cats == c) & ~is_ntc
+            ax.scatter(
+                coords[mask, 0], coords[mask, 1],
+                s=40, c=[palette[c]], marker=markers[c],
+                alpha=0.9, linewidths=0.3, edgecolors="white",
+            )
+        # 3) NTC overlay — red X, drawn on top
+        if is_ntc.any():
+            ax.scatter(
+                coords[is_ntc, 0], coords[is_ntc, 1],
+                marker="X", s=70, c="red",
+                alpha=0.55, linewidths=0.4, edgecolors="#a00000", zorder=10,
+            )
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(
+            f"{name} — gene-level (EBI-weighted aggregation)", fontsize=12,
+        )
+    # Compact 2-col legend on the right with truncated complex names
+    handles = [
+        mlines.Line2D(
+            [], [], color=palette[c], marker=markers[c], linestyle="",
+            markersize=7, markeredgecolor="white", markeredgewidth=0.4,
+            label=(c if len(c) <= 38 else c[:35] + "..."),
+        )
+        for c in unique_complexes
+    ]
+    handles.append(
+        mpatches.Patch(color=DARK_GRAY, label=f"Not in EBI panel (n={n_out})")
+    )
+    if n_ntc:
+        handles.append(
+            mlines.Line2D([], [], marker="X", color="red", linestyle="",
+                          markersize=8, markeredgecolor="#a00000",
+                          label=f"NTC (n={n_ntc})")
+        )
+    fig.legend(
+        handles=handles, loc="center left", bbox_to_anchor=(1.0, 0.5),
+        ncol=2, fontsize=6, frameon=False, handlelength=1.0, handleheight=0.8,
+        columnspacing=0.8,
+    )
+    fig.suptitle(
+        f"EBI complex membership overlay (per complex — {len(unique_complexes)} "
+        f"complexes / {n_in} genes)",
+        fontsize=13, y=1.02,
+    )
+    fig.tight_layout()
+    out = plots_dir / "gene_ebi_complex_overlay.png"
+    try:
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
+        fig.savefig(out.with_suffix(".svg"), bbox_inches="tight")
+        _logger.info("  Saved %s", out.name)
+    except Exception as exc:
+        _logger.warning("  EBI per-complex overlay failed: %s", exc)
+    plt.close(fig)
+
+    # ---- 2) Binary in-panel / not-in-panel ----
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    for ax, coords, name in [(axes[0], umap, "UMAP"), (axes[1], phate, "PHATE")]:
+        ax.scatter(
+            coords[not_in_panel, 0], coords[not_in_panel, 1],
+            s=14, c=DARK_GRAY, alpha=0.55, linewidths=0,
+            label=f"Not in EBI panel (n={n_out})",
+        )
+        ax.scatter(
+            coords[in_panel, 0], coords[in_panel, 1],
+            s=20, c="#d62728", alpha=0.85, linewidths=0,
+            label=f"In EBI complex (n={n_in})",
+        )
+        if is_ntc.any():
+            ax.scatter(
+                coords[is_ntc, 0], coords[is_ntc, 1],
+                marker="X", s=70, c="red",
+                alpha=0.55, linewidths=0.4, edgecolors="#a00000",
+                label=f"NTC (n={n_ntc})", zorder=10,
+            )
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(
+            f"{name} — gene-level (EBI-weighted aggregation)", fontsize=12,
+        )
+        ax.legend(loc="best", fontsize=10, frameon=False)
+    fig.suptitle(
+        "EBI panel membership overlay (binary)", fontsize=13, y=1.02,
+    )
+    fig.tight_layout()
+    out = plots_dir / "gene_ebi_binary_overlay.png"
+    try:
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
+        fig.savefig(out.with_suffix(".svg"), bbox_inches="tight")
+        _logger.info("  Saved %s", out.name)
+    except Exception as exc:
+        _logger.warning("  EBI binary overlay failed: %s", exc)
+    plt.close(fig)
 
 
 # =============================================================================
@@ -1107,11 +1306,13 @@ def _build_hover_records(
     """Hover-data table aligned with ``perts``.
 
     Columns: perturbation, n_cells, activity, auc, distinctiveness, corum,
-    chad, super, chad_cluster, corum_complex, plus one per Leiden resolution.
+    chad, super, chad_cluster, ebi_complex, corum_complex, plus one per
+    Leiden resolution.
     """
     super_map = overlay_maps.get("super", {}) or {}
     chad_map = overlay_maps.get("chad", {}) or {}
     corum_map = overlay_maps.get("corum", {}) or {}
+    ebi_map = overlay_maps.get("ebi", {}) or {}
 
     records = []
     for i, p in enumerate(perts):
@@ -1126,6 +1327,7 @@ def _build_hover_records(
             rec[key] = m.get(key, float("nan"))
         rec["super"] = super_map.get(str(p), "Uncategorized")
         rec["chad_cluster"] = chad_map.get(str(p), "Uncategorized")
+        rec["ebi_complex"] = ebi_map.get(str(p), "Uncategorized")
         rec["corum_complex"] = corum_map.get(str(p), "")
         for col, labels in leiden_results.items():
             rec[col] = f"cluster_{labels[i]}"
@@ -1274,6 +1476,7 @@ def _save_one_interactive(
     color_modes: List[Tuple[str, str]] = []
     color_modes.append(("Super-category", "super"))
     color_modes.append(("CHAD cluster", "chad_cluster"))
+    color_modes.append(("EBI complex", "ebi_complex"))
     color_modes.append(("CORUM complex", "corum_complex"))
     for col in sorted(leiden_results.keys()):
         color_modes.append((f"Leiden r={col.replace('leiden_r','')}", col))
@@ -1296,6 +1499,8 @@ def _save_one_interactive(
             lines.append(f"Super: {row['super']}")
         if row.get("chad_cluster", ""):
             lines.append(f"CHAD: {row['chad_cluster']}")
+        if row.get("ebi_complex", ""):
+            lines.append(f"EBI: {row['ebi_complex']}")
         if row.get("corum_complex", ""):
             lines.append(f"CORUM: {row['corum_complex']}")
         for k in row.index:
@@ -2837,6 +3042,9 @@ def save_extra_overlays(
 
     save_supercluster_overlays(
         adata_guide, adata_gene_embed, overlay_maps, plots_dir, plt, _logger=_logger,
+    )
+    save_ebi_dual_overlays(
+        adata_gene_embed, overlay_maps, plots_dir, plt, _logger=_logger,
     )
     save_leiden_overlays(
         adata_gene_embed, leiden_results, plots_dir, plt, _logger=_logger,
