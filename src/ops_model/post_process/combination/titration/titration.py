@@ -12,19 +12,19 @@ plus a combined overview:
 Usage::
 
     # Run locally for a single variant (default -o matches pca_optimization.py)
-    python -m ops_model.post_process.combination.pca_titration
+    python -m ops_model.post_process.combination.titration.titration
 
     # Submit as SLURM jobs (one per reporter)
-    python -m ops_model.post_process.combination.pca_titration --slurm
+    python -m ops_model.post_process.combination.titration.titration --slurm
 
     # Include minibinder geneKO subset analysis with comparison overlay plots
-    python -m ops_model.post_process.combination.pca_titration --minibinder-subset
+    python -m ops_model.post_process.combination.titration.titration --minibinder-subset
 
     # Minibinder subset with SLURM submission
-    python -m ops_model.post_process.combination.pca_titration --minibinder-subset --slurm
+    python -m ops_model.post_process.combination.titration.titration --minibinder-subset --slurm
 
     # Override root (same as pca_optimization -o)
-    python -m ops_model.post_process.combination.pca_titration \
+    python -m ops_model.post_process.combination.titration.titration \
         -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
 """
 
@@ -60,7 +60,7 @@ NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
 METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
-# Shared plot styling / labels (used by compare_pca_titration_versions and below)
+# Shared plot styling / labels (used by compare_titration_versions and below)
 TITRATION_METRIC_COLORS = {
     "activity": "steelblue",
     "distinctiveness": "mediumseagreen",
@@ -1438,7 +1438,7 @@ def _build_parser():
         "--per-target-slurm", dest="per_target_slurm",
         action="store_true", default=True,
         help="(Default: ON) Fan out ONE SLURM task per (reporter, target) bin "
-             "instead of one per reporter. Mirrors pca_combined_titration "
+             "instead of one per reporter. Mirrors combined_titration "
              "--per-target-slurm: schedules are pre-built on the login node "
              "(backed-mode reads), each task scores its single target and "
              "writes a shard CSV (<reporter>_titration_t<target>.csv), and "
@@ -1524,7 +1524,7 @@ def _resolve_output_dir(args) -> Path:
 
 
 def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
-    """Where ``pca_titration`` writes per-reporter outputs: ``<variant>/titration``."""
+    """Where ``titration`` writes per-reporter outputs: ``<variant>/titration``."""
     return _resolve_output_dir(args) / "titration"
 
 
@@ -1891,10 +1891,10 @@ def main():
             }
             submit_parallel_jobs(
                 jobs_to_submit=jobs,
-                experiment="pca_titration",
+                experiment="titration",
                 slurm_params=slurm_params,
                 log_dir="pca_optimization",
-                manifest_prefix="pca_titration_replot",
+                manifest_prefix="titration_replot",
                 wait_for_completion=True,
             )
         else:
@@ -2038,10 +2038,10 @@ def main():
             )
             submit_parallel_jobs(
                 jobs_to_submit=all_jobs,
-                experiment="pca_titration",
+                experiment="titration",
                 slurm_params=slurm_params,
                 log_dir="pca_optimization",
-                manifest_prefix="pca_titration_per_target",
+                manifest_prefix="titration_per_target",
                 wait_for_completion=True,
                 verbose=True,
             )
@@ -2116,10 +2116,10 @@ def main():
             print(f"\nSubmitting {len(regular_jobs)} SLURM titration jobs ({args.slurm_time}min each)...")
             result_reg = submit_parallel_jobs(
                 jobs_to_submit=regular_jobs,
-                experiment="pca_titration",
+                experiment="titration",
                 slurm_params=regular_params,
                 log_dir="pca_optimization",
-                manifest_prefix="pca_titration",
+                manifest_prefix="titration",
                 wait_for_completion=False,
             )
             if result_reg.get("submitted_jobs"):
@@ -2134,10 +2134,10 @@ def main():
             print(f"\nSubmitting {len(phase_jobs)} Phase titration job(s) ({phase_time}min)...")
             result_phase = submit_parallel_jobs(
                 jobs_to_submit=phase_jobs,
-                experiment="pca_titration_phase",
+                experiment="titration_phase",
                 slurm_params=phase_params,
                 log_dir="pca_optimization",
-                manifest_prefix="pca_titration_phase",
+                manifest_prefix="titration_phase",
                 wait_for_completion=False,
             )
             if result_phase.get("submitted_jobs"):
@@ -2152,7 +2152,7 @@ def main():
         if job_arrays:
             wait_result = wait_for_multiple_job_arrays(
                 job_arrays,
-                experiment="pca_titration",
+                experiment="titration",
             )
             all_failed = wait_result.get("failed", []) or []
 

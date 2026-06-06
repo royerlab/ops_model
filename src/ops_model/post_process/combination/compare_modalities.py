@@ -23,7 +23,7 @@ Output dir is fully isolated from other titration modes:
 
 Usage::
 
-    uv run python -m ops_model.post_process.combination.pca_modality_distinctiveness \\
+    uv run python -m ops_model.post_process.combination.compare_modalities \\
         --cell-dino --paper-v1 --groups cp,4i,matched_livecell --slurm
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ from ops_model.features.anndata_utils import (
     hconcat_by_perturbation,
     normalize_guide_adata,
 )
-from ops_model.post_process.combination.pca_combined_titration import (
+from ops_model.post_process.combination.titration.combined_titration import (
     DEFAULT_MATCHING_CONFIG,
     _build_parser as _combined_parser,
     _per_guide_median,
@@ -52,7 +52,7 @@ from ops_model.post_process.combination.pca_combined_titration import (
     _resolve_matched_set_membership,
     _resolve_output_dir,
 )
-from ops_model.post_process.combination.pca_titration import (
+from ops_model.post_process.combination.titration.titration import (
     _prepare_for_copairs,
     _subsample_per_guide_and_aggregate,
 )
@@ -110,7 +110,7 @@ def _resolve_modality_dir(
 
 
 # ---------------------------------------------------------------------------
-# Combined-matrix builder (mirrors pca_combined_titration but exposes the score
+# Combined-matrix builder (mirrors combined_titration but exposes the score
 # map outputs directly instead of just the aggregate stats)
 # ---------------------------------------------------------------------------
 
@@ -848,7 +848,7 @@ def main():
     worker_args["slurm"] = False  # avoid recursion inside the job
     submit_parallel_jobs(
         jobs_to_submit=[{
-            "name": "pca_modality_distinctiveness",
+            "name": "compare_modalities",
             "func": run_modality_analysis,
             "kwargs": {"args_dict": worker_args},
             "metadata": {
@@ -856,7 +856,7 @@ def main():
                 "cells_per_guide": args.cells_per_guide,
             },
         }],
-        experiment="pca_modality_distinctiveness",
+        experiment="compare_modalities",
         slurm_params=slurm_params,
         log_dir="pca_optimization",
         manifest_prefix="modality_dist",

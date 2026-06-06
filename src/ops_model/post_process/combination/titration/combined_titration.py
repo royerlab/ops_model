@@ -1,6 +1,6 @@
 """Combined-reporter cell-count titration.
 
-Like ``pca_titration`` but instead of titrating each reporter independently,
+Like ``titration`` but instead of titrating each reporter independently,
 this samples cells across N reporters at each cell budget, h-concatenates
 their NTC-normalized guide-level features into one combined matrix, and scores
 that combined matrix. Produces one curve per metric for the *group* (e.g. all
@@ -20,13 +20,13 @@ Built-in groups (resolved from --output-dir + --paper-v1 + --cell-dino):
 
 Whenever ``--groups`` lists ≥2 groups the script automatically overlays their
 mean-mAP curves in 4 figures (one per metric), in the same style as
-compare_pca_titration_versions. Use ``--no-compare`` to skip that step and
+compare_titration_versions. Use ``--no-compare`` to skip that step and
 ``--compare-only`` to re-plot without re-running the per-group titration.
 
 Usage::
 
     # Run cp + 4i in parallel SLURM; comparison plots emitted automatically.
-    python -m ops_model.post_process.combination.pca_combined_titration \\
+    python -m ops_model.post_process.combination.titration.combined_titration \\
         --cell-dino --paper-v1 --per-guide-max-titration --slurm \\
         --groups cp,4i
 """
@@ -50,7 +50,7 @@ from ops_model.features.anndata_utils import (
     normalize_guide_adata,
 )
 from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
-from ops_model.post_process.combination.pca_titration import (
+from ops_model.post_process.combination.titration.titration import (
     DOWNSAMPLE_RATIO,
     METRICS,
     MIN_CELLS,
@@ -87,7 +87,7 @@ _GENERIC_FLUORS = {"GFP", "mCherry", "BFP", "RFP", "YFP", "Cy5", "Cy3"}
 
 def _per_signal_dir(args: argparse.Namespace, group: str) -> Path:
     """Resolve the per_signal/ dir for a given group given the same flag
-    space as pca_titration / pca_optimization."""
+    space as titration / pca_optimization."""
     ns = argparse.Namespace(**vars(args))
     # Reset channel-selection flags to match the requested group
     ns.include_4i = False
@@ -1696,13 +1696,13 @@ def _plot_combo_by_swap_count(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Reuse pca_titration's parser to share path-resolution flags, then add ours."""
+    """Reuse titration's parser to share path-resolution flags, then add ours."""
     p = _titr_parser()
     p.description = "Combined-reporter cell-count titration."
     # Combined-titration parallelizes the per-reporter prep loop across CPUs;
     # 32 is the sweet spot on 50+ reporter groups (per Amdahl's analysis on
     # ~35s of serial scoring vs ~225s of parallelizable prep). Override the
-    # upstream pca_titration default (8) which was tuned for the 1-reporter
+    # upstream titration default (8) which was tuned for the 1-reporter
     # per-job case. Users can still pass --slurm-cpus to override.
     p.set_defaults(slurm_cpus=32)
     p.add_argument(
@@ -1767,11 +1767,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "skip this step regardless of the threshold value (e.g. "
              "phase_only stays untouched).",
     )
-    # --no-cache is inherited from pca_titration's parser (same semantics).
+    # --no-cache is inherited from titration's parser (same semantics).
     p.add_argument(
         "--seed", type=int, default=42, help="Random seed for cell subsampling",
     )
-    # --per-target-slurm is inherited from pca_titration's parser; both
+    # --per-target-slurm is inherited from titration's parser; both
     # scripts use identical (action="store_true") semantics — one task per
     # schedule target.
     p.add_argument(
@@ -1920,7 +1920,7 @@ def main():
             )
             _spj(
                 jobs_to_submit=prep_jobs,
-                experiment="pca_combined_titration",
+                experiment="combined_titration",
                 slurm_params=prep_params,
                 log_dir="pca_optimization",
                 manifest_prefix="pca_combtitr_prep",
@@ -2128,7 +2128,7 @@ def main():
             )
             submit_parallel_jobs(
                 jobs_to_submit=all_jobs,
-                experiment="pca_combined_titration",
+                experiment="combined_titration",
                 slurm_params=slurm_params,
                 log_dir="pca_optimization",
                 manifest_prefix="pca_combtitr_per_target",
@@ -2177,7 +2177,7 @@ def main():
         # Auto-bump timeout for any group that includes the Phase reporter
         # (~60M cells / 25GB) to args.phase_slurm_time (default 240min). All
         # reporters in a combined-titration group are h-concatted into one job,
-        # so we can't split Phase out the way pca_titration does.
+        # so we can't split Phase out the way titration does.
         def _has_phase(paths: List[Path]) -> bool:
             return any("phase" in p.stem.lower() for p in paths)
 
@@ -2200,7 +2200,7 @@ def main():
                 timeout_min = args.phase_slurm_time
             else:
                 timeout_min = args.slurm_time
-            # Mirror pca_titration's bootstrap autoscaling for the big-group budget
+            # Mirror titration's bootstrap autoscaling for the big-group budget
             if (
                 is_big_group and args.bootstrap > 1
                 and timeout_min == parser.get_default("phase_slurm_time")
@@ -2239,7 +2239,7 @@ def main():
             )
             result = submit_parallel_jobs(
                 jobs_to_submit=[job],
-                experiment="pca_combined_titration",
+                experiment="combined_titration",
                 slurm_params=slurm_params,
                 log_dir="pca_optimization",
                 manifest_prefix=f"pca_combtitr_{g}",
@@ -2257,7 +2257,7 @@ def main():
             )
 
         if job_arrays:
-            wait_for_multiple_job_arrays(job_arrays, experiment="pca_combined_titration")
+            wait_for_multiple_job_arrays(job_arrays, experiment="combined_titration")
     else:
         # Default thread pool size for local mode: --n-workers if set,
         # else os.cpu_count() (capped per group inside _build_combined_at_target).

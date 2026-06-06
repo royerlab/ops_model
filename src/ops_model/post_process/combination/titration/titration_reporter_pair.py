@@ -24,13 +24,13 @@ every threshold scored at every N plus the chosen consensus.
 
 Usage::
 
-    python -m ops_model.post_process.combination.pca_titration_reporter_pair \\
+    python -m ops_model.post_process.combination.titration.titration_reporter_pair \\
         --reporter-a /path/to/pca_optimized_v2/dino/all/per_signal/Phase_cells.h5ad \\
         --reporter-b /path/to/pca_optimized_v2/dino/all/per_signal/FeRhoNox_cells.h5ad \\
         -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2/dino/all/titration/phase_fe_comparison
 
     # Phase vs Fe+ with dual-pass PCA + per-marker reuse:
-    python -m ops_model.post_process.combination.pca_titration_reporter_pair \\
+    python -m ops_model.post_process.combination.titration.titration_reporter_pair \\
         --reporter-a /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2/dino/all/per_signal/Phase_cells.h5ad \\
         --reporter-b "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v2/dino/all/per_signal/Fe2+_FeRhoNox_live-cell_dye_cells.h5ad" \\
         --name-a "Phase" --name-b "Fe+" \\
@@ -56,7 +56,7 @@ from ops_model.features.anndata_utils import (
 )
 
 # Reuse utilities from the main titration script
-from ops_model.post_process.combination.pca_titration import (
+from ops_model.post_process.combination.titration.titration import (
     DOWNSAMPLE_RATIO,
     MIN_CELLS,
     METRICS,
@@ -94,7 +94,7 @@ def _is_metric_col(c: str) -> bool:
 
 def _per_marker_csv_path(per_marker_dir: Optional[Path], name: str) -> Optional[Path]:
     """Resolve <per_marker_dir>/<name>/<name>_titration.csv (handles names with
-    spaces / special chars by trying the sanitized variant pca_titration uses)."""
+    spaces / special chars by trying the sanitized variant titration uses)."""
     if per_marker_dir is None:
         return None
     per_marker_dir = Path(per_marker_dir)
@@ -803,7 +803,7 @@ def main():
         type=str,
         default=None,
         help="Directory containing existing per-reporter titration CSVs "
-        "(<dir>/<name>/<name>_titration.csv from pca_titration.py). When set, "
+        "(<dir>/<name>/<name>_titration.csv from titration.py). When set, "
         "A-alone / B-alone curves are interpolated from these instead of "
         "rescored. Defaults to inferring from --reporter-a path "
         "(<variant>/per_signal/X_cells.h5ad → <variant>/titration).",
@@ -918,10 +918,10 @@ def main():
 
         result = submit_parallel_jobs(
             jobs_to_submit=jobs,
-            experiment="pca_titration_phase_pairs",
+            experiment="titration_phase_pairs",
             slurm_params=slurm_params,
             log_dir="pca_optimization",
-            manifest_prefix="pca_titration_phase_pairs",
+            manifest_prefix="titration_phase_pairs",
             wait_for_completion=True,
         )
         if result.get("failed"):
@@ -1001,10 +1001,10 @@ def main():
 
         result = submit_parallel_jobs(
             jobs_to_submit=jobs,
-            experiment="pca_titration_pair",
+            experiment="titration_pair",
             slurm_params=slurm_params,
             log_dir="pca_optimization",
-            manifest_prefix="pca_titration_pair",
+            manifest_prefix="titration_pair",
             wait_for_completion=True,
         )
         if result.get("success"):
