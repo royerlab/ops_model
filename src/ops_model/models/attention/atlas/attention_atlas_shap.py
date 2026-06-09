@@ -35,7 +35,7 @@ Examples:
     --shap-cache-phase /hpc/projects/icd.fast.ops/models/alex_lin_attention/shap_caches/phase \\
     --shap-cache-fluor /hpc/projects/icd.fast.ops/models/alex_lin_attention/shap_caches/fluor \\
     --output /hpc/projects/icd.fast.ops/models/alex_lin_attention/top20/atlas_shap_top20.pdf \\
-    --skip-cp-4i --no-strict
+    --no-strict
 
   # → ~5 min login-node prep (loads CSVs, builds per-gene violin/bg
   #   arrays from caches, picks NTC pool) followed by a 1000-task SLURM
@@ -617,6 +617,35 @@ COLOR_DOWN = "#C81E1E" # red
 # the longest top20 captions wrap inside this narrower SHAP column.
 FIG_WIDTH_IN = 24.5
 FIG_HEIGHT_IN = 18.0
+
+# Phenotype-concentration inset — optional small chart in the upper-RIGHT
+# corner of the page, in the empty area to the right of the mAP heatmap bar
+# (the bar spans 0.47" → 18.9", so 19.0"–24.2" is free) and ABOVE the SHAP
+# violin grid (which starts at IMG_TOP_FROM_TOP_IN = 1.80" from top). Wide
+# and short to fit the available 5×1-ish rectangle. Page size unchanged.
+INSET_W_IN = 4.0
+INSET_H_IN = 1.2
+INSET_RIGHT_MARGIN_IN = 0.6    # slight nudge left of the page right edge
+INSET_TOP_MARGIN_IN = 0.25     # tucked tight into the top-right corner
+INSET_THRESHOLD_FALLBACK = 0.3 # used only when --threshold-map=0 (filter off);
+                               # otherwise the inset's threshold tracks the
+                               # atlas's --threshold-map so the inclusion bar
+                               # and the inset's reference line agree.
+INSET_ATLAS_PAGE_K = 10        # vertical guide ("atlas tile budget")
+# Where the per-K mAP CSVs live (built by
+# attention/titration/expansion/count_genes_above_threshold.py).
+INSET_GENEKO_CSV = (
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/"
+    "expansion_v3_trainval/genes_above_threshold/k10_ranked_all_geneKOs.csv"
+)
+INSET_EBI_CSV = (
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/"
+    "expansion_v3_trainval/genes_above_threshold_ebi/k10_ranked_all_complexes.csv"
+)
+INSET_CHAD_CSV = (
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/"
+    "expansion_v3_trainval/genes_above_threshold_chad/k10_ranked_all_chad_complexes.csv"
+)
 # In figure-coord units: where the image grid ends and the SHAP panels begin.
 IMG_GRID_RIGHT = 19.0 / FIG_WIDTH_IN          # 19/24.5 ≈ 0.776
 # 1.7" gap — moderate whitespace for the lollipop y-tick labels.
@@ -1963,8 +1992,17 @@ def _prep_shap_data_slurm(args, gene_list: list[str]) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = []
+    skipped = 0
     for i, shard in enumerate(shards):
         out_pkl = work_dir / f"shard_{i:05d}.pkl"
+        # Skip shards whose pickle already exists (resumable runs). The
+        # merge step downstream reads every shard_*.pkl in work_dir, so
+        # cached shards are picked up automatically — no need to re-run
+        # the (~5 min/shard) SHAP load. Pass --force-shap-prep to override.
+        if (out_pkl.exists() and out_pkl.stat().st_size > 0
+                and not getattr(args, "force_shap_prep", False)):
+            skipped += 1
+            continue
         jobs.append({
             "name": f"shap_prep_{Path(args.output).stem}_{i:05d}",
             "func": _prep_shap_data_shard_worker,
@@ -1994,6 +2032,20 @@ def _prep_shap_data_slurm(args, gene_list: list[str]) -> dict:
             "metadata": {"shard": i, "n_genes": len(shard),
                           "out_pkl": str(out_pkl)},
         })
+    if skipped:
+        print(f"[shap-prep] skipping {skipped}/{len(shards)} shards "
+              f"with existing pickles in {work_dir} "
+              f"(--force-shap-prep to override)", flush=True)
+    if not jobs:
+        print(f"[shap-prep] all {len(shards)} shards already cached — "
+              f"skipping SLURM submission, merging from disk", flush=True)
+        merged: dict = {}
+        for p in sorted(work_dir.glob("shard_*.pkl")):
+            with open(p, "rb") as f:
+                merged.update(_pickle.load(f))
+        print(f"[shap-prep] merged {len(merged):,} gene payloads "
+              f"from {len(shards)} cached shards", flush=True)
+        return merged
 
     slurm_params = {
         "timeout_min": args.shap_prep_timeout_min,
@@ -2020,10 +2072,11 @@ def _prep_shap_data_slurm(args, gene_list: list[str]) -> dict:
               f"surviving shards", flush=True)
 
     merged: dict = {}
-    for j in jobs:
-        p = Path(j["kwargs"]["out_pkl"])
-        if not p.exists():
-            print(f"  [shap-prep] missing {p}", flush=True)
+    # Read every shard pickle in work_dir — picks up BOTH the newly-run
+    # jobs AND any pickles cached from a prior run (skipped above).
+    for p in sorted(work_dir.glob("shard_*.pkl")):
+        if p.stat().st_size == 0:
+            print(f"  [shap-prep] empty shard {p.name}", flush=True)
             continue
         with open(p, "rb") as f:
             merged.update(_pickle.load(f))
@@ -2561,6 +2614,138 @@ def _gene_symbol(marker_display_name):
     return name
 
 
+def _load_per_K_mAP_panel(aggregation_level: str) -> dict | None:
+    """Load the per-entity × per-K mAP wide CSV used by the phenotype-
+    concentration inset. Returns dict {K_vals, q25, q50, q75, by_name}.
+    by_name is keyed on geneKO symbol or complex name.
+
+    For complex-level atlases the CHAD CSV is the canonical source —
+    the atlas's complex pages are labeled with CHAD cluster names.
+    """
+    import pandas as pd  # local import — only when inset is enabled
+    if aggregation_level == "complex":
+        csv_path = INSET_CHAD_CSV
+    else:
+        csv_path = INSET_GENEKO_CSV
+    p = Path(csv_path)
+    if not p.exists():
+        print(f"  [inset] per-K mAP CSV missing: {p} — disabling inset",
+              flush=True)
+        return None
+    df = pd.read_csv(p)
+    K_cols = [c for c in df.columns if c.startswith("mAP@K=")]
+    K_vals = [int(c.split("=")[1]) for c in K_cols]
+    name_col = "complex_name" if aggregation_level == "complex" else "geneKO"
+    if name_col not in df.columns:
+        print(f"  [inset] missing column {name_col!r} in {p} — disabling",
+              flush=True)
+        return None
+    arr = df[K_cols].to_numpy(dtype=float)
+    q25 = np.nanpercentile(arr, 25, axis=0)
+    q50 = np.nanpercentile(arr, 50, axis=0)
+    q75 = np.nanpercentile(arr, 75, axis=0)
+    by_name = {}
+    for _, row in df.iterrows():
+        by_name[str(row[name_col])] = row[K_cols].astype(float).values
+    metric_label = ("CHAD consistency mAP" if aggregation_level == "complex"
+                    else "distinctiveness mAP")
+    head_label = ("CHAD head" if aggregation_level == "complex"
+                  else "geneKO head")
+    return {
+        "K_vals": K_vals,
+        "q25": q25, "q50": q50, "q75": q75,
+        "by_name": by_name,
+        "metric_label": metric_label,
+        "head_label": head_label,
+    }
+
+
+def _draw_concentration_inset(ax, panel: dict, entity_name: str,
+                              threshold: float = INSET_THRESHOLD_FALLBACK,
+                              atlas_page_K: int = INSET_ATLAS_PAGE_K):
+    """Draw the phenotype-concentration curve into pre-positioned ``ax``."""
+    from matplotlib.ticker import FuncFormatter
+    K_vals = panel["K_vals"]
+    values = panel["by_name"].get(entity_name)
+    if values is None:
+        ax.text(0.5, 0.5, f"no per-K mAP for {entity_name!r}",
+                transform=ax.transAxes, ha="center", va="center",
+                fontsize=9, color="#888888")
+        ax.set_axis_off()
+        return
+
+    # Exact (interpolated) K at which the curve first crosses the threshold.
+    # Linear interpolation in log-K space between the adjacent bins where
+    # the crossing lies, since the x-axis is log.
+    import math
+    k_thr = None
+    v_clean = [float(x) if x is not None and not (isinstance(x, float) and x != x) else None
+               for x in values]
+    if len(v_clean) > 0 and v_clean[0] is not None and v_clean[0] >= threshold:
+        k_thr = float(K_vals[0])
+    else:
+        for i in range(len(K_vals) - 1):
+            v0, v1 = v_clean[i], v_clean[i + 1]
+            if v0 is None or v1 is None:
+                continue
+            if v0 < threshold and v1 >= threshold:
+                lK0, lK1 = math.log(K_vals[i]), math.log(K_vals[i + 1])
+                frac = (threshold - v0) / (v1 - v0)
+                k_thr = math.exp(lK0 + frac * (lK1 - lK0))
+                break
+
+    ax.fill_between(K_vals, panel["q25"], panel["q75"], color="#cccccc",
+                    alpha=0.55, linewidth=0, zorder=1, label="panel 25–75%")
+    ax.plot(K_vals, panel["q50"], color="#888888", linewidth=1.0,
+            linestyle="--", zorder=2, label="panel median")
+    ax.plot(K_vals, values, color="#d62728", linewidth=1.8, marker="o",
+            markersize=3.5, zorder=4, label=entity_name)
+    ax.axhline(threshold, color="#222222", linestyle=":", linewidth=0.8,
+               zorder=2)
+    ax.axvline(atlas_page_K, color="#1f77b4", linestyle=":", linewidth=0.8,
+               zorder=2)
+    # Mark the crossing point visually on the curve.
+    if k_thr is not None:
+        ax.plot([k_thr], [threshold], marker="*", markersize=12,
+                color="#222222", markerfacecolor="#ffd700",
+                markeredgewidth=0.7, zorder=6)
+
+    # Title carries the K@mAP=THR callout (no floating annotation box).
+    if k_thr is None:
+        callout = f"K@mAP={threshold:.1f}: unreachable"
+    else:
+        if k_thr >= 1e6:
+            ks = f"{k_thr / 1e6:.2f}M"
+        elif k_thr >= 1e3:
+            ks = f"{k_thr / 1e3:.2f}k"
+        else:
+            ks = f"{k_thr:.0f}" if k_thr >= 10 else f"{k_thr:.1f}"
+        callout = f"K@mAP={threshold:.1f}: {ks} cells"
+
+    def _fmt_K(v):
+        if v >= 1e6: return f"{v / 1e6:.1f}M"
+        if v >= 1e3: return f"{v / 1e3:.0f}k"
+        return f"{int(v)}"
+    ax.set_xscale("log")
+    # A little headroom to the left of the smallest K, and clip the right
+    # edge at 15k cells (the empirical peak — past it returns add no info).
+    ax.set_xlim(min(K_vals) * 0.55, 15_000)
+    ax.set_ylim(0, 1.0)
+    ax.set_xticks([10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000])
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: _fmt_K(v)))
+    ax.tick_params(axis="x", which="minor", bottom=False)
+    ax.tick_params(axis="both", labelsize=7.5, pad=2)
+    ax.set_xlabel("cells / geneKO", fontsize=8.5, labelpad=-1)
+    ax.set_ylabel(panel["metric_label"], fontsize=8.5, labelpad=2)
+    ax.set_title(
+        f"Concentration — {callout}",
+        fontsize=9.5, pad=4, loc="left", fontweight="bold",
+    )
+    ax.grid(True, alpha=0.25, linewidth=0.4)
+    ax.legend(loc="lower right", fontsize=7, frameon=False,
+              handlelength=1.4, borderpad=0.3, labelspacing=0.25)
+
+
 def _render_map_bar(bar_ax, *, marker_order, marker_display,
                     full_row, selected_keys, selected_colors=None):
     """Draw the page-top mAP heatmap bar with rotated gene-symbol
@@ -2702,6 +2887,7 @@ def build_shap_factories(task):
     shap_data = task.get("shap_data") or {}
     panels_holder = []  # captured by both closures
     map_bar_holder = []
+    inset_holder = []   # axes for the optional phenotype-concentration inset
 
     # Resolve per-page fluor-channel count. Override > task field > default.
     n_fluor = task.get("n_fluor_channels")
@@ -2714,6 +2900,10 @@ def build_shap_factories(task):
     # render). 3-row baseline: 2 phase + 2*3 fluor = 8 rows × 2.25 = 18".
     # K=1 → 9", K=10 → 49.5".
     fig_height_page = n_total_rows_page * 2.25
+    # Optional phenotype-concentration inset lives in the empty upper-right
+    # rectangle (right of the mAP bar, above the SHAP grid). Page size is
+    # unchanged — the inset just claims that already-free real estate.
+    inset_enabled = bool(shap_data.get("per_K_mAP"))
 
     def fig_factory():
         fig = plt.figure(figsize=(FIG_WIDTH_IN, fig_height_page))
@@ -2743,6 +2933,19 @@ def build_shap_factories(task):
         bar_bottom_frac = 1.0 - BAR_BOTTOM_FROM_TOP_IN / fig_height_page
         bar_top_frac    = 1.0 - BAR_TOP_FROM_TOP_IN    / fig_height_page
         img_top         = 1.0 - IMG_TOP_FROM_TOP_IN    / fig_height_page
+
+        # PHENOTYPE-CONCENTRATION INSET — upper-right corner. Sits in the
+        # otherwise-empty rectangle right of the mAP heatmap bar and above
+        # the SHAP grid. Page size unchanged.
+        if inset_enabled:
+            ax_inset = fig.add_axes([
+                (FIG_WIDTH_IN - INSET_RIGHT_MARGIN_IN - INSET_W_IN) / FIG_WIDTH_IN,
+                1.0 - (INSET_TOP_MARGIN_IN + INSET_H_IN) / fig_height_page,
+                INSET_W_IN / FIG_WIDTH_IN,
+                INSET_H_IN / fig_height_page,
+            ])
+            ax_inset.set_facecolor("white")
+            inset_holder.append(ax_inset)
 
         img_gs = fig.add_gridspec(
             n_total_rows_page, aa.N_COLS,
@@ -2816,6 +3019,22 @@ def build_shap_factories(task):
                 full_row=shap_data.get("mAP_full_row") or {},
                 selected_keys=shap_data.get("mAP_selected_keys") or [],
                 selected_colors=shap_data.get("mAP_selected_colors") or {},
+            )
+
+        # Phenotype-concentration inset — only rendered when per-K mAP
+        # data was attached to shap_data at load time. The inset's
+        # threshold tracks --threshold-map so the inclusion bar and the
+        # inset's reference line agree (falls back to
+        # INSET_THRESHOLD_FALLBACK if the user disabled the filter).
+        if inset_enabled and inset_holder:
+            panel = shap_data["per_K_mAP"]
+            entity_name = (shap_data.get("display_name")
+                           or shap_data.get("gene") or "")
+            inset_thr = panel.get("threshold", INSET_THRESHOLD_FALLBACK)
+            _draw_concentration_inset(
+                inset_holder[0], panel, entity_name,
+                threshold=inset_thr,
+                atlas_page_K=INSET_ATLAS_PAGE_K,
             )
 
         # Lead each panel title with "{gene} geneKO" so every panel
@@ -2985,19 +3204,34 @@ def main():
              "page from growing unboundedly. Default 10.",
     )
     parser.add_argument(
-        "--threshold-map", type=float, default=0.2,
-        help="Drop genes/complexes whose all-markers-combined mAP "
-             "(distinctiveness for gene-level, consistency for complex-"
-             "level) is below this threshold. Default 0.2. Set to 0 to "
-             "disable. Used together with --threshold-acc — a page must "
-             "pass BOTH filters to be rendered.",
+        "--threshold-map", type=float, default=0.0,
+        help="Optional secondary filter: drop genes/complexes whose "
+             "all-markers-combined mAP (distinctiveness for gene-level, "
+             "consistency for complex-level) is below this threshold. "
+             "Default 0 = disabled — page inclusion is decided solely "
+             "by --threshold-acc. Set explicitly (e.g. 0.2) to enable.",
     )
     parser.add_argument(
-        "--threshold-acc", type=float, default=0.8,
+        "--inset-threshold", type=float, default=0.2,
+        help="Reference-line / K@mAP callout threshold for the "
+             "phenotype-concentration inset only. Independent of the "
+             "--threshold-map page-inclusion filter. Default 0.2.",
+    )
+    parser.add_argument(
+        "--with-concentration-inset", action="store_true",
+        help="Add the phenotype-concentration inset to each atlas page — a "
+             "small chart showing this gene's per-K mAP vs the panel "
+             "25-75% ribbon, with a 'K@mAP=THR' callout. Page grows by "
+             "INSET_TOP_BAND_IN (2\") at the top. Reads per-K mAP tables "
+             "from INSET_GENEKO_CSV / INSET_EBI_CSV (set by aggregation "
+             "level). Off by default — opt-in until validated.",
+    )
+    parser.add_argument(
+        "--threshold-acc", type=float, default=0.9,
         help="Drop genes/complexes whose attention-model top1_acc "
              "(max of phase + fluor classifiers, from --eval-csv at "
-             "--eval-n-cells) is below this threshold. Default 0.8 "
-             "(= model picks the right perturbation 80%+ of the time "
+             "--eval-n-cells) is below this threshold. Default 0.9 "
+             "(= model picks the right perturbation 90%+ of the time "
              "with EITHER modality). Set to 0 to disable. Supersedes "
              "--threshold for atlas_shap usage.",
     )
@@ -3031,28 +3265,23 @@ def main():
         "--shap-prep-timeout-min", type=int, default=45,
         help="SHAP-prep SLURM task timeout (minutes). Default 45.",
     )
+    parser.add_argument(
+        "--force-shap-prep", action="store_true",
+        help="Force re-run of every SHAP-prep shard, even ones whose "
+             "pickle already exists in the *_shap_prep/ work dir. "
+             "Default is to skip cached shards (resumable behavior).",
+    )
     args = parser.parse_args()
     # Wire --threshold-acc into the legacy --threshold path the renderer
     # already consumes (`attention_atlas.run_atlas` filters genes by
     # `top1_acc >= threshold`). User-set --threshold takes precedence;
-    # otherwise --threshold-acc default (0.66) becomes effective.
-    #
-    # Exception: at --aggregation-level complex, the accuracy signal is
-    # per-gene (cdino_eval_phase_50.csv keys = gene symbols), so it has
-    # no entries for CHAD complex names. Forcing the threshold here
-    # would drop every complex (top1_acc lookup returns 0). Auto-zero
-    # the threshold for complex-level runs so only --threshold-map
-    # gates which complexes render. Users who genuinely want a gene-
-    # level accuracy gate at complex level can still pass an explicit
-    # `--threshold X` to override.
+    # otherwise --threshold-acc becomes effective at BOTH gene and
+    # complex level — the CHAD eval CSVs (cdino_eval_*_chad_50.csv)
+    # carry a `label_name` column so `_load_one_eval_csv` rolls top1_acc
+    # up per complex automatically. (Older CHAD eval CSVs were per-gene
+    # only and forced an auto-zero here, but the current ones aren't.)
     if args.threshold == 0.0:
-        if getattr(args, "aggregation_level", "gene") == "complex":
-            args.threshold = 0.0
-            print("  [threshold-acc] aggregation-level=complex — "
-                  "accuracy filter disabled (eval CSV is per-gene; "
-                  "complexes have no top1_acc lookup).", flush=True)
-        else:
-            args.threshold = args.threshold_acc
+        args.threshold = args.threshold_acc
 
     # For --contrast {ntc, global}, the SHAP CSV carries rows for ALL
     # ~56 channels per gene but the atlas's image tiles come from
@@ -3322,10 +3551,35 @@ def main():
     # Plant the per-gene panel-title prefix when the variant overrides
     # the default "{gene} geneKO" framing. The renderer's
     # `build_shap_factories` reads shap_data["title_prefix"] when set.
+    #
+    # Optionally also attach the per-K mAP panel for the
+    # phenotype-concentration inset. Loaded once here and shared
+    # (read-only) across all per-gene payloads.
+    inset_panel = None
+    if getattr(args, "with_concentration_inset", False):
+        inset_panel = _load_per_K_mAP_panel(
+            getattr(args, "aggregation_level", "gene")
+        )
+        if inset_panel:
+            # Inset's reference line / K@mAP callout uses its own threshold
+            # (--inset-threshold), independent of --threshold-map. This
+            # cleanly separates page inclusion (acc-only by default) from
+            # the inset's "how diffuse is the phenotype?" question.
+            thr = float(getattr(args, "inset_threshold", 0.2) or 0.0)
+            inset_panel["threshold"] = (thr if thr > 0
+                                        else INSET_THRESHOLD_FALLBACK)
+            print(f"  [inset] loaded per-K mAP panel "
+                  f"({len(inset_panel['by_name'])} entities, "
+                  f"{len(inset_panel['K_vals'])} K bins) for "
+                  f"{inset_panel['head_label']}; threshold = "
+                  f"{inset_panel['threshold']}", flush=True)
+
     extra_per_gene = {}
     for gene, payload in shap_data_per_gene.items():
         if framing is not None:
             payload["title_prefix"] = f"{gene} {framing}  "
+        if inset_panel is not None:
+            payload["per_K_mAP"] = inset_panel
         extra_per_gene[gene] = {"shap_data": payload}
 
     # Constrain the renderer's gene set to what survived the mAP filter.
