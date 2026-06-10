@@ -72,7 +72,6 @@ class LitDynaClr(ContrastiveModule):
     def __init__(
         self,
         encoder=None,
-        # loss_function=nn.TripletMarginLoss(margin=0.5),
         loss_function=NTXentLoss(temperature=0.07),
         lr=1e-3,
         schedule="Constant",
