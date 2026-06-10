@@ -8,7 +8,7 @@ Weights are downloaded on first use from the public S3 bucket:
     s3://czi-subcell-public/models/DNA-Protein_MAE-CellS-ProtS-Pool.pth
 
 Local cache:
-    /hpc/projects/icd.ops/models/model_checkpoints/subcell/bg/
+    /hpc/projects/icd.fast.ops/models/model_checkpoints/subcell/bg/
 
 Channel mapping:
     batch["data"] channel 0  →  Blue  (DNA / DAPI)
@@ -17,10 +17,42 @@ Channel mapping:
 Output:
     (B, 1536) float32 embeddings from the Gated Attention Pooler
     (2 attention heads × 768 hidden dims = 1536)
+
+Feature extraction pipeline (same pattern as dinov3.py / cell_dino.py):
+  - extract_subcell_features(config)  — single-job extraction loop
+  - subcell_main(config_paths)        — SLURM orchestrator (one job per protein
+                                        channel), then submits AnnData conversion
+  - CLI entry point via __main__
+
+Config structure (YAML):
+    data_manager:
+      experiments:
+        <experiment_key>: <zarr_path>
+      dna_channel: DAPI          # nuclear/Blue channel for SubCell bg model
+      batch_size: 32
+      data_split: [0, 0, 1]
+      out_channels: ["Phase2D", "GFP"]  # imaging channels; subcell_main pairs each with dna_channel
+      initial_yx_patch_size: [256, 256]
+      final_yx_patch_size: [128, 128]
+      num_workers: 10
+    dataset_type: basic
+    output_dir: /path/to/output
+    slurm:
+      partition: gpu
+      gres: "gpu:1"
+      cpus_per_task: 10
+      mem: "36G"
+      time: "4:00:00"
+      constraint: "h100|h200|a100|a40"
+
+Note: subcell_main reads dna_channel and spawns one SLURM job per channel in
+out_channels, passing [dna_channel, channel] as out_channels to each job.
 """
 
 from __future__ import annotations
 
+import argparse
+import copy
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +60,16 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+import yaml
 from torch import nn, Tensor
+
+from ops_model.data.paths import OpsPaths
+from ops_model.models.extractor_common import (
+    build_dataloader,
+    build_slurm_params,
+    run_anndata_followon,
+    run_extraction,
+)
 
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.vit.configuration_vit import ViTConfig
@@ -384,7 +425,7 @@ class ViTPoolClassifier(nn.Module):
 # Constants
 # ---------------------------------------------------------------------------
 
-CHECKPOINT_DIR = Path("/hpc/projects/icd.ops/models/model_checkpoints/subcell/bg")
+CHECKPOINT_DIR = OpsPaths.checkpoint("subcell", "bg")
 ENCODER_FILENAME = "DNA-Protein_MAE-CellS-ProtS-Pool.pth"
 ENCODER_S3_KEY = "models/DNA-Protein_MAE-CellS-ProtS-Pool.pth"
 S3_BUCKET = "czi-subcell-public"
@@ -515,3 +556,141 @@ class SubCellModel:
             with torch.autocast(device_type="cuda", dtype=torch.float32):
                 output = self.model(x)
         return output.pool_op.cpu()
+
+# ---------------------------------------------------------------------------
+# Feature extraction pipeline
+# ---------------------------------------------------------------------------
+
+
+def extract_subcell_features(config: dict = None):
+    """Extract SubCell embeddings for a single two-channel configuration.
+
+    Args:
+        config: Parsed YAML config dict. data_manager.out_channels must have
+                exactly 2 entries: [dna_channel, imaging_channel].
+    """
+    out_channels = config["data_manager"]["out_channels"]
+    assert (
+        len(out_channels) == 2
+    ), f"SubCell requires exactly 2 channels [DNA, imaging], got {out_channels}"
+
+    print(
+        f"Extracting SubCell features for "
+        f"{list(config['data_manager']['experiments'].keys())} "
+        f"channels={out_channels}"
+    )
+
+    dm = build_dataloader(config, out_channels)
+    model = SubCellModel()
+    # name the output after the protein channel (channel 1); channel 0 is DNA
+    run_extraction(
+        config, dm, model, model_prefix="subcell", name_channel=out_channels[1]
+    )
+
+
+def subcell_main(config_paths: list[str], run_anndata: bool = True):
+    """Orchestrate SubCell feature extraction via SLURM.
+
+    For each config, reads out_channels and spawns one SLURM job per protein
+    channel (paired with the DNA channel), using submit_parallel_jobs. Once
+    extraction completes, optionally submits the AnnData conversion
+    (batch_process_embeddings) as a follow-on CPU SLURM batch.
+
+    Args:
+        config_paths: List of paths to YAML configuration files.
+        run_anndata: If True (default), convert the extracted feature CSVs into
+            AnnData objects after extraction succeeds.
+
+    Returns:
+        Result dict from submit_parallel_jobs (extraction).
+    """
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+    jobs_to_submit = []
+    slurm_params = None
+
+    for config_path in config_paths:
+        config_stem = Path(config_path).stem
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        dna_channel = config["data_manager"]["dna_channel"]
+        protein_channels = config["data_manager"]["out_channels"]
+        experiments = list(config["data_manager"]["experiments"].keys())
+
+        print(
+            f"Config {config_stem}: {len(protein_channels)} channel(s) for experiment(s) {experiments}"
+        )
+        print(f"  DNA channel: {dna_channel}, Imaging channels: {protein_channels}")
+
+        if slurm_params is None:
+            slurm_params = build_slurm_params(config, default_cpus=10)
+
+        for protein_channel in protein_channels:
+            channel_config = copy.deepcopy(config)
+            channel_config["data_manager"]["out_channels"] = [
+                dna_channel,
+                protein_channel,
+            ]
+            jobs_to_submit.append(
+                {
+                    "name": f"{config_stem}_{protein_channel}",
+                    "func": extract_subcell_features,
+                    "kwargs": {"config": channel_config},
+                    "metadata": {
+                        "config": config_path,
+                        "dna_channel": dna_channel,
+                        "protein_channel": protein_channel,
+                        "experiments": experiments,
+                    },
+                }
+            )
+
+    log_dir = str(OpsPaths.slurm_log_dir("subcell"))
+
+    print(f"\nSubmitting {len(jobs_to_submit)} SubCell job(s) via submit_parallel_jobs")
+    result = submit_parallel_jobs(
+        jobs_to_submit=jobs_to_submit,
+        experiment="subcell",
+        slurm_params=slurm_params,
+        log_dir=log_dir,
+        wait_for_completion=True,
+    )
+
+    if run_anndata:
+        run_anndata_followon(config_paths, result)
+
+    return result
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Extract SubCell features from OPS dataset based on config"
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--config_path",
+        type=str,
+        help="Path to a single YAML config file",
+    )
+    group.add_argument(
+        "--config_list",
+        type=str,
+        help="Path to .txt file with one config path per line",
+    )
+    parser.add_argument(
+        "--skip_anndata",
+        action="store_true",
+        help="Skip the automatic AnnData conversion after feature extraction",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    if args.config_list:
+        with open(args.config_list) as f:
+            config_paths = [line.strip() for line in f if line.strip()]
+    else:
+        config_paths = [args.config_path]
+    subcell_main(config_paths, run_anndata=not args.skip_anndata)

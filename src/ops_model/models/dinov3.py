@@ -1,26 +1,27 @@
-import yaml
-from tqdm import tqdm
-
-import torch
-import numpy as np
-import pandas as pd
-import os
+import argparse
+import copy
 from pathlib import Path
-from torchvision.transforms import v2
-from monai.transforms import (
-    CenterSpatialCropd,
-    Compose,
-    SpatialPadd,
-    ToTensord,
-)
 
-from ops_model.data import data_loader
-from ops_model.data.labels import load_immunostaining_labels, SOURCE_FILENAME_TEMPLATES
+import yaml
+import torch
+from torchvision.transforms import v2
+
+from ops_model.data.paths import OpsPaths
+from ops_model.models.extractor_common import (
+    build_dataloader,
+    build_slurm_params,
+    maybe_build_labels_df,
+    run_anndata_followon,
+    run_extraction,
+)
 
 
 class DinoV3Model:
-    """
-    TODO: model.forward has the option to provide masks??
+    """DINOv3 ViT-L/16 (Meta, natural-image pretrained) inference wrapper.
+
+    Loads the model from a local torch.hub checkout and returns one embedding
+    per image via ``model.forward``. Unlike Cell-DINO, preprocessing uses fixed
+    ImageNet-style channel statistics rather than per-image z-scoring.
     """
 
     def __init__(self):
@@ -29,11 +30,13 @@ class DinoV3Model:
         self.model.cuda()
 
     def load_model(self):
-        repo_dir = "/hpc/projects/icd.ops/models/model_checkpoints/dinov3/dinov3"
-        checkpoint = "/hpc/projects/icd.ops/models/model_checkpoints/dinov3/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
+        repo_dir = OpsPaths.checkpoint("dinov3", "dinov3")
+        checkpoint = OpsPaths.checkpoint(
+            "dinov3", "dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
+        )
 
         self.model = torch.hub.load(
-            repo_dir, "dinov3_vitl16", source="local", weights=checkpoint
+            str(repo_dir), "dinov3_vitl16", source="local", weights=str(checkpoint)
         )
         return
 
@@ -47,200 +50,55 @@ class DinoV3Model:
                 output = self.model(inputs.cuda())
         return output
 
-    def preprocess(self, x: np.ndarray, resize_size: int = 256) -> torch.Tensor:
-        """Important: images should have a mean of 1 and std of 1 before input to dinov3"""
+    def preprocess(self, x: torch.Tensor, resize_size: int = 256) -> torch.Tensor:
+        """Resize, scale to [0, 1], and divide by ImageNet channel std.
 
+        DINOv3 expects roughly unit-variance inputs. We scale to [0, 1] then
+        divide by the ImageNet std; mean is left at 0 (no centering), matching
+        the original DINOv3 preprocessing for these grayscale-derived crops.
+        """
         to_tensor = v2.ToImage()
         resize = v2.Resize((resize_size, resize_size), antialias=True)
         to_float = v2.ToDtype(torch.float32, scale=True)
-        # goal is to have output images with zero mean and unit variance
         normalize = v2.Normalize(
-            mean=(0, 0, 0),  # mean=(0.485, 0.456, 0.406),
+            mean=(0, 0, 0),
             std=(0.229, 0.224, 0.225),
         )
         return v2.Compose([to_tensor, resize, to_float, normalize])(x.cuda())
 
-    def _reshape_to_spatial(self, patches: torch.Tensor) -> torch.Tensor:
-        """
-        Reshape (B, N, D) patches to (B, D, H', W') spatial map.
-        * Only need if running model.get_intermediate_layers, just calling
-        model.forward will return a single embedding per image
 
-        """
-        batch_size, n_patches, embed_dim = patches.shape
-        h_patches = w_patches = int(np.sqrt(n_patches))
-
-        if h_patches * w_patches != n_patches:
-            raise ValueError(
-                f"Number of patches ({n_patches}) is not a perfect square. "
-                f"Expected {h_patches}*{h_patches} = {h_patches * h_patches}."
-            )
-
-        # (B, N, D) -> (B, H', W', D) -> (B, D, H', W')
-        spatial = patches.reshape(batch_size, h_patches, w_patches, embed_dim)
-        return spatial.permute(0, 3, 1, 2)
-
-
-def extract_dinov3_features(
-    config: dict = None,
-):
-
+def extract_dinov3_features(config: dict = None):
     print(
         f"Extracting DINOv3 features for {list(config['data_manager']['experiments'].keys())}"
     )
-
-    # Build labels_df from cell painting CSVs if configured
-    csv_source = config.get("csv_source", "standard")
-    labels_df = None
-    if csv_source in ("cell_painting", "four_i", "immunostaining"):
-        filename_template = config.get("filename_template") or SOURCE_FILENAME_TEMPLATES.get(csv_source)
-        labels_df = load_immunostaining_labels(
-            experiments=config["data_manager"]["experiments"],
-            filename_template=filename_template,
-            base_path=config.get("base_path"),
-        )
-
-    dm = data_loader.OpsDataManager(
-        experiments=config["data_manager"]["experiments"],
-        batch_size=config["data_manager"]["batch_size"],
-        data_split=config["data_manager"]["data_split"],
-        out_channels=config["data_manager"]["out_channels"],
-        initial_yx_patch_size=config["data_manager"]["initial_yx_patch_size"],
-        final_yx_patch_size=config["data_manager"]["final_yx_patch_size"],
-        link_csv_dir=config["data_manager"].get("link_csv_dir"),
-        verbose=False,
-        guide_col=config.get("guide_col", "sgRNA"),
+    out_channels = config["data_manager"]["out_channels"]
+    dm = build_dataloader(
+        config, out_channels, labels_df=maybe_build_labels_df(config)
     )
-    dm.construct_dataloaders(
-        labels_df=labels_df,
-        num_workers=config["data_manager"]["num_workers"],
-        dataset_type=config["dataset_type"],
-        basic_kwargs={
-            "cell_masks": True,
-            "transform": Compose(
-                [
-                    SpatialPadd(
-                        keys=["data", "mask"],
-                        spatial_size=dm.initial_yx_patch_size,
-                    ),
-                    CenterSpatialCropd(
-                        keys=["data", "mask"], roi_size=(dm.final_yx_patch_size)
-                    ),
-                    ToTensord(
-                        keys=["data", "mask"],
-                    ),
-                ]
-            ),
-        },
+    model = DinoV3Model()
+    run_extraction(
+        config, dm, model, model_prefix="dinov3", name_channel=out_channels[0]
     )
-    test_loader = dm.test_loader
-    print(f"Created dataset with {len(test_loader.dataset)} crops")
-
-    dino = DinoV3Model()
-    print("DINOv3 model loaded")
-
-    # Setup output directory
-    output_dir = Path(config["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    chunk_subdir = output_dir / f"chunks_{config['data_manager']['out_channels'][0]}"
-    chunk_subdir.mkdir(parents=True, exist_ok=True)
-
-    save_every = 100  # Save every N batches
-    all_features = []
-    chunk_idx = 0
-    guide_col = dm.guide_col
-
-    # Extract features from all batches
-    for batch_idx, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
-        # Extract features using the DINOv3 model
-        features = dino.extract_features(batch)
-
-        # Convert to numpy and create dataframe with metadata
-        features_np = features.cpu().numpy()
-
-        features_db = pd.DataFrame(features_np)
-        features_db["label_int"] = batch["gene_label"].numpy()
-        features_db["label_str"] = [
-            dm.int_label_lut[label] for label in batch["gene_label"].numpy()
-        ]
-        features_db[guide_col] = [a[guide_col] for a in batch["crop_info"]]
-        features_db["experiment"] = [a["store_key"] for a in batch["crop_info"]]
-        features_db["x_position"] = [a["x_pheno"] for a in batch["crop_info"]]
-        features_db["y_position"] = [a["y_pheno"] for a in batch["crop_info"]]
-
-        features_db["well"] = [
-            a["well"] + "_" + a["store_key"] for a in batch["crop_info"]
-        ]
-        all_features.append(features_db)
-
-        if batch_idx % save_every == 0 and batch_idx > 0:
-            df_chunk = pd.concat(all_features, ignore_index=True)
-            csv_path = chunk_subdir / f"features_chunk_{chunk_idx}.csv"
-            df_chunk.to_csv(csv_path, index=False)
-            print(
-                f"Saved chunk {chunk_idx} with {len(all_features)} batches to {csv_path}"
-            )
-
-            # Reset for next chunk
-            all_features = []
-            chunk_idx += 1
-
-    # Save any remaining features
-    if all_features:
-        df_chunk = pd.concat(all_features, ignore_index=True)
-        csv_path = chunk_subdir / f"features_chunk_{chunk_idx}.csv"
-        df_chunk.to_csv(csv_path, index=False)
-        print(
-            f"Saved final chunk {chunk_idx} with {len(all_features)} batches to {csv_path}"
-        )
-        chunk_idx += 1
-
-    # Load and concatenate all CSV files
-    print(f"\nLoading and concatenating {chunk_idx} chunks...")
-    csv_files = sorted(chunk_subdir.glob("features_chunk_*.csv"))
-
-    if not csv_files:
-        print("No feature files found!")
-        return None
-
-    df_list = [pd.read_csv(csv_file) for csv_file in csv_files]
-    final_df = pd.concat(df_list, ignore_index=True)
-
-    # Save the final concatenated dataframe
-    final_path = (
-        output_dir / f"dinov3_features_{config['data_manager']['out_channels'][0]}.csv"
-    )
-    final_df.to_csv(final_path, index=False)
-    print(f"Saved final concatenated features to {final_path}")
-    print(f"Final dataframe shape: {final_df.shape}")
-
-    return None
 
 
-import argparse
-import copy
-
-
-def dinov3_main(config_paths: list):
+def dinov3_main(config_paths: list, run_anndata: bool = True):
     """
     Main orchestrator function for DinoV3 feature extraction.
 
     Spawns one SLURM job per config × channel via submit_parallel_jobs.
-    Each job runs extract_dinov3_features() independently.
+    Each job runs extract_dinov3_features() independently. Once extraction
+    completes, optionally submits the AnnData conversion
+    (batch_process_embeddings) as a follow-on CPU SLURM batch.
 
     Args:
         config_paths: List of paths to YAML configuration files
+        run_anndata: If True (default), convert the extracted feature CSVs into
+            AnnData objects after extraction succeeds.
 
     Returns:
-        Result dict from submit_parallel_jobs
+        Result dict from submit_parallel_jobs (extraction)
     """
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-
-    def _parse_time(t) -> int:
-        if isinstance(t, int):
-            return t
-        parts = t.split(":")
-        return int(parts[0]) * 60 + int(parts[1])  # HH:MM[:SS] → minutes
 
     jobs_to_submit = []
     slurm_params = None
@@ -259,22 +117,7 @@ def dinov3_main(config_paths: list):
         print(f"  Channels: {out_channels}")
 
         if slurm_params is None:
-            slurm_config = config.get("slurm", {})
-            mem = slurm_config.get("mem", "64G")
-            time_limit = slurm_config.get("time", "4:00:00")
-            mem_gb = int(mem.rstrip("G")) if isinstance(mem, str) else int(mem)
-            timeout_min = _parse_time(time_limit)
-
-            slurm_params = {
-                "slurm_partition": slurm_config.get("partition", "gpu"),
-                "slurm_gres": slurm_config.get("gres", "gpu:1"),
-                "cpus_per_task": slurm_config.get("cpus_per_task", 20),
-                "mem_gb": mem_gb,
-                "timeout_min": timeout_min,
-            }
-            constraint = slurm_config.get("constraint")
-            if constraint:
-                slurm_params["slurm_constraint"] = constraint
+            slurm_params = build_slurm_params(config, default_cpus=20)
 
         for channel in out_channels:
             channel_config = copy.deepcopy(config)
@@ -292,16 +135,21 @@ def dinov3_main(config_paths: list):
                 }
             )
 
-    log_dir = "/hpc/projects/icd.fast.ops/models/logs/dinov3/slurm_logs"
+    log_dir = str(OpsPaths.slurm_log_dir("dinov3"))
 
     print(f"\nSubmitting {len(jobs_to_submit)} DinoV3 job(s) via submit_parallel_jobs")
-    return submit_parallel_jobs(
+    result = submit_parallel_jobs(
         jobs_to_submit=jobs_to_submit,
         experiment="dinov3",
         slurm_params=slurm_params,
         log_dir=log_dir,
         wait_for_completion=True,
     )
+
+    if run_anndata:
+        run_anndata_followon(config_paths, result)
+
+    return result
 
 
 def parse_args():
@@ -319,6 +167,11 @@ def parse_args():
         type=str,
         help="Path to .txt file with one config path per line",
     )
+    parser.add_argument(
+        "--skip_anndata",
+        action="store_true",
+        help="Skip the automatic AnnData conversion after feature extraction",
+    )
     return parser.parse_args()
 
 
@@ -329,4 +182,4 @@ if __name__ == "__main__":
             config_paths = [line.strip() for line in f if line.strip()]
     else:
         config_paths = [args.config_path]
-    dinov3_main(config_paths)
+    dinov3_main(config_paths, run_anndata=not args.skip_anndata)
