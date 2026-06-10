@@ -1,4 +1,5 @@
 import ast
+import json
 import random
 from pathlib import Path
 from typing import Callable, List, Literal, Optional
@@ -55,6 +56,7 @@ class BaseDataset(Dataset):
         label_int_lut: dict = None,  # string --> int
         int_label_lut: dict = None,  # int --> string
         cell_masks: bool = True,
+        dataloader_normalization: Literal["log", "per_well", "none"] = "log",
         transform: Optional[Callable] = None,
         guide_col: str = DEFAULT_GUIDE_COL,
     ):
@@ -66,7 +68,10 @@ class BaseDataset(Dataset):
         self.label_int_lut = label_int_lut
         self.int_label_lut = int_label_lut
         self.cell_masks = cell_masks
+        self.dataloader_normalization = dataloader_normalization
         self.guide_col = guide_col
+        # Per-(store, well) cache of normalization_stats.json for "per_well" mode.
+        self._well_stats_cache: dict = {}
 
         if transform is None:
             self.transform = Compose(
@@ -122,6 +127,47 @@ class BaseDataset(Dataset):
         data_norm = np.stack(img_list, axis=0)
 
         return data_norm
+
+    def _load_well_stats(self, store_key, well):
+        """Load (and cache) the per-well normalization_stats.json for a store/well."""
+        cache_key = (store_key, well)
+        if cache_key not in self._well_stats_cache:
+            stats_path = (
+                Path(OpsPaths(store_key).stores["phenotyping_v3"])
+                / well
+                / "normalization_stats.json"
+            )
+            with open(stats_path) as f:
+                self._well_stats_cache[cache_key] = json.load(f)
+        return self._well_stats_cache[cache_key]
+
+    def _normalize_per_well(self, channel_index, data, store_key, well):
+        """Robust per-well normalization: (x - median) / iqr.
+
+        Uses whole-FOV raw-intensity stats (median/iqr per channel index) from
+        the well's normalization_stats.json. No log transform; pair with
+        model_z_score=False to preserve cell-level fluorescence intensity.
+        """
+        stats = self._load_well_stats(store_key, well)
+        img_list = []
+        for i, ch_idx in enumerate(channel_index):
+            ch_stats = stats["channels"][str(ch_idx)]["dataset_statistics"]
+            img_norm = (data[i] - ch_stats["median"]) / (ch_stats["iqr"] + 1e-8)
+            img_list.append(img_norm)
+        return np.stack(img_list, axis=0)
+
+    def _apply_normalization(self, channel_names, channel_index, data, store_key, well):
+        """Select the dataloader normalization strategy from config."""
+        if self.dataloader_normalization == "log":
+            return self._normalize_data(channel_names, data)
+        if self.dataloader_normalization == "per_well":
+            return self._normalize_per_well(channel_index, data, store_key, well)
+        if self.dataloader_normalization == "none":
+            return data
+        raise ValueError(
+            f"Unknown dataloader_normalization {self.dataloader_normalization!r}; "
+            "expected 'log', 'per_well', or 'none'"
+        )
 
     def _pad_bbox(self, bbox, final_shape):
         """
@@ -211,7 +257,9 @@ class BaseDataset(Dataset):
         mask = np.expand_dims(mask, axis=0)
         sc_mask = mask == ci.segmentation_id
 
-        data_norm = self._normalize_data(channel_names, data)
+        data_norm = self._apply_normalization(
+            channel_names, channel_index, data, ci.store_key, well
+        )
 
         if self.cell_masks:
             data_norm = data_norm * sc_mask
@@ -329,7 +377,9 @@ class ContrastiveDataset(BaseDataset):
         mask = np.expand_dims(mask, axis=0)
         sc_mask = mask == ci.segmentation_id
 
-        data_norm = self._normalize_data(channel_names, data)
+        data_norm = self._apply_normalization(
+            channel_names, channel_index, data, ci.store_key, well
+        )
 
         if self.cell_masks:
             data_norm = data_norm * sc_mask

@@ -277,6 +277,7 @@ def batch_process(
 def batch_process_slurm(
     config_list_path: Optional[str] = None,
     config_path: Optional[str] = None,
+    config_paths: Optional[List[str]] = None,
     force_reprocess: bool = False,
     slurm_config: Optional[Dict] = None,
 ) -> Dict[str, bool]:
@@ -290,6 +291,8 @@ def batch_process_slurm(
         config_list_path: Path to text file with config paths (one per line).
             Extracts experiments/channels/feature_type from each config.
         config_path: Path to a single YAML config file.
+        config_paths: Explicit list of config paths (used by callers that
+            already hold the resolved paths, e.g. cell_dino_main).
         force_reprocess: Reprocess even if outputs exist
         slurm_config: SLURM parameters dict (partition, mem, cpus, time, etc.).
             Caller-supplied values override values read from config files.
@@ -297,7 +300,10 @@ def batch_process_slurm(
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
     # Resolve the list of config paths to process
-    if config_list_path:
+    if config_paths:
+        resolved = list(config_paths)
+        experiment_label = f"{len(resolved)}_configs"
+    elif config_list_path:
         config_list = Path(config_list_path)
         with open(config_list) as f:
             config_paths = [
@@ -316,7 +322,9 @@ def batch_process_slurm(
         resolved = [config_path]
         experiment_label = Path(config_path).stem
     else:
-        raise ValueError("Either config_list_path or config_path must be provided")
+        raise ValueError(
+            "Either config_paths, config_list_path or config_path must be provided"
+        )
 
     # --- Parse configs and build flat job list ---
     parsed = []

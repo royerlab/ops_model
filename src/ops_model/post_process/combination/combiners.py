@@ -269,6 +269,7 @@ def _process_signal_group(
     no_pca: bool = False,
     cell_filter: Optional[Any] = None,
     save_cell_level: bool = False,
+    cell_path_map: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> str:
     """Phase 1: pool cells for one biological signal, fit PCA, select n_pcs, save h5ads.
 
@@ -312,6 +313,13 @@ def _process_signal_group(
     maps_path = get_channel_maps_path()
     storage_roots = [Path(base_dir)]
 
+    def _resolve_cell_file(exp, ch):
+        """Explicit-path override (bypasses discovery) if provided, else standard lookup."""
+        if cell_path_map and (exp, ch) in cell_path_map:
+            p = Path(cell_path_map[(exp, ch)])
+            return p if p.exists() else None
+        return find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+
     _logger.info(f"Processing signal: {signal} ({len(exp_channel_pairs)} experiments)")
 
     # --- Pre-scan cell counts (lightweight h5py read) ---
@@ -319,7 +327,7 @@ def _process_signal_group(
 
     exp_cell_counts = {}
     for exp, ch in exp_channel_pairs:
-        cell_file = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+        cell_file = _resolve_cell_file(exp, ch)
         if cell_file is not None:
             try:
                 with h5py.File(cell_file, "r") as f:
@@ -358,7 +366,8 @@ def _process_signal_group(
         if exp_cell_counts.get((exp, ch), 0) == 0:
             continue
 
-        adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
+        cell_file = _resolve_cell_file(exp, ch)
+        adata = ad.read_h5ad(cell_file) if cell_file is not None else None
         if adata is None:
             continue
 
@@ -666,22 +675,55 @@ class PcaOptimizationCombiner:
 
     def __init__(self, config: CombinationConfig) -> None:
         self.config = config
+        self._cell_path_map = self._build_cell_path_map()
 
     # ------------------------------------------------------------------
     # Experiment resolution
     # ------------------------------------------------------------------
 
+    def _build_cell_path_map(self) -> Optional[Dict[Tuple[str, str], str]]:
+        """Flatten config.cell_paths ({exp: {channel: path}}) to {(exp, channel): path}.
+
+        Returns None when cell_paths is not set (standard discovery is used).
+        """
+        if not self.config.cell_paths:
+            return None
+        out: Dict[Tuple[str, str], str] = {}
+        for exp, chan_map in self.config.cell_paths.items():
+            if not isinstance(chan_map, dict):
+                raise ValueError(
+                    f"cell_paths[{exp!r}] must be a mapping of channel -> path, "
+                    f"got {type(chan_map).__name__}."
+                )
+            for ch, path in chan_map.items():
+                out[(exp, ch)] = path
+        return out
+
     def _resolve_experiments(self) -> List[Tuple[str, str]]:
         """Return final (experiment, channel) list from config.
 
-        If auto_discover=True: scan base_dir via feature_discovery functions.
-        If auto_discover=False: flatten experiments_channels from config.
-        Applies reporters filter to the result in both cases.
+        If cell_paths is set: use its keys as the (experiment, channel) pairs
+        (discovery is bypassed; the explicit paths are used to load cells).
+        Else if auto_discover=True: scan base_dir via feature_discovery functions.
+        Else: flatten experiments_channels from config.
+        Applies reporters filter to the result in all cases.
         """
         from ops_utils.data.feature_discovery import (
             discover_dino_experiments,
             discover_cellprofiler_experiments,
         )
+
+        if self._cell_path_map is not None:
+            pairs = list(self._cell_path_map.keys())
+            logger.info(
+                f"Using {len(pairs)} explicit cell_paths entries "
+                "(path discovery bypassed)."
+            )
+            if self.config.reporters:
+                pairs = [(exp, ch) for exp, ch in pairs if ch in self.config.reporters]
+            if not pairs:
+                raise ValueError("No experiment-channel pairs remain after filtering.")
+            return pairs
 
         if self.config.auto_discover:
             if self.config.experiments_channels:
@@ -755,9 +797,13 @@ class PcaOptimizationCombiner:
         for signal, pairs in signal_groups.items():
             group_total = 0
             for exp, ch in pairs:
-                cell_file = find_cell_h5ad_path(
-                    exp, ch, storage_roots, feature_dir, maps_path
-                )
+                if self._cell_path_map and (exp, ch) in self._cell_path_map:
+                    _p = Path(self._cell_path_map[(exp, ch)])
+                    cell_file = _p if _p.exists() else None
+                else:
+                    cell_file = find_cell_h5ad_path(
+                        exp, ch, storage_roots, feature_dir, maps_path
+                    )
                 if cell_file is not None:
                     try:
                         with h5py.File(cell_file, "r") as f:
@@ -819,6 +865,7 @@ class PcaOptimizationCombiner:
                 no_pca=self.config.no_pca,
                 cell_filter=cell_filter,
                 save_cell_level=save_cell_level,
+                cell_path_map=self._cell_path_map,
             )
             logger.info(f"  {result}")
 
@@ -865,6 +912,7 @@ class PcaOptimizationCombiner:
                         "no_pca": self.config.no_pca,
                         "cell_filter": cell_filter,
                         "save_cell_level": save_cell_level,
+                        "cell_path_map": self._cell_path_map,
                     },
                 }
             )

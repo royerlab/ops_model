@@ -57,6 +57,13 @@ class CombinationConfig:
     experiments_channels: Optional[Dict[str, List[str]]] = None
     channel: Optional[str] = None
 
+    # Explicit cell-h5ad path override for pca_optimized: {experiment: {channel: path}}.
+    # When set, bypasses find_cell_h5ad_path discovery (the standard
+    # {base}/{exp}/3-assembly/{feature_dir}/anndata_objects layout) and uses these
+    # exact cell-level files. Its keys also define the (experiment, channel) pairs,
+    # so everything downstream (signal grouping, downsampling, PCA) is unchanged.
+    cell_paths: Optional[Dict[str, Dict[str, str]]] = None
+
     # Aggregation & Normalization
     aggregation_level: Optional[str] = "cell"
     aggregation_per_experiment: bool = False
