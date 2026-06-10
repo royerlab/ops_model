@@ -47,6 +47,61 @@ python -m ops_model.post_process.combination.pca_optimization --help
 **Exactly one feature-mode flag is required** (no implicit default):
 `--cell-dino` · `--dino` · `--cell-profiler` · `--dynaclr` · `--subcell` · `--organelle-profiler`.
 
+### Run from a config file
+
+Instead of (or alongside) CLI flags, pass a YAML config with `--config`:
+
+```bash
+python -m ops_model.post_process.combination.pca_optimization --config my_run.yml
+```
+
+The config keys are the **same arguments**, written as their snake_case names
+(`--cell-dino` → `cell_dino`, `--phase-only` → `phase_only`, `--output-dir` → `output_dir`).
+Config values populate the defaults; **any flag passed explicitly on the command line still
+overrides the config** (e.g. `--config my_run.yml --no-slurm`). To turn off a default-on flag
+in the config, set it `false` (e.g. `second_pca: false`). Unknown keys are rejected.
+
+A worked example (the validation-cohort run) is at
+[`pca_optimization/example_config.yml`](pca_optimization/example_config.yml):
+
+```yaml
+cell_dino: true
+output_dir: /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
+experiments: ops0146,ops0147,ops0150,ops0151
+phase_only: true
+fixed_threshold: 0.80
+slurm: true
+```
+
+Programmatic equivalent:
+
+```python
+from ops_model.post_process.combination.pca_optimization import run_from_config
+run_from_config("my_run.yml")
+```
+
+### Combine embeddings outside the experiment structure
+
+If your cell-level embeddings don't live in the standard
+`…/3-assembly/<feature_dir>/anndata_objects/` layout, add a **`signal_paths`** mapping to the
+config (no separate flag). It maps each signal-group name to one h5ad path, or a list of paths
+that get **pooled**:
+
+```yaml
+cell_dino: true                      # still pick a feature mode (for metadata/labels)
+output_dir: /path/to/out
+signal_paths:
+  Phase: /data/runA/phase.h5ad       # one file = one signal
+  MAP4:                              # multiple files pooled into one signal
+    - /data/runA/map4.h5ad
+    - /data/runB/map4.h5ad
+```
+
+Each h5ad must have the **same schema as the discovery `features_processed_*.h5ad`** (obs with
+`sgRNA` / `perturbation` / `experiment`; `X` = the embedding matrix). When `signal_paths` is set,
+experiment discovery is skipped, every other option (PCA threshold, normalization, downsampling,
+SLURM, second-pass PCA, …) applies as usual, and output lands under `<output_dir>/external/`.
+
 ---
 
 ## Inputs

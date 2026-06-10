@@ -192,6 +192,7 @@ from ops_model.post_process.combination.pca_optimization.handlers import (
     _handle_aggregate_only,
     _handle_chad_umap_only,
     _handle_downsampled,
+    _handle_external,
     _handle_op,
     _handle_overlays_only,
     _handle_second_pca,
@@ -266,6 +267,54 @@ DUD_GUIDES = frozenset({
 
 
 
+def _load_and_validate_config(config_path: str) -> dict:
+    """Load a YAML config and validate its keys against the CLI argument set.
+
+    Keys must be argparse ``dest`` names (snake_case), so a config is just the
+    CLI args expressed as YAML (``--cell-dino`` → ``cell_dino``). Returns the
+    parsed dict; the caller feeds it to ``parser.set_defaults(**cfg)``.
+    """
+    import yaml
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    if not isinstance(cfg, dict):
+        raise ValueError(
+            f"Config {config_path} must be a YAML mapping of arg→value, "
+            f"got {type(cfg).__name__}."
+        )
+    valid_dests = {
+        a.dest for a in _build_parser()._actions if a.dest not in ("help", "config")
+    }
+    unknown = sorted(set(cfg) - valid_dests)
+    if unknown:
+        raise ValueError(
+            f"Unknown config key(s): {unknown}. Keys must match CLI argument names "
+            f"as snake_case dest names (e.g. cell_dino, phase_only, output_dir, "
+            f"fixed_threshold). Run the module with --help for the full list."
+        )
+    # set_defaults bypasses argparse's mutually-exclusive-group check, so guard
+    # the one pair a config can realistically set together. (The "exactly one
+    # feature-mode flag" rule is still enforced in run() below.)
+    if cfg.get("phase_only") and cfg.get("no_phase"):
+        raise ValueError(
+            "Config sets both phase_only and no_phase (mutually exclusive)."
+        )
+    return cfg
+
+
+def run_from_config(config_path: str):
+    """Programmatic entry point: run the pipeline from a YAML config (no CLI).
+
+    Equivalent to ``--config <path>`` on the command line. See
+    ``pca_optimization/example_config.yml`` for the key set.
+    """
+    cfg = _load_and_validate_config(config_path)
+    parser = _build_parser()
+    parser.set_defaults(**cfg)
+    run(parser.parse_args([]))
+
+
 def main():
     # Force line-buffered stdout so progress prints appear in real time when
     # launched under `uv run`, `nohup`, or any other wrapper that pipes
@@ -277,8 +326,19 @@ def main():
     except (AttributeError, ValueError):
         pass
 
-    global CHAD_ANNOTATION_PATH, EBI_ANNOTATION_PATH
     args = _build_parser().parse_args()
+    if getattr(args, "config", None):
+        # Config file populates argparse defaults; any explicit CLI flag still
+        # overrides it (re-parse the same argv against the config-seeded parser).
+        cfg = _load_and_validate_config(args.config)
+        parser = _build_parser()
+        parser.set_defaults(**cfg)
+        args = parser.parse_args()
+    run(args)
+
+
+def run(args):
+    global CHAD_ANNOTATION_PATH, EBI_ANNOTATION_PATH
     CHAD_ANNOTATION_PATH = args.chad_annotation
     EBI_ANNOTATION_PATH = args.ebi_annotation
     # --seed default depends on --umap-type: max → 1 (Max's recipe), gav → 42 (legacy).
@@ -286,6 +346,17 @@ def main():
         args.seed = 1 if getattr(args, "umap_type", "max") == "max" else 42
         print(f"--seed unset, resolved to {args.seed} (umap_type={args.umap_type})")
     output_dir = Path(args.output_dir)
+
+    # External mode: combine explicit per-signal h5ads given in the config's
+    # `signal_paths` mapping (embeddings outside the experiment structure).
+    # Bypasses the feature-mode requirement and experiment discovery.
+    if getattr(args, "signal_paths", None):
+        args.phase_filter = None
+        args.all_cells = not getattr(args, "downsampled", False)
+        out = output_dir if args.direct else output_dir / "external"
+        print(f"External mode (signal_paths): output → {out}")
+        _handle_external(args, out)
+        return
 
     # --only-4i / --only-cp imply the corresponding --with-* and turn off the
     # standard scan. Apply once here so both --direct and standard paths see it.
