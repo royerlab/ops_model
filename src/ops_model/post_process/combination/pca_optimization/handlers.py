@@ -46,7 +46,7 @@ from ops_model.post_process.combination.pca_optimization.aggregation import (
     _atomic_write_h5ad,
     _plot_chad_umap,
 )
-from ops_model.post_process.combination.pca_optimization.chromosome import (
+from ops_model.post_process.combination.pipeline_add_ons.chromosome import (
     _load_chromosome_map,
     _plot_chromosome_overlay,
     _plot_chromosome_overlay_html,
@@ -54,7 +54,7 @@ from ops_model.post_process.combination.pca_optimization.chromosome import (
 from ops_model.post_process.combination.pca_optimization.embeddings import (
     _compute_and_plot_embeddings,
 )
-from ops_model.post_process.combination.pca_optimization.op_signal import (
+from ops_model.post_process.combination.pipeline_add_ons.op_signal import (
     _discover_op_files,
     pca_sweep_op_signal,
 )
@@ -531,7 +531,7 @@ def _run_overlays_only(
     corum_map = _load_csv("phenotypic_consistency_corum.csv")
     chad_map = _load_csv("phenotypic_consistency_manual.csv")
 
-    from ops_model.post_process.combination.embedding_overlays import save_extra_overlays
+    from ops_model.post_process.combination.analysis.embedding_overlays import save_extra_overlays
 
     save_extra_overlays(
         adata_guide=adata_guide,
@@ -813,7 +813,7 @@ def _handle_overlays_only(args, output_dir):
                 subdir = f"second_pca_{int(round(threshold * 100))}"
             # Honor the chrom-arm-correction suffix used by run_chrom_arm_then_second_pca
             if getattr(args, "chrom_arm_correct", False):
-                from ops_model.post_process.combination.guide_chrom_arm_correction import (
+                from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
                     METHOD_SUFFIX,
                 )
                 method = getattr(args, "chrom_arm_method", "cohesion")
@@ -824,7 +824,7 @@ def _handle_overlays_only(args, output_dir):
     # When --chrom-arm-correct is on but no --chromosome-csv was given,
     # auto-pipe the shared symbol→arm cache so the chr-arm overlay plot fires.
     if getattr(args, "chrom_arm_correct", False) and not getattr(args, "chromosome_csv", None):
-        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
             SHARED_MAP_CSV_PATH,
         )
         if SHARED_MAP_CSV_PATH is not None and SHARED_MAP_CSV_PATH.is_file():
@@ -987,7 +987,7 @@ def run_second_pca_then_chrom_arm(
     clobbers the standard ``second_pca_consensus_chrom_arm_corr*/`` dirs
     produced by the original-order wrapper.
     """
-    from ops_model.post_process.combination.guide_chrom_arm_correction import (
+    from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
         run_chrom_arm_correction,
         METHOD_SUFFIX,
     )
@@ -1060,7 +1060,7 @@ def run_chrom_arm_then_second_pca(
     Keeping this as a top-level function (not a closure inside
     ``_handle_second_pca``) so submitit can pickle it for SLURM submission.
     """
-    from ops_model.post_process.combination.guide_chrom_arm_correction import (
+    from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
         run_chrom_arm_correction,
         METHOD_SUFFIX,
     )
@@ -1104,7 +1104,7 @@ def _handle_second_pca(args, output_dir):
         not chromosome_csv
         and getattr(args, "chrom_arm_correct", False)
     ):
-        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
             SHARED_MAP_CSV_PATH,
         )
         if SHARED_MAP_CSV_PATH is not None and SHARED_MAP_CSV_PATH.is_file():

@@ -17,7 +17,7 @@ ROOT = /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_all
 12 variants — feature type × channel subset
 -------------------------------------------
 Each variant produces an independent output subtree and can be compared via
-compare_map_scores.py.  Replace --slurm with --aggregate-only --slurm to re-run
+analysis/compare_map_scores.py.  Replace --slurm with --aggregate-only --slurm to re-run
 Phase 2 only (e.g. after code changes) without redoing the PCA sweeps.
 
   Variant                           Flags                                              Output subdir
@@ -132,12 +132,12 @@ from ops_utils.data.positive_controls import (
     plot_positive_controls_grid,
 )
 
-from ops_model.post_process.combination.pca_optimization.chromosome import (
+from ops_model.post_process.combination.pipeline_add_ons.chromosome import (
     _load_chromosome_map,
     _plot_chromosome_overlay,
     _plot_chromosome_overlay_html,
 )
-from ops_model.post_process.combination.pca_optimization.op_signal import (
+from ops_model.post_process.combination.pipeline_add_ons.op_signal import (
     _discover_op_files,
     pca_sweep_op_signal,
 )

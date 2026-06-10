@@ -377,7 +377,7 @@ def _annotate_chrom_arm(adata, _logger=logger) -> None:
     if "chrom_arm" in adata.obs.columns:
         return
     try:
-        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
             SHARED_MAP_CSV_PATH,
             _load_symbol_to_arm_from_csv,
         )

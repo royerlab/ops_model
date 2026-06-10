@@ -30,7 +30,7 @@ from ops_utils.data.positive_controls import plot_positive_controls_grid
 from ops_model.post_process.combination.pca_optimization.aggregation import (
     _annotate_genes_from_panel,
 )
-from ops_model.post_process.combination.pca_optimization.chromosome import (
+from ops_model.post_process.combination.pipeline_add_ons.chromosome import (
     _load_chromosome_map,
     _plot_chromosome_overlay,
     _plot_chromosome_overlay_html,

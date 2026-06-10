@@ -339,7 +339,7 @@ def aggregate_channels(
 
     # Extra overlays (super-category, Leiden, interactive HTML)
     try:
-        from ops_model.post_process.combination.embedding_overlays import (
+        from ops_model.post_process.combination.analysis.embedding_overlays import (
             save_extra_overlays,
         )
 
@@ -1048,7 +1048,7 @@ def apply_second_pass_pca(
 
     # Extra overlays (super-category, Leiden, interactive HTML)
     try:
-        from ops_model.post_process.combination.embedding_overlays import (
+        from ops_model.post_process.combination.analysis.embedding_overlays import (
             save_extra_overlays,
         )
 
