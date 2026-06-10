@@ -8,6 +8,35 @@ from pathlib import Path
 
 
 class OpsPaths:
+    @staticmethod
+    def _resolve_base() -> Path:
+        """Base output dir, overridable via the OPS_OUTPUT_BASE_DIR env var."""
+        return Path(
+            os.environ.get(
+                "OPS_OUTPUT_BASE_DIR",
+                "/hpc/projects/icd.fast.ops",
+            )
+        )
+
+    @classmethod
+    def model_checkpoints_dir(cls) -> Path:
+        """Root directory holding all model checkpoints."""
+        return cls._resolve_base() / "models" / "model_checkpoints"
+
+    @classmethod
+    def checkpoint(cls, *parts: str) -> Path:
+        """Path to a checkpoint under the model_checkpoints root.
+
+        e.g. ``OpsPaths.checkpoint("dinov3", "dinov3_vitl16_pretrain_....pth")``.
+        Not experiment-specific, so callable without instantiating.
+        """
+        return cls.model_checkpoints_dir().joinpath(*parts)
+
+    @classmethod
+    def slurm_log_dir(cls, model: str) -> Path:
+        """SLURM log directory for a given model's batch jobs."""
+        return cls._resolve_base() / "models" / "logs" / model / "slurm_logs"
+
     def __init__(self, experiment: str, well: str = None):
         self.experiment = experiment
         if well is not None:
@@ -16,12 +45,7 @@ class OpsPaths:
             self.well_prefix = None
 
         # Allow override of base directory via environment variable
-        self.base = Path(
-            os.environ.get(
-                "OPS_OUTPUT_BASE_DIR",
-                "/hpc/projects/icd.fast.ops",
-            )
-        )
+        self.base = self._resolve_base()
 
         # Allow override of fast_ops base directory (defaults to base)
         fast_base = Path(
