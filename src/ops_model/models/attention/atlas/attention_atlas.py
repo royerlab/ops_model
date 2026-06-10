@@ -3328,6 +3328,63 @@ def apply_aggregation_level_defaults(args):
         args.ntc_pma_fluor_csv = _CHAD_NTC_FLUOR
         print(f"[CHAD] swapped --ntc-pma-fluor-csv → "
               f"{args.ntc_pma_fluor_csv.name}")
+
+    # SHAP feature/caption CSVs and SHAP caches — atlas_shap-only args.
+    # Same pattern as the NTC swaps above: only swap when the user kept
+    # the gene-level default. Hardcoded gene/chad paths mirror the
+    # constants in attention_atlas_shap.py.
+    _GENE_SHAP_FEAT = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "top20_v4/ko_shap_features.csv"
+    )
+    _CHAD_SHAP_FEAT = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "top20_v4_chad/ko_shap_features.csv"
+    )
+    _GENE_SHAP_CAP = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "top20_v4/ko_shap_captions.csv"
+    )
+    _CHAD_SHAP_CAP = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "top20_v4_chad/ko_shap_captions.csv"
+    )
+    _GENE_CACHE_PHASE = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "shap_caches/v4/phase"
+    )
+    _CHAD_CACHE_PHASE = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "shap_caches/v4_chad/phase"
+    )
+    _GENE_CACHE_FLUOR = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "shap_caches/v4/fluor"
+    )
+    _CHAD_CACHE_FLUOR = Path(
+        "/hpc/projects/icd.fast.ops/models/alex_lin_attention/"
+        "shap_caches/v4_chad/fluor"
+    )
+    sf = getattr(args, "shap_features_csv", None)
+    if sf is not None and Path(sf) == _GENE_SHAP_FEAT:
+        args.shap_features_csv = _CHAD_SHAP_FEAT
+        print(f"[CHAD] swapped --shap-features-csv → "
+              f"{args.shap_features_csv.parent.name}/{args.shap_features_csv.name}")
+    sc = getattr(args, "shap_captions_csv", None)
+    if sc is not None and Path(sc) == _GENE_SHAP_CAP:
+        args.shap_captions_csv = _CHAD_SHAP_CAP
+        print(f"[CHAD] swapped --shap-captions-csv → "
+              f"{args.shap_captions_csv.parent.name}/{args.shap_captions_csv.name}")
+    cp = getattr(args, "shap_cache_phase", None)
+    if cp is not None and Path(cp) == _GENE_CACHE_PHASE:
+        args.shap_cache_phase = _CHAD_CACHE_PHASE
+        print(f"[CHAD] swapped --shap-cache-phase → "
+              f"{args.shap_cache_phase.parent.name}/{args.shap_cache_phase.name}")
+    cf = getattr(args, "shap_cache_fluor", None)
+    if cf is not None and Path(cf) == _GENE_CACHE_FLUOR:
+        args.shap_cache_fluor = _CHAD_CACHE_FLUOR
+        print(f"[CHAD] swapped --shap-cache-fluor → "
+              f"{args.shap_cache_fluor.parent.name}/{args.shap_cache_fluor.name}")
     # Suffix output PDF with `_chad` so the gene-level run isn't clobbered.
     if args.output.stem and "_chad" not in args.output.stem:
         args.output = args.output.with_name(
