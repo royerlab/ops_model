@@ -72,6 +72,7 @@ def build_dataloader(config: dict, out_channels: list, *, labels_df=None):
         link_csv_dir=config["data_manager"].get("link_csv_dir"),
         verbose=False,
         guide_col=config.get("guide_col", "sgRNA"),
+        store_key=config["data_manager"].get("store_key", "phenotyping_v3"),
     )
     dm.construct_dataloaders(
         labels_df=labels_df,
