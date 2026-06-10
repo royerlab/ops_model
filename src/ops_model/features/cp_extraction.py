@@ -8,6 +8,7 @@ colocalization, and neighbor measurements, independent of distributed execution.
 import ast
 import math
 import os
+import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
@@ -497,6 +498,11 @@ def _init_worker(labels_df, label_int_lut, int_label_lut, experiment_dict, out_c
     CPU-only: no CUDA contexts. GPU granularity goes through gran_queue
     to the dedicated GPU worker process.
     """
+    # Submitit installs a SIGTERM-bypass handler in the parent that is inherited
+    # by forked children. Without restoring the default handler here, pool.terminate()
+    # during context-manager exit cannot kill straggler workers and pool.__exit__ hangs.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
     zarr.config.set({"threading.max_workers": 4, "async.concurrency": 4})
 
     stores = {}

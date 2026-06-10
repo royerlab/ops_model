@@ -8,12 +8,17 @@ Architecture: N CPU workers → gran_queue → M GPU workers → result_store
 """
 
 import multiprocessing as mp
+import signal
 import time
 from collections import defaultdict
 
 
 def gpu_worker_loop(gran_queue, result_store, result_lock, batch_size=8):
     """Accumulate images, group by size bucket, flush same-size batches to GPU."""
+    # Submitit's inherited SIGTERM-bypass handler would block the proc.terminate()
+    # fallback in stop_gpu_workers when a worker hangs (e.g., on gran_queue.get).
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
     import numpy, warnings
     import cupy as cp
     import skimage.morphology
