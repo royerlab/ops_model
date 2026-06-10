@@ -71,9 +71,13 @@ logger = logging.getLogger(__name__)
 
 NULL_SIZE = 100_000
 DEFAULT_GROUPS = ("cp", "4i", "matched_livecell_best")
-DEFAULT_SUPERCATEGORY_CONFIG = Path(
-    "/home/gav.sturm/linked_folders/mydata/ops_mono/organelle_profiler/configs/"
-    "gene_supercategory_mapping.yaml"
+# In-repo default (was a hardcoded personal home-dir path). Resolved relative to
+# the repo root so it works for any checkout; callers may override.
+DEFAULT_SUPERCATEGORY_CONFIG = (
+    Path(__file__).resolve().parents[6]
+    / "organelle_profiler"
+    / "configs"
+    / "gene_supercategory_mapping.yaml"
 )
 GROUP_PALETTE = {
     "cp": "#d97706",                     # amber

@@ -23,7 +23,7 @@ def group_guides():
 
 
 def get_gene_complexes():
-    path = "/hpc/projects/intracellular_dashboard/ops/configs/annotated_gene_panel_July2025.csv"
+    path = "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
     df = pd.read_csv(path)
     complex_df = df[["Gene.name", "In_same_complex_with"]]
     gene_list = list(complex_df["Gene.name"])

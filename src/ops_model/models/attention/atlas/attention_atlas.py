@@ -187,8 +187,13 @@ from ops_utils.data.experiment import OpsDataset
 from ops_utils.data.filesystem import resolve_experiment_name
 
 
-DEFAULT_SUPERCATEGORY_CONFIG = Path(
-    "/hpc/mydata/gav.sturm/ops_mono/organelle_profiler/configs/gene_supercategory_mapping.yaml"
+# In-repo default (was a hardcoded personal home-dir path). Resolved relative to
+# the repo root so it works for any checkout; callers may override.
+DEFAULT_SUPERCATEGORY_CONFIG = (
+    Path(__file__).resolve().parents[6]
+    / "organelle_profiler"
+    / "configs"
+    / "gene_supercategory_mapping.yaml"
 )
 
 

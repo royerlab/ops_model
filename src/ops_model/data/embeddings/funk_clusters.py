@@ -8,7 +8,7 @@ from ops_model.data.embeddings.utils import load_adata
 
 def get_funk_clusters():
     path = Path(
-        "/hpc/projects/intracellular_dashboard/ops/configs/annotated_gene_panel_July2025.csv"
+        "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
     )
     df = pd.read_csv(path)
 
