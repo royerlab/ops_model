@@ -57,6 +57,12 @@ class OpsPaths:
             "phenotyping_v3": fast_base
             / self.experiment
             / "3-assembly/phenotyping_v3.zarr",
+            # Sibling v3 store holding the 7 raw brightfield z-slices as channels
+            # (labels symlinked from phenotyping_v3). Built by run_bf_titration_pipeline
+            # and read by Cell-DINO inference for the per-slice titration comparison.
+            "bf_slices_assembled_v3": fast_base
+            / self.experiment
+            / "3-assembly/bf_slices_assembled_v3.zarr",
         }
 
         self.embeddings = {
