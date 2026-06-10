@@ -1468,6 +1468,80 @@ def load_multiple_experiments(
             else:
                 warnings.warn(msg)
 
+
+def load_features_corrected(
+    h5ad_path: Union[str, Path],
+    *,
+    drop_unresolved: bool = False,
+    drop_orphans: bool = False,
+) -> ad.AnnData:
+    """Load a ``features_processed_*.h5ad`` and apply ISS-drift sidecar
+    corrections if present.
+
+    The cell-dino / dinov3 / subcell / cp feature-extraction pipelines all
+    load gene assignments from ``OpsPaths(...).links["training"]``, which is a
+    frozen snapshot of ``<exp>/3-assembly/<W>_linked_pheno_iss.csv``. When the
+    ISS calling pipeline is re-run, the frozen snapshot goes stale and the
+    h5ad's ``obs["sgRNA"]`` / ``obs["perturbation"]`` keep the *old* gene calls
+    (14-23% drift per experiment).
+
+    ``ops_model.data.iss_drift_fix`` produces a sibling parquet
+    ``<h5ad_stem>_obs_corrected.parquet`` next to each affected h5ad. This
+    function applies that sidecar in-memory and adds a ``correction_status``
+    column so consumers can filter or trust as needed.
+
+    Parameters
+    ----------
+    h5ad_path
+        Path to ``features_processed_<channel>.h5ad``.
+    drop_unresolved
+        Drop rows where the obs position couldn't be matched to the frozen
+        link CSV (``correction_status == "position_unresolved"``).
+    drop_orphans
+        Drop rows that the current ISS call no longer recognises
+        (``correction_status == "orphan_in_h5ad"``).
+
+    Returns
+    -------
+    AnnData
+        Same shape and X as the source h5ad. If the sidecar is missing, the
+        original AnnData is returned unchanged (with a warning).
+    """
+    h5ad_path = Path(h5ad_path)
+    adata = ad.read_h5ad(h5ad_path)
+    sidecar = h5ad_path.with_name(h5ad_path.stem + "_obs_corrected.parquet")
+    if not sidecar.exists():
+        warnings.warn(
+            f"No ISS-correction sidecar at {sidecar.name}; returning the "
+            "original AnnData with potentially stale gene labels. Run "
+            "`python -m ops_model.data.iss_drift_fix --exp <exp>` to build it."
+        )
+        return adata
+
+    patch = pd.read_parquet(sidecar).sort_values("obs_idx").reset_index(drop=True)
+    if len(patch) != adata.n_obs:
+        raise ValueError(
+            f"Sidecar row count ({len(patch)}) != h5ad rows ({adata.n_obs}); "
+            f"the sidecar at {sidecar} is stale. Rebuild via "
+            "`python -m ops_model.data.iss_drift_fix --exp <exp> --overwrite`."
+        )
+
+    for col in ("sgRNA", "perturbation", "label_str"):
+        if col in patch.columns:
+            adata.obs[col] = patch[col].values
+    adata.obs["segmentation_id"] = patch["segmentation_id"].values
+    adata.obs["correction_status"] = patch["correction_status"].values
+
+    if drop_unresolved or drop_orphans:
+        mask = np.ones(adata.n_obs, dtype=bool)
+        if drop_unresolved:
+            mask &= (adata.obs["correction_status"].values != "position_unresolved")
+        if drop_orphans:
+            mask &= (adata.obs["correction_status"].values != "orphan_in_h5ad")
+        adata = adata[mask].copy()
+
+    return adata
+
     print(f"Found {len(paths)}/{len(experiments)} experiment files")
     return paths
 

@@ -50,16 +50,32 @@ DISCORDANCE_THRESHOLD = 0.15
 TOP_N_LABELS = 10
 SLOPE_MAX_BG = 120
 
-METRICS: Dict[str, Tuple[str, str, str]] = {
-    # key: (csv_filename, display_label, id_column)
-    "activity": ("phenotypic_activity.csv", "Activity", "perturbation"),
+_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+_EBI_YAML = (
+    "/hpc/projects/icd.fast.ops/configs/gene_clusters/"
+    "EBI_complexes_v1_old_gene_names.yaml"
+)
+
+METRICS: Dict[str, Tuple[str, str, str, Optional[str]]] = {
+    # key: (csv_filename, display_label, id_column, name_yaml_or_None)
+    "activity": ("phenotypic_activity.csv", "Activity", "perturbation", None),
     "distinctiveness": (
         "phenotypic_distinctiveness.csv",
         "Distinctiveness",
         "perturbation",
+        None,
     ),
-    "corum": ("phenotypic_consistency_corum.csv", "Consistency\n(CORUM)", "complex_id"),
-    "chad": ("phenotypic_consistency_manual.csv", "Consistency\n(CHAD)", "complex_num"),
+    "corum": (
+        "phenotypic_consistency_corum.csv", "Consistency\n(CORUM)", "complex_id", None,
+    ),
+    "chad": (
+        "phenotypic_consistency_manual.csv", "Consistency\n(CHAD)", "complex_num",
+        _CHAD_YAML,
+    ),
+    "ebi": (
+        "phenotypic_consistency_ebi.csv", "Consistency\n(EBI)", "complex_num",
+        _EBI_YAML,
+    ),
 }
 
 _COL_SIG_BOTH = "#2196F3"
@@ -157,15 +173,13 @@ def _auto_discover_configs(root: Path) -> List[dict]:
 # I/O helpers
 # ----------------------------------------------------------------------------
 
-_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
 
-
-def _chad_num_to_name() -> dict:
-    """Load CHAD YAML and return {int_key: name} lookup."""
+def _complex_num_to_name(yaml_path: str) -> dict:
+    """Load a complex YAML (CHAD / EBI) and return {int_key: name} lookup."""
     try:
         import yaml
 
-        with open(_CHAD_YAML) as f:
+        with open(yaml_path) as f:
             d = yaml.safe_load(f)
         return {
             k: v["name"] for k, v in d.items() if isinstance(v, dict) and "name" in v
@@ -174,7 +188,9 @@ def _chad_num_to_name() -> dict:
         return {}
 
 
-def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
+def _load_metric_csv(
+    path: Path, id_col: str, name_yaml: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
     if not path.exists():
         return None
     df = pd.read_csv(path)
@@ -185,8 +201,8 @@ def _load_metric_csv(path: Path, id_col: str) -> Optional[pd.DataFrame]:
         return None
     if id_col == "perturbation":
         df = df[~df[id_col].str.contains("NTC|non-targeting", case=False, na=False)]
-    if id_col == "complex_num":
-        name_map = _chad_num_to_name()
+    if id_col == "complex_num" and name_yaml is not None:
+        name_map = _complex_num_to_name(name_yaml)
         if name_map:
             df[id_col] = df[id_col].map(
                 lambda x: name_map.get(x, name_map.get(int(x), x))
@@ -421,7 +437,7 @@ def _ax_violin(
     col_b: str,
 ) -> None:
     labels, data, pvals = [], [], []
-    for key, (_, label, _id) in METRICS.items():
+    for key, (_, label, _id, _yaml) in METRICS.items():
         if key not in metric_deltas:
             continue
         d = metric_deltas[key]
@@ -503,9 +519,9 @@ def _run_comparison(cfg: dict, comp_dir: Path) -> List[dict]:
     dir_a, dir_b = cfg["dir_a"], cfg["dir_b"]
 
     available = {}
-    for key, (csv_name, metric_label, id_col) in METRICS.items():
-        df_a = _load_metric_csv(dir_a / csv_name, id_col)
-        df_b = _load_metric_csv(dir_b / csv_name, id_col)
+    for key, (csv_name, metric_label, id_col, name_yaml) in METRICS.items():
+        df_a = _load_metric_csv(dir_a / csv_name, id_col, name_yaml=name_yaml)
+        df_b = _load_metric_csv(dir_b / csv_name, id_col, name_yaml=name_yaml)
         if df_a is not None and df_b is not None:
             merged = _merge_pair(df_a, df_b)
             if len(merged) >= 3:
@@ -617,19 +633,148 @@ def compare_maps(output_dir: str) -> None:
             )
 
 
+_DEFAULT_COMPARISON_COLOURS = ("#2E7D32", "#6A1B9A")  # green, purple
+
+
+def _compare_pair(
+    path_a: Path,
+    path_b: Path,
+    output_dir: Path,
+    label_a: str,
+    label_b: str,
+    tag: Optional[str],
+    comparison: str,
+    col_a_override: Optional[str] = None,
+    col_b_override: Optional[str] = None,
+) -> List[dict]:
+    """Compare two paths directly. Each path may be a metrics/ dir, its parent,
+    or an h5ad file living next to a metrics/ dir."""
+
+    def _resolve_metrics(p: Path) -> Path:
+        if p.is_file():
+            p = p.parent
+        if p.name == "metrics" and p.is_dir():
+            return p
+        m = _find_metrics_dir(p)
+        if m is None:
+            raise FileNotFoundError(f"No metrics/ directory found at or under {p}")
+        return m
+
+    dir_a = _resolve_metrics(path_a)
+    dir_b = _resolve_metrics(path_b)
+
+    col_a, col_b = _COMPARISON_COLOURS.get(comparison, _DEFAULT_COMPARISON_COLOURS)
+    if col_a_override:
+        col_a = col_a_override
+    if col_b_override:
+        col_b = col_b_override
+    if tag is None:
+        tag = f"{label_a}_vs_{label_b}".lower().replace(" ", "_").replace("/", "_")
+
+    cfg = dict(
+        group=comparison.replace("-", "_"),
+        tag=tag,
+        label_a=label_a,
+        label_b=label_b,
+        col_a=col_a,
+        col_b=col_b,
+        dir_a=dir_a,
+        dir_b=dir_b,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"\n=== {tag}: {label_a} vs {label_b} ===")
+    logger.info(f"  A: {dir_a}")
+    logger.info(f"  B: {dir_b}")
+    rows = _run_comparison(cfg, output_dir)
+    if rows:
+        pd.DataFrame(rows).to_csv(output_dir / f"{tag}_summary.csv", index=False)
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Auto-discover and compare phenotypic mAP scores across feature types and channel subsets"
+        description="Compare phenotypic mAP scores. Either auto-discover pairs "
+        "under a root directory, or compare two specific paths."
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         type=str,
         default="/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized",
-        help="Root output directory containing dino/ and cellprofiler/ subdirs",
+        help="Auto-discover mode: root directory containing dino/ and "
+        "cellprofiler/ subdirs. Output written to <root>/comparison/.",
+    )
+    parser.add_argument(
+        "-a",
+        "--path-a",
+        type=str,
+        help="Two-path mode: path A. May be a metrics/ dir, its parent, or an "
+        "h5ad file next to a metrics/ dir. Requires --path-b.",
+    )
+    parser.add_argument(
+        "-b",
+        "--path-b",
+        type=str,
+        help="Two-path mode: path B (see --path-a).",
+    )
+    parser.add_argument(
+        "--label-a", type=str, default="A", help="Display label for path A."
+    )
+    parser.add_argument(
+        "--label-b", type=str, default="B", help="Display label for path B."
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Filename prefix for outputs. Defaults to slug from labels.",
+    )
+    parser.add_argument(
+        "--comparison",
+        type=str,
+        default="phase-vs-nophase",
+        help=f"Free-form group/colour-preset name. Known presets: "
+        f"{list(_COMPARISON_COLOURS.keys())}. Unknown names use a default "
+        f"green/purple pair; override with --col-a/--col-b.",
+    )
+    parser.add_argument(
+        "--col-a", type=str, default=None, help="Hex colour for side A (overrides preset)."
+    )
+    parser.add_argument(
+        "--col-b", type=str, default=None, help="Hex colour for side B (overrides preset)."
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="Two-path mode: output directory (default: <path-a parent>/comparison/).",
     )
     args = parser.parse_args()
-    compare_maps(args.output_dir)
+
+    if args.path_a or args.path_b:
+        if not (args.path_a and args.path_b):
+            parser.error("--path-a and --path-b must be given together")
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+        )
+        path_a = Path(args.path_a)
+        out = Path(args.out) if args.out else (
+            (path_a.parent if path_a.is_file() else path_a) / "comparison"
+        )
+        _compare_pair(
+            path_a,
+            Path(args.path_b),
+            out,
+            args.label_a,
+            args.label_b,
+            args.tag,
+            args.comparison,
+            col_a_override=args.col_a,
+            col_b_override=args.col_b,
+        )
+    else:
+        compare_maps(args.output_dir)
 
 
 if __name__ == "__main__":

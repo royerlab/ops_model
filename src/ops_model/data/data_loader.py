@@ -583,6 +583,13 @@ class OpsDataManager:
                     well_prefix = w[0] + w[2]
                     csv_path = self.link_csv_dir / f"{well_prefix}_linked_pheno_iss.csv"
                 else:
+                    # Default to the live 3-assembly CSV ("original") so feature
+                    # extractions automatically pick up ISS-pipeline re-runs.
+                    # The frozen "training" snapshot under models/link_csvs/ goes
+                    # stale whenever ISS is re-run (14-23% gene-call drift was
+                    # observed across 81/84 experiments). Pass explicit
+                    # link_csv_dir=models/link_csvs/<exp>/ if a frozen snapshot
+                    # is required for reproducible training.
                     csv_path = OpsPaths(exp_name, well=w).links["original"]
                 print(f"Reading link CSV from {csv_path}")
                 labels_tmp = pd.read_csv(csv_path)

@@ -459,7 +459,10 @@ def extract_cp_features(
 def _read_well_labels(args):
     """Read and filter labels CSV for a single well. Used with ThreadPoolExecutor."""
     exp_name, well = args
-    labels_tmp = pd.read_csv(OpsPaths(exp_name, well=well).links["training"])
+    # See note in ops_model.data.data_loader.OpsDataManager.get_labels: the
+    # frozen "training" snapshot under models/link_csvs/ goes stale when ISS
+    # is re-run, so default to the live 3-assembly CSV ("original").
+    labels_tmp = pd.read_csv(OpsPaths(exp_name, well=well).links["original"])
     labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
     from ops_model.data.qc.qc_labels import filter_small_bboxes
 

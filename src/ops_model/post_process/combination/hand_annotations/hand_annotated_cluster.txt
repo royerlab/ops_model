@@ -1,0 +1,931 @@
+DNA Damage Response
+COPS2
+COPS3
+COPS4
+COPS5
+COPS6
+COPS8
+DDB1
+GPS1
+
+
+Actin Organization:
+# supercluster: Cytoskeleton & Morphology
+# well_known: DYNC1H1
+# rep_gene: DYNC1H1
+# rep_channel: actin filament_FastAct_SPY555 Live Cell Dye
+# ch_rank: 1
+# rep_modality: fluor
+CLASP1
+DCTN4
+DCTN5
+DYNC1H1
+DYNC1I2
+DYNC1LI1
+DYNC1LI2
+DYNLL1
+
+Cytoskeleton Organization:
+# supercluster: Cytoskeleton & Morphology
+# well_known: ERN1
+# rep_gene: MIEN1
+# rep_channel: actin filament_FastAct_SPY555 Live Cell Dye
+# ch_rank: 1
+# rep_modality: fluor
+DYNLL2
+ERN1
+HOXB2
+LIMD2
+MBTD1
+MIEN1
+SLC35B1
+SLC4A1
+VMP1
+
+Mitochondria Inner Membrane OXPHOS:
+# supercluster: Metabolism
+# well_known: ATP5F1B
+# rep_gene: ATAD3A
+# rep_channel: mitochondria_ChromaLIVE 561 excitation
+# ch_rank: 1
+# rep_modality: fluor
+ATAD3A
+COA5
+COX11
+COX7B
+COX7C
+DHX30
+MRPL20
+MRPL34
+MRPL39
+MRPL40
+MRPL42
+MRPL52
+NDUFC1
+VARS2
+ATP5F1B
+ATP5ME
+DNAJA3
+EMC1
+EMC2
+EMC3
+HSPD1
+RBM10
+
+Mitochondrial Import:
+# supercluster: Metabolism
+# well_known: ATAD3A
+# rep_gene: ATAD3A
+# rep_channel: mitochondria_ChromaLIVE 561 excitation
+# ch_rank: 1
+# rep_modality: fluor
+ATAD3A
+COA5
+COX11
+COX7B
+COX7C
+DHX30
+MRPL20
+MRPL34
+MRPL39
+MRPL40
+MRPL42
+MRPL52
+NDUFC1
+VARS2
+
+Mitophagy
+DNAJC19
+GRPEL1
+HSPA9
+PHB
+PHB2
+PRELID3B
+TIMM23
+TIMM44
+TOMM20
+
+
+Galactose Metabolism:
+# supercluster: Metabolism
+# well_known: GLB1
+# rep_gene: GLB1
+# rep_channel: endocytic vesicle pH_pHrodo-dextran Live Cell Dye
+# ch_rank: 1
+# rep_modality: fluor
+GLB1
+MOB4
+NUP98
+PKMYT1
+SCN10A
+ZNF638
+
+Lipid Metabolism:
+# supercluster: Metabolism
+# well_known: CERS6
+# rep_gene: CIAO1
+# rep_channel: ER_SEC61B
+# ch_rank: 3
+# rep_modality: fluor
+CERS6
+CIAO1
+DHRS9
+INO80D
+LRP1B
+PRKRA
+SLC39A7
+TTN
+
+Hypoxia:
+# supercluster: Metabolism
+# well_known: MTOR
+# rep_gene: RPTOR
+# rep_channel: oxidative stress_CellROX live-cell dye
+# ch_rank: 1
+# rep_modality: fluor
+ATXN7L3
+DCAF7
+MAX
+MTOR
+PDPK1
+PPP1R15B
+RICTOR
+RPTOR
+TTI1
+TTI2
+
+MTOR Signaling:
+# supercluster: Metabolism
+# well_known: MTOR
+# rep_gene: MTOR
+# rep_channel: lysosome_LysoTracker live-cell dye
+# ch_rank: 1
+# rep_modality: fluor
+ATXN7L3
+DCAF7
+MAX
+MTOR
+PDPK1
+PPP1R15B
+RICTOR
+RPTOR
+TTI1
+TTI2
+
+Tight Junctions:
+# supercluster: Metabolism
+# well_known: CLDN15
+# rep_gene: AP1S1
+# rep_channel: plasma membrane_ATP1B3
+# ch_rank: 2
+# rep_modality: fluor
+AP1S1
+CLDN15
+DLD
+FZD9
+H2AFX
+IMPDH1
+PLOD3
+PTDSS1
+
+Potassium Channels:
+# supercluster: Metabolism
+# well_known: KCNG1
+# rep_gene: DIS3L2
+# rep_channel: plasma membrane_ATP1B3
+# ch_rank: 1
+# rep_modality: fluor
+ACSS2
+ATIC
+DIS3L2
+KCNG1
+SERINC3
+
+Sodium Channels:
+# supercluster: Metabolism
+# well_known: SCN8A
+# rep_gene: SCN8A
+# rep_channel: plasma membrane_ATP1B3
+# ch_rank: 3
+# rep_modality: fluor
+KRT8
+METTL7B
+MUCL1
+PAN2
+SCN8A
+TSPAN31
+ZBTB39
+
+
+
+
+Cristae Formation:
+# supercluster: Metabolism
+# well_known: SAMM50
+# rep_gene: SAMM50
+# rep_channel: Phase2D
+# ch_rank: 1
+# rep_modality: phase
+DDI2
+DDOST
+KIF17
+MAD2L2
+MICOS13
+PLEKHM2
+SAMM50
+SCAP
+STMN1
+UBR4
+
+Calcium Signaling:
+# supercluster: Metabolism
+# well_known: MYCL
+# rep_gene: CEP85
+# rep_channel: plasma membrane_ATP1B3
+# ch_rank: 1
+# rep_modality: fluor
+AHCYL1
+CEP85
+DHDDS
+DPH2
+MYBPHL
+MYCL
+PDZK1IP1
+PEF1
+PSRC1
+PUM1
+RBMXL1
+STK40
+SYPL2
+TMA16
+ZFP69B
+ZNF593
+
+Calcium-dependent Exocytosis:
+# supercluster: Metabolism
+# well_known: NRAS
+# rep_gene: KDM4A
+# rep_channel: clathrin vesicles_CLTA
+# ch_rank: 2
+# rep_modality: fluor
+ELOVL1
+KDM4A
+METAP1
+NCDN
+NRAS
+POU3F1
+PPCS
+REST
+RNF11
+SLC25A24
+SNRNP40
+SSBP3
+SSX2IP
+STXBP3
+TRIM33
+
+Purine Metabolism:
+# supercluster: Metabolism
+# well_known: IMPDH2
+# rep_gene: NPRL2
+# rep_channel: ER_SEC61B
+# ch_rank: 3
+# rep_modality: fluor
+ALAS1
+AMIGO3
+CACNA1D
+CCR2
+IMPDH2
+MANF
+NCKIPSD
+NPRL2
+PCYT1A
+SACM1L
+SEC22C
+SMARCC1
+
+Triglyceride Metabolism:
+# supercluster: Metabolism
+# well_known: APC
+# rep_gene: APC
+# rep_channel: lipid droplet_BODIPY live cell dye
+# ch_rank: 1
+# rep_modality: fluor
+ABHD10
+APC
+CPOX
+FOXL2
+METTL3
+PPP1CA
+RBM26
+WRB
+ZBED2
+
+
+
+ER membrane:
+# supercluster: Membrane Trafficking
+# well_known: CERS6
+# rep_gene: CIAO1
+# rep_channel: ER_SEC61B
+# ch_rank: 3
+# rep_modality: fluor
+CERS6
+CIAO1
+DHRS9
+INO80D
+LRP1B
+PRKRA
+SLC39A7
+TTN
+
+ER Tubular Network:
+# supercluster: Membrane Trafficking
+# well_known: INPPL1
+# rep_gene: NHSL1
+# rep_channel: microtubules_MAP4
+# ch_rank: 1
+# rep_modality: fluor
+INPPL1
+KATNBL1
+NHSL1
+RNF41
+TMX2
+WBP4
+
+
+
+ER-Golgi Transport:
+# supercluster: Membrane Trafficking
+# well_known: SEC23B
+# rep_gene: SEC23B
+# rep_channel: ER/Golgi COP-II_SEC23A
+# ch_rank: 1
+# rep_modality: fluor
+CSNK2A3
+NAE1
+NEDD8
+PCID2
+PRRC2A
+SEC23B
+UBE2M
+
+COPI Vescicle - Protein Trafficking
+COPA
+COPB1
+COPB2
+COPZ1
+NAPA
+SEC61A1
+SEC61G
+SRP19
+SRP54
+SRP68
+SRPRA
+
+Golgi Organization:
+# supercluster: Membrane Trafficking
+# well_known: HMGCR
+# rep_gene: HMGCR
+# rep_channel: ER/Golgi COP-II_SEC23A
+# ch_rank: 1
+# rep_modality: fluor
+COG3
+COG4
+COG7
+COG8
+PREB
+SEC16A
+SEC23IP
+STX5
+TRAPPC11
+TRAPPC4
+EXOC4
+HMGCR
+RAB10
+RABGGTA
+RABGGTB
+
+Exocytic Vesicles:
+# supercluster: Membrane Trafficking
+# well_known: RAB10
+# rep_gene: RAB10
+# rep_channel: plasma membrane_ATP1B3
+# ch_rank: 3
+# rep_modality: fluor
+EXOC4
+HMGCR
+RAB10
+RABGGTA
+RABGGTB
+
+
+
+Exosomal Secretion:
+# supercluster: Membrane Trafficking
+# well_known: RAB7A
+# rep_gene: VPS29
+# rep_channel: endosome_VPS35
+# ch_rank: 3
+# rep_modality: fluor
+CHMP2A
+CHMP4B
+CHMP6
+HGS
+PDCD7
+RAB7A
+SLC39A9
+VPS29
+
+Lysosome:
+# supercluster: Membrane Trafficking
+# well_known: FTH1
+# rep_gene: LIN37
+# rep_channel: lysosome_LysoTracker live-cell dye
+# ch_rank: 2
+# rep_modality: fluor
+CAPN12
+DMRTC2
+FTH1
+FTL
+HAMP
+LIN37
+POP4
+RFWD3
+SPHK2
+ZNF574
+
+Endocytosis:
+# supercluster: Membrane Trafficking
+# well_known: WASL
+# rep_gene: CTPS2
+# rep_channel: early endosome_EEA1
+# ch_rank: 2
+# rep_modality: fluor
+CTPS2
+HDAC6
+IZUMO2
+SH3KBP1
+WASL
+
+Receptor-mediated Endocytosis
+AP2A1
+AP2M1
+AP2S1
+GRB2
+KRAS
+MAPK1
+RBM14
+
+Peroxisome:
+# supercluster: Membrane Trafficking
+# well_known: CRAT
+# rep_gene: CERCAM
+# rep_channel: lipid droplet_BODIPY live cell dye
+# ch_rank: 2
+# rep_modality: fluor
+CERCAM
+COQ4
+CRAT
+FANCC
+GOLGA2
+LMX1B
+RXRA
+STXBP1
+TOR2A
+
+Vacuolar Acidification:
+# supercluster: Membrane Trafficking
+# well_known: ATP6V1B2
+# rep_gene: SUV39H1
+# rep_channel: lysosome_LysoTracker live-cell dye
+# ch_rank: 1
+# rep_modality: fluor
+ATP6V1B2
+ATP6V1H
+EXOC5
+GPX4
+SUV39H1
+
+
+Intermediate Filament Cytoskeleton:
+# supercluster: Cytoskeleton & Morphology
+# well_known: FOXK1
+# rep_gene: FOXK1
+# rep_channel: Phase2D
+# ch_rank: 1
+# rep_modality: phase
+FOXK1
+NUFIP2
+SLC38A6
+ZMYM3
+ZNF131
+
+
+
+Mitochondrial Outer Membrane:
+# supercluster: Metabolism
+# well_known: FBXL4
+# rep_gene: PRDM13
+# rep_channel: mitochondria_ChromaLIVE 561 excitation
+# ch_rank: 3
+# rep_modality: fluor
+CENPW
+COL9A1
+FBXL4
+PRDM13
+RNF146
+UFL1
+
+DNA Methylation:
+# supercluster: Transcription
+# well_known: DNMT1
+# rep_gene: BTBD9
+# rep_channel: chromatin_H2BC21
+# ch_rank: 3
+# rep_modality: fluor
+BEND6
+BTBD9
+CABIN1
+CMTR1
+CNOT10
+CNOT11
+DNMT1
+SLC35B2
+TBP
+TMEM63B
+UHRF1
+
+snRNA:
+# supercluster: Transcription
+# well_known: INTS1
+# rep_gene: INTS7
+# rep_channel: chromatin_H2BC21
+# ch_rank: 2
+# rep_modality: fluor
+INTS1
+INTS2
+INTS5
+INTS7
+
+
+
+Nuclear Export:
+# supercluster: Transcription
+# well_known: KPNB1
+# rep_gene: KPNB1
+# rep_channel: nucleus_NucleoLIVE Live Cell dye
+# ch_rank: 1
+# rep_modality: fluor
+CCDC174
+CSE1L
+DDX39B
+DGCR8
+GBF1
+KIN
+KPNB1
+PPIE
+PPWD1
+RANGAP1
+RNF20
+SON
+ZFR
+
+Transcription Initiation:
+# supercluster: Transcription
+# well_known: RAD21
+# rep_gene: GTF2A1
+# rep_channel: nuclear speckles_SRRM2
+# ch_rank: 2
+# rep_modality: fluor
+BRD9
+GTF2A1
+GTF2A2
+NCBP2
+RAD21
+SMARCD1
+SMC1A
+SMC3
+TAF12
+TAF6
+ERCC3
+GPN1
+GPN2
+GTF2E2
+INTS11
+POLR2I
+
+DNA-templated Transcription:
+# supercluster: Transcription
+# well_known: POLR2B
+# rep_gene: POLR2B
+# rep_channel: nuclear speckles_SRRM2
+# ch_rank: 1
+# rep_modality: fluor
+GTF2B
+MED18
+MED21
+MED6
+POLR2B
+POLR2C
+POLR2D
+POLR2E
+POLR2F
+POLR2H
+SRSF7
+
+Spliceosome Assembly:
+# supercluster: Transcription
+# well_known: SF3B3
+# rep_gene: SF3B3
+# rep_channel: nuclear speckles_SRRM2
+# ch_rank: 2
+# rep_modality: fluor
+SF3B3
+SF3B5
+SNRPD1
+SNRPD2
+SNRPD3
+
+Splicing:
+# supercluster: Transcription
+# well_known: SRSF3
+# rep_gene: BUD31
+# rep_channel: nuclear speckles_SRRM2
+# ch_rank: 1
+# rep_modality: fluor
+BUD31
+CDC5L
+EFTUD2
+LSM4
+LSM5
+LSM6
+MFAP1
+PRPF4
+PRPF6
+RBM22
+SLU7
+SMU1
+SNRNP200
+SRSF3
+TFIP11
+XAB2
+
+
+Translation Initiation:
+# supercluster: Translation
+# well_known: EIF4G1
+# rep_gene: EIF3B
+# rep_channel: ER_SEC61B
+# ch_rank: 1
+# rep_modality: fluor
+EIF1AD
+EIF3A
+EIF3B
+EIF3M
+EIF4A1
+EIF4G1
+EIF5B
+TSR2
+
+Ribosomal Large Subunit:
+# supercluster: Translation
+# well_known: RPL5
+# rep_gene: RPL5
+# rep_channel: nucleolus-DFC_FBL
+# ch_rank: 1
+# rep_modality: fluor
+DDX18
+GNL2
+GNL3L
+MDN1
+NLE1
+RPF2
+RPL5
+RRS1
+WDR12
+EIF2S2
+RPL15
+RPL18
+RPL23
+RPL26
+RPL27A
+RPL30
+RPL32
+RPL34
+RPL35
+RPL37A
+RPL9
+UBA52
+
+Ribosomal Small Subunit:
+# supercluster: Translation
+# well_known: RPS6
+# rep_gene: FAU
+# rep_channel: ER_SEC61B
+# ch_rank: 1
+# rep_modality: fluor
+FAU
+RPS10
+RPS14
+RPS16
+RPS25
+RPS28
+RPS3A
+RPS4X
+RPS5
+RPS6
+RPS8
+RPS9
+
+Ribosomal Biogenesis:
+# supercluster: Translation
+# well_known: NOP58
+# rep_gene: BMS1
+# rep_channel: nucleolus-GC_NPM3
+# ch_rank: 3
+# rep_modality: fluor
+AATF
+BMS1
+C12orf45
+DDX47
+DDX52
+IMP4
+NOL10
+NOL6
+NOL7
+NOP56
+NOP58
+RCL1
+RRP7A
+TBL3
+TSR1
+UTP14A
+WDR36
+EIF6
+NOL8
+NOLC1
+NOP16
+PPAN
+URB2
+
+RNA Degradation:
+# supercluster: Translation
+# well_known: EXOSC3
+# rep_gene: EXOSC6
+# rep_channel: nuclear speckles_SRRM2
+# ch_rank: 2
+# rep_modality: fluor
+EXOSC3
+EXOSC6
+EXOSC8
+ILF3
+LTV1
+NOB1
+RIOK2
+RPS19BP1
+ZCCHC9
+
+RNA Polymerase:
+# supercluster: Translation
+# well_known: NCL
+# rep_gene: NCL
+# rep_channel: nucleolus-GC_NPM3
+# ch_rank: 1
+# rep_modality: fluor
+CD3EAP
+NCL
+POLR1B
+POLR1C
+POLR1E
+RRN3
+TAF1B
+USP39
+ZNRD1
+
+Spindle Assembly:
+# supercluster: Cell Cycle & DNA
+# well_known: AURKB
+# rep_gene: ECT2
+# rep_channel: cell proliferation marker_MKI67
+# ch_rank: 2
+# rep_modality: fluor
+AURKB
+ECT2
+INCENP
+KIF11
+KIF23
+
+DNA recombination:
+# supercluster: Cell Cycle & DNA
+# well_known: RPA2
+# rep_gene: RPA2
+# rep_channel: chromatin_H2BC21
+# ch_rank: 3
+# rep_modality: fluor
+AQP7
+CDC27
+FOXD4L5
+GOLGA6D
+HMGB1
+HMGB3
+LYPD2
+RBBP8
+RPA2
+RPL41
+SPATA31A3
+SPATA31A5
+TUBB8
+USP17L12
+
+DNA Replication:
+# supercluster: Cell Cycle & DNA
+# well_known: MCM7
+# rep_gene: POLA1
+# rep_channel: chromatin_H2BC21
+# ch_rank: 3
+# rep_modality: fluor
+CDC45
+MCM7
+MTBP
+ORC6
+POLA1
+POLA2
+POLE
+POLE2
+PRIM1
+RRM1
+TIMELESS
+TIPIN
+TONSL
+
+Nuclear Deformation:
+# supercluster: Cell Cycle & DNA
+# well_known: PUF60
+# rep_gene: PLGLB2
+# rep_channel: chromatin_H2BC21
+# ch_rank: 1
+# rep_modality: fluor
+HIST1H2AI
+OTOP1
+PLGLB2
+PPIAL4D
+PUF60
+RHOQ
+SPRR2A
+SPRR2B
+
+
+
+
+
+Microtubule Nucleation:
+# supercluster: Cytoskeleton & Morphology
+# well_known: BUB1B
+# rep_gene: BUB1B
+# rep_channel: actin filament_FastAct_SPY555 Live Cell Dye
+# ch_rank: 2
+# rep_modality: fluor
+BUB1B
+CENPC
+HAUS4
+HAUS5
+HAUS6
+NCAPG2
+SKA3
+SMC2
+
+Actin Nucleation:
+# supercluster: Cytoskeleton & Morphology
+# well_known: ARPC2
+# rep_gene: ARPC2
+# rep_channel: recycling endosome_TFRC
+# ch_rank: 2
+# rep_modality: fluor
+ACTR3
+ARPC2
+ARPC3
+ARPC4
+CUL2
+GARS
+
+
+
+
+
+Actin Projections:
+# supercluster: Cytoskeleton & Morphology
+# well_known: TWF1
+# rep_gene: BRCA1
+# rep_channel: plasma membrane_SLC3A2
+# ch_rank: 3
+# rep_modality: fluor
+BRCA1
+KRTAP2-3
+KRTAP2-4
+KRTAP4-2
+NMT1
+OSBPL7
+PHF23
+PPY
+TWF1
