@@ -1,0 +1,13 @@
+There are 5 core features of ops_model that should each have a self contained end-to-end test
+    - 4 model inference feature extractors
+    - embedding post-processing and combination
+
+Struture of the tests:
+    - the tests should be structured as python scripts, not pytests
+    - they should be based on the following outline:
+        1. define a config at the top of the script
+        2. load csvs from a select subset of experiments and subset them to a minimal example, then save that subsample to a tmp dir. 
+            have the config point to this as the source
+        2. write that config to a tmp dir
+        3. run feature extraction normally
+        4. save outputs to the tmp dir and verify that they ran successfully
