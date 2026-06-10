@@ -279,13 +279,13 @@ def anndata_conversion_worker(csv_path: str, config_path: str = None):
         ... )
         '/path/to/anndata_objects'
     """
-    from ops_model.features.evaluate_cp import process
+    from ops_model.features.processing_common import process_features_csv
 
     print(f"Starting AnnData conversion for {csv_path}")
     print(f"Using config: {config_path if config_path else 'default settings'}")
 
     # Process the CSV (creates 3 .h5ad files)
-    process(save_path=csv_path, config_path=config_path)
+    process_features_csv(save_path=csv_path, config_path=config_path)
 
     # Return the output directory
     output_dir = Path(csv_path).parent / "anndata_objects"
