@@ -151,7 +151,7 @@ def _handle_chad_umap_only(args, output_dir):
         print("ERROR: No X_umap in gene embedding.")
         return
 
-    chad_path = args.chad_annotation or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
+    chad_path = args.chad_annotation or "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     with open(chad_path) as f:
         chad_clusters = _yaml.safe_load(f)
 

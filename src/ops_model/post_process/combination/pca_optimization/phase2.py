@@ -315,7 +315,7 @@ def aggregate_channels(
     except Exception as exc:
         _logger.warning(f"  1st-pass metric violin plot failed: {exc}")
 
-    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
+    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
             import yaml as _yaml
@@ -1022,7 +1022,7 @@ def apply_second_pass_pca(
 
     _chad_path = (
         CHAD_ANNOTATION_PATH
-        or "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
+        or "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
     )
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:

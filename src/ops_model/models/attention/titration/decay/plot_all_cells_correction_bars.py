@@ -54,7 +54,7 @@ CACHE_DIR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v3/attention_v3/cdino"
 )
 CHAD_YAML = Path(
-    "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
 )
 NULL_SIZE = 10_000
 

@@ -106,7 +106,7 @@ DEFAULT_ALL_CELLS_H5AD       = Path(_PHASE_PCA_DIR) / "gene_pca_optimized.h5ad"
 DEFAULT_ALL_CELLS_GUIDE_H5AD = Path(_PHASE_PCA_DIR) / "guide_pca_optimized.h5ad"
 # CHAD manual-annotation gene-cluster YAML — used by
 # phenotypic_consistency_manual_annotation as a complement to EBI.
-DEFAULT_CHAD_YAML            = Path("/hpc/projects/icd.ops/configs/gene_clusters/"
+DEFAULT_CHAD_YAML            = Path("/hpc/projects/icd.fast.ops/configs/gene_clusters/"
                                      "chad_positive_controls_v4.yml")
 
 
