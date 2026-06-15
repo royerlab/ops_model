@@ -29,6 +29,7 @@ Usage::
 """
 
 import argparse
+import glob
 import logging
 import math
 import time
@@ -923,6 +924,16 @@ _X_AXIS_VARIANTS = [
     ("cells_per_guide", "Cells / Guide", "perguide"),
 ]
 
+# Background "fluorescent pack" for the BF-vs-phase comparison plot: every
+# fluor / 4i / cell-painting marker titration (the EBI-inclusive combined run),
+# drawn in low-alpha gray so the labelfree reconstructions visibly break out of
+# the pack. Labelfree signals (anything with "phase" in the name) are excluded.
+_FLUOR_PACK_GLOB = (
+    "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
+    "zscore_per_exp/paper_v1/with_cp/with_4i/all_livecell/fixed_80%/cosine/"
+    "titration_guide_median/*/*_titration.csv"
+)
+
 
 def titration_x_axis_base_label(x_col: str) -> str:
     """Human-readable x-axis title segment for a titration CSV column."""
@@ -1174,6 +1185,7 @@ def _plot_combined_titration(
     csv_glob="**/*_titration.csv",
     title_suffix=None,
     filename_prefix="titration_combined",
+    fluor_pack_glob=None,
 ):
     """Combine all per-reporter titration CSVs into one summary plot.
 
@@ -1268,6 +1280,30 @@ def _plot_combined_titration(
 
     _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
+    # BF run: load the "fluorescent pack" once (every fluor/4i/CP marker) to
+    # draw as low-alpha gray context behind the labelfree curves. Excludes any
+    # phase signal (those are what we want to break out from the pack).
+    bg_combined = None
+    _pack_glob = fluor_pack_glob or (_FLUOR_PACK_GLOB if _is_bf_run else None)
+    if _pack_glob:
+        _bg_files = sorted(glob.glob(_pack_glob))
+        if _bg_files:
+            _bg = pd.concat([pd.read_csv(f) for f in _bg_files], ignore_index=True)
+            _bg = _bg[~_bg["signal"].astype(str).str.lower().str.contains("phase")]
+            if len(_bg):
+                bg_combined = _bg
+                _n_pack = _bg["signal"].nunique()
+
+    def _plot_pack(ax, col, x_col, scale_to_pct=False):
+        """Draw the fluor pack in low-alpha gray behind the main curves."""
+        if bg_combined is None or col not in bg_combined.columns:
+            return
+        for _, bsub in bg_combined.groupby("signal", observed=True):
+            bsub = bsub.sort_values(x_col)
+            y = bsub[col] * (100 if scale_to_pct else 1)
+            ax.plot(bsub[x_col], y, color="0.6", alpha=0.25, linewidth=1.0,
+                    zorder=0.5, solid_capstyle="round")
+
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in combined.columns:
             continue
@@ -1287,6 +1323,10 @@ def _plot_combined_titration(
             for col_idx, (metric, label, _) in enumerate(metric_info):
                 ax = axes[0, col_idx]
                 ratio_col = f"{metric}_ratio"
+                _plot_pack(ax, ratio_col, x_col, scale_to_pct=True)
+                if bg_combined is not None and col_idx == 0:
+                    ax.plot([], [], color="0.6", alpha=0.6, linewidth=2,
+                            label=f"fluor / 4i / CP markers (n={_n_pack})")
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
@@ -1315,6 +1355,7 @@ def _plot_combined_titration(
             for col_idx, (metric, label, _) in enumerate(metric_info):
                 ax = axes[1, col_idx]
                 map_col = f"{metric}_map_mean"
+                _plot_pack(ax, map_col, x_col)
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
