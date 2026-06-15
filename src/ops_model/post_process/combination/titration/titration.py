@@ -1186,6 +1186,7 @@ def _plot_combined_titration(
     title_suffix=None,
     filename_prefix="titration_combined",
     fluor_pack_glob=None,
+    save_dir=None,
 ):
     """Combine all per-reporter titration CSVs into one summary plot.
 
@@ -1280,11 +1281,16 @@ def _plot_combined_titration(
 
     _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
-    # BF run: load the "fluorescent pack" once (every fluor/4i/CP marker) to
-    # draw as low-alpha gray context behind the labelfree curves. Excludes any
-    # phase signal (those are what we want to break out from the pack).
+    # Optional "fluorescent pack" overlay (every fluor/4i/CP marker), drawn as
+    # gray context behind the labelfree curves so Phase2D/Focus3D/raw-BF break
+    # out of the pack. Only active when a glob is passed; phase signals excluded.
+    # Plots saved to save_dir (a dedicated subdir) so the standard pack-free
+    # plots are not overwritten.
+    dest = Path(save_dir) if save_dir else Path(output_dir)
+    if save_dir:
+        dest.mkdir(parents=True, exist_ok=True)
     bg_combined = None
-    _pack_glob = fluor_pack_glob or (_FLUOR_PACK_GLOB if _is_bf_run else None)
+    _pack_glob = fluor_pack_glob
     if _pack_glob:
         _bg_files = sorted(glob.glob(_pack_glob))
         if _bg_files:
@@ -1301,7 +1307,7 @@ def _plot_combined_titration(
         for _, bsub in bg_combined.groupby("signal", observed=True):
             bsub = bsub.sort_values(x_col)
             y = bsub[col] * (100 if scale_to_pct else 1)
-            ax.plot(bsub[x_col], y, color="0.6", alpha=0.25, linewidth=1.0,
+            ax.plot(bsub[x_col], y, color="0.55", alpha=0.45, linewidth=1.8,
                     zorder=0.5, solid_capstyle="round")
 
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
@@ -1325,7 +1331,7 @@ def _plot_combined_titration(
                 ratio_col = f"{metric}_ratio"
                 _plot_pack(ax, ratio_col, x_col, scale_to_pct=True)
                 if bg_combined is not None and col_idx == 0:
-                    ax.plot([], [], color="0.6", alpha=0.6, linewidth=2,
+                    ax.plot([], [], color="0.55", alpha=0.7, linewidth=2.5,
                             label=f"fluor / 4i / CP markers (n={_n_pack})")
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
@@ -1403,7 +1409,7 @@ def _plot_combined_titration(
                 bbox_to_anchor=(0.5, 0.005),
             )
 
-            stem = Path(output_dir) / f"{filename_prefix}_{x_suffix}_{scale}"
+            stem = dest / f"{filename_prefix}_{x_suffix}_{scale}"
             fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
             fig.savefig(f"{stem}.svg", bbox_inches="tight")
             plt.close(fig)
@@ -1415,7 +1421,8 @@ def _plot_combined_titration(
             _sigset = set(signals)
             _phase_sig = ("Phase2D" if "Phase2D" in _sigset
                           else "Phase" if "Phase" in _sigset else None)
-            if (_is_bf_run and "BF_z3" in _sigset and _phase_sig is not None
+            if (_is_bf_run and _pack_glob is None and "BF_z3" in _sigset
+                    and _phase_sig is not None
                     and x_suffix == "perpert" and scale == "log10"):
                 _delta_dir = Path(output_dir) / "phase2d_vs_bfmid"
                 _delta_dir.mkdir(exist_ok=True)
@@ -1826,6 +1833,15 @@ def _replot(titration_dir, minibinder_subset: bool = False):
     print("Generating combined titration plot...")
     _plot_combined_titration(titration_dir, plt)
     print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+
+    # BF run: also emit a fluorescent-pack overlay variant in its own subdir,
+    # so the labelfree curves can be seen breaking out from the fluor/4i/CP pack.
+    if sorted(Path(titration_dir).glob("BF_z*/*_titration.csv")):
+        _plot_combined_titration(
+            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+            save_dir=Path(titration_dir) / "vs_fluor_pack",
+            filename_prefix="titration_vs_fluor_pack")
+        print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack_*.{{png,svg}}")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
