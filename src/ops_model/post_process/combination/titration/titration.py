@@ -1187,6 +1187,8 @@ def _plot_combined_titration(
     filename_prefix="titration_combined",
     fluor_pack_glob=None,
     save_dir=None,
+    x_cap=None,
+    perpert_log10_only=False,
 ):
     """Combine all per-reporter titration CSVs into one summary plot.
 
@@ -1200,8 +1202,14 @@ def _plot_combined_titration(
     all_dfs = [pd.read_csv(f) for f in csv_files]
     combined = pd.concat(all_dfs, ignore_index=True)
 
+    # Optional cap on cells/perturbation (focus on the cell-limited regime).
+    if x_cap is not None and "cells_per_perturbation" in combined.columns:
+        combined = combined[combined["cells_per_perturbation"] <= x_cap]
+
     # Export the combined DataFrame as CSV next to the plots
-    combined_csv = Path(output_dir) / f"{filename_prefix}.csv"
+    combined_csv = Path(save_dir or output_dir) / f"{filename_prefix}.csv"
+    if save_dir:
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
     combined.to_csv(combined_csv, index=False)
 
     signals = combined["signal"].unique()
@@ -1296,6 +1304,8 @@ def _plot_combined_titration(
         if _bg_files:
             _bg = pd.concat([pd.read_csv(f) for f in _bg_files], ignore_index=True)
             _bg = _bg[~_bg["signal"].astype(str).str.lower().str.contains("phase")]
+            if x_cap is not None and "cells_per_perturbation" in _bg.columns:
+                _bg = _bg[_bg["cells_per_perturbation"] <= x_cap]
             if len(_bg):
                 bg_combined = _bg
                 _n_pack = _bg["signal"].nunique()
@@ -1313,11 +1323,15 @@ def _plot_combined_titration(
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in combined.columns:
             continue
+        if perpert_log10_only and x_suffix != "perpert":
+            continue
         x_all = combined[x_col].values
         x_min, x_max = float(x_all.min()), float(x_all.max())
 
         n_metrics_plot = len(metric_info)
         for scale in SCALES:
+            if perpert_log10_only and scale != "log10":
+                continue
             fig, axes = plt.subplots(2, n_metrics_plot, figsize=(14 * n_metrics_plot, 18))
             xlabel = f"{x_label_base} ({_scale_label[scale]})"
 
@@ -1841,7 +1855,14 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
             save_dir=Path(titration_dir) / "vs_fluor_pack",
             filename_prefix="titration_vs_fluor_pack")
-        print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack_*.{{png,svg}}")
+        # Capped variant: perpert log10 only, stopping at 3k cells/pert (the
+        # cell-limited regime where the labelfree breakout is clearest).
+        _plot_combined_titration(
+            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+            save_dir=Path(titration_dir) / "vs_fluor_pack",
+            filename_prefix="titration_vs_fluor_pack_cap3k",
+            x_cap=3000, perpert_log10_only=True)
+        print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
