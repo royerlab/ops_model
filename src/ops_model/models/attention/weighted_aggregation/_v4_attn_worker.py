@@ -22,11 +22,14 @@ head. Different strategies handle NaN differently — see ``_compute_weights``.
 ``strategy_spec`` keys
 ----------------------
 * ``op``           — "column", "min", "product", "concordance", "softmax",
-                     "fallback", or "acc_select"
-* ``col``          — for "column" / "softmax" / "acc_select": which sidecar
-                     column to use (for "acc_select" this is also what we rank
-                     cells by within each (sgRNA, experiment) group)
-* ``cols``         — for "min" / "product" / "concordance": pair of cols
+                     "fallback", "acc_select", "power", "filter", or "sum"
+* ``col``          — for "column" / "softmax" / "acc_select" / "power" / "filter":
+                     which sidecar column to use (for "acc_select" this is also
+                     what we rank cells by within each (sgRNA, experiment) group)
+* ``cols``         — for "min" / "product" / "concordance" / "fallback" / "sum":
+                     list of cols
+* ``p``            — for "power": exponent (e.g. 2.0, 4.0)
+* ``threshold``    — for "filter": min value of col to keep (cells below get w=0)
 * ``percentile``   — for "concordance": top-N% threshold (e.g. 50.0)
 * ``K``            — for "softmax": exp(K * attn) sharpness
 * ``mode``         — for "acc_select": "raw" (kept cells weight=1) or
@@ -108,6 +111,119 @@ def _compute_weights(spec: Dict, attns: Dict[str, "np.ndarray"], thresholds: Dic
             a = np.where(mask, attns[c], a)
         return np.where(np.isnan(a), 1.0, a).astype(np.float32)
 
+    if op == "power":
+        # w = col ** p; NaN → 1 (uniform fallback)
+        a = attns[spec["col"]]
+        p = float(spec["p"])
+        return np.where(np.isnan(a), 1.0, np.power(a, p)).astype(np.float32)
+
+    if op == "filter":
+        # Hard threshold: w = 1 if col >= threshold else 0.
+        # nan_keep (default False): NaN → 0 (drop). nan_keep=True: NaN → 1 (keep).
+        a = attns[spec["col"]]
+        t = float(spec["threshold"])
+        nan_default = bool(spec.get("nan_keep", False))
+        keep = np.where(np.isnan(a), nan_default, a >= t)
+        return keep.astype(np.float32)
+
+    if op == "floor":
+        # w = max(col, floor); NaN → 1.0. Prevents bottom cells from going to w=0.
+        a = attns[spec["col"]]
+        floor = float(spec["floor"])
+        return np.where(np.isnan(a), 1.0, np.maximum(a, floor)).astype(np.float32)
+
+    if op == "shift":
+        # w = col + shift; NaN → 1.0. Additive smoothing — every cell contributes.
+        a = attns[spec["col"]]
+        shift = float(spec["shift"])
+        return np.where(np.isnan(a), 1.0, a + shift).astype(np.float32)
+
+    if op == "misalign_recip":
+        # Misalignment weight: w = 1 / (1 + non_sister_count / alpha)
+        # where non_sister_count = neighbor_count - sister_count.
+        # cols = ["neighbor_count", "sister_count"]; NaN → w=1 (uniform fallback).
+        nc = attns[spec["cols"][0]]
+        sc = attns[spec["cols"][1]]
+        alpha = float(spec["alpha"])
+        non_sister = nc - sc
+        return np.where(
+            np.isnan(non_sister), 1.0,
+            1.0 / (1.0 + non_sister / alpha),
+        ).astype(np.float32)
+
+    if op == "misalign_exp":
+        # Misalignment weight: w = exp(-non_sister_count / scale)
+        # cols = ["neighbor_count", "sister_count"]; NaN → w=1.
+        nc = attns[spec["cols"][0]]
+        sc = attns[spec["cols"][1]]
+        scale = float(spec["scale"])
+        non_sister = nc - sc
+        return np.where(
+            np.isnan(non_sister), 1.0,
+            np.exp(-non_sister / scale),
+        ).astype(np.float32)
+
+    if op == "filter_le":
+        # Inverse-direction hard threshold: keep cells where col <= threshold.
+        # Use for "high score = bad" signals (e.g. miscall_score).
+        # nan_keep (default True for this op): NaN cells keep at w=1.
+        a = attns[spec["col"]]
+        t = float(spec["threshold"])
+        nan_default = bool(spec.get("nan_keep", True))
+        keep = np.where(np.isnan(a), nan_default, a <= t)
+        return keep.astype(np.float32)
+
+    if op == "region_recip":
+        # w = 1 / (1 + miscall_score / alpha); high miscall (likely barcode
+        # miscall in coherent region) → low w. NaN → w=1 (uniform fallback).
+        # cols = ["miscall_score"].
+        ms = attns[spec["col"]]
+        alpha = float(spec["alpha"])
+        return np.where(
+            np.isnan(ms), 1.0,
+            1.0 / (1.0 + ms / alpha),
+        ).astype(np.float32)
+
+    if op == "region_recip_x_col":
+        # Compound: w = (1 / (1 + miscall_score/alpha)) * other_col
+        # cols = [other_col, "miscall_score"]; NaN in either → 1.0.
+        other = attns[spec["cols"][0]]
+        ms = attns[spec["cols"][1]]
+        alpha = float(spec["alpha"])
+        region_w = np.where(
+            np.isnan(ms), 1.0,
+            1.0 / (1.0 + ms / alpha),
+        )
+        other_w = np.where(np.isnan(other), 1.0, other)
+        return (region_w * other_w).astype(np.float32)
+
+    if op == "misalign_recip_x_col":
+        # Compound: w = (1 / (1 + non_sister/alpha)) * other_col
+        # cols = [other_col, "neighbor_count", "sister_count"].
+        # NaN in either factor → 1.0 (multiplicative identity).
+        other = attns[spec["cols"][0]]
+        nc = attns[spec["cols"][1]]
+        sc = attns[spec["cols"][2]]
+        alpha = float(spec["alpha"])
+        non_sister = nc - sc
+        misalign_w = np.where(
+            np.isnan(non_sister), 1.0,
+            1.0 / (1.0 + non_sister / alpha),
+        )
+        other_w = np.where(np.isnan(other), 1.0, other)
+        return (misalign_w * other_w).astype(np.float32)
+
+    if op == "sum":
+        # Additive combination of multiple columns; NaN → 0 for that term.
+        # Scales are mixed (attn ~1e-3, sister 0-1) so the per-sgRNA
+        # mean(w)=1 normalization handles the rescaling.
+        cols = spec["cols"]
+        acc = np.zeros_like(attns[cols[0]], dtype=np.float64)
+        for c in cols:
+            acc = acc + np.where(np.isnan(attns[c]), 0.0, attns[c])
+        # All-NaN cells get w=0; the per-sgRNA normalization handles them.
+        return acc.astype(np.float32)
+
     raise ValueError(f"unknown strategy op: {op!r}")
 
 
@@ -132,7 +248,9 @@ def make_patched_phase1_worker(
         from ops_model.post_process.combination.pca_optimization import phase1 as p1
 
         # 1) Figure out which sidecar columns we need.
-        if strategy_spec["op"] in ("column", "softmax", "acc_select"):
+        if strategy_spec["op"] in ("column", "softmax", "acc_select",
+                                    "power", "filter", "filter_le",
+                                    "floor", "shift", "region_recip"):
             needed_cols = [strategy_spec["col"]]
         else:
             needed_cols = list(strategy_spec["cols"])
