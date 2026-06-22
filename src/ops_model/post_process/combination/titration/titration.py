@@ -1792,6 +1792,7 @@ def _plot_labelfree_vs_pack(
                     color = pack_colors[sig] if pack_colors else "0.7"
                     ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
                             color=color, alpha=0.55, linewidth=1.8,
+                            marker="o", markersize=4,
                             zorder=0.5, solid_capstyle="round")
             for sig, (color, lab) in highlight.items():
                 s = comb[comb["signal"] == sig].sort_values(x_col)
@@ -1800,6 +1801,7 @@ def _plot_labelfree_vs_pack(
                             color=color, linewidth=3.5, marker="o", markersize=9,
                             label=lab, zorder=5)
             _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
+            ax.grid(False)
             ax.set_xlim(xmin * 0.7, xmax * 1.3)
             ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
             ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
