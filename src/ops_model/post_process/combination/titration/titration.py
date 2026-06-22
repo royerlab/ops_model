@@ -1742,10 +1742,15 @@ def _resolve_output_dir(args) -> Path:
 def _plot_labelfree_vs_pack(
     titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
     x_col="cells_per_guide", x_label="Cells / Guide", scale="log10",
+    metrics=("activity", "distinctiveness", "ebi"),
+    rows=(("ratio", True), ("map_mean", False)),
+    multicolor_pack=False,
     filename="titration_midslice_phase2d_vs_pack_perguide_log10",
 ):
-    """Focused 'money plot': fluorescent pack in gray, only BF-mid + Phase2D
-    highlighted. perguide log10, transparent background, saved to vs_fluor_pack/.
+    """Focused 'money plot' for dark slides: fluorescent pack behind, only
+    BF-mid + Phase2D highlighted. Transparent background, white borders/text.
+    `metrics`/`rows` subset the panels; `multicolor_pack` colors each marker
+    distinctly instead of gray. Saved to vs_fluor_pack/.
     """
     plt.rcParams["pdf.fonttype"] = 42
     titration_dir = Path(titration_dir)
@@ -1760,23 +1765,33 @@ def _plot_labelfree_vs_pack(
         bg = bg[~bg["signal"].astype(str).str.lower().str.contains("phase")]
 
     names = {"activity": "Activity", "distinctiveness": "Distinctiveness", "ebi": "EBI"}
-    metrics = ["activity", "distinctiveness", "ebi"]
+    metrics = list(metrics)
+    rows = list(rows)
     # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
     highlight = {"Phase2D": ("#ffffff", "Phase2D"),
                  "BF_z3": ("#2ec4d6", "BF-mid (raw)")}
     x_all = comb[x_col].values
     xmin, xmax = float(x_all.min()), float(x_all.max())
 
-    fig, axes = plt.subplots(2, len(metrics), figsize=(14 * len(metrics), 18))
-    for r, (suf, as_pct) in enumerate([("ratio", True), ("map_mean", False)]):
+    pack_colors = None
+    if multicolor_pack and bg is not None:
+        _sigs = sorted(bg["signal"].unique())
+        _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
+        pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
+
+    nrows, ncols = len(rows), len(metrics)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14 * ncols, 9 * nrows),
+                             squeeze=False)
+    for r, (suf, as_pct) in enumerate(rows):
         for c, m in enumerate(metrics):
-            ax = axes[r, c]
+            ax = axes[r][c]
             col = f"{m}_{suf}"
             if bg is not None and col in bg.columns:
-                for _, bs in bg.groupby("signal", observed=True):
+                for sig, bs in bg.groupby("signal", observed=True):
                     bs = bs.sort_values(x_col)
+                    color = pack_colors[sig] if pack_colors else "0.7"
                     ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
-                            color="0.7", alpha=0.55, linewidth=1.8,
+                            color=color, alpha=0.55, linewidth=1.8,
                             zorder=0.5, solid_capstyle="round")
             for sig, (color, lab) in highlight.items():
                 s = comb[comb["signal"] == sig].sort_values(x_col)
@@ -1796,10 +1811,10 @@ def _plot_labelfree_vs_pack(
             ax.xaxis.label.set_color("white")
             ax.yaxis.label.set_color("white")
             ax.title.set_color("white")
-    if bg is not None:
-        axes[0, 0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
+    if bg is not None and not multicolor_pack:
+        axes[0][0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
                         label=f"fluor / 4i / CP markers (n={bg['signal'].nunique()})")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
+    handles, labels = axes[0][0].get_legend_handles_labels()
     leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20,
                      bbox_to_anchor=(0.5, 0.005), labelcolor="white")
     leg.get_frame().set_facecolor("none")
@@ -1939,6 +1954,11 @@ def _replot(titration_dir, minibinder_subset: bool = False):
         print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
         # Focused money plot: pack in gray, only BF-mid + Phase2D highlighted.
         _plot_labelfree_vs_pack(titration_dir, plt)
+        # Single-panel distinctiveness mean-mAP, multicolor fluorescent pack.
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",),
+            rows=(("map_mean", False),), multicolor_pack=True,
+            filename="titration_midslice_phase2d_vs_pack_distinct_meanmap_perguide_log10_multicolor")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
