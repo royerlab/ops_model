@@ -1768,8 +1768,8 @@ def _plot_labelfree_vs_pack(
     metrics = list(metrics)
     rows = list(rows)
     # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
-    highlight = {"Phase2D": ("#ffffff", "Phase2D"),
-                 "BF_z3": ("#2ec4d6", "BF-mid (raw)")}
+    highlight = {"Phase2D": ("#ffffff", "Phase Reconstruction"),
+                 "BF_z3": ("#2ec4d6", "Brightfield")}
     x_all = comb[x_col].values
     xmin, xmax = float(x_all.min()), float(x_all.max())
 
