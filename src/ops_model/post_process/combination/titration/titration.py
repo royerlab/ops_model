@@ -1779,8 +1779,9 @@ def _plot_labelfree_vs_pack(
         _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
         pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
 
+    from matplotlib.ticker import LogLocator, LogFormatterSciNotation
     nrows, ncols = len(rows), len(metrics)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(14 * ncols, 9 * nrows),
+    fig, axes = plt.subplots(nrows, ncols, figsize=(11 * ncols, 11 * nrows),
                              squeeze=False)
     for r, (suf, as_pct) in enumerate(rows):
         for c, m in enumerate(metrics):
@@ -1802,6 +1803,11 @@ def _plot_labelfree_vs_pack(
                             label=lab, zorder=5)
             _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
             ax.grid(False)
+            # Scientific-notation x ticks (10^n) at decade boundaries.
+            ax.xaxis.set_major_locator(LogLocator(base=10.0))
+            ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
+            ax.tick_params(axis="x", rotation=0)
+            ax.set_box_aspect(1)  # square panel
             ax.set_xlim(xmin * 0.7, xmax * 1.3)
             ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
             ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
