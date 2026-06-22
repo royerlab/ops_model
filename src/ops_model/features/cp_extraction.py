@@ -1016,7 +1016,14 @@ def extract_cp_features_bulk_read(
     img_arr = stores[store_key][well]["0"]
     mask_label = getattr(first_row, "mask_label", "cell_seg")
     cell_seg_arr = stores[store_key][well]["labels"][mask_label]["0"]
-    nuc_seg_arr = stores[store_key][well]["labels"]["nuclear_seg"]["0"]
+    # Nuclear mask: prefer native-20x `nuclei_seg` (from the
+    # `submit_nuclei_segmentation_jobs` step), fall back to legacy
+    # `nuclear_seg` (5x-upscaled, from `segment_and_stitch_pheno`).
+    # Both labels are 20x-shaped at level 0; bbox slicing unchanged.
+    # See ops_process PR #113.
+    _labels_group = stores[store_key][well]["labels"]
+    _nuc_label = "nuclei_seg" if "nuclei_seg" in _labels_group else "nuclear_seg"
+    nuc_seg_arr = _labels_group[_nuc_label]["0"]
     chunk_size = img_arr.chunks[-1]  # 512
 
     # Phase 1: Identify unique chunks from bounding boxes
