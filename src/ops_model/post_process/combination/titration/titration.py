@@ -1739,6 +1739,80 @@ def _resolve_output_dir(args) -> Path:
     return output_dir
 
 
+def _plot_labelfree_vs_pack(
+    titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+    x_col="cells_per_guide", x_label="Cells / Guide", scale="log10",
+    filename="titration_midslice_phase2d_vs_pack_perguide_log10",
+):
+    """Focused 'money plot': fluorescent pack in gray, only BF-mid + Phase2D
+    highlighted. perguide log10, transparent background, saved to vs_fluor_pack/.
+    """
+    plt.rcParams["pdf.fonttype"] = 42
+    titration_dir = Path(titration_dir)
+    csvs = sorted(titration_dir.glob("*/*_titration.csv"))
+    if not csvs:
+        return
+    comb = pd.concat([pd.read_csv(f) for f in csvs], ignore_index=True)
+    bg = None
+    bgf = sorted(glob.glob(fluor_pack_glob))
+    if bgf:
+        bg = pd.concat([pd.read_csv(f) for f in bgf], ignore_index=True)
+        bg = bg[~bg["signal"].astype(str).str.lower().str.contains("phase")]
+
+    names = {"activity": "Activity", "distinctiveness": "Distinctiveness", "ebi": "EBI"}
+    metrics = ["activity", "distinctiveness", "ebi"]
+    # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
+    highlight = {"Phase2D": ("#ffffff", "Phase2D"),
+                 "BF_z3": ("#2ec4d6", "BF-mid (raw)")}
+    x_all = comb[x_col].values
+    xmin, xmax = float(x_all.min()), float(x_all.max())
+
+    fig, axes = plt.subplots(2, len(metrics), figsize=(14 * len(metrics), 18))
+    for r, (suf, as_pct) in enumerate([("ratio", True), ("map_mean", False)]):
+        for c, m in enumerate(metrics):
+            ax = axes[r, c]
+            col = f"{m}_{suf}"
+            if bg is not None and col in bg.columns:
+                for _, bs in bg.groupby("signal", observed=True):
+                    bs = bs.sort_values(x_col)
+                    ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
+                            color="0.7", alpha=0.55, linewidth=1.8,
+                            zorder=0.5, solid_capstyle="round")
+            for sig, (color, lab) in highlight.items():
+                s = comb[comb["signal"] == sig].sort_values(x_col)
+                if col in s.columns and len(s):
+                    ax.plot(s[x_col], s[col] * (100 if as_pct else 1),
+                            color=color, linewidth=3.5, marker="o", markersize=9,
+                            label=lab, zorder=5)
+            _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
+            ax.set_xlim(xmin * 0.7, xmax * 1.3)
+            ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
+            ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
+            ax.set_title(names[m] if as_pct else f"{names[m]} mAP", fontsize=26)
+            # White borders + text for a dark slide background.
+            for spine in ax.spines.values():
+                spine.set_color("white")
+            ax.tick_params(axis="both", colors="white", labelsize=19)
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
+    if bg is not None:
+        axes[0, 0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
+                        label=f"fluor / 4i / CP markers (n={bg['signal'].nunique()})")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20,
+                     bbox_to_anchor=(0.5, 0.005), labelcolor="white")
+    leg.get_frame().set_facecolor("none")
+    leg.get_frame().set_edgecolor("white")
+    fig.tight_layout(rect=[0, 0.06, 1, 0.97])
+    out = titration_dir / "vs_fluor_pack"
+    out.mkdir(exist_ok=True)
+    stem = out / filename
+    fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight", transparent=True)
+    fig.savefig(f"{stem}.svg", bbox_inches="tight", transparent=True)
+    plt.close(fig)
+
+
 def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
     """Where ``titration`` writes per-reporter outputs: ``<variant>/titration``."""
     return _resolve_output_dir(args) / "titration"
@@ -1863,6 +1937,8 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             filename_prefix="titration_vs_fluor_pack_cap3k",
             x_cap=3000, perpert_log10_only=True)
         print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
+        # Focused money plot: pack in gray, only BF-mid + Phase2D highlighted.
+        _plot_labelfree_vs_pack(titration_dir, plt)
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
