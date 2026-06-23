@@ -2001,7 +2001,7 @@ def _replot(titration_dir, minibinder_subset: bool = False):
         _plot_labelfree_vs_pack(
             titration_dir, plt, metrics=("distinctiveness",), rows=(("map_mean", False),),
             multicolor_pack=True, include_brightfield=False, title_override="geneKO mean mAP",
-            scale="linear", xlim=(100, 1000), ylim=(0.0, 0.2),
+            scale="linear", xlim=(100, 1000), ylim=(0.0, 0.3),
             filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
 
     if minibinder_subset:
