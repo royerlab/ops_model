@@ -1747,6 +1747,8 @@ def _plot_labelfree_vs_pack(
     multicolor_pack=False,
     include_brightfield=True,
     title_override=None,
+    xlim=None,
+    ylim=None,
     filename="titration_midslice_phase2d_vs_pack_perguide_log10",
 ):
     """Focused 'money plot' for dark slides: fluorescent pack behind, only
@@ -1775,6 +1777,9 @@ def _plot_labelfree_vs_pack(
         highlight["BF_z3"] = ("#2ec4d6", "Brightfield")
     x_all = comb[x_col].values
     xmin, xmax = float(x_all.min()), float(x_all.max())
+    if xlim is not None:
+        xmin, xmax = float(xlim[0]), float(xlim[1])
+    _scale_sfx = {"linear": "", "log2": " (log₂)", "log10": " (log₁₀)"}[scale]
 
     pack_colors = None
     if multicolor_pack and bg is not None:
@@ -1782,7 +1787,8 @@ def _plot_labelfree_vs_pack(
         _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
         pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
 
-    from matplotlib.ticker import LogLocator, LogFormatterSciNotation, NullFormatter
+    from matplotlib.ticker import (LogLocator, LogFormatterSciNotation,
+                                   NullFormatter, AutoMinorLocator)
     nrows, ncols = len(rows), len(metrics)
     fig, axes = plt.subplots(nrows, ncols, figsize=(11 * ncols, 11 * nrows),
                              squeeze=False)
@@ -1806,19 +1812,27 @@ def _plot_labelfree_vs_pack(
                             label=lab, zorder=5)
             _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
             ax.grid(False)
-            # Scientific-notation x ticks (10^n) at decades, with minor tick
-            # marks at 2-9x each decade so the log scale is easy to read.
-            ax.xaxis.set_major_locator(LogLocator(base=10.0))
-            ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
-            ax.xaxis.set_minor_locator(
-                LogLocator(base=10.0, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
-            ax.xaxis.set_minor_formatter(NullFormatter())
+            # Tick marks: decade 10^n (log) or evenly-spaced (linear), with
+            # minor ticks so the axis is easy to read.
+            if scale == "linear":
+                ax.xaxis.set_minor_locator(AutoMinorLocator())
+            else:
+                ax.xaxis.set_major_locator(LogLocator(base=10.0))
+                ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
+                ax.xaxis.set_minor_locator(
+                    LogLocator(base=10.0, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
+                ax.xaxis.set_minor_formatter(NullFormatter())
             ax.tick_params(axis="x", which="both", colors="white", rotation=0)
             ax.tick_params(axis="x", which="major", length=9, width=1.5)
             ax.tick_params(axis="x", which="minor", length=5, width=1.0)
             ax.set_box_aspect(1)  # square panel
-            ax.set_xlim(xmin * 0.7, xmax * 1.3)
-            ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
+            if xlim is not None:
+                ax.set_xlim(*xlim)
+            else:
+                ax.set_xlim(xmin * 0.7, xmax * 1.3)
+            if ylim is not None:
+                ax.set_ylim(*ylim)
+            ax.set_xlabel(f"{x_label}{_scale_sfx}", fontsize=24)
             ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
             ax.set_title(title_override or (names[m] if as_pct else f"{names[m]} mAP"),
                          fontsize=26)
@@ -1983,6 +1997,12 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             rows=(("map_mean", False),), multicolor_pack=True, include_brightfield=False,
             title_override="geneKO mean mAP",
             filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_log10_multicolor")
+        # Linear-scale zoom on the workhorse regime (100-1000 cells/guide), Phase only.
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",), rows=(("map_mean", False),),
+            multicolor_pack=True, include_brightfield=False, title_override="geneKO mean mAP",
+            scale="linear", xlim=(100, 1000), ylim=(0.0, 0.2),
+            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
