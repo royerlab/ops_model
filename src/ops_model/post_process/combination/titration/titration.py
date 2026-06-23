@@ -1745,6 +1745,7 @@ def _plot_labelfree_vs_pack(
     metrics=("activity", "distinctiveness", "ebi"),
     rows=(("ratio", True), ("map_mean", False)),
     multicolor_pack=False,
+    include_brightfield=True,
     filename="titration_midslice_phase2d_vs_pack_perguide_log10",
 ):
     """Focused 'money plot' for dark slides: fluorescent pack behind, only
@@ -1768,8 +1769,9 @@ def _plot_labelfree_vs_pack(
     metrics = list(metrics)
     rows = list(rows)
     # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
-    highlight = {"Phase2D": ("#ffffff", "Phase Reconstruction"),
-                 "BF_z3": ("#2ec4d6", "Brightfield")}
+    highlight = {"Phase2D": ("#ffffff", "Phase Reconstruction")}
+    if include_brightfield:
+        highlight["BF_z3"] = ("#2ec4d6", "Brightfield")
     x_all = comb[x_col].values
     xmin, xmax = float(x_all.min()), float(x_all.max())
 
@@ -1779,7 +1781,7 @@ def _plot_labelfree_vs_pack(
         _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
         pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
 
-    from matplotlib.ticker import LogLocator, LogFormatterSciNotation
+    from matplotlib.ticker import LogLocator, LogFormatterSciNotation, NullFormatter
     nrows, ncols = len(rows), len(metrics)
     fig, axes = plt.subplots(nrows, ncols, figsize=(11 * ncols, 11 * nrows),
                              squeeze=False)
@@ -1803,10 +1805,16 @@ def _plot_labelfree_vs_pack(
                             label=lab, zorder=5)
             _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
             ax.grid(False)
-            # Scientific-notation x ticks (10^n) at decade boundaries.
+            # Scientific-notation x ticks (10^n) at decades, with minor tick
+            # marks at 2-9x each decade so the log scale is easy to read.
             ax.xaxis.set_major_locator(LogLocator(base=10.0))
             ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
-            ax.tick_params(axis="x", rotation=0)
+            ax.xaxis.set_minor_locator(
+                LogLocator(base=10.0, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
+            ax.xaxis.set_minor_formatter(NullFormatter())
+            ax.tick_params(axis="x", which="both", colors="white", rotation=0)
+            ax.tick_params(axis="x", which="major", length=9, width=1.5)
+            ax.tick_params(axis="x", which="minor", length=5, width=1.0)
             ax.set_box_aspect(1)  # square panel
             ax.set_xlim(xmin * 0.7, xmax * 1.3)
             ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
@@ -1967,6 +1975,11 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             titration_dir, plt, metrics=("distinctiveness",),
             rows=(("map_mean", False),), multicolor_pack=True,
             filename="titration_midslice_phase2d_vs_pack_distinct_meanmap_perguide_log10_multicolor")
+        # Same, but Phase only (no brightfield mid-slice curve).
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",),
+            rows=(("map_mean", False),), multicolor_pack=True, include_brightfield=False,
+            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_log10_multicolor")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
