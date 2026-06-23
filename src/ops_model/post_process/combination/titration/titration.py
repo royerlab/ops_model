@@ -1749,6 +1749,9 @@ def _plot_labelfree_vs_pack(
     title_override=None,
     xlim=None,
     ylim=None,
+    font_scale=1.0,
+    pack_linewidth=1.8,
+    pack_markersize=4,
     filename="titration_midslice_phase2d_vs_pack_perguide_log10",
 ):
     """Focused 'money plot' for dark slides: fluorescent pack behind, only
@@ -1801,8 +1804,8 @@ def _plot_labelfree_vs_pack(
                     bs = bs.sort_values(x_col)
                     color = pack_colors[sig] if pack_colors else "0.7"
                     ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
-                            color=color, alpha=0.55, linewidth=1.8,
-                            marker="o", markersize=4,
+                            color=color, alpha=0.55, linewidth=pack_linewidth,
+                            marker="o", markersize=pack_markersize,
                             zorder=0.5, solid_capstyle="round")
             for sig, (color, lab) in highlight.items():
                 s = comb[comb["signal"] == sig].sort_values(x_col)
@@ -1810,7 +1813,8 @@ def _plot_labelfree_vs_pack(
                     ax.plot(s[x_col], s[col] * (100 if as_pct else 1),
                             color=color, linewidth=3.5, marker="o", markersize=9,
                             label=lab, zorder=5)
-            _apply_x_scale(ax, [xmin, xmax], scale, tick_fontsize=19)
+            _apply_x_scale(ax, [xmin, xmax], scale,
+                           tick_fontsize=int(round(19 * font_scale)))
             ax.grid(False)
             # Tick marks: decade 10^n (log) or evenly-spaced (linear), with
             # minor ticks so the axis is easy to read.
@@ -1832,14 +1836,14 @@ def _plot_labelfree_vs_pack(
                 ax.set_xlim(xmin * 0.7, xmax * 1.3)
             if ylim is not None:
                 ax.set_ylim(*ylim)
-            ax.set_xlabel(f"{x_label}{_scale_sfx}", fontsize=24)
-            ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
+            ax.set_xlabel(f"{x_label}{_scale_sfx}", fontsize=24 * font_scale)
+            ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24 * font_scale)
             ax.set_title(title_override or (names[m] if as_pct else f"{names[m]} mAP"),
-                         fontsize=26)
+                         fontsize=26 * font_scale)
             # White borders + text for a dark slide background.
             for spine in ax.spines.values():
                 spine.set_color("white")
-            ax.tick_params(axis="both", colors="white", labelsize=19)
+            ax.tick_params(axis="both", colors="white", labelsize=19 * font_scale)
             ax.xaxis.label.set_color("white")
             ax.yaxis.label.set_color("white")
             ax.title.set_color("white")
@@ -1847,7 +1851,7 @@ def _plot_labelfree_vs_pack(
         axes[0][0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
                         label=f"fluor / 4i / CP markers (n={bg['signal'].nunique()})")
     handles, labels = axes[0][0].get_legend_handles_labels()
-    leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20,
+    leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20 * font_scale,
                      bbox_to_anchor=(0.5, 0.005), labelcolor="white")
     leg.get_frame().set_facecolor("none")
     leg.get_frame().set_edgecolor("white")
@@ -2002,6 +2006,7 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             titration_dir, plt, metrics=("distinctiveness",), rows=(("map_mean", False),),
             multicolor_pack=True, include_brightfield=False, title_override="geneKO mean mAP",
             scale="linear", xlim=(100, 1000), ylim=(0.0, 0.25),
+            font_scale=1.25, pack_linewidth=3.5, pack_markersize=9,
             filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
 
     if minibinder_subset:
