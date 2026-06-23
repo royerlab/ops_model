@@ -1746,6 +1746,7 @@ def _plot_labelfree_vs_pack(
     rows=(("ratio", True), ("map_mean", False)),
     multicolor_pack=False,
     include_brightfield=True,
+    title_override=None,
     filename="titration_midslice_phase2d_vs_pack_perguide_log10",
 ):
     """Focused 'money plot' for dark slides: fluorescent pack behind, only
@@ -1819,7 +1820,8 @@ def _plot_labelfree_vs_pack(
             ax.set_xlim(xmin * 0.7, xmax * 1.3)
             ax.set_xlabel(f"{x_label} (log₁₀)", fontsize=24)
             ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24)
-            ax.set_title(names[m] if as_pct else f"{names[m]} mAP", fontsize=26)
+            ax.set_title(title_override or (names[m] if as_pct else f"{names[m]} mAP"),
+                         fontsize=26)
             # White borders + text for a dark slide background.
             for spine in ax.spines.values():
                 spine.set_color("white")
@@ -1973,12 +1975,13 @@ def _replot(titration_dir, minibinder_subset: bool = False):
         # Single-panel distinctiveness mean-mAP, multicolor fluorescent pack.
         _plot_labelfree_vs_pack(
             titration_dir, plt, metrics=("distinctiveness",),
-            rows=(("map_mean", False),), multicolor_pack=True,
+            rows=(("map_mean", False),), multicolor_pack=True, title_override="geneKO mean mAP",
             filename="titration_midslice_phase2d_vs_pack_distinct_meanmap_perguide_log10_multicolor")
         # Same, but Phase only (no brightfield mid-slice curve).
         _plot_labelfree_vs_pack(
             titration_dir, plt, metrics=("distinctiveness",),
             rows=(("map_mean", False),), multicolor_pack=True, include_brightfield=False,
+            title_override="geneKO mean mAP",
             filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_log10_multicolor")
 
     if minibinder_subset:
