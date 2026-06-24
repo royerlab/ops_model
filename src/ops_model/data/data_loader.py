@@ -537,8 +537,10 @@ class OpsDataManager:
         verbose: bool = False,
         link_csv_dir: str | None = None,
         guide_col: str = DEFAULT_GUIDE_COL,
+        store_key: str = "phenotyping_v3",
     ):
         self.experiments = experiments
+        self.store_key = store_key
         self.data_split = data_split
         self.shuffle_seed = shuffle_seed
         self.num_workers = 1
@@ -654,7 +656,7 @@ class OpsDataManager:
         stores = {}
         for exp_name, wells in self.experiments.items():
             stores[f"{exp_name}"] = zarr.open_group(
-                OpsPaths(exp_name).stores["phenotyping_v3"], mode="r"
+                OpsPaths(exp_name).stores[self.store_key], mode="r"
             )
 
         return stores

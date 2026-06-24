@@ -53,7 +53,7 @@ GUIDE_DIR = EXPANSION / "bin_guide_means"   # Phase 1 output: small guide_a.h5ad
 BIN_DIR = EXPANSION / "bin_results"
 PLOT_DIR = EXPANSION / "plots"
 
-K_BINS = [100, 500, 1000, 5000, 10000, 15000, 20000, 50000, 100000]
+K_BINS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 12500, 15000, 20000, 50000, 100000]
 PERCENTILES = [10, 20, 25, 30, 40, 50]
 HEADS = ("ebi", "chad", "geneko")
 

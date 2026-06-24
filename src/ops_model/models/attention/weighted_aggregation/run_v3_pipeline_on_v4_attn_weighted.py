@@ -32,8 +32,10 @@ Multi-head combinations:
     softmax_K1k  — w = exp(1000 * max(ebi, geneko))
     softmax_K10k — w = exp(10000 * max(ebi, geneko))
 
-Output run-tag: ``attention/<strategy>`` — all results land under
-``<root>/cell_dino/zscore_per_exp/paper_v1/attention/<strategy>/phase_only/...``.
+Output run-tag: ``attention/<strategy>`` for attention-only strategies, or
+``sister/<strategy>`` for sister-coherence strategies (sister*, attn_*_x_sister,
+attn_ebi_plus_sister). Results land under
+``<root>/cell_dino/zscore_per_exp/paper_v1/{attention|sister}/<strategy>/phase_only/...``.
 
 SLURM compatibility: monkey-patches in the submitter process do not propagate
 to submitit workers. We wrap each SLURM worker function with a picklable
@@ -178,6 +180,103 @@ def _resolve_strategy(name: str) -> dict:
         gene_to_K = _build_chad_gene_to_K()
         return {"op": "acc_select", "col": "attn_chad", "mode": "weighted",
                 "gene_to_K": gene_to_K}
+    # Sister-coherence strategies (sidecar columns added by build_v4_attn_sidecar
+    # --add-sister-coherence). sister_ratio is the KDTree-derived per-cell
+    # spatial co-localization metric; orthogonal to attention (Spearman ~ -0.1
+    # to -0.2 across heads — see sister_vs_attention_corr.csv).
+    if name == "sister":
+        return {"op": "column", "col": "sister_ratio"}
+    if name == "sister_pow2":
+        return {"op": "power", "col": "sister_ratio", "p": 2.0}
+    if name == "sister_pow4":
+        return {"op": "power", "col": "sister_ratio", "p": 4.0}
+    if name == "sister_floored_01":
+        # w = max(sister_ratio, 0.1); cells with sister_ratio=0 still get 0.1
+        # (i.e. ~10% of a typical cell's weight). Tests "does dropping zeros hurt?"
+        return {"op": "floor", "col": "sister_ratio", "floor": 0.1}
+    if name == "sister_smoothed_01":
+        # w = sister_ratio + 0.1; additive smoothing — high-sister still dominates
+        # but the dynamic range is compressed.
+        return {"op": "shift", "col": "sister_ratio", "shift": 0.1}
+    if name == "sister_filter_gt0":
+        # Drop only the zero-sister tail: sister_ratio > 0 (~4.2M cells, 7.1%).
+        # 1e-9 acts as ">0" since min nonzero ratio is 1/max_neighbor ≈ 0.01.
+        # NaN-sister cells (~3.67M) also drop → 13.3% total drop.
+        return {"op": "filter", "col": "sister_ratio", "threshold": 1e-9}
+    if name == "sister_filter_gt0_nankeep":
+        # Same as gt0 but NaN cells (no spatial coherence data) kept at w=1.
+        # Drops only the 4.2M sr=0 cells (7.1%) — gentler than gt0.
+        return {"op": "filter", "col": "sister_ratio", "threshold": 1e-9, "nan_keep": True}
+    if name == "sister_filter_005":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.05}
+    if name == "sister_filter_010":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.10}
+    if name == "sister_filter_015":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.15}
+    if name == "sister_filter_020":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.20}
+    if name == "sister_filter_03":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.3}
+    if name == "sister_filter_05":
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.5}
+    if name == "sister_filter_08":
+        # Extreme tail: median sister_ratio ~0.16, so 0.8 keeps only the
+        # extreme high-coherence tail (a few percent of cells).
+        return {"op": "filter", "col": "sister_ratio", "threshold": 0.8}
+    if name == "attn_ebi_x_sister":
+        return {"op": "product", "cols": ["attn_ebi", "sister_ratio"]}
+    if name == "attn_geneko_x_sister":
+        return {"op": "product", "cols": ["attn_geneko", "sister_ratio"]}
+    # Region-homogeneity-based "barcode miscall" weighting / filtering.
+    # miscall_score = max(0, region_homogeneity - sister_ratio) — high iff
+    # the local region is dominated by a single sgRNA and THIS cell does NOT
+    # share it. See compute_region_homogeneity.py for derivation.
+    if name == "region_miscall_filter_03":
+        # Drop cells with miscall_score > 0.3 (likely barcode miscalls in
+        # coherent regions). NaN cells (no sister data) keep at w=1.
+        return {"op": "filter_le", "col": "miscall_score", "threshold": 0.3,
+                "nan_keep": True}
+    if name == "region_miscall_filter_05":
+        return {"op": "filter_le", "col": "miscall_score", "threshold": 0.5,
+                "nan_keep": True}
+    if name == "region_miscall_w_a03":
+        # Continuous: w = 1 / (1 + miscall_score / 0.3). NaN → w=1.
+        return {"op": "region_recip", "col": "miscall_score", "alpha": 0.3}
+    if name == "region_miscall_w_a10":
+        # Gentler: w = 1 / (1 + miscall_score / 1.0). NaN → w=1.
+        return {"op": "region_recip", "col": "miscall_score", "alpha": 1.0}
+    if name == "attn_ebi_x_region_w_a03":
+        # Compound: w = (1 / (1 + miscall_score/0.3)) * attn_ebi.
+        return {"op": "region_recip_x_col",
+                "cols": ["attn_ebi", "miscall_score"], "alpha": 0.3}
+    if name == "misalign_w_a30":
+        # Continuous misalignment weight: w = 1 / (1 + non_sister/30)
+        # median cell (ns≈23): w≈0.57; dense miscall (ns=50): w≈0.38
+        return {"op": "misalign_recip",
+                "cols": ["neighbor_count", "sister_count"],
+                "alpha": 30.0}
+    if name == "misalign_w_a100":
+        # Gentler misalignment weight: w = 1 / (1 + non_sister/100)
+        # median cell: w≈0.81; dense miscall (ns=50): w≈0.67
+        return {"op": "misalign_recip",
+                "cols": ["neighbor_count", "sister_count"],
+                "alpha": 100.0}
+    if name == "misalign_exp_s30":
+        # Exponential decay: w = exp(-non_sister/30)
+        # Sharper penalty than misalign_w_a30.
+        return {"op": "misalign_exp",
+                "cols": ["neighbor_count", "sister_count"],
+                "scale": 30.0}
+    if name == "misalign_w_a30_x_ebi":
+        # Compound: misalignment weight × EBI attention.
+        # Test whether misalignment is additive with attention (parallel to attn_ebi_x_sister).
+        return {"op": "misalign_recip_x_col",
+                "cols": ["attn_ebi", "neighbor_count", "sister_count"],
+                "alpha": 30.0}
+    if name == "attn_ebi_plus_sister":
+        # Additive combination — tests whether EBI + sister are additive
+        # vs multiplicative. Both signals on similar 0-1 magnitude scales.
+        return {"op": "sum", "cols": ["attn_ebi", "sister_ratio"]}
     raise ValueError(f"unknown strategy: {name!r}")
 
 
@@ -188,7 +287,37 @@ STRATEGIES = [
     "acc_select_geneko_raw", "acc_select_geneko_weighted",
     "acc_select_chad_raw", "acc_select_chad_weighted",
     "ebi_then_geneko",
+    # sister-coherence strategies → route to <root>/sister/<name>/ subdir
+    "sister", "sister_pow2", "sister_pow4",
+    "sister_floored_01", "sister_smoothed_01",
+    "sister_filter_gt0_nankeep", "sister_filter_gt0",
+    "sister_filter_005", "sister_filter_010", "sister_filter_015", "sister_filter_020",
+    "sister_filter_03", "sister_filter_05", "sister_filter_08",
+    "attn_ebi_x_sister", "attn_geneko_x_sister",
+    "attn_ebi_plus_sister",
+    # misalignment-based weights (continuous, derived from neighbor_count - sister_count)
+    "misalign_w_a30", "misalign_w_a100", "misalign_exp_s30",
+    "misalign_w_a30_x_ebi",
+    # region-homogeneity-based "barcode miscall" weighting / filtering
+    "region_miscall_filter_03", "region_miscall_filter_05",
+    "region_miscall_w_a03", "region_miscall_w_a10",
+    "attn_ebi_x_region_w_a03",
 ]
+
+SISTER_STRATEGIES = {
+    "sister", "sister_pow2", "sister_pow4",
+    "sister_floored_01", "sister_smoothed_01",
+    "sister_filter_gt0_nankeep", "sister_filter_gt0",
+    "sister_filter_005", "sister_filter_010", "sister_filter_015", "sister_filter_020",
+    "sister_filter_03", "sister_filter_05", "sister_filter_08",
+    "attn_ebi_x_sister", "attn_geneko_x_sister",
+    "attn_ebi_plus_sister",
+    "misalign_w_a30", "misalign_w_a100", "misalign_exp_s30",
+    "misalign_w_a30_x_ebi",
+    "region_miscall_filter_03", "region_miscall_filter_05",
+    "region_miscall_w_a03", "region_miscall_w_a10",
+    "attn_ebi_x_region_w_a03",
+}
 
 
 def _install_patches(strategy_name: str) -> None:
@@ -256,7 +385,10 @@ def main() -> int:
 
     from ops_model.post_process.combination.pca_optimization import main as pca_main
 
-    run_tag = f"attention/{args.attn_strategy}"
+    # Sister-coherence strategies live under <root>/sister/<name>/ to keep them
+    # organized as a sibling tree to <root>/attention/<name>/.
+    parent_tag = "sister" if args.attn_strategy in SISTER_STRATEGIES else "attention"
+    run_tag = f"{parent_tag}/{args.attn_strategy}"
     pca_argv = [
         "--output-dir", str(args.output_dir),
         "--cell-dino",

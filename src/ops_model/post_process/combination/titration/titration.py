@@ -29,6 +29,7 @@ Usage::
 """
 
 import argparse
+import glob
 import logging
 import math
 import time
@@ -923,6 +924,16 @@ _X_AXIS_VARIANTS = [
     ("cells_per_guide", "Cells / Guide", "perguide"),
 ]
 
+# Background "fluorescent pack" for the BF-vs-phase comparison plot: every
+# fluor / 4i / cell-painting marker titration (the EBI-inclusive combined run),
+# drawn in low-alpha gray so the labelfree reconstructions visibly break out of
+# the pack. Labelfree signals (anything with "phase" in the name) are excluded.
+_FLUOR_PACK_GLOB = (
+    "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
+    "zscore_per_exp/paper_v1/with_cp/with_4i/all_livecell/fixed_80%/cosine/"
+    "titration_guide_median/*/*_titration.csv"
+)
+
 
 def titration_x_axis_base_label(x_col: str) -> str:
     """Human-readable x-axis title segment for a titration CSV column."""
@@ -1174,6 +1185,10 @@ def _plot_combined_titration(
     csv_glob="**/*_titration.csv",
     title_suffix=None,
     filename_prefix="titration_combined",
+    fluor_pack_glob=None,
+    save_dir=None,
+    x_cap=None,
+    perpert_log10_only=False,
 ):
     """Combine all per-reporter titration CSVs into one summary plot.
 
@@ -1187,8 +1202,14 @@ def _plot_combined_titration(
     all_dfs = [pd.read_csv(f) for f in csv_files]
     combined = pd.concat(all_dfs, ignore_index=True)
 
+    # Optional cap on cells/perturbation (focus on the cell-limited regime).
+    if x_cap is not None and "cells_per_perturbation" in combined.columns:
+        combined = combined[combined["cells_per_perturbation"] <= x_cap]
+
     # Export the combined DataFrame as CSV next to the plots
-    combined_csv = Path(output_dir) / f"{filename_prefix}.csv"
+    combined_csv = Path(save_dir or output_dir) / f"{filename_prefix}.csv"
+    if save_dir:
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
     combined.to_csv(combined_csv, index=False)
 
     signals = combined["signal"].unique()
@@ -1203,6 +1224,56 @@ def _plot_combined_titration(
         return _COLOR_CYCLE[i % len(_COLOR_CYCLE)], _MARKER_CYCLE[i % len(_MARKER_CYCLE)]
     colors_cycle = _COLOR_CYCLE  # keep for back-compat with any other refs
 
+    # BF-slice titration color scheme (only when BF_z* signals are present, so
+    # production biological-signal plots are unaffected): the raw brightfield
+    # z-slices are an ordered focal sweep, so map them along a single sequential
+    # perceptual colormap (viridis: BF_z0 dark-purple → BF_zN yellow). Phase2D and
+    # Focus3D are distinct anchors (black, red) that stand out from viridis.
+    _bf_idxs = sorted(
+        int(str(s)[len("BF_z"):]) for s in signals
+        if str(s).startswith("BF_z") and str(s)[len("BF_z"):].isdigit()
+    )
+    _is_bf_run = bool(_bf_idxs)
+    _bf_mid = 3  # middle z-index (for friendly labels: BF-mid)
+    _bf_lo, _bf_hi = (_bf_idxs[0], _bf_idxs[-1]) if _bf_idxs else (0, 1)
+
+    def _bf_color(sig):
+        if not _is_bf_run:
+            return None
+        if sig in ("Phase", "Phase2D"):
+            return "#000000"   # black anchor
+        if sig == "Focus3D":
+            return "#d62728"   # red anchor (stands out from viridis)
+        if str(sig).startswith("BF_z"):
+            try:
+                k = int(str(sig)[len("BF_z"):])
+            except ValueError:
+                return None
+            t = 0.0 if _bf_hi == _bf_lo else (k - _bf_lo) / (_bf_hi - _bf_lo)
+            return plt.cm.viridis(t)
+        return None
+
+    def _style_for2(i, sig):
+        c, mk = _style_for(i)
+        bc = _bf_color(sig)
+        return (bc if bc is not None else c), mk
+
+    def _bf_label(sig):
+        """Friendly legend label for the BF run: Phase2D, Focus3D, BF-mid, BF±n."""
+        if not _is_bf_run:
+            return str(sig)[:25]
+        if sig in ("Phase", "Phase2D"):
+            return "Phase2D"
+        if sig == "Focus3D":
+            return "Focus3D"
+        if str(sig).startswith("BF_z"):
+            try:
+                k = int(str(sig)[len("BF_z"):])
+            except ValueError:
+                return str(sig)[:25]
+            return "BF-mid" if k == _bf_mid else f"BF{k - _bf_mid:+d}"
+        return str(sig)[:25]
+
     metric_info = [
         ("activity", "% Active", "steelblue"),
         ("distinctiveness", "% Distinctive", "mediumseagreen"),
@@ -1210,17 +1281,57 @@ def _plot_combined_titration(
         ("chad", "% CHAD", "darkorange"),
         ("ebi", "% EBI", "crimson"),
     ]
+    # BF run: collection plots show only activity, distinctiveness, EBI
+    # (CORUM/CHAD mAP dropped).
+    if _is_bf_run:
+        metric_info = [m for m in metric_info
+                       if m[0] in ("activity", "distinctiveness", "ebi")]
 
     _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
+    # Optional "fluorescent pack" overlay (every fluor/4i/CP marker), drawn as
+    # gray context behind the labelfree curves so Phase2D/Focus3D/raw-BF break
+    # out of the pack. Only active when a glob is passed; phase signals excluded.
+    # Plots saved to save_dir (a dedicated subdir) so the standard pack-free
+    # plots are not overwritten.
+    dest = Path(save_dir) if save_dir else Path(output_dir)
+    if save_dir:
+        dest.mkdir(parents=True, exist_ok=True)
+    bg_combined = None
+    _pack_glob = fluor_pack_glob
+    if _pack_glob:
+        _bg_files = sorted(glob.glob(_pack_glob))
+        if _bg_files:
+            _bg = pd.concat([pd.read_csv(f) for f in _bg_files], ignore_index=True)
+            _bg = _bg[~_bg["signal"].astype(str).str.lower().str.contains("phase")]
+            if x_cap is not None and "cells_per_perturbation" in _bg.columns:
+                _bg = _bg[_bg["cells_per_perturbation"] <= x_cap]
+            if len(_bg):
+                bg_combined = _bg
+                _n_pack = _bg["signal"].nunique()
+
+    def _plot_pack(ax, col, x_col, scale_to_pct=False):
+        """Draw the fluor pack in low-alpha gray behind the main curves."""
+        if bg_combined is None or col not in bg_combined.columns:
+            return
+        for _, bsub in bg_combined.groupby("signal", observed=True):
+            bsub = bsub.sort_values(x_col)
+            y = bsub[col] * (100 if scale_to_pct else 1)
+            ax.plot(bsub[x_col], y, color="0.55", alpha=0.45, linewidth=1.8,
+                    zorder=0.5, solid_capstyle="round")
+
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in combined.columns:
+            continue
+        if perpert_log10_only and x_suffix != "perpert":
             continue
         x_all = combined[x_col].values
         x_min, x_max = float(x_all.min()), float(x_all.max())
 
         n_metrics_plot = len(metric_info)
         for scale in SCALES:
+            if perpert_log10_only and scale != "log10":
+                continue
             fig, axes = plt.subplots(2, n_metrics_plot, figsize=(14 * n_metrics_plot, 18))
             xlabel = f"{x_label_base} ({_scale_label[scale]})"
 
@@ -1232,22 +1343,26 @@ def _plot_combined_titration(
             for col_idx, (metric, label, _) in enumerate(metric_info):
                 ax = axes[0, col_idx]
                 ratio_col = f"{metric}_ratio"
+                _plot_pack(ax, ratio_col, x_col, scale_to_pct=True)
+                if bg_combined is not None and col_idx == 0:
+                    ax.plot([], [], color="0.55", alpha=0.7, linewidth=2.5,
+                            label=f"fluor / 4i / CP markers (n={_n_pack})")
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
                         sem_col = f"{ratio_col}_sem"
-                        c, mk = _style_for(i)
+                        c, mk = _style_for2(i, sig)
                         if sem_col in sub.columns and sub[sem_col].notna().any():
                             ax.errorbar(
                                 sub[x_col], sub[ratio_col] * 100, yerr=sub[sem_col] * 100,
-                                marker=mk, color=c, label=sig[:25],
+                                marker=mk, color=c, label=_bf_label(sig),
                                 linewidth=3, markersize=9, alpha=0.8,
                                 capsize=3, elinewidth=1.2,
                             )
                         else:
                             ax.plot(
                                 sub[x_col], sub[ratio_col] * 100,
-                                marker=mk, color=c, label=sig[:25],
+                                marker=mk, color=c, label=_bf_label(sig),
                                 linewidth=3, markersize=9, alpha=0.8,
                             )
                 ax.set_xlabel(xlabel, fontsize=24)
@@ -1260,22 +1375,23 @@ def _plot_combined_titration(
             for col_idx, (metric, label, _) in enumerate(metric_info):
                 ax = axes[1, col_idx]
                 map_col = f"{metric}_map_mean"
+                _plot_pack(ax, map_col, x_col)
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
                         sem_col = f"{map_col}_sem"
-                        c, mk = _style_for(i)
+                        c, mk = _style_for2(i, sig)
                         if sem_col in sub.columns and sub[sem_col].notna().any():
                             ax.errorbar(
                                 sub[x_col], sub[map_col], yerr=sub[sem_col],
-                                marker=mk, color=c, label=sig[:25],
+                                marker=mk, color=c, label=_bf_label(sig),
                                 linewidth=3, markersize=9, alpha=0.8,
                                 capsize=3, elinewidth=1.2,
                             )
                         else:
                             ax.plot(
                                 sub[x_col], sub[map_col],
-                                marker=mk, color=c, label=sig[:25],
+                                marker=mk, color=c, label=_bf_label(sig),
                                 linewidth=3, markersize=9, alpha=0.8,
                             )
                 ax.set_xlabel(xlabel, fontsize=24)
@@ -1307,10 +1423,99 @@ def _plot_combined_titration(
                 bbox_to_anchor=(0.5, 0.005),
             )
 
-            stem = Path(output_dir) / f"{filename_prefix}_{x_suffix}_{scale}"
+            stem = dest / f"{filename_prefix}_{x_suffix}_{scale}"
             fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
             fig.savefig(f"{stem}.svg", bbox_inches="tight")
             plt.close(fig)
+
+            # Delta figure: Δ mean mAP (Phase2D − BF-mid) per metric across bins
+            # — how much Phase2D improves over the mid BF slice.
+            # Phase2D and BF_z3 schedules can differ, so interpolate Phase2D's
+            # mAP onto BF-mid's cell-count bins before differencing.
+            _sigset = set(signals)
+            _phase_sig = ("Phase2D" if "Phase2D" in _sigset
+                          else "Phase" if "Phase" in _sigset else None)
+            if (_is_bf_run and _pack_glob is None and "BF_z3" in _sigset
+                    and _phase_sig is not None
+                    and x_suffix == "perpert" and scale == "log10"):
+                _delta_dir = Path(output_dir) / "phase2d_vs_bfmid"
+                _delta_dir.mkdir(exist_ok=True)
+                bf = combined[combined["signal"] == "BF_z3"].sort_values(x_col)
+                ph = combined[combined["signal"] == _phase_sig].sort_values(x_col)
+                # Only activity, distinctiveness, EBI shown here (not CORUM/CHAD).
+                _dmetrics = [m for m in metric_info
+                             if m[0] in ("activity", "distinctiveness", "ebi")]
+                _ndm = len(_dmetrics)
+                dfig, daxes = plt.subplots(1, _ndm, figsize=(14 * _ndm, 9))
+                if _ndm == 1:
+                    daxes = [daxes]
+                for col_idx, (metric, label, _) in enumerate(_dmetrics):
+                    ax = daxes[col_idx]
+                    map_col = f"{metric}_map_mean"
+                    if (map_col in bf.columns and map_col in ph.columns
+                            and len(bf) and len(ph)):
+                        xb = bf[x_col].to_numpy(float); yb = bf[map_col].to_numpy(float)
+                        xp = ph[x_col].to_numpy(float); yp = ph[map_col].to_numpy(float)
+                        order = np.argsort(xp)
+                        yp_i = np.interp(xb, xp[order], yp[order],
+                                         left=np.nan, right=np.nan)
+                        delta = yp_i - yb
+                        finite = np.isfinite(delta)
+                        ax.plot(xb[finite], delta[finite], marker="o",
+                                color="#222222", linewidth=3, markersize=9)
+                    ax.axhline(0, color="#d62728", linestyle="--",
+                               linewidth=1.5, alpha=0.8)
+                    ax.set_xlabel(xlabel, fontsize=24)
+                    ax.set_ylabel("Δ mean mAP (Phase2D − BF-mid)", fontsize=18)
+                    ax.set_title(f"{label} mAP", fontsize=26)
+                    ax.tick_params(axis="y", labelsize=19)
+                    _style_combined_axis(ax)
+                dfig.suptitle(
+                    f"Phase2D − BF-mid : Δ mean mAP{title_tag}  [{scale}]",
+                    fontsize=32, fontweight="bold")
+                dfig.tight_layout(rect=[0, 0, 1, 0.95])
+                dstem = (_delta_dir
+                         / f"{filename_prefix}_delta_Phase2D_vs_BFmid_{x_suffix}_{scale}")
+                dfig.savefig(f"{dstem}.png", dpi=150, bbox_inches="tight")
+                dfig.savefig(f"{dstem}.svg", bbox_inches="tight")
+                plt.close(dfig)
+
+                # Percent improvement: 100 * (Phase2D − BF-mid) / BF-mid.
+                pfig, paxes = plt.subplots(1, _ndm, figsize=(14 * _ndm, 9))
+                if _ndm == 1:
+                    paxes = [paxes]
+                for col_idx, (metric, label, _) in enumerate(_dmetrics):
+                    ax = paxes[col_idx]
+                    map_col = f"{metric}_map_mean"
+                    if (map_col in bf.columns and map_col in ph.columns
+                            and len(bf) and len(ph)):
+                        xb = bf[x_col].to_numpy(float); yb = bf[map_col].to_numpy(float)
+                        xp = ph[x_col].to_numpy(float); yp = ph[map_col].to_numpy(float)
+                        order = np.argsort(xp)
+                        yp_i = np.interp(xb, xp[order], yp[order],
+                                         left=np.nan, right=np.nan)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            pct = 100.0 * (yp_i - yb) / yb
+                        finite = np.isfinite(pct)
+                        ax.plot(xb[finite], pct[finite], marker="o",
+                                color="#222222", linewidth=3, markersize=9)
+                    ax.axhline(0, color="#d62728", linestyle="--",
+                               linewidth=1.5, alpha=0.8)
+                    ax.set_xlabel(xlabel, fontsize=24)
+                    ax.set_ylabel("% mean mAP improvement (Phase2D vs BF-mid)",
+                                  fontsize=18)
+                    ax.set_title(f"{label} mAP", fontsize=26)
+                    ax.tick_params(axis="y", labelsize=19)
+                    _style_combined_axis(ax)
+                pfig.suptitle(
+                    f"Phase2D vs BF-mid : % mean mAP improvement{title_tag}  [{scale}]",
+                    fontsize=32, fontweight="bold")
+                pfig.tight_layout(rect=[0, 0, 1, 0.95])
+                pstem = (_delta_dir
+                         / f"{filename_prefix}_pctimprove_Phase2D_vs_BFmid_{x_suffix}_{scale}")
+                pfig.savefig(f"{pstem}.png", dpi=150, bbox_inches="tight")
+                pfig.savefig(f"{pstem}.svg", bbox_inches="tight")
+                plt.close(pfig)
 
 
 # ---------------------------------------------------------------------------
@@ -1643,6 +1848,22 @@ def _replot(titration_dir, minibinder_subset: bool = False):
     _plot_combined_titration(titration_dir, plt)
     print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
 
+    # BF run: also emit a fluorescent-pack overlay variant in its own subdir,
+    # so the labelfree curves can be seen breaking out from the fluor/4i/CP pack.
+    if sorted(Path(titration_dir).glob("BF_z*/*_titration.csv")):
+        _plot_combined_titration(
+            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+            save_dir=Path(titration_dir) / "vs_fluor_pack",
+            filename_prefix="titration_vs_fluor_pack")
+        # Capped variant: perpert log10 only, stopping at 3k cells/pert (the
+        # cell-limited regime where the labelfree breakout is clearest).
+        _plot_combined_titration(
+            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+            save_dir=Path(titration_dir) / "vs_fluor_pack",
+            filename_prefix="titration_vs_fluor_pack_cap3k",
+            x_cap=3000, perpert_log10_only=True)
+        print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
+
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
         mb_library_csvs = sorted(mb_base.glob("**/*_titration_library.csv"))
@@ -1698,10 +1919,12 @@ def _build_schedule_for_cells_path(
                 f"{cells_h5ad_path.name}: per-guide titration requires 'sgRNA' obs col"
             )
         pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        sg_counts = a.obs.groupby("sgRNA", observed=True).size()
-        sg_to_pert = a.obs.groupby("sgRNA", observed=True)[pert_col].first()
-        non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
-        non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
+        # Single groupby pass (size + first together) instead of two separate
+        # groupbys over the full ~60M-row obs.
+        sg = a.obs.groupby("sgRNA", observed=True).agg(
+            n=(pert_col, "size"), pert=(pert_col, "first"))
+        sg_counts = sg["n"]
+        non_ntc_counts = sg.loc[~sg["pert"].astype(str).str.startswith("NTC"), "n"]
         pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
         if per_guide_median:
             start = int(np.median(pool.values))
@@ -1947,21 +2170,32 @@ def main():
             else "n_cells"
         )
 
-        print(f"\nBuilding per-reporter schedules on login node ({len(cells_files)} reporters)...")
+        # Build per-reporter schedules in parallel — each reads one cells h5ad's
+        # obs (~60M rows) + a groupby, which is independent across reporters.
+        # Bounded worker count to keep login-node memory in check.
+        import os as _os
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        _sched_kw = dict(
+            per_guide_min=args.per_guide_min_titration,
+            per_guide_max=args.per_guide_max_titration,
+            per_guide_median=args.per_guide_median_titration,
+            per_ko_min=args.per_ko_min_titration,
+            per_ko_max=args.per_ko_max_titration,
+        )
+        _n_workers = min(len(cells_files), (_os.cpu_count() or 4), 8)
+        print(f"\nBuilding per-reporter schedules ({len(cells_files)} reporters, "
+              f"{_n_workers} parallel workers)...")
         per_reporter_schedule: Dict[Path, List[int]] = {}
-        for cf in cells_files:
-            sched = _build_schedule_for_cells_path(
-                cf,
-                per_guide_min=args.per_guide_min_titration,
-                per_guide_max=args.per_guide_max_titration,
-                per_guide_median=args.per_guide_median_titration,
-                per_ko_min=args.per_ko_min_titration,
-                per_ko_max=args.per_ko_max_titration,
-            )
-            per_reporter_schedule[cf] = sched
-            print(f"  {cf.stem.replace('_cells', '')}: {len(sched)} target(s) "
-                  f"(head: {sched[:3]}, tail: {sched[-2:]})" if len(sched) > 3
-                  else f"  {cf.stem.replace('_cells', '')}: {sched}")
+        with ProcessPoolExecutor(max_workers=_n_workers) as _pool:
+            _futs = {_pool.submit(_build_schedule_for_cells_path, cf, **_sched_kw): cf
+                     for cf in cells_files}
+            for _fut in as_completed(_futs):
+                cf = _futs[_fut]
+                sched = _fut.result()
+                per_reporter_schedule[cf] = sched
+                print(f"  {cf.stem.replace('_cells', '')}: {len(sched)} target(s) "
+                      f"(head: {sched[:3]}, tail: {sched[-2:]})" if len(sched) > 3
+                      else f"  {cf.stem.replace('_cells', '')}: {sched}")
 
         # Cache short-circuit: if a canonical CSV already has this target, skip.
         # A row counts as "cached" only when every metric is actually scored —

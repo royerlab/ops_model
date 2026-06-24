@@ -198,8 +198,15 @@ def _submit_phase1_slurm(
     experiment_name,
     manifest_prefix,
     unit_label,
+    chain_aggregation: bool = True,
 ):
-    """Submit Phase 1 SLURM jobs + auto-chain Phase 2 aggregation on completion."""
+    """Submit Phase 1 SLURM jobs, optionally auto-chaining Phase 2 aggregation.
+
+    chain_aggregation=True (default) preserves the historical behavior of firing
+    Phase 2 aggregation on completion. Pass False when the caller wants to run
+    aggregation itself (e.g. in parallel with another step). Returns the
+    submit_parallel_jobs result so the caller can gate on failures.
+    """
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
     slurm_params = _make_slurm_params(args)
@@ -232,9 +239,10 @@ def _submit_phase1_slurm(
         log_dir="pca_optimization",
         manifest_prefix=f"{manifest_prefix}_opt",
         wait_for_completion=True,
-        post_completion_callback=_on_phase1_complete,
+        post_completion_callback=_on_phase1_complete if chain_aggregation else None,
     )
     if result.get("failed"):
         print(f"\nWarning: {len(result['failed'])} {unit_label} failed")
         for name in result["failed"]:
             print(f"  - {name}")
+    return result
