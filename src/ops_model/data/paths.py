@@ -63,6 +63,16 @@ class OpsPaths:
             "bf_slices_assembled_v3": fast_base
             / self.experiment
             / "3-assembly/bf_slices_assembled_v3.zarr",
+            # Per-experiment denoised fluor-marker v3 store (labels symlinked from
+            # phenotyping_v3). Built by run_fluor_denoise_titration_pipeline and read
+            # by Cell-DINO for the denoised-vs-raw marker titration. Glob-resolved
+            # since the marker is in the name but each experiment has exactly one.
+            "denoise_fluor_assembled_v3": next(
+                iter(sorted((fast_base / self.experiment
+                             / "1-preprocess/live_imaging/reconstruction").glob(
+                    "phenotyping_fluor_2d_denoise_*_assembled_v3.zarr"))),
+                fast_base / self.experiment / "1-preprocess/live_imaging/reconstruction"
+                / "phenotyping_fluor_2d_denoise_assembled_v3.zarr"),
         }
 
         self.embeddings = {
