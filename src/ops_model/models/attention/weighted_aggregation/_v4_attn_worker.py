@@ -232,11 +232,35 @@ def make_patched_phase1_worker(
     sidecar_path: str,
     strategy_spec: Dict,
     v4_dir: str,
+    fluor_sidecar_path: str = None,
+    v4_fluor_dir: str = None,
 ) -> Callable:
     """Wrap orig_func so the worker patches load_cell_h5ad before calling it.
 
     Closure captures small dict + paths — the heavy sidecar load happens on
     the worker, not in the serialized pickle blob.
+
+    Parameters
+    ----------
+    sidecar_path
+        Phase sidecar parquet — per-(experiment, well, segmentation_id).
+        Always loaded.
+    v4_dir
+        Directory holding ``<exp>.h5ad`` v4 phase features. Phase channel
+        loads are redirected here and weighted by ``sidecar_path``.
+    fluor_sidecar_path
+        Optional fluor sidecar parquet — per-(experiment, well,
+        segmentation_id, channel). When provided AND v4_fluor_dir is also
+        provided, non-phase channel loads are redirected to the v4 fluor
+        h5ad (sliced by channel) and weighted by this sidecar. When None,
+        non-phase channels pass through unweighted (legacy behavior).
+    v4_fluor_dir
+        Directory holding ``<exp>.h5ad`` v4 fluor features (one h5ad per
+        experiment, with channel_name in obs; multiple rows per cell when
+        the cell was imaged in multiple channels). When provided alongside
+        fluor_sidecar_path, the worker uses these h5ads (mirroring how
+        phase uses ``v4_dir``); else it falls back to the v3 production
+        fluor h5ads via _orig_load.
     """
 
     def _patched_worker(*args, **kwargs):
@@ -272,11 +296,35 @@ def make_patched_phase1_worker(
                 thresholds[c] = float(np.percentile(vals, 100 - pct))
                 print(f"  concordance threshold {c}: top-{pct:.0f}% cutoff = {thresholds[c]:.4g}")
 
-        # Group by experiment, dedupe duplicate (well, seg) by max per column.
+        # Group phase sidecar by experiment, dedupe (well, seg) by max per column.
         sidecar_by_exp = {}
         for exp, g in sidecar.groupby("experiment"):
             agg = g.groupby(["well", "segmentation_id"])[needed_cols].max()
             sidecar_by_exp[exp] = agg
+
+        def _normalize_channel(channel: str) -> str:
+            """Map v3-internal channel name to the fluor sidecar key.
+            v3 uses commas+spaces (e.g. 'ER/Golgi COP-II, SEC23A'); the
+            sidecar uses underscores (matches Alex's PMA CSV channel column).
+            """
+            return channel.replace(", ", "_").replace(" ", "_")
+
+        # Optional fluor sidecar — keyed on (experiment, channel) → DF[well,seg].
+        fluor_by_exp_channel: Dict[str, Dict[str, "pd.DataFrame"]] = {}
+        if fluor_sidecar_path:
+            print(f"[v4-attn worker] loading fluor sidecar: {fluor_sidecar_path}")
+            fluor = pd.read_parquet(
+                fluor_sidecar_path,
+                columns=["experiment", "well", "segmentation_id", "channel"]
+                + needed_cols,
+            )
+            fluor["well"] = fluor["well"].astype(str)
+            fluor["channel"] = fluor["channel"].astype(str)
+            for (exp, ch), g in fluor.groupby(["experiment", "channel"], observed=True):
+                agg = g.groupby(["well", "segmentation_id"])[needed_cols].max()
+                fluor_by_exp_channel.setdefault(exp, {})[ch] = agg
+            n_pairs = sum(len(v) for v in fluor_by_exp_channel.values())
+            print(f"  fluor sidecar: {n_pairs} (exp, channel) slices loaded")
 
         v4_dir_p = Path(v4_dir)
 
@@ -284,73 +332,65 @@ def make_patched_phase1_worker(
         _orig_find = fd.find_cell_h5ad_path
         _orig_load = fd.load_cell_h5ad
 
+        v4_fluor_dir_p = Path(v4_fluor_dir) if v4_fluor_dir else None
+
+        # Thread-local hand-off: v3's phase1 calls find_cell_h5ad_path RIGHT
+        # before load_features_corrected. We stash the channel from find() so
+        # the patched load_features_corrected can slice the multi-channel
+        # v4 fluor h5ad correctly.
+        import threading as _threading
+        _fluor_ctx = _threading.local()
+
         def _patched_find(experiment, channel, *a, **kw):
-            if "phase" in str(channel).lower():
+            channel_lower = str(channel).lower()
+            if "phase" in channel_lower:
                 p = v4_dir_p / f"{experiment}.h5ad"
                 if p.exists():
                     return p
+            elif v4_fluor_dir_p is not None:
+                # Non-phase: point at v4 fluor h5ad (the worker's _patched_load
+                # OR _patched_load_features_corrected will slice it by channel).
+                p = v4_fluor_dir_p / f"{experiment}.h5ad"
+                if p.exists():
+                    # Stash the channel for the subsequent
+                    # load_features_corrected call.
+                    _fluor_ctx.last_channel = str(channel)
+                    _fluor_ctx.last_experiment = experiment
+                    return p
             return _orig_find(experiment, channel, *a, **kw)
 
-        def _patched_load(experiment, channel, *a, **kw):
-            if "phase" not in str(channel).lower():
-                return _orig_load(experiment, channel, *a, **kw)
-            p = v4_dir_p / f"{experiment}.h5ad"
-            if not p.exists():
-                return _orig_load(experiment, channel, *a, **kw)
+        def _apply_weights(
+            adata: "ad.AnnData",
+            attns: dict,
+            experiment: str,
+            tag: str,
+        ) -> "ad.AnnData":
+            """Per-sgRNA normalize the per-cell weights, pre-multiply X, return adata.
 
-            adata = ad.read_h5ad(p)
-            # Drop NaN-sgRNA + duplicate (well, seg) rows that break v3 aggregation.
-            n0 = adata.n_obs
-            keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
-                subset=["well", "segmentation_id"], keep="first"
-            ).values
-            if not keep.all():
-                adata = adata[keep].copy()
-                print(f"  [{experiment}] dropped {n0 - adata.n_obs:,} bad rows → {adata.n_obs:,} cells")
-
-            if experiment not in sidecar_by_exp:
-                print(f"  [{experiment}] WARN no sidecar entries — uniform weights")
-                return adata
-
-            sidecar_exp = sidecar_by_exp[experiment]
-            well = adata.obs["well"].astype(str).values
-            seg = adata.obs["segmentation_id"].values
-            idx = pd.MultiIndex.from_arrays([well, seg])
-
-            # Reindex pulls the per-cell attention values for each requested column.
-            reindexed = sidecar_exp.reindex(idx)
-            attns = {c: reindexed[c].to_numpy(dtype=np.float32) for c in needed_cols}
-
+            ``attns`` maps each needed_col → length-n_cells np.float32 array
+            (NaN where the cell has no attention for that column).
+            """
             sgrna = adata.obs["sgRNA"].astype(str).values
             gene_names = adata.obs["gene_name"].astype(str).values
 
             if strategy_spec["op"] == "acc_select":
-                # Per (sgRNA, exp) group, rank cells by chosen attention column,
-                # keep top K where K = gene_to_K[gene] // already-divided-by-4.
-                # K=-1 means "keep all cells of this gene".
                 attn_col = strategy_spec["col"]
                 a = attns[attn_col]
                 gene_to_K = strategy_spec["gene_to_K"]
-                # Per-cell K cap: -1 means no cap.
                 K_per_cell = np.array(
                     [gene_to_K.get(g, -1) for g in gene_names], dtype=np.int32
                 )
-                # Rank per sgRNA descending; NaN attention → sent to bottom.
                 a_rank_src = np.where(np.isnan(a), -np.inf, a)
                 df = pd.DataFrame({"sgRNA": sgrna, "a": a_rank_src})
                 ranks = df.groupby("sgRNA", observed=True)["a"].rank(
                     method="first", ascending=False, na_option="bottom"
                 ).to_numpy()
-                # Keep cells whose rank ≤ K, or all cells when K < 0 (no cap).
                 keep = (K_per_cell < 0) | (ranks <= K_per_cell)
                 if strategy_spec.get("mode", "raw") == "weighted":
-                    # Use attention value for kept cells; NaN-fallback to 1
                     w = np.where(np.isnan(a), 1.0, a).astype(np.float32)
                     w = np.where(keep, w, 0.0).astype(np.float32)
                 else:
-                    # Raw: kept = 1, dropped = 0
                     w = keep.astype(np.float32)
-                # Diagnostic
                 n_kept = int(keep.sum())
                 print(
                     f"  [acc_select/{strategy_spec.get('mode','raw')}] kept "
@@ -368,21 +408,160 @@ def make_patched_phase1_worker(
             X *= w_norm[:, None]
             adata.X = X
 
-            # Diagnostics
-            n_real = int(any(np.isfinite(attns[c]).sum() > 0 for c in needed_cols))
             covered = sum(np.isfinite(attns[c]) for c in needed_cols)
             n_any = int((covered > 0).sum())
             print(
-                f"  [{experiment}] {adata.n_obs:,} cells, "
+                f"  [{experiment}/{tag}] {adata.n_obs:,} cells, "
                 f"attn-covered (any head)={n_any:,} ({n_any/adata.n_obs:.0%}), "
                 f"w_norm in [{w_norm.min():.3g}, {w_norm.max():.3g}]"
             )
             return adata
 
+        def _lookup_attns(sidecar_slice, well_arr, seg_arr):
+            """Reindex a per-(well, seg) sidecar slice to get per-cell attention."""
+            idx = pd.MultiIndex.from_arrays([well_arr, seg_arr])
+            reindexed = sidecar_slice.reindex(idx)
+            return {c: reindexed[c].to_numpy(dtype=np.float32) for c in needed_cols}
+
+        def _patched_load(experiment, channel, *a, **kw):
+            channel_str = str(channel)
+            is_phase = "phase" in channel_str.lower()
+
+            if is_phase:
+                # ---- Phase path: load v4 h5ad + apply phase sidecar weighting.
+                p = v4_dir_p / f"{experiment}.h5ad"
+                if not p.exists():
+                    return _orig_load(experiment, channel, *a, **kw)
+
+                adata = ad.read_h5ad(p)
+                n0 = adata.n_obs
+                keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
+                    subset=["well", "segmentation_id"], keep="first"
+                ).values
+                if not keep.all():
+                    adata = adata[keep].copy()
+                    print(f"  [{experiment}] dropped {n0 - adata.n_obs:,} bad rows → {adata.n_obs:,} cells")
+
+                if experiment not in sidecar_by_exp:
+                    print(f"  [{experiment}] WARN no phase sidecar entries — uniform weights")
+                    return adata
+
+                well = adata.obs["well"].astype(str).values
+                seg = adata.obs["segmentation_id"].values
+                attns = _lookup_attns(sidecar_by_exp[experiment], well, seg)
+                return _apply_weights(adata, attns, experiment, channel_str)
+
+            # ---- Non-phase channel: prefer v4 fluor h5ad (sliced by
+            # channel) if v4_fluor_dir was provided; otherwise fall back
+            # to v3 production fluor.
+            channel_norm = _normalize_channel(channel_str)
+            v4_fluor_p = (Path(v4_fluor_dir) / f"{experiment}.h5ad"
+                            if v4_fluor_dir else None)
+            using_v4 = v4_fluor_p is not None and v4_fluor_p.exists()
+
+            if using_v4:
+                adata_all = ad.read_h5ad(v4_fluor_p)
+                # Slice to rows for THIS channel only.
+                m_chan = (adata_all.obs["channel_name"].astype(str)
+                          == channel_norm).values
+                if not m_chan.any():
+                    print(f"  [{experiment}/{channel_str}] no v4 fluor rows "
+                          f"for channel {channel_norm!r} — falling back to v3")
+                    adata = _orig_load(experiment, channel, *a, **kw)
+                else:
+                    adata = adata_all[m_chan].copy()
+            else:
+                adata = _orig_load(experiment, channel, *a, **kw)
+
+            # Always drop bad rows: NaN sgRNA breaks downstream aggregation,
+            # duplicate (well, seg) breaks v3's per-cell join. Apply regardless
+            # of which branch (v4 fluor / v3 fallback) produced the adata.
+            if "sgRNA" in adata.obs.columns:
+                n0 = adata.n_obs
+                keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
+                    subset=["well", "segmentation_id"], keep="first"
+                ).values
+                if not keep.all():
+                    adata = adata[keep].copy()
+                    print(f"  [{experiment}/{channel_str}] dropped "
+                          f"{n0 - adata.n_obs:,} bad rows → {adata.n_obs:,} cells")
+
+            if not fluor_by_exp_channel:
+                return adata  # no fluor sidecar → unweighted
+
+            exp_channels = fluor_by_exp_channel.get(experiment, {})
+            if channel_norm not in exp_channels:
+                # No fluor attention for this (exp, channel) — pass through.
+                print(f"  [{experiment}/{channel_str}] no fluor sidecar entries "
+                      f"(normalized to {channel_norm!r}) — uniform weights")
+                return adata
+
+            well = adata.obs["well"].astype(str).values
+            seg = adata.obs["segmentation_id"].values
+            attns = _lookup_attns(exp_channels[channel_norm], well, seg)
+            return _apply_weights(adata, attns, experiment, channel_str)
+
         fd.find_cell_h5ad_path = _patched_find
         fd.load_cell_h5ad = _patched_load
         p1.find_cell_h5ad_path = _patched_find
         p1.load_cell_h5ad = _patched_load
+
+        # ALSO patch load_features_corrected — v3's phase1 calls it instead of
+        # load_cell_h5ad when --apply-iss-sidecar is set (the default). For
+        # v4 fluor h5ads (multi-channel), we must slice by channel here too,
+        # else v3 sees rows from ALL channels mixed together.
+        if v4_fluor_dir_p is not None:
+            from ops_model.features import anndata_utils as au
+
+            _orig_lfc = au.load_features_corrected
+
+            def _patched_load_features_corrected(cell_path, *a, **kw):
+                p = Path(cell_path) if cell_path else None
+                # Detect v4 fluor h5ad by parent dir match.
+                is_v4_fluor = (
+                    p is not None
+                    and p.parent == v4_fluor_dir_p
+                    and p.exists()
+                )
+                if not is_v4_fluor:
+                    return _orig_lfc(cell_path, *a, **kw)
+
+                # Load the full multi-channel h5ad then slice by the channel
+                # that the immediately-preceding _patched_find captured.
+                channel = getattr(_fluor_ctx, "last_channel", None)
+                if channel is None:
+                    print(f"  WARN: load_features_corrected on v4 fluor h5ad "
+                          f"{p.name} without a channel context — returning full")
+                    return _orig_lfc(cell_path, *a, **kw)
+                channel_norm = _normalize_channel(channel)
+                adata = ad.read_h5ad(p)
+                m = (adata.obs["channel_name"].astype(str) == channel_norm).values
+                if not m.any():
+                    print(f"  WARN: no v4 fluor rows for channel {channel_norm!r} "
+                          f"in {p.name} — falling back to v3")
+                    return _orig_lfc(cell_path, *a, **kw)
+                adata = adata[m].copy()
+                # Drop NaN-sgRNA + duplicate (well, seg) rows (mirror phase).
+                n0 = adata.n_obs
+                keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
+                    subset=["well", "segmentation_id"], keep="first"
+                ).values
+                if not keep.all():
+                    adata = adata[keep].copy()
+                print(f"  [{getattr(_fluor_ctx,'last_experiment','?')}/"
+                      f"{channel}] v4 fluor sliced to {adata.n_obs:,} "
+                      f"rows (from {n0:,})")
+                return adata
+
+            au.load_features_corrected = _patched_load_features_corrected
+            try:
+                from ops_model.post_process.combination.pca_optimization \
+                    import phase1 as _p1
+                # phase1 imports via `from ... import` inside the function,
+                # so the name resolves at call time from au — no extra patch
+                # needed. But if phase1 had a top-level import, patch it too.
+            except Exception:
+                pass
 
         # 3) Run the original phase1 worker.
         return orig_func(*args, **kwargs)

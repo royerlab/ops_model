@@ -68,6 +68,14 @@ ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
     "per_experiment_v4_attn.parquet"
 )
+FLUOR_ATTN_SIDECAR = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
+    "per_experiment_v4_attn_fluor.parquet"
+)
+V4_PER_EXP_FLUOR = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
+    "per_experiment_v4_fluor"
+)
 # v3 cdino classification accuracy tables — used by acc_select strategies.
 # Per (gene, n_cells), top1_acc / top5_acc; the bin is the smallest n_cells
 # at which top1_acc >= 0.95.
@@ -180,6 +188,19 @@ def _resolve_strategy(name: str) -> dict:
         gene_to_K = _build_chad_gene_to_K()
         return {"op": "acc_select", "col": "attn_chad", "mode": "weighted",
                 "gene_to_K": gene_to_K}
+    # Fluorescent-marker attention strategies — these reuse the same op shapes
+    # as the phase strategies but read attention from the per-(cell, channel)
+    # FLUOR sidecar (per_experiment_v4_attn_fluor.parquet). Run with
+    # ``--signal-set no_phase`` (fluor only) or ``all_with_autofluorescence``
+    # (phase + fluor) to actually load fluor channels.
+    if name == "fluor_ebi":
+        return {"op": "column", "col": "attn_ebi"}
+    if name == "fluor_geneko":
+        return {"op": "column", "col": "attn_geneko"}
+    if name == "fluor_max":
+        return {"op": "column", "col": "attn_max"}
+    if name == "fluor_ebi_then_geneko":
+        return {"op": "fallback", "cols": ["attn_ebi", "attn_geneko"]}
     # Sister-coherence strategies (sidecar columns added by build_v4_attn_sidecar
     # --add-sister-coherence). sister_ratio is the KDTree-derived per-cell
     # spatial co-localization metric; orthogonal to attention (Spearman ~ -0.1
@@ -302,7 +323,16 @@ STRATEGIES = [
     "region_miscall_filter_03", "region_miscall_filter_05",
     "region_miscall_w_a03", "region_miscall_w_a10",
     "attn_ebi_x_region_w_a03",
+    # fluor-attention strategies (use --signal-set no_phase by default)
+    "fluor_ebi", "fluor_geneko", "fluor_max", "fluor_ebi_then_geneko",
 ]
+
+# Strategies that read from the FLUOR sidecar (per-(cell, channel)) instead
+# of the phase sidecar. The runner enables the fluor sidecar when the
+# strategy name starts with "fluor_" OR when --signal-set != phase_only.
+FLUOR_STRATEGIES = {
+    "fluor_ebi", "fluor_geneko", "fluor_max", "fluor_ebi_then_geneko",
+}
 
 SISTER_STRATEGIES = {
     "sister", "sister_pow2", "sister_pow4",
@@ -320,9 +350,17 @@ SISTER_STRATEGIES = {
 }
 
 
-def _install_patches(strategy_name: str) -> None:
-    """Patch submit_parallel_jobs to wrap phase1 workers + patch local fd."""
+def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
+    """Patch submit_parallel_jobs to wrap phase1 workers + patch local fd.
+
+    When ``use_fluor=True``, the fluor sidecar
+    (per_experiment_v4_attn_fluor.parquet, keyed on (exp, well, seg,
+    channel)) is also passed to the worker. Non-phase channel loads then
+    apply per-(cell, channel) attention weighting from that sidecar.
+    """
     spec = _resolve_strategy(strategy_name)
+    fluor_path = str(FLUOR_ATTN_SIDECAR) if use_fluor else None
+    fluor_dir = str(V4_PER_EXP_FLUOR) if use_fluor else None
 
     import ops_utils.hpc.slurm_batch_utils as sbu
     _orig_submit = sbu.submit_parallel_jobs
@@ -333,6 +371,8 @@ def _install_patches(strategy_name: str) -> None:
             if getattr(orig_func, "__name__", "") == "pca_sweep_pooled_signal":
                 job["func"] = make_patched_phase1_worker(
                     orig_func, str(ATTN_SIDECAR), spec, str(V4_PER_EXP),
+                    fluor_sidecar_path=fluor_path,
+                    v4_fluor_dir=fluor_dir,
                 )
         return _orig_submit(jobs_to_submit, *args, **kwargs)
 
@@ -376,12 +416,31 @@ def main() -> int:
                         "are more likely to be spread across separate nodes)")
     p.add_argument("--aggregate-only", action="store_true")
     p.add_argument("--fixed-threshold", type=float, default=0.80)
+    p.add_argument("--signal-set", default="auto",
+                   choices=["auto", "phase_only", "no_phase", "all_livecell"],
+                   help="Which signal set to feed v3 pca_optimization. "
+                        "'auto' = phase_only for non-fluor strategies, "
+                        "no_phase for strategies in FLUOR_STRATEGIES. "
+                        "Pass all_livecell to combine phase + fluor channels "
+                        "in one run (output → all_livecell/).")
     args = p.parse_args()
 
-    _install_patches(args.attn_strategy)
+    # Resolve signal_set + whether to enable the fluor sidecar.
+    is_fluor_strategy = args.attn_strategy in FLUOR_STRATEGIES
+    if args.signal_set == "auto":
+        signal_set = "no_phase" if is_fluor_strategy else "phase_only"
+    else:
+        signal_set = args.signal_set
+    use_fluor = signal_set != "phase_only" or is_fluor_strategy
+
+    _install_patches(args.attn_strategy, use_fluor=use_fluor)
     print(f"✓ installed v4-attn patches (strategy={args.attn_strategy})")
     print(f"  v4 dir: {V4_PER_EXP}")
-    print(f"  sidecar: {ATTN_SIDECAR}")
+    print(f"  phase sidecar: {ATTN_SIDECAR}")
+    if use_fluor:
+        print(f"  fluor sidecar: {FLUOR_ATTN_SIDECAR}")
+        print(f"  v4 fluor dir:  {V4_PER_EXP_FLUOR}")
+    print(f"  signal_set: {signal_set}")
 
     from ops_model.post_process.combination.pca_optimization import main as pca_main
 
@@ -389,18 +448,27 @@ def main() -> int:
     # organized as a sibling tree to <root>/attention/<name>/.
     parent_tag = "sister" if args.attn_strategy in SISTER_STRATEGIES else "attention"
     run_tag = f"{parent_tag}/{args.attn_strategy}"
+
+    # signal_set "all_livecell" = neither --phase-only nor --no-phase (default
+    # multi-channel behavior). The other two pass the matching v3 flag.
+    # 2nd-pass PCA consensus is ENABLED by default (no --no-second-pca flag) —
+    # the canonical headline metric comes from the 2nd-pass output at
+    # <run>/second_pca_consensus/.
     pca_argv = [
         "--output-dir", str(args.output_dir),
         "--cell-dino",
         "--zscore-per-experiment",
-        "--phase-only",
         "--paper-v1",
         "--run-tag", run_tag,
         "--chad-annotation", str(args.chad_annotation),
         "--fixed-threshold", str(args.fixed_threshold),
-        "--no-second-pca",
         "--slurm-partition", args.slurm_partition,
     ]
+    if signal_set == "phase_only":
+        pca_argv.append("--phase-only")
+    elif signal_set == "no_phase":
+        pca_argv.append("--no-phase")
+    # signal_set == "all_livecell": no flag — default to all channels
     if args.slurm:
         pca_argv.append("--slurm")
     if args.aggregate_only:
