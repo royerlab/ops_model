@@ -17,6 +17,8 @@ class DiffAE(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         n_blocks = len(cfg.block_out_channels)
+        # attention at the two lowest-resolution stages (kept — this arch produces the
+        # promising morphs; speed comes from multi-GPU, not from shrinking the model)
         down = tuple("AttnDownBlock2D" if i >= n_blocks - 2 else "DownBlock2D"
                      for i in range(n_blocks))
         up = tuple("AttnUpBlock2D" if i < 2 else "UpBlock2D" for i in range(n_blocks))

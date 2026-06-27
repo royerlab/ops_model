@@ -32,8 +32,8 @@ class DiffAEConfig:
     # ---- training: proper conditional-diffusion recipe ----
     # The v1 run had ~dead conditioning (emb/noise ratio 0.008). Fix = conditioning
     # dropout (forces the model to USE the embedding) + EMA + much longer training.
-    epochs: int = 120              # resume across 12h jobs to reach this
-    batch_size: int = 48
+    epochs: int = 120              # resume across jobs to reach this
+    batch_size: int = 48           # single-GPU (DataParallel breaks diffusers; DDP TODO)
     lr: float = 1e-4
     weight_decay: float = 0.0
     cond_dropout: float = 0.15     # replace embedding with learned null this often (enables CFG)

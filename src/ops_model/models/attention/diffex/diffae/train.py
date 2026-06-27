@@ -103,6 +103,10 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
     out_dir = Path(out_dir)
     (out_dir / "gate").mkdir(parents=True, exist_ok=True)
 
+    # NOTE: nn.DataParallel is incompatible with the diffusers UNet (its `.dtype`
+    # property breaks on DP replicas). Multi-GPU would need DDP. Single-GPU here.
+    train_model = model
+
     @torch.no_grad()
     def ema_update():
         for e, p in zip(ema.parameters(), model.parameters()):
@@ -134,7 +138,7 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
             noisy = sched.add_noise(x, noise, t)
             opt.zero_grad()
             with torch.autocast(device_type="cuda", enabled=use_amp):
-                loss = crit(model(noisy, t, e), noise)
+                loss = crit(train_model(noisy, t, e), noise)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             ema_update()
             ep_loss += float(loss) * x.shape[0]

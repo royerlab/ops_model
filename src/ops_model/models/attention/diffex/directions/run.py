@@ -53,13 +53,15 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     ctrl_idx = np.flatnonzero(labels == 0)[: cfg.n_traverse]
     src_imgs = normalize(images[ctrl_idx])
     src_embs = embs[ctrl_idx]
+    kd_idx = np.flatnonzero(labels == 1)[: cfg.n_traverse]   # REAL KD cells for reference column
+    kd_imgs = normalize(images[kd_idx]) if len(kd_idx) else src_imgs
     diffae = load_diffae(cfg, dev)
 
-    # sweep edit-guidance scale w (w=1 normal; w>1 amplifies the embedding edit)
+    # sweep guidance scale w (w=1 = plain conditional; w>1 amplifies the embedding edit)
     sweep = {}
     for w in cfg.guidance_scales:
         sc = traverse(diffae, bank, best_k, src_imgs, src_embs, lr_w, lr_b, cfg, dev, out,
-                      gap=gap, w=w)
+                      gap=gap, w=w, real_kd=kd_imgs)
         mono = float(np.mean([np.all(np.diff(s) > 0) or np.all(np.diff(s) < 0) for s in sc]))
         sweep[f"w{w:g}"] = {"mean_score_delta": float((sc[:, -1] - sc[:, 0]).mean()),
                             "frac_monotonic": mono}
