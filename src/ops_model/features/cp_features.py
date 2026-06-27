@@ -453,8 +453,20 @@ def cp_features_main(
     )
 
     if config["wait_for_completion"]:
-        # Wait for all jobs to complete
-        print("Waiting for all jobs to complete...")
+        # Live-watch the array -> concat -> anndata chain by job ID so the
+        # user sees progress instead of a silent block (or silent exit).
+        from ops_utils.hpc.slurm_batch_utils import monitor_slurm_arrays
+
+        monitor_slurm_arrays(
+            arrays=[
+                {"label": "cp_features", "base_job_id": array_job_id, "total": len(array_jobs)},
+                {"label": "concatenate", "base_job_id": str(concat_job.job_id), "total": 1},
+                {"label": "anndata", "base_job_id": str(anndata_job.job_id), "total": 1},
+            ],
+        )
+
+        # Jobs are now terminal; .result() returns immediately (or raises if
+        # the job failed) and gives us the pickled return value.
         final_df = concat_job.result()
         print(f"Concatenation completed. Final dataframe shape: {final_df.shape}")
 
@@ -530,6 +542,13 @@ def parse_args():
         type=str,
         help="Path to .txt file with one absolute config path per line",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="After submitting, watch the array -> concat -> anndata job chain "
+        "with live progress (overrides wait_for_completion in the config). "
+        "Single-config mode only.",
+    )
     return parser.parse_args()
 
 
@@ -544,4 +563,7 @@ if __name__ == "__main__":
             ]
         cp_features_bulk_main(config_paths)
     else:
-        cp_features_main(args.config_path)
+        cp_features_main(
+            args.config_path,
+            wait_for_completion=True if args.watch else None,
+        )
