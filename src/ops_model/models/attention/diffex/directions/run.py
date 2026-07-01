@@ -36,13 +36,18 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     images, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
 
-    # 2a: directions (unsupervised, all embeddings)
+    # 2a: directions (unsupervised, all embeddings). Seed so direction discovery is
+    # REPRODUCIBLE run-to-run (otherwise each run learns a different axis).
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
     bank = DirectionBank(cfg.cond_dim, cfg.K, cfg.hidden)
     train_directions(bank, embs, cfg, dev)
     torch.save(bank.state_dict(), out / "direction_bank.pt")
 
-    # 2b: rank
-    best_k, shifts, lr_w, lr_b, lr_acc = rank_directions(bank, embs, labels, cfg, dev)
+    # 2b: rank (sign orients +α toward KO unless disabled)
+    best_k, shifts, lr_w, lr_b, lr_acc, sign = rank_directions(bank, embs, labels, cfg, dev)
+    if not cfg.orient_sign:
+        sign = 1.0   # raw MLP sign (pre-orientation behavior)
 
     # 3: traverse control cells. Scale α to the control→KD embedding gap so
     # α=+1 ≈ a full traversal (unit directions × small α barely move otherwise).
@@ -61,7 +66,7 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     sweep = {}
     for w in cfg.guidance_scales:
         sc = traverse(diffae, bank, best_k, src_imgs, src_embs, lr_w, lr_b, cfg, dev, out,
-                      gap=gap, w=w, real_kd=kd_imgs)
+                      gap=gap, w=w, real_kd=kd_imgs, sign=sign)
         mono = float(np.mean([np.all(np.diff(s) > 0) or np.all(np.diff(s) < 0) for s in sc]))
         sweep[f"w{w:g}"] = {"mean_score_delta": float((sc[:, -1] - sc[:, 0]).mean()),
                             "frac_monotonic": mono}

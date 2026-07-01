@@ -21,6 +21,8 @@ def main():
     ap.add_argument("--K", type=int, default=10)
     ap.add_argument("--dir-epochs", type=int, default=100)
     ap.add_argument("--diffae-ckpt", default=None)
+    ap.add_argument("--no-orient", action="store_true",
+                    help="raw MLP sign (pre-orientation); default orients +α toward KO")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--partition", default="gpu")
     ap.add_argument("--gres", default="gpu:1")
@@ -31,7 +33,8 @@ def main():
     args = ap.parse_args()
 
     cfg = DirConfig(grain=args.grain, target=args.target, K=args.K,
-                    dir_epochs=args.dir_epochs, device="cuda")
+                    dir_epochs=args.dir_epochs, device="cuda",
+                    orient_sign=not args.no_orient)
     if args.diffae_ckpt:
         cfg.diffae_ckpt = args.diffae_ckpt
     out = args.out_dir or f"{DEFAULT_OUT_ROOT}/directions/{args.grain}/{slugify(args.target)}"

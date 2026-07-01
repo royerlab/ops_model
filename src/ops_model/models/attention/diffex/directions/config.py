@@ -39,8 +39,9 @@ class DirConfig:
     # ---- 3: traversal ----
     # alphas are MULTIPLES of the control→KD embedding gap ‖μ_KD−μ_ctrl‖ when
     # scale_alpha_to_gap=True (α=+1 ≈ a full control→KD traversal); else raw units.
-    alphas: tuple = (-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5)
+    alphas: tuple = (-3.0, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
     scale_alpha_to_gap: bool = True
+    orient_sign: bool = True       # orient so +α=toward KO (False = raw MLP sign, pre-orientation)
     n_traverse: int = 8            # source (control) cells to traverse
     ddim_steps: int = 50
     # edit-guidance: ε̃ = ε(z0) + w·(ε(z0+αd) − ε(z0)). w=1 = normal; w>1 amplifies the

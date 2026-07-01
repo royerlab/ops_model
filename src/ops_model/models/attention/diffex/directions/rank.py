@@ -27,7 +27,11 @@ def rank_directions(bank, embs: np.ndarray, labels: np.ndarray, cfg, dev):
             shift = (((z + a * d) @ w) - ((z - a * d) @ w)).mean().item()
             shifts.append(shift)
     best_k = int(max(range(bank.K), key=lambda k: abs(shifts[k])))
+    # orient so +α always increases the KD score (the MLP's sign is arbitrary):
+    # +α → more KO-like, −α → more control-like, consistently across targets.
+    sign = 1.0 if shifts[best_k] >= 0 else -1.0
     print(f"[rank] LR train acc={acc:.3f}; per-direction score shift: "
           + ", ".join(f"{k}:{s:+.3f}" for k, s in enumerate(shifts)))
-    print(f"[rank] selected direction {best_k} (|shift|={abs(shifts[best_k]):.3f})")
-    return best_k, shifts, clf.coef_[0].astype(np.float32), float(clf.intercept_[0]), acc
+    print(f"[rank] selected direction {best_k} (|shift|={abs(shifts[best_k]):.3f}), "
+          f"orient sign={sign:+.0f} (+α = toward KO)")
+    return best_k, shifts, clf.coef_[0].astype(np.float32), float(clf.intercept_[0]), acc, sign
