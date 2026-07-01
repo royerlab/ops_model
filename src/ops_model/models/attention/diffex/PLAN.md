@@ -370,3 +370,26 @@ re-encode verify, run, submit). Verified 2a+2b on synthetic; full pipeline ran o
 - Retrain 34394595 (phase_v1, reuses caches, 120 epochs, batch 48, resume). Watching cond_ratio
   trajectory. **After it works:** switch directions/traverse to true CFG ε(∅)+w(ε(c)−ε(∅)).
 - If time-embedding conditioning still can't climb → escalate to cross-attention (UNet2DConditionModel).
+
+### 2026-06-29 — Plan C implemented (deterministic direction) + v2_aug retrain
+- **Reproducibility root cause:** unsupervised InfoNCE direction bank is GPU/seed-nondeterministic
+  and `best_k = argmax|shift|` flips run-to-run → same cell highlighted different regions.
+- **Fix (plan C, implemented):** `directions/config.py` `direction_method` — default **`mean_diff`**
+  (deterministic control→KD centroid vector; also `lr_weight`) as PRIMARY; the paper's unsupervised
+  bank kept as `direction_method="unsupervised"` secondary track. `traverse(fixed_dir=…)` uses the
+  global deterministic direction; `deterministic=True` sets seeds + cuDNN-deterministic. `+α = toward
+  KO` by construction (no more sign flip). `rank.supervised_direction()` computes it; LR kept for the
+  re-encode score check only.
+- Reproducibility proof in progress: TIMM23 run twice (jobs 34654037/34654040) → pixel-diff strips.
+- **Next model (v2_aug)**: orientation-aug DiffAE retraining (job 34651296), cond_ratio climbing
+  0.04→0.14 @ep19/120 (aug ramps slower); resume to convergence, then switch directions default to it.
+
+### Future direction — orientation-invariance via augmentation (2026-06-29)
+Observation: along a traversal the cell often spuriously rotates/transposes (orientation is
+encoded in the CellDINO embedding, so the discovered direction carries an orientation component the
+DiffAE renders). Fix: during DiffAE training, augment the TARGET image with the dihedral group
+(4 rotations × flip = 8 views, incl. transpose) while conditioning on the embedding of the CANONICAL
+(un-augmented) cell. Teaches the model orientation ≠ embedding-determined → orientation absorbed by
+the (fixed) noise latent, phenotype carried by the embedding → traversals stop rotating. Do NOT
+recompute CellDINO on the augmented crop (defeats the decoupling). Also serves as general aug to
+sharpen conditioning.

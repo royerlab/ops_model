@@ -22,7 +22,7 @@ from ..diffae.data import normalize
 from .config import DirConfig
 from .data import gather
 from .model import DirectionBank
-from .rank import rank_directions
+from .rank import rank_directions, supervised_direction
 from .traverse import load_diffae, traverse
 from .train_directions import train_directions
 
@@ -36,18 +36,26 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     images, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
 
-    # 2a: directions (unsupervised, all embeddings). Seed so direction discovery is
-    # REPRODUCIBLE run-to-run (otherwise each run learns a different axis).
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    bank = DirectionBank(cfg.cond_dim, cfg.K, cfg.hidden)
-    train_directions(bank, embs, cfg, dev)
-    torch.save(bank.state_dict(), out / "direction_bank.pt")
+    # ---- direction ----
+    if cfg.deterministic:                     # repeatable runs (plan C)
+        torch.manual_seed(cfg.seed); np.random.seed(cfg.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-    # 2b: rank (sign orients +α toward KO unless disabled)
-    best_k, shifts, lr_w, lr_b, lr_acc, sign = rank_directions(bank, embs, labels, cfg, dev)
-    if not cfg.orient_sign:
-        sign = 1.0   # raw MLP sign (pre-orientation behavior)
+    if cfg.direction_method in ("mean_diff", "lr_weight"):
+        # PRIMARY: deterministic supervised control→KD direction (global, +α = toward KO).
+        d_vec, lr_w, lr_b, lr_acc = supervised_direction(embs, labels, cfg)
+        fixed_dir = torch.as_tensor(d_vec, dtype=torch.float32)[None]  # (1,D)
+        bank, best_k, shifts, sign = None, None, None, 1.0
+    else:
+        # SECONDARY: the paper's unsupervised InfoNCE bank (not reproducible run-to-run).
+        bank = DirectionBank(cfg.cond_dim, cfg.K, cfg.hidden)
+        train_directions(bank, embs, cfg, dev)
+        torch.save(bank.state_dict(), out / "direction_bank.pt")
+        best_k, shifts, lr_w, lr_b, lr_acc, sign = rank_directions(bank, embs, labels, cfg, dev)
+        if not cfg.orient_sign:
+            sign = 1.0
+        fixed_dir = None
 
     # 3: traverse control cells. Scale α to the control→KD embedding gap so
     # α=+1 ≈ a full traversal (unit directions × small α barely move otherwise).
@@ -66,15 +74,15 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     sweep = {}
     for w in cfg.guidance_scales:
         sc = traverse(diffae, bank, best_k, src_imgs, src_embs, lr_w, lr_b, cfg, dev, out,
-                      gap=gap, w=w, real_kd=kd_imgs, sign=sign)
+                      gap=gap, w=w, real_kd=kd_imgs, sign=sign, fixed_dir=fixed_dir)
         mono = float(np.mean([np.all(np.diff(s) > 0) or np.all(np.diff(s) < 0) for s in sc]))
         sweep[f"w{w:g}"] = {"mean_score_delta": float((sc[:, -1] - sc[:, 0]).mean()),
                             "frac_monotonic": mono}
         print(f"[w={w:g}] mean_score_delta={sweep[f'w{w:g}']['mean_score_delta']:.2f}  "
               f"frac_monotonic={mono:.2f}")
     metrics = {
-        "target": cfg.target, "grain": cfg.grain, "K": cfg.K, "best_direction": best_k,
-        "lr_acc": lr_acc, "score_shifts": shifts, "gap": gap,
+        "target": cfg.target, "grain": cfg.grain, "direction_method": cfg.direction_method,
+        "best_direction": best_k, "lr_acc": lr_acc, "score_shifts": shifts, "gap": gap,
         "guidance_sweep": sweep, "n_traverse": int(len(ctrl_idx)),
     }
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2))

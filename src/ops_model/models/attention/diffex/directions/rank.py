@@ -11,6 +11,28 @@ import torch
 from sklearn.linear_model import LogisticRegression
 
 
+def supervised_direction(embs: np.ndarray, labels: np.ndarray, cfg):
+    """Deterministic control→KD direction (plan C primary). No training, no seeds:
+    reproducible by construction, and +α → toward KD by construction.
+
+      - 'mean_diff'  : normalize(mean(KD emb) − mean(control emb))  [centroid vector]
+      - 'lr_weight'  : normalize(logistic-regression weight)         [covariance-aware]
+
+    Returns (d_unit (D,), lr_weight (D,), lr_bias, lr_acc). The LR is kept for the
+    re-encoded score verification only.
+    """
+    clf = LogisticRegression(max_iter=2000, C=1.0).fit(embs, labels)
+    lr_w = clf.coef_[0].astype(np.float32)
+    acc = float(clf.score(embs, labels))
+    if cfg.direction_method == "lr_weight":
+        d = lr_w.copy()
+    else:  # mean_diff (default)
+        d = (embs[labels == 1].mean(0) - embs[labels == 0].mean(0)).astype(np.float32)
+    d = d / (np.linalg.norm(d) + 1e-9)
+    print(f"[direction] supervised '{cfg.direction_method}' (deterministic); LR acc={acc:.3f}")
+    return d.astype(np.float32), lr_w, float(clf.intercept_[0]), acc
+
+
 def rank_directions(bank, embs: np.ndarray, labels: np.ndarray, cfg, dev):
     clf = LogisticRegression(max_iter=2000, C=1.0).fit(embs, labels)
     w = torch.as_tensor(clf.coef_[0], dtype=torch.float32, device=dev)

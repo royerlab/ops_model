@@ -27,6 +27,19 @@ def _device(name: str) -> torch.device:
     return torch.device(name)
 
 
+def _dihedral(x: torch.Tensor) -> torch.Tensor:
+    """Per-sample random dihedral transform (4 rot90 × flip = 8 orientations, incl.
+    transpose). x: (B,1,H,W). The conditioning embedding is NOT recomputed — orientation
+    is made a nuisance the model must push into the noise latent, not the embedding."""
+    ks = torch.randint(0, 4, (x.shape[0],))
+    fl = torch.rand(x.shape[0]) < 0.5
+    out = torch.empty_like(x)
+    for i in range(x.shape[0]):
+        xi = torch.rot90(x[i], int(ks[i]), dims=(-2, -1))
+        out[i] = torch.flip(xi, dims=(-1,)) if fl[i] else xi
+    return out
+
+
 @torch.no_grad()
 def _sample(model, xT, emb, cfg):
     fwd = DDIMScheduler(num_train_timesteps=cfg.train_timesteps)
@@ -129,6 +142,8 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
         ep_loss = 0.0
         for x, e in loader:
             x, e = x.to(dev), e.to(dev)
+            if getattr(cfg, "augment_dihedral", False):    # orientation-invariance aug
+                x = _dihedral(x)
             if cfg.cond_dropout > 0:                       # conditioning dropout
                 drop = torch.rand(e.shape[0], device=dev) < cfg.cond_dropout
                 if drop.any():

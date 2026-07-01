@@ -58,9 +58,12 @@ def _sample_guided(diffae, xT, emb, emb_base, w, cfg):
 
 @torch.no_grad()
 def traverse(diffae, bank, best_k, src_imgs_norm, src_embs, lr_w, lr_b, cfg, dev, out_dir,
-             gap: float = 1.0, w: float = 1.0, real_kd=None, sign: float = 1.0):
+             gap: float = 1.0, w: float = 1.0, real_kd=None, sign: float = 1.0,
+             fixed_dir=None):
     """src_imgs_norm (M,1,H,W) in [-1,1]; src_embs (M,cond_dim).
-    gap = ‖μ_KD−μ_ctrl‖ (α scaled by it); w = edit-guidance scale."""
+    gap = ‖μ_KD−μ_ctrl‖ (α scaled by it); w = edit-guidance scale.
+    fixed_dir (1,D): if given, use this global deterministic direction (plan C) for
+    every cell instead of the per-cell unsupervised bank direction (reproducible)."""
     out_dir = Path(out_dir)
     alphas = list(cfg.alphas)
     H = cfg.crop_size
@@ -70,7 +73,10 @@ def traverse(diffae, bank, best_k, src_imgs_norm, src_embs, lr_w, lr_b, cfg, dev
     gen_imgs = []   # (M, n_alpha) generated patches
     for i in range(len(src_imgs_norm)):
         z0 = torch.as_tensor(src_embs[i:i + 1], dtype=torch.float32).to(dev)
-        d = sign * bank.direction(z0, best_k)                # (1,D); +α → toward KO
+        if fixed_dir is not None:                            # plan C: deterministic global dir
+            d = fixed_dir.to(dev)                            # (1,D), already control→KO oriented
+        else:
+            d = sign * bank.direction(z0, best_k)            # (1,D); +α → toward KO
         # Fixed random noise per cell (constant across α): only the embedding edit
         # changes along a row. α=0 = DDPM recon of z0 (Alex's design), not the real image.
         g = torch.Generator(device=dev).manual_seed(1234 + i)

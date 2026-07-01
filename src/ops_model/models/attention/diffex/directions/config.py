@@ -24,7 +24,14 @@ class DirConfig:
     mask_cell: bool = False
     seed: int = 0
 
-    # ---- 2a: direction discovery ----
+    # ---- direction method (plan C) ----
+    # 'mean_diff' | 'lr_weight' = deterministic supervised control→KD direction (PRIMARY,
+    # reproducible). 'unsupervised' = the paper's InfoNCE direction bank (secondary track,
+    # NOT reproducible run-to-run — GPU/seed sensitive + best_k flips).
+    direction_method: str = "mean_diff"
+    deterministic: bool = True     # seed + cuDNN-deterministic so runs are repeatable
+
+    # ---- 2a: unsupervised direction discovery (only when direction_method='unsupervised') ----
     cond_dim: int = 1024           # CellDINO ViT-L embedding dim
     K: int = 10                    # number of candidate directions
     hidden: int = 512

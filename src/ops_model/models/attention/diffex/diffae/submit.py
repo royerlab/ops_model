@@ -29,6 +29,9 @@ def main():
     ap.add_argument("--cpus", type=int, default=8)
     ap.add_argument("--mem-gb", type=int, default=96)
     ap.add_argument("--time-min", type=int, default=720)
+    ap.add_argument("--after", default=None,
+                    help="SLURM job id: start afterany:<id> (resume=True continues training → auto-resubmit chains)")
+    ap.add_argument("--name", default="diffae_phase_v1")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -37,7 +40,7 @@ def main():
         batch_size=args.batch_size, device="cuda",
     )
     jobs = [{
-        "name": "diffae_phase_v1",
+        "name": args.name,
         "func": run_diffae,
         "kwargs": {"cfg": cfg, "out_dir": str(Path(args.out_dir).resolve())},
         "metadata": {"stage": "diffae"},
@@ -49,6 +52,8 @@ def main():
     }
     if args.constraint:
         slurm_params["slurm_constraint"] = args.constraint
+    if args.after:  # resume-chain: wait for the prior job to end (any reason), then continue
+        slurm_params["slurm_additional_parameters"] = {"dependency": f"afterany:{args.after}"}
     submit_parallel_jobs(
         jobs_to_submit=jobs, experiment="diffae",
         slurm_params=slurm_params, log_dir="diffae",

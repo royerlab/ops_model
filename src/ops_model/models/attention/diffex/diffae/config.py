@@ -39,6 +39,10 @@ class DiffAEConfig:
     cond_dropout: float = 0.15     # replace embedding with learned null this often (enables CFG)
     ema_decay: float = 0.9995      # EMA weights used for sampling/eval
     resume: bool = True            # continue from saved train state if present
+    # dihedral augmentation: randomly rot90×flip the TARGET image while keeping the
+    # canonical CellDINO embedding fixed → teaches the model orientation is NOT
+    # embedding-determined, so traversals stop spuriously rotating the cell.
+    augment_dihedral: bool = True
     device: str = "cuda"
     num_workers: int = 0
 
