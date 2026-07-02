@@ -178,6 +178,7 @@ def _setup(grain, target, out_root, device):
     slug = slugify(target)
     out = Path(out_root) / "directions" / grain / slug
     cache = out / "cache"
+    cache.mkdir(parents=True, exist_ok=True)          # brand-new targets have no cache dir yet
     tag = f"{slug}_{cfg.crop_size}"
     _, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
