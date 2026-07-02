@@ -19,12 +19,40 @@ from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
 from ..classifier.config import DEFAULT_OUT_ROOT, slugify
 from .config import DirConfig
-from .make_gifs import make_all_gifs, make_gif
+from .make_gifs import make_all_gifs, make_gif, render_all_review
 from .run import run_directions
 
 
-def _short(name: str, n: int = 18) -> str:
-    """Short GIF header label for a complex name (genes pass through unchanged)."""
+# ≤10-char header labels so complex names don't overflow the grid tiles.
+COMPLEX_ABBR = {
+    "UTP-B complex": "UTP-B",
+    "mTORC1 complex": "mTORC1",
+    "Chaperonin-containing T-complex": "CCT",
+    "Box C/D snoRNA-Guided RNP methyltransferase complex, FBLL1 variant": "Box C/D",
+    "COPI vesicle coat complex, COPG1-COPZ1 variant": "COPI",
+    "SF3B complex": "SF3B",
+    "COP9 signalosome variant 1": "COP9",
+    "Nucleolar exosome complex, EXOSC10 variant": "Exosome",
+    "LSM2-8 complex": "LSM2-8",
+    "DNA polymerase alpha:primase complex": "Pol α-prim",
+    "40S cytosolic small ribosomal subunit": "40S ribo",
+    "19S proteasome regulatory complex": "19S prot",
+    "DNA polymerase epsilon complex": "DNA Pol ε",
+    "DNA-directed RNA polymerase III complex, POLR3G variant": "Pol III",
+    "DNA-directed RNA polymerase II complex": "Pol II",
+    "Core mediator complex": "Core mediator",
+    "Sm complex": "Sm core",
+    "Eukaryotic translation initiation factor 3 complex": "eIF3",
+    "ESCRT-III complex": "ESCRT-III",
+    "60S cytosolic large ribosomal subunit": "60S ribo",
+    "Actin-related protein 2/3 complex, ARPC1A-ACTR3B-ARPC5 variant": "Arp2/3",
+}
+
+
+def _short(name: str, n: int = 10) -> str:
+    """≤n-char GIF header label for a complex name (genes pass through unchanged)."""
+    if name in COMPLEX_ABBR:
+        return COMPLEX_ABBR[name]
     s = name
     for suf in (" complex", " subunit", " variant"):
         s = s.replace(suf, "")
@@ -49,6 +77,11 @@ def all_gifs_target(grain: str, target: str, label: str, w: float = 5.0) -> list
     return make_all_gifs(grain, target, label, w=w)
 
 
+def review_all_target(grain: str, target: str, label: str, w: float = 5.0) -> list:
+    """Both styles (3-way axis + 2-way half) GIF + panel PNG for every traversed cell."""
+    return render_all_review(grain, target, label, w=w)
+
+
 def build_targets(genes_csv: str, complex_csv: str, n_genes: int, n_complex: int):
     g = pd.read_csv(genes_csv).sort_values("rank_by_K10_mAP").head(n_genes)
     c = pd.read_csv(complex_csv).sort_values("rank_by_K10_mAP").head(n_complex)
@@ -66,18 +99,20 @@ def main():
     ap.add_argument("--w", type=float, default=5.0)
     ap.add_argument("--gifs-only", action="store_true",
                     help="strips already exist: only render GIFs for all traversed cells")
+    ap.add_argument("--review", action="store_true",
+                    help="render both 3-way axis + 2-way half GIF+panel for all cells")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     targets = build_targets(args.genes_csv, args.complex_csv, args.n_genes, args.n_complex)
-    print(f"{len(targets)} targets: {args.n_genes} geneKO + {args.n_complex} complex"
-          f"{'  [gifs-only, all cells]' if args.gifs_only else ''}")
-    func = all_gifs_target if args.gifs_only else run_target
+    mode = "review, all cells, 3-way+2-way" if args.review else ("gifs-only, all cells" if args.gifs_only else "full")
+    print(f"{len(targets)} targets: {args.n_genes} geneKO + {args.n_complex} complex  [{mode}]")
+    func = review_all_target if args.review else (all_gifs_target if args.gifs_only else run_target)
     jobs = [{
         "name": f"dx_{grain}_{slugify(target)[:24]}",
         "func": func,
         "kwargs": {"grain": grain, "target": target, "label": label, "w": args.w},
-        "metadata": {"stage": "batch_gifs" if args.gifs_only else "batch_directions",
+        "metadata": {"stage": "batch_review" if args.review else ("batch_gifs" if args.gifs_only else "batch_directions"),
                      "grain": grain, "target": target},
     } for grain, target, label in targets]
 

@@ -78,7 +78,16 @@ def _labeled3(cell_u8, pos, label, W=340, hdr=58):
     cell = Image.fromarray(cell_u8).resize((W, W), Image.NEAREST).convert("RGB")
     canvas.paste(cell, (0, hdr))
     d = ImageDraw.Draw(canvas)
-    f = _font(19)
+    # auto-shrink font so long labels (−label / label) don't collide with centered NTC
+    left = f"−{label}"
+    sz = 19
+    while sz > 11:
+        f = _font(sz)
+        side = max(d.textlength(left, font=f), d.textlength(label, font=f))
+        if side <= W / 2 - d.textlength("NTC", font=f) / 2 - 8:
+            break
+        sz -= 1
+    f = _font(sz)
     aL = max(0.0, 1 - abs(pos - 0.0) / 0.5)
     aM = max(0.0, 1 - abs(pos - 0.5) / 0.5)
     aR = max(0.0, 1 - abs(pos - 1.0) / 0.5)
@@ -121,12 +130,15 @@ def _render_review(ctx, cell, w, label):
         raw.append(np.clip((img.cpu().numpy()[0, 0] + 1) / 2, 0, 1))
     sd = out / "strips"; sd.mkdir(parents=True, exist_ok=True)
 
-    # FULL axis: −label ← NTC(center) → label; pause at both ends + center
+    # FULL axis: −label ← NTC(center) → label. Start at NTC → +KO → back → −KO → back.
+    # Long settle at the two extremes, SHORT pause at NTC.
     full = [_labeled3((u * 255).astype("uint8"), (a - amin) / (amax - amin), label)
             for a, u in zip(alphas, raw)]
-    m = len(full) // 2
-    idx = ([0] * 5 + list(range(1, m + 1)) + [m] * 5 + list(range(m + 1, len(full))) + [len(full) - 1] * 5
-           + list(range(len(full) - 2, m - 1, -1)) + [m] * 5 + list(range(m - 1, -1, -1)))
+    m = len(full) // 2; n = len(full); He, Hm = 5, 2
+    idx = ([m] * Hm + list(range(m + 1, n)) + [n - 1] * He           # NTC → +label, hold
+           + list(range(n - 2, m - 1, -1)) + [m] * Hm                # back to NTC (short)
+           + list(range(m - 1, -1, -1)) + [0] * He                   # NTC → −label, hold
+           + list(range(1, m + 1)) + [m] * Hm)                       # back to NTC (short)
     seq = [full[i] for i in idx]
     seq[0].save(sd / f"{slug}_w{w:g}_cell{cell}_axis.gif", save_all=True,
                 append_images=seq[1:], duration=180, loop=0)
@@ -149,6 +161,14 @@ def run_review(specs=None, device="cuda"):
                       ("complex", "mTORC1 complex", 2, 5.0, "mTORC1")]
     return [_render_review(_setup(g, t, DEFAULT_OUT_ROOT, device), c, w, lab)
             for g, t, c, w, lab in specs]
+
+
+def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda"):
+    """Both styles (3-way axis + 2-way half), GIF + panel PNG, for every traversed cell."""
+    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device)
+    n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
+    cells = list(cells) if cells is not None else list(range(min(ctx[1].n_traverse, n_ctrl)))
+    return [_render_review(ctx, c, w, label) for c in cells]
 
 
 def _setup(grain, target, out_root, device):
