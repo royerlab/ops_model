@@ -384,6 +384,22 @@ re-encode verify, run, submit). Verified 2a+2b on synthetic; full pipeline ran o
 - **Next model (v2_aug)**: orientation-aug DiffAE retraining (job 34651296), cond_ratio climbing
   0.04→0.14 @ep19/120 (aug ramps slower); resume to convergence, then switch directions default to it.
 
+### Future direction — per-fluorescent-marker embeddings (2026-07-01)
+Repeat the whole directions pipeline on each fluorescent-marker CellDINO embedding (not just
+phase), traversing that marker's top-attention cells — a per-marker counterfactual view of each
+gene-KO / complex phenotype in the channel where attention is most informative. Needs the
+per-marker PMA parquet + per-marker CellDINO gather; direction/traverse stages unchanged.
+
+### Future direction — attention-informed cell selection (2026-06-29)
+Currently we take a flat top-1000 attention-ranked cells per class and pick traversal/feature
+cells by index. To exploit attention ranking more (only touches `directions/data.py gather` +
+`rank.supervised_direction`, not the DiffAE):
+- **Pick highest-attention cells for the traversal/featured strips** (most representative morph),
+  not an arbitrary cell index.
+- **Per-target penetrance depth** — use the attention-accuracy knee (HSPA5≈top10, RPL10≈top800)
+  instead of a flat top-1000, so sharp phenotypes aren't diluted by the diffuse tail.
+- **Attention-weight** the mean_diff / classifier so the most-phenotypic cells dominate the axis.
+
 ### Future direction — orientation-invariance via augmentation (2026-06-29)
 Observation: along a traversal the cell often spuriously rotates/transposes (orientation is
 encoded in the CellDINO embedding, so the discovered direction carries an orientation component the

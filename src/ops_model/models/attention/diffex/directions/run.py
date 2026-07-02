@@ -75,6 +75,7 @@ def run_directions(cfg: DirConfig, out_dir: str) -> dict:
     for w in cfg.guidance_scales:
         sc = traverse(diffae, bank, best_k, src_imgs, src_embs, lr_w, lr_b, cfg, dev, out,
                       gap=gap, w=w, real_kd=kd_imgs, sign=sign, fixed_dir=fixed_dir)
+        np.save(out / f"scores_w{w:g}.npy", sc)   # per-cell,per-alpha scores (for GIF cell pick)
         mono = float(np.mean([np.all(np.diff(s) > 0) or np.all(np.diff(s) < 0) for s in sc]))
         sweep[f"w{w:g}"] = {"mean_score_delta": float((sc[:, -1] - sc[:, 0]).mean()),
                             "frac_monotonic": mono}
