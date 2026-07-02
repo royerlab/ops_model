@@ -502,6 +502,18 @@ def _build_parser():
              "Output → paper_v1/ subdir.",
     )
     parser.add_argument(
+        "--paper-v2",
+        type=str,
+        nargs="?",
+        const="/hpc/projects/icd.fast.ops/configs/good_experiment_list_v2.yml",
+        default=None,
+        help="Restrict discovery to the exact experiment list in the paper-v2 YAML "
+             "(default path: /hpc/projects/icd.fast.ops/configs/good_experiment_list_v2.yml). "
+             "With --cell-dino, reads features from cell_dino_features_v2/ (the v2 run). "
+             "Errors out if any expected experiment is missing from discovery. "
+             "Output → paper_v2/ subdir. Mutually exclusive with --paper-v1.",
+    )
+    parser.add_argument(
         "--run-tag",
         type=str,
         default=None,

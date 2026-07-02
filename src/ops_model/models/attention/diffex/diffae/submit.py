@@ -32,12 +32,16 @@ def main():
     ap.add_argument("--after", default=None,
                     help="SLURM job id: start afterany:<id> (resume=True continues training → auto-resubmit chains)")
     ap.add_argument("--name", default="diffae_phase_v1")
+    ap.add_argument("--augment-affine", action="store_true",
+                    help="continuous rotation+scale+flip aug (else discrete dihedral)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     cfg = DiffAEConfig(
         n_crops=args.n_crops, crop_size=args.crop_size, epochs=args.epochs,
         batch_size=args.batch_size, device="cuda",
+        augment_affine=args.augment_affine,
+        augment_dihedral=not args.augment_affine,
     )
     jobs = [{
         "name": args.name,

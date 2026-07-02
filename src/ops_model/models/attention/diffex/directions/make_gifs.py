@@ -115,44 +115,46 @@ def _strip(frames, gap=4):
 
 
 @torch.no_grad()
-def _render_review(ctx, cell, w, label):
-    """Two review styles from one set of generated frames: full axis + NTC→KO half."""
+def _render_review(ctx, cell, w, label, tag="", styles=("axis",)):
+    """Render traversal styles from one set of frames. DEFAULT = three-way ('axis',
+    −label ← NTC(center) → label). Pass styles=('axis','half') or ('half',) for the
+    two-way NTC→KO view. `tag` is inserted into filenames (e.g. '_v2')."""
     dev, cfg, slug, out, embs, labels, fixed_dir, gap, diffae, null_base = ctx
     ci = np.flatnonzero(labels == 0)
     z0 = torch.as_tensor(embs[ci[cell]:ci[cell] + 1], dtype=torch.float32).to(dev)
     H = cfg.crop_size
     ge = torch.Generator(device=dev).manual_seed(1234 + cell)
     xT = torch.randn(1, 1, H, H, generator=ge, device=dev)
-    alphas = sorted(cfg.alphas); amin, amax = alphas[0], alphas[-1]
-    raw = []
+    all_alphas = sorted(cfg.alphas); amin, amax = all_alphas[0], all_alphas[-1]
+    # only decode the α needed: axis needs the full range, half only α≥0
+    alphas = all_alphas if "axis" in styles else [a for a in all_alphas if a >= 0]
+    raw = {}
     for a in alphas:
         img = _sample_guided(diffae, xT.clone(), z0 + (a * gap) * fixed_dir, null_base, w, cfg)
-        raw.append(np.clip((img.cpu().numpy()[0, 0] + 1) / 2, 0, 1))
+        raw[a] = np.clip((img.cpu().numpy()[0, 0] + 1) / 2, 0, 1)
     sd = out / "strips"; sd.mkdir(parents=True, exist_ok=True)
 
-    # FULL axis: −label ← NTC(center) → label. Start at NTC → +KO → back → −KO → back.
-    # Long settle at the two extremes, SHORT pause at NTC.
-    full = [_labeled3((u * 255).astype("uint8"), (a - amin) / (amax - amin), label)
-            for a, u in zip(alphas, raw)]
-    m = len(full) // 2; n = len(full); He, Hm = 5, 2
-    idx = ([m] * Hm + list(range(m + 1, n)) + [n - 1] * He           # NTC → +label, hold
-           + list(range(n - 2, m - 1, -1)) + [m] * Hm                # back to NTC (short)
-           + list(range(m - 1, -1, -1)) + [0] * He                   # NTC → −label, hold
-           + list(range(1, m + 1)) + [m] * Hm)                       # back to NTC (short)
-    seq = [full[i] for i in idx]
-    seq[0].save(sd / f"{slug}_w{w:g}_cell{cell}_axis.gif", save_all=True,
-                append_images=seq[1:], duration=180, loop=0)
-    _strip(full).save(sd / f"{slug}_w{w:g}_cell{cell}_axis_strip.png")
+    if "axis" in styles:  # FULL 3-way: −label ← NTC(center) → label; NTC→+→−→ back
+        full = [_labeled3((raw[a] * 255).astype("uint8"), (a - amin) / (amax - amin), label)
+                for a in all_alphas]
+        m = len(full) // 2; n = len(full); He, Hm = 5, 2
+        idx = ([m] * Hm + list(range(m + 1, n)) + [n - 1] * He
+               + list(range(n - 2, m - 1, -1)) + [m] * Hm
+               + list(range(m - 1, -1, -1)) + [0] * He
+               + list(range(1, m + 1)) + [m] * Hm)
+        seq = [full[i] for i in idx]
+        seq[0].save(sd / f"{slug}_w{w:g}_cell{cell}{tag}_axis.gif", save_all=True,
+                    append_images=seq[1:], duration=180, loop=0)
+        _strip(full).save(sd / f"{slug}_w{w:g}_cell{cell}{tag}_axis_strip.png")
 
-    # HALF: true NTC (α=0) → label; pause at both ends
-    pa = [(a, u) for a, u in zip(alphas, raw) if a >= 0]
-    amx = pa[-1][0]
-    half = [_labeled((u * 255).astype("uint8"), a / amx, label) for a, u in pa]
-    sh = [half[0]] * 5 + half + [half[-1]] * 6 + half[-2:0:-1] + [half[0]] * 2
-    sh[0].save(sd / f"{slug}_w{w:g}_cell{cell}_half.gif", save_all=True,
-               append_images=sh[1:], duration=180, loop=0)
-    _strip(half).save(sd / f"{slug}_w{w:g}_cell{cell}_half_strip.png")
-    print(f"review {slug} cell{cell}: axis+half gif/strip written")
+    if "half" in styles:  # TWO-WAY (default): true NTC (α=0) → label; pause at both ends
+        pa = [a for a in all_alphas if a >= 0]; amx = pa[-1]
+        half = [_labeled((raw[a] * 255).astype("uint8"), a / amx, label) for a in pa]
+        sh = [half[0]] * 5 + half + [half[-1]] * 6 + half[-2:0:-1] + [half[0]] * 2
+        sh[0].save(sd / f"{slug}_w{w:g}_cell{cell}{tag}_half.gif", save_all=True,
+                   append_images=sh[1:], duration=180, loop=0)
+        _strip(half).save(sd / f"{slug}_w{w:g}_cell{cell}{tag}_half_strip.png")
+    print(f"review {slug} cell{cell}: {'+'.join(styles)} written")
     return slug
 
 
@@ -163,18 +165,95 @@ def run_review(specs=None, device="cuda"):
             for g, t, c, w, lab in specs]
 
 
-def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda"):
-    """Both styles (3-way axis + 2-way half), GIF + panel PNG, for every traversed cell."""
-    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device)
+def run_v2_review(device="cuda"):
+    """Compare the phase_v2_aug (dihedral) model on GBF1 + mTORC1, cell2, at w=5 and w=8."""
+    ckpt = f"{DEFAULT_OUT_ROOT}/diffae/phase_v2_aug/diffae_best.pt"
+    specs = [("geneKO", "GBF1", 2, "GBF1"), ("complex", "mTORC1 complex", 2, "mTORC1")]
+    outs = []
+    for g, t, cell, lab in specs:
+        ctx = _setup(g, t, DEFAULT_OUT_ROOT, device, ckpt=ckpt)
+        for w in (5.0, 8.0):
+            outs.append(_render_review(ctx, cell, w, lab, tag="_v2"))
+    return outs
+
+
+def render_flow(grain, target, label, cells=(0, 2, 3, 5), w=5.0, n_record=10,
+                device="cuda", ckpt=None, two_way=False, overshoot=1.0):
+    """OPTIONAL traversal via CellFlow-style conditional flow matching (see flow.py).
+    Learns a control→KD velocity field in CellDINO space, integrates the ODE from each
+    control cell, decodes each step with the frozen DiffAE. DEFAULT 3-way (−label ← NTC →
+    label; anti arm is a backward extrapolation). two_way=True → forward-only NTC→KO.
+    overshoot = ODE end time t_max: 1.0 lands at the KD manifold; >1 overshoots past it
+    (overshoot≈3 ≈ mean-diff's α=3 drama). Filenames get '_o{overshoot}' when ≠1."""
+    from .flow import train_flow, integrate_flow, integrate_flow_bidir
+    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt)
+    dev, cfg, slug, out, embs, labels, fixed_dir, gap, diffae, null_base = ctx
+    net = train_flow(embs, labels, dev, seed=cfg.seed)
+    sd = out / "strips"; sd.mkdir(parents=True, exist_ok=True)
+    ci = np.flatnonzero(labels == 0)
+    H = cfg.crop_size
+    otag = "" if overshoot == 1.0 else f"_o{overshoot:g}"
+    outs = []
+    for cell in cells:
+        z0 = torch.as_tensor(embs[ci[cell]:ci[cell] + 1], dtype=torch.float32).to(dev)
+        ge = torch.Generator(device=dev).manual_seed(1234 + cell)
+        xT = torch.randn(1, 1, H, H, generator=ge, device=dev)
+        if two_way:
+            traj = integrate_flow(net, z0, dev, n_record=n_record, t_max=overshoot)
+            n = traj.shape[0]
+            frames = [_labeled(
+                (np.clip((_sample_guided(diffae, xT.clone(), traj[k:k + 1], null_base, w, cfg)
+                          .cpu().numpy()[0, 0] + 1) / 2, 0, 1) * 255).astype("uint8"),
+                k / (n - 1), label) for k in range(n)]
+            sq = [frames[0]] * 5 + frames + [frames[-1]] * 6 + frames[-2:0:-1] + [frames[0]] * 2
+            suffix = "_flow2way"
+        else:
+            traj = integrate_flow_bidir(net, z0, dev, n_record=n_record, t_max=overshoot)
+            n = traj.shape[0]
+            frames = [_labeled3(
+                (np.clip((_sample_guided(diffae, xT.clone(), traj[k:k + 1], null_base, w, cfg)
+                          .cpu().numpy()[0, 0] + 1) / 2, 0, 1) * 255).astype("uint8"),
+                k / (n - 1), label) for k in range(n)]
+            m = n // 2; He, Hm = 5, 2
+            idx = ([m] * Hm + list(range(m + 1, n)) + [n - 1] * He
+                   + list(range(n - 2, m - 1, -1)) + [m] * Hm
+                   + list(range(m - 1, -1, -1)) + [0] * He
+                   + list(range(1, m + 1)) + [m] * Hm)
+            sq = [frames[i] for i in idx]
+            suffix = "_flow"
+        gif = sd / f"{slug}{suffix}{otag}_cell{cell}.gif"
+        sq[0].save(gif, save_all=True, append_images=sq[1:], duration=180, loop=0)
+        _strip(frames).save(sd / f"{slug}{suffix}{otag}_cell{cell}_strip.png")
+        print(f"wrote {gif}  ({n} steps)")
+        outs.append(str(gif))
+    return outs
+
+
+def compare_ckpts(grain, target, cell, w, label, ckpts, device="cuda"):
+    """Render the same (target, cell, w) under multiple checkpoints, tagged, for A/B compare.
+    ckpts: {tag: ckpt_path} e.g. {'_v1': '.../phase_v1/diffae_best.pt', '_v2': '.../phase_v2_aug/...'}"""
+    out = []
+    for tag, ckpt in ckpts.items():
+        ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt)
+        out.append(_render_review(ctx, cell, w, label, tag=tag))
+    return out
+
+
+def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag=""):
+    """Both styles (3-way axis + 2-way half), GIF + panel PNG, for the given cells.
+    ckpt overrides the DiffAE checkpoint; tag suffixes filenames (e.g. '_v2')."""
+    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt)
     n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
     cells = list(cells) if cells is not None else list(range(min(ctx[1].n_traverse, n_ctrl)))
-    return [_render_review(ctx, c, w, label) for c in cells]
+    return [_render_review(ctx, c, w, label, tag=tag) for c in cells]
 
 
-def _setup(grain, target, out_root, device):
+def _setup(grain, target, out_root, device, ckpt=None):
     """Expensive per-target setup shared by all cells: gather + direction + model."""
     dev = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
     cfg = DirConfig(grain=grain, target=target, device=device)
+    if ckpt:
+        cfg.diffae_ckpt = ckpt
     slug = slugify(target)
     out = Path(out_root) / "directions" / grain / slug
     cache = out / "cache"
@@ -199,17 +278,20 @@ def _render_cell(ctx, cell, w, label):
     ge = torch.Generator(device=dev).manual_seed(1234 + cell)
     xT = torch.randn(1, 1, H, H, generator=ge, device=dev)
 
-    alphas = sorted(cfg.alphas)                       # ascending = NTC → KO
-    amin, amax = alphas[0], alphas[-1]
+    # Default = THREE-WAY: −label ← NTC(center) → label. Start at NTC → +KO → back → −KO → back.
+    alphas = sorted(cfg.alphas); amin, amax = alphas[0], alphas[-1]
     frames = []
     for a in alphas:
         img = _sample_guided(diffae, xT.clone(), z0 + (a * gap) * fixed_dir, null_base, w, cfg)
         u = np.clip((img.cpu().numpy()[0, 0] + 1) / 2, 0, 1)
-        pos = (a - amin) / (amax - amin)
-        frames.append(_labeled((u * 255).astype("uint8"), pos, label))
+        frames.append(_labeled3((u * 255).astype("uint8"), (a - amin) / (amax - amin), label))
 
-    # ping-pong with a hold at each extreme; slower playback
-    seq = [frames[0]] * 3 + frames + [frames[-1]] * 4 + frames[-2:0:-1] + [frames[0]] * 2
+    m = len(frames) // 2; n = len(frames); He, Hm = 5, 2
+    idx = ([m] * Hm + list(range(m + 1, n)) + [n - 1] * He
+           + list(range(n - 2, m - 1, -1)) + [m] * Hm
+           + list(range(m - 1, -1, -1)) + [0] * He
+           + list(range(1, m + 1)) + [m] * Hm)
+    seq = [frames[i] for i in idx]
     gif = out / "strips" / f"{slug}_w{w:g}_cell{cell}.gif"
     seq[0].save(gif, save_all=True, append_images=seq[1:], duration=180, loop=0)
     print(f"wrote {gif}  ({len(alphas)} frames, gap={gap:.2f})")

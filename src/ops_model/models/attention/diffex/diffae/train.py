@@ -27,6 +27,27 @@ def _device(name: str) -> torch.device:
     return torch.device(name)
 
 
+def _augment(x: torch.Tensor, scale_jit: float = 0.15) -> torch.Tensor:
+    """Per-sample continuous rotation (±180°) + scale + horizontal flip, with REFLECTION
+    padding so arbitrary angles introduce no black corners. Matches the contrastive
+    data_loader recipe (RandAffine ±π, scale) and — unlike the discrete dihedral — makes
+    orientation a nuisance across ALL angles, not just 90° steps. Embedding is NOT
+    recomputed. x: (B,1,H,W)."""
+    import math
+    B = x.shape[0]; dev = x.device
+    fl = torch.rand(B, device=dev) < 0.5
+    x = torch.where(fl[:, None, None, None], torch.flip(x, dims=(-1,)), x)
+    ang = (torch.rand(B, device=dev) * 2 - 1) * math.pi
+    s = 1.0 / (1.0 + (torch.rand(B, device=dev) * 2 - 1) * scale_jit)   # inverse for sampling grid
+    cos, sin = torch.cos(ang) * s, torch.sin(ang) * s
+    theta = torch.zeros(B, 2, 3, device=dev, dtype=x.dtype)
+    theta[:, 0, 0], theta[:, 0, 1] = cos, -sin
+    theta[:, 1, 0], theta[:, 1, 1] = sin, cos
+    grid = torch.nn.functional.affine_grid(theta, x.shape, align_corners=False)
+    return torch.nn.functional.grid_sample(x, grid, mode="bilinear",
+                                           padding_mode="reflection", align_corners=False)
+
+
 def _dihedral(x: torch.Tensor) -> torch.Tensor:
     """Per-sample random dihedral transform (4 rot90 × flip = 8 orientations, incl.
     transpose). x: (B,1,H,W). The conditioning embedding is NOT recomputed — orientation
@@ -142,7 +163,9 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
         ep_loss = 0.0
         for x, e in loader:
             x, e = x.to(dev), e.to(dev)
-            if getattr(cfg, "augment_dihedral", False):    # orientation-invariance aug
+            if getattr(cfg, "augment_affine", False):       # continuous rotation+scale+flip
+                x = _augment(x, getattr(cfg, "affine_scale", 0.15))
+            elif getattr(cfg, "augment_dihedral", False):    # discrete 90°×flip
                 x = _dihedral(x)
             if cfg.cond_dropout > 0:                       # conditioning dropout
                 drop = torch.rand(e.shape[0], device=dev) < cfg.cond_dropout

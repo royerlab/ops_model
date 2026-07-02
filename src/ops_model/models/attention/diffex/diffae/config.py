@@ -43,6 +43,11 @@ class DiffAEConfig:
     # canonical CellDINO embedding fixed → teaches the model orientation is NOT
     # embedding-determined, so traversals stop spuriously rotating the cell.
     augment_dihedral: bool = True
+    # affine augmentation: continuous rotation (±180°) + scale + flip with reflection
+    # padding (no black corners), matching the contrastive data_loader recipe. Covers
+    # arbitrary orientations (not just 90° steps); takes precedence over dihedral when set.
+    augment_affine: bool = False
+    affine_scale: float = 0.15     # ±fraction scale jitter
     device: str = "cuda"
     num_workers: int = 0
 

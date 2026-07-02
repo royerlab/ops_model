@@ -352,9 +352,11 @@ def main():
         )
         print(f"Output: {output_dir}")
     elif args.cell_dino:
-        cp_override = "cell_dino_features"
+        # paper-v2 reads the newer v2 inference (160px patches, cell_masks off)
+        # from cell_dino_features_v2/; otherwise the standard cell_dino_features/.
+        cp_override = "cell_dino_features_v2" if getattr(args, "paper_v2", None) else "cell_dino_features"
         output_dir = output_dir / "cell_dino"
-        print(f"Cell-DINO mode: features from 3-assembly/cell_dino_features/")
+        print(f"Cell-DINO mode: features from 3-assembly/{cp_override}/")
         print(f"Output: {output_dir}")
     elif getattr(args, "dynaclr", False):
         cp_override = "dynaclr_features"
@@ -383,11 +385,21 @@ def main():
         output_dir = output_dir / "zscore_per_exp"
         print(f"Per-experiment z-score scaling enabled: output → {output_dir}")
 
-    # paper_v1 sits at the top of the channel-set hierarchy so the v1 cohort
-    # is the primary partition; with_cp / with_4i / cellpainting nest under it.
+    # paper_v1 / paper_v2 sit at the top of the channel-set hierarchy so the
+    # cohort is the primary partition; with_cp / with_4i / cellpainting nest under it.
+    if getattr(args, "paper_v1", None) and getattr(args, "paper_v2", None):
+        raise ValueError("--paper-v1 and --paper-v2 are mutually exclusive.")
+    if getattr(args, "paper_v2", None) and not args.cell_dino:
+        raise ValueError(
+            "--paper-v2 requires --cell-dino (the v2 features live in "
+            "cell_dino_features_v2/; no v2 dir exists for other feature modes)."
+        )
     if getattr(args, "paper_v1", None):
         output_dir = output_dir / "paper_v1"
         print(f"Paper-v1 experiment list enforced: output → {output_dir}")
+    elif getattr(args, "paper_v2", None):
+        output_dir = output_dir / "paper_v2"
+        print(f"Paper-v2 experiment list enforced: output → {output_dir}")
 
     # --run-tag accepts a multi-segment relative path (e.g.
     # "paper_v1/validation_4exp_phase_only") so callers can recreate cohort

@@ -1452,19 +1452,20 @@ def _handle_downsampled(args, output_dir, cp_override):
         print("No experiment-channel pairs found!")
         return
 
-    paper_v1_path = getattr(args, "paper_v1", None)
+    paper_v1_path = getattr(args, "paper_v1", None) or getattr(args, "paper_v2", None)
+    paper_flag = "--paper-v2" if getattr(args, "paper_v2", None) else "{paper_flag}"
     if paper_v1_path:
         import yaml as _yaml
 
         v1_path = Path(paper_v1_path)
         if not v1_path.exists():
-            print(f"ERROR: --paper-v1 manifest not found: {v1_path}")
+            print(f"ERROR: {paper_flag} manifest not found: {v1_path}")
             return
         with open(v1_path) as f:
             v1_doc = _yaml.safe_load(f) or {}
         v1_map = v1_doc.get("experiments_channels", {}) or {}
         if not v1_map:
-            print(f"ERROR: --paper-v1 manifest has empty 'experiments_channels': {v1_path}")
+            print(f"ERROR: {paper_flag} manifest has empty 'experiments_channels': {v1_path}")
             return
         # YAML keys are full experiment names (e.g. ops0094_20251217). Match by full name.
         expected_full = set(v1_map.keys())
@@ -1472,7 +1473,7 @@ def _handle_downsampled(args, output_dir, cp_override):
         before = len(all_pairs)
         all_pairs = [(exp, ch) for exp, ch in all_pairs if exp in expected_full]
         print(
-            f"--paper-v1: {before} → {len(all_pairs)} pairs "
+            f"{paper_flag}: {before} → {len(all_pairs)} pairs "
             f"(restricted to {len(expected_full)} experiments from {v1_path.name})"
         )
         discovered_full = {exp for exp, _ in all_pairs}
@@ -1482,7 +1483,7 @@ def _handle_downsampled(args, output_dir, cp_override):
         only_subset = getattr(args, "only_4i", False) or getattr(args, "only_cp", False)
         if missing and not only_subset:
             print(
-                f"\nERROR: --paper-v1 expects {len(expected_full)} experiments but "
+                f"\nERROR: {paper_flag} expects {len(expected_full)} experiments but "
                 f"{len(missing)} are MISSING from discovery (must be present, no more, no less):"
             )
             for m in missing:
@@ -1496,7 +1497,7 @@ def _handle_downsampled(args, output_dir, cp_override):
         extra_short = {exp.split("_")[0] for exp, _ in all_pairs} - expected_short
         if extra_short:
             print(
-                f"\nERROR: --paper-v1 saw {len(extra_short)} extra experiments after filtering "
+                f"\nERROR: {paper_flag} saw {len(extra_short)} extra experiments after filtering "
                 f"(this should not happen): {sorted(extra_short)}"
             )
             return
@@ -1539,7 +1540,7 @@ def _handle_downsampled(args, output_dir, cp_override):
                 excluded.append((exp, ch, fluor))
         all_pairs = kept
         print(
-            f"--paper-v1 channel filter: {before_ch} → {len(all_pairs)} pairs "
+            f"{paper_flag} channel filter: {before_ch} → {len(all_pairs)} pairs "
             f"({len(excluded)} excluded by per-experiment channel allow-list)"
         )
 
@@ -1563,7 +1564,7 @@ def _handle_downsampled(args, output_dir, cp_override):
                 grouped.setdefault((ch,), []).append(exp)
             _print_groups("  WARNING: kept (marker not resolvable via channel_maps):", grouped)
         if not all_pairs:
-            print("ERROR: no experiment-channel pairs remain after --paper-v1 channel filter.")
+            print(f"ERROR: no experiment-channel pairs remain after {paper_flag} channel filter.")
             return
 
     exp_whitelist = getattr(args, "experiments", None)
