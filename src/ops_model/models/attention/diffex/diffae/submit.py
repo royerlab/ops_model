@@ -38,6 +38,10 @@ def main():
                     help="disable ALL augmentation (true v1-style, no dihedral/affine)")
     ap.add_argument("--init-ckpt", default=None,
                     help="warm-start: load these weights into the fresh model before training")
+    ap.add_argument("--marker-channel", default=None,
+                    help="fluor mode: fluor-CSV `channel` value (e.g. 'nucleolus-GC_NPM3')")
+    ap.add_argument("--channel", default="Phase2D",
+                    help="raw pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -47,6 +51,7 @@ def main():
         n_crops=args.n_crops, crop_size=args.crop_size, epochs=args.epochs,
         batch_size=args.batch_size, device="cuda",
         augment_affine=affine, augment_dihedral=dihedral, init_ckpt=args.init_ckpt,
+        marker_channel=args.marker_channel, channel=args.channel,
     )
     jobs = [{
         "name": args.name,

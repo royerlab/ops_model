@@ -17,7 +17,12 @@ class DiffAEConfig:
     pma_parquet: str = PMA_PHASE_GENEKO
     n_crops: int = 50_000
     crop_size: int = 160
-    channel: str = "Phase2D"
+    channel: str = "Phase2D"       # RAW pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)
+    # fluorescent mode: set marker_channel to a `channel` value in the fluor attention CSV
+    # (e.g. "nucleolus-GC_NPM3"); build_broad_table then samples that marker's cells and the
+    # generator trains on the raw `channel` above. None = phase mode (samples pma_parquet).
+    marker_channel: str | None = None
+    fluor_csv: str = f"{PMA_PHASE_GENEKO.rsplit('/', 1)[0]}/pma_fluorescent_cells_all.csv"
     mask_cell: bool = False
     seed: int = 0
 

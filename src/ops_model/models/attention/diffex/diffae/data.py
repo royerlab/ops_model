@@ -18,7 +18,24 @@ _COLS = ["gene", "experiment", "well", "segmentation", "x_pheno", "y_pheno"]
 
 
 def build_broad_table(cfg) -> pd.DataFrame:
-    """Uniform fraction-sample across all row groups (covers all genes/ranks)."""
+    """Uniform fraction-sample across all row groups (covers all genes/ranks).
+    Fluorescent mode (cfg.marker_channel set): sample that marker's cells from the fluor
+    attention CSV; the generator reads cfg.channel (GFP/mCherry) — the raw pheno-zarr channel
+    carrying that marker."""
+    if getattr(cfg, "marker_channel", None):
+        cols = ["gene", "channel", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank_type"]
+        df = pd.read_csv(cfg.fluor_csv, usecols=cols)
+        df = df[(df["channel"] == cfg.marker_channel) & (df["rank_type"] == "top")]
+        if df.empty:
+            raise ValueError(f"no 'top' cells for marker_channel={cfg.marker_channel!r}")
+        if len(df) > cfg.n_crops:
+            df = df.sample(n=cfg.n_crops, random_state=cfg.seed)
+        df = df.reset_index(drop=True).rename(columns={"gene": "cls"})
+        df["label"] = 0
+        print(f"fluor broad table [{cfg.marker_channel} -> raw {cfg.channel}]: "
+              f"{len(df)} crops across {df['cls'].nunique()} genes")
+        return df
+
     pf = pq.ParquetFile(cfg.pma_parquet)
     total = pf.metadata.num_rows
     frac = min(1.0, cfg.n_crops / total * 1.15)
