@@ -34,14 +34,19 @@ def main():
     ap.add_argument("--name", default="diffae_phase_v1")
     ap.add_argument("--augment-affine", action="store_true",
                     help="continuous rotation+scale+flip aug (else discrete dihedral)")
+    ap.add_argument("--no-aug", action="store_true",
+                    help="disable ALL augmentation (true v1-style, no dihedral/affine)")
+    ap.add_argument("--init-ckpt", default=None,
+                    help="warm-start: load these weights into the fresh model before training")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    affine = args.augment_affine and not args.no_aug
+    dihedral = (not args.augment_affine) and not args.no_aug
     cfg = DiffAEConfig(
         n_crops=args.n_crops, crop_size=args.crop_size, epochs=args.epochs,
         batch_size=args.batch_size, device="cuda",
-        augment_affine=args.augment_affine,
-        augment_dihedral=not args.augment_affine,
+        augment_affine=affine, augment_dihedral=dihedral, init_ckpt=args.init_ckpt,
     )
     jobs = [{
         "name": args.name,

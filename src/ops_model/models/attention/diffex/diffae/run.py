@@ -30,6 +30,10 @@ def run_diffae(cfg: DiffAEConfig, out_dir: str) -> dict:
         emb_cache=str(cache / f"diffae_celldino_{cfg.n_crops}_{cfg.crop_size}.npz"),
     )
     model = DiffAE(cfg)
+    if getattr(cfg, "init_ckpt", None):               # warm-start from an existing model
+        import torch
+        model.load_state_dict(torch.load(cfg.init_ckpt, map_location="cpu"))
+        print(f"warm-started weights from {cfg.init_ckpt}")
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"DiffAE: {n_params:.1f}M params; cond_dim={embs.shape[1]}; "
           f"training on {len(images)} crops")

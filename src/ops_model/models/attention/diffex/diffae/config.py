@@ -48,6 +48,7 @@ class DiffAEConfig:
     # arbitrary orientations (not just 90° steps); takes precedence over dihedral when set.
     augment_affine: bool = False
     affine_scale: float = 0.15     # ±fraction scale jitter
+    init_ckpt: str | None = None   # warm-start: load these weights into the fresh model
     device: str = "cuda"
     num_workers: int = 0
 

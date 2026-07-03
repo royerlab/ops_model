@@ -384,11 +384,37 @@ re-encode verify, run, submit). Verified 2a+2b on synthetic; full pipeline ran o
 - **Next model (v2_aug)**: orientation-aug DiffAE retraining (job 34651296), cond_ratio climbing
   0.04→0.14 @ep19/120 (aug ramps slower); resume to convergence, then switch directions default to it.
 
-### Future direction — per-fluorescent-marker embeddings (2026-07-01)
-Repeat the whole directions pipeline on each fluorescent-marker CellDINO embedding (not just
-phase), traversing that marker's top-attention cells — a per-marker counterfactual view of each
-gene-KO / complex phenotype in the channel where attention is most informative. Needs the
-per-marker PMA parquet + per-marker CellDINO gather; direction/traverse stages unchanged.
+### Active experiments (2026-07-03)
+- **v1 remains the best model.** v2 (dihedral) and v3 (continuous rot+scale) augmentation did NOT
+  beat v1 — not more orientation-stable, weaker/less-convincing phenotypes; cond_ratio ceiling falls
+  with aug (v1 0.47 → v2 0.25 → v3 0.20; curves in `coding_exps/diffex/diffae_training_curves.png`).
+  Flow-matching transport (CellFlow-style, `directions/flow.py`) also explored → smoother but less
+  clean phenotypes, noisy negative extreme → NOT adopted. Reverted default to v1 + mean-diff α.
+- **Generator data-scaling test (RUNNING):** does 50k→**500k** crops help? Two no-aug chains, 24 ep:
+  - scratch `phase_v1_500k` — jobs `34667092→34667174→34667175`
+  - warm-start from v1 `phase_v1_500k_warm` — jobs `34667176→34667177→34667178`
+  - Compare cond_ratio/loss vs v1 (0.47) + visual morphs. mem_gb=400 (500k float32 crops ≈ 51GB each).
+- **Direction depth test (pending):** gather 1k→**~12k**/class (the distinctiveness peak) for a tighter
+  mean-diff centroid — cheap, per-target (~30-40 min CellDINO/target), no retraining.
+
+### Future direction — per-fluorescent-marker models (2026-07-03)
+Reproduce the best phase pipeline **per fluorescent marker** (~60 live-cell markers) — a per-marker
+counterfactual view of each gene-KO / complex phenotype in the channel where attention is most
+informative. **~60 models** (one DiffAE + direction set per marker).
+- **Attention source EXISTS:** `…/alex_lin_attention/v4/pma_fluorescent_cells_all.csv`
+  (+ `pma_fluorescent_cells_ebi_all.csv` for complexes) — the fluor analog of `pma_phase_cells_v2_all.parquet`.
+  CellDINO fluor train/val sets also present (`train/val_ops_zstdcontrol_cdino_fluorescent`).
+- **Scope:** `good_experiment_list_v2.yml` (87 exps; fluor channels GFP×74, mCherry×23, Cy5×2). Each
+  experiment's channel→biological-marker label is in `ops_process/ops_analysis/configs/ops_channel_maps.yaml`.
+  Marker/experiment enumeration tooling: `ops_utils/data/feature_discovery.py`,
+  `ops_utils/analysis/embedding_discovery.py`.
+- **Per-marker pieces:** gather top-attention fluor cells (control + KD) → CellDINO embed the MARKER
+  channel → mean-diff direction → **per-marker DiffAE** (phase generator can't decode fluor) → traverse.
+  Direction/traverse code unchanged; needs a per-marker DiffAE + a marker→(experiments, channel) map.
+- **Complication (deferred):** the v2 list is **live-cell fluor only** — 4i / Cell-Painting (fixed-cell)
+  channels are excluded. If added later they need their **own per-round link CSVs** (`link_csv_dir` in
+  `ops_model/data/data_loader.py`), not the default live 3-assembly link.
+- **NEEDS DESIGN CONFIRM before building** (60 DiffAE trainings is a large program).
 
 ### Future direction — attention-informed cell selection (2026-06-29)
 Currently we take a flat top-1000 attention-ranked cells per class and pick traversal/feature
