@@ -20,7 +20,12 @@ class DirConfig:
     control: str = "NTC"           # control class
     n_per_class: int = 1000        # top-attention cells per class
     crop_size: int = 160
-    channel: str = "Phase2D"
+    channel: str = "Phase2D"       # RAW pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)
+    # fluorescent mode: set marker_channel to a fluor-attention-CSV `channel` value
+    # (e.g. "nucleus_NucleoLIVE Live Cell dye"); gather() then pulls that marker's top cells
+    # from fluor_csv and reads the raw `channel` above. None = phase mode (uses the grain parquet).
+    marker_channel: str | None = None
+    fluor_csv: str = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/pma_fluorescent_cells_all.csv"
     mask_cell: bool = False
     seed: int = 0
 

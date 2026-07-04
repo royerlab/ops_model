@@ -239,26 +239,38 @@ def compare_ckpts(grain, target, cell, w, label, ckpts, device="cuda"):
     return out
 
 
-def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag=""):
+def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag="",
+                      marker_channel=None, channel=None):
     """Both styles (3-way axis + 2-way half), GIF + panel PNG, for the given cells.
-    ckpt overrides the DiffAE checkpoint; tag suffixes filenames (e.g. '_v2')."""
-    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt)
+    ckpt overrides the DiffAE checkpoint; tag suffixes filenames. For fluor pass
+    marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt."""
+    ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt,
+                 marker_channel=marker_channel, channel=channel)
     n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
     cells = list(cells) if cells is not None else list(range(min(ctx[1].n_traverse, n_ctrl)))
     return [_render_review(ctx, c, w, label, tag=tag) for c in cells]
 
 
-def _setup(grain, target, out_root, device, ckpt=None):
-    """Expensive per-target setup shared by all cells: gather + direction + model."""
+def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None):
+    """Expensive per-target setup shared by all cells: gather + direction + model.
+    Fluor: pass marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's
+    DiffAE via ckpt. Fluor gets its own out dir (<slug>__<channel>) + cache so it never
+    collides with the phase pipeline."""
     dev = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
     cfg = DirConfig(grain=grain, target=target, device=device)
     if ckpt:
         cfg.diffae_ckpt = ckpt
+    if marker_channel:
+        cfg.marker_channel = marker_channel
+    if channel:
+        cfg.channel = channel
     slug = slugify(target)
-    out = Path(out_root) / "directions" / grain / slug
+    msuf = slugify(cfg.marker_channel) if cfg.marker_channel else ""   # key on MARKER (2 markers can share a raw channel)
+    sub = f"{slug}__{msuf}" if cfg.marker_channel else slug
+    out = Path(out_root) / "directions" / grain / sub
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)          # brand-new targets have no cache dir yet
-    tag = f"{slug}_{cfg.crop_size}"
+    tag = f"{slug}_{cfg.crop_size}" + (f"_{msuf}" if cfg.marker_channel else "")
     _, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
     d, _, _, _ = supervised_direction(embs, labels, cfg)
