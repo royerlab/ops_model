@@ -37,7 +37,7 @@ def main():
                     orient_sign=not args.no_orient)
     if args.diffae_ckpt:
         cfg.diffae_ckpt = args.diffae_ckpt
-    out = args.out_dir or f"{DEFAULT_OUT_ROOT}/directions/{args.grain}/{slugify(args.target)}"
+    out = args.out_dir or f"{DEFAULT_OUT_ROOT}/directions/phase/{args.grain}/{slugify(args.target)}"
 
     jobs = [{
         "name": f"diffex_dir_{slugify(args.target)}"[:64],

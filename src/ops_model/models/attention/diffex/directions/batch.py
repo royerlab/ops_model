@@ -63,7 +63,7 @@ def _short(name: str, n: int = 10) -> str:
 def run_target(grain: str, target: str, label: str, w: float = 5.0) -> dict:
     cfg = DirConfig(grain=grain, target=target, device="cuda")
     cfg.guidance_scales = (w,)                      # w=5 only (batch)
-    out = f"{DEFAULT_OUT_ROOT}/directions/{grain}/{slugify(target)}"
+    out = f"{DEFAULT_OUT_ROOT}/directions/phase/{grain}/{slugify(target)}"
     run_directions(cfg, out)
     sc = np.load(f"{out}/scores_w{w:g}.npy")        # (n_cells, n_alphas)
     delta = sc[:, -1] - sc[:, 0]

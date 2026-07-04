@@ -106,7 +106,7 @@ def main():
                     dir_epochs=args.dir_epochs, device=args.device)
     if args.diffae_ckpt:
         cfg.diffae_ckpt = args.diffae_ckpt
-    out = args.out_dir or f"{DEFAULT_OUT_ROOT}/directions/{args.grain}/{slugify(args.target)}"
+    out = args.out_dir or f"{DEFAULT_OUT_ROOT}/directions/phase/{args.grain}/{slugify(args.target)}"
     run_directions(cfg, out)
 
 

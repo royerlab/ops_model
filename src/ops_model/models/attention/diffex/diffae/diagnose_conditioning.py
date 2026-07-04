@@ -105,7 +105,7 @@ def run_diagnose(ckpt: str, emb_npz: str, crops_npz: str, out_dir: str,
 def main():
     ap = argparse.ArgumentParser()
     base = f"{DEFAULT_OUT_ROOT}/diffae/phase_v1"
-    dirs = f"{DEFAULT_OUT_ROOT}/directions/geneKO/HSPA5/cache"
+    dirs = f"{DEFAULT_OUT_ROOT}/directions/phase/geneKO/HSPA5/cache"
     ap.add_argument("--ckpt", default=f"{base}/diffae_best.pt")
     ap.add_argument("--emb-npz", default=f"{dirs}/celldino_HSPA5_160.npz")
     ap.add_argument("--crops-npz", default=f"{dirs}/crops_HSPA5_160.npz")

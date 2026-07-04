@@ -34,8 +34,9 @@ def _frames_dur(gif_path):
 
 
 def build_tiles(grain, cell, out_root, csv_dir=None, names=None,
-                n_genes=50, n_complex=20, w=5.0, suffix=""):
-    """suffix: '' | '_axis' | '_half'. names overrides the CSV top-N list."""
+                n_genes=50, n_complex=20, w=5.0, suffix="", modality="phase"):
+    """suffix: '' | '_axis' | '_half'. names overrides the CSV top-N list.
+    modality: 'phase' or a marker slug (directions/<modality>/<grain>/<slug>)."""
     if names is None:
         if grain == "geneKO":
             df = pd.read_csv(f"{csv_dir}/k10_ranked_all_geneKOs.csv").sort_values("rank_by_K10_mAP").head(n_genes)
@@ -46,7 +47,7 @@ def build_tiles(grain, cell, out_root, csv_dir=None, names=None,
     tiles, missing = [], []
     for nm in names:
         s = slugify(nm)
-        p = f"{out_root}/directions/{grain}/{s}/strips/{s}_w{w:g}_cell{cell}{suffix}.gif"
+        p = f"{out_root}/directions/{modality}/{grain}/{s}/strips/{s}_w{w:g}_cell{cell}{suffix}.gif"
         (tiles if os.path.exists(p) else missing).append(p)
     if missing:
         print(f"  [{grain} cell{cell}{suffix}] {len(missing)} tiles missing (skipped)")

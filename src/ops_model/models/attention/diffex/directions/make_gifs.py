@@ -265,12 +265,13 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
     if channel:
         cfg.channel = channel
     slug = slugify(target)
-    msuf = slugify(cfg.marker_channel) if cfg.marker_channel else ""   # key on MARKER (2 markers can share a raw channel)
-    sub = f"{slug}__{msuf}" if cfg.marker_channel else slug
-    out = Path(out_root) / "directions" / grain / sub
+    # modality-first layout: directions/<phase|marker>/<grain>/<slug> — keeps each modality's
+    # per-target listing separate (phase not overwhelmed by per-marker copies).
+    modality = slugify(cfg.marker_channel) if cfg.marker_channel else "phase"
+    out = Path(out_root) / "directions" / modality / grain / slug
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)          # brand-new targets have no cache dir yet
-    tag = f"{slug}_{cfg.crop_size}" + (f"_{msuf}" if cfg.marker_channel else "")
+    tag = f"{slug}_{cfg.crop_size}"
     _, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
     d, _, _, _ = supervised_direction(embs, labels, cfg)
