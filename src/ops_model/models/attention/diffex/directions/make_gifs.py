@@ -240,12 +240,15 @@ def compare_ckpts(grain, target, cell, w, label, ckpts, device="cuda"):
 
 
 def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag="",
-                      marker_channel=None, channel=None):
+                      marker_channel=None, channel=None, alphas=None):
     """Both styles (3-way axis + 2-way half), GIF + panel PNG, for the given cells.
     ckpt overrides the DiffAE checkpoint; tag suffixes filenames. For fluor pass
-    marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt."""
+    marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt.
+    alphas overrides the traversal range (e.g. tighter ±1 for strongly-conditioned models)."""
     ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt,
                  marker_channel=marker_channel, channel=channel)
+    if alphas is not None:
+        ctx[1].alphas = tuple(alphas)                 # ctx[1] = cfg
     n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
     cells = list(cells) if cells is not None else list(range(min(ctx[1].n_traverse, n_ctrl)))
     return [_render_review(ctx, c, w, label, tag=tag) for c in cells]

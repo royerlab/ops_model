@@ -33,6 +33,42 @@ def _frames_dur(gif_path):
     return frames, durs
 
 
+def make_labeled_grid(grid_paths, out_path, row_labels, col_labels, title=None, tile_w=260):
+    """Composite a synchronized R×C matrix of GIFs with row/col axis labels (a disentanglement
+    figure). grid_paths: list of rows, each a list of C gif paths. Preserves frame durations."""
+    seqs = [[_frames_dur(p) for p in row] for row in grid_paths]
+    F = min(len(fr) for row in seqs for fr, _ in row)
+    durs = seqs[0][0][1][:F]
+    tw0, th0 = seqs[0][0][0][0].size
+    tw, th = tile_w, round(th0 * tile_w / tw0)
+    R, C = len(grid_paths), len(grid_paths[0])
+    gap, lm, tm = 8, 92, (58 if title else 30)       # left margin (row labels), top margin
+    W = lm + C * tw + (C + 1) * gap
+    H = tm + 24 + R * th + (R + 1) * gap              # +24 for col-label row
+    tfont, lfont = _font(30), _font(20)
+
+    frames = []
+    for k in range(F):
+        cv = Image.new("RGB", (W, H), (0, 0, 0)); d = ImageDraw.Draw(cv)
+        if title:
+            d.text(((W - d.textlength(title, font=tfont)) / 2, 12), title, font=tfont, fill=(235, 235, 235))
+        for c, cl in enumerate(col_labels):          # column headers
+            x0 = lm + gap + c * (tw + gap)
+            d.text((x0 + (tw - d.textlength(cl, font=lfont)) / 2, tm), cl, font=lfont, fill=(0, 200, 255))
+        for r, rl in enumerate(row_labels):          # row labels (left, rotated-ish: just left-aligned)
+            y0 = tm + 24 + gap + r * (th + gap)
+            d.text((8, y0 + th / 2 - 10), rl, font=lfont, fill=(255, 170, 40))
+        for r in range(R):
+            for c in range(C):
+                tile = seqs[r][c][0][k].resize((tw, th), Image.BILINEAR)
+                cv.paste(tile, (lm + gap + c * (tw + gap), tm + 24 + gap + r * (th + gap)))
+        frames.append(cv)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(out_path, save_all=True, append_images=frames[1:], duration=durs, loop=0)
+    print(f"wrote {out_path}  ({R}x{C}, {F} frames, {W}x{H})")
+    return str(out_path)
+
+
 def build_tiles(grain, cell, out_root, csv_dir=None, names=None,
                 n_genes=50, n_complex=20, w=5.0, suffix="", modality="phase"):
     """suffix: '' | '_axis' | '_half'. names overrides the CSV top-N list.
