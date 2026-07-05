@@ -240,13 +240,14 @@ def compare_ckpts(grain, target, cell, w, label, ckpts, device="cuda"):
 
 
 def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag="",
-                      marker_channel=None, channel=None, alphas=None):
+                      marker_channel=None, channel=None, alphas=None, fluor_csv=None):
     """Both styles (3-way axis + 2-way half), GIF + panel PNG, for the given cells.
     ckpt overrides the DiffAE checkpoint; tag suffixes filenames. For fluor pass
-    marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt.
+    marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt;
+    fluor_csv overrides the attention CSV (use the EBI one for grain='complex').
     alphas overrides the traversal range (e.g. tighter ±1 for strongly-conditioned models)."""
     ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt,
-                 marker_channel=marker_channel, channel=channel)
+                 marker_channel=marker_channel, channel=channel, fluor_csv=fluor_csv)
     if alphas is not None:
         ctx[1].alphas = tuple(alphas)                 # ctx[1] = cfg
     n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
@@ -254,7 +255,7 @@ def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ck
     return [_render_review(ctx, c, w, label, tag=tag) for c in cells]
 
 
-def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None):
+def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None, fluor_csv=None):
     """Expensive per-target setup shared by all cells: gather + direction + model.
     Fluor: pass marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's
     DiffAE via ckpt. Fluor gets its own out dir (<slug>__<channel>) + cache so it never
@@ -267,6 +268,8 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
         cfg.marker_channel = marker_channel
     if channel:
         cfg.channel = channel
+    if fluor_csv:
+        cfg.fluor_csv = fluor_csv
     slug = slugify(target)
     # modality-first layout: directions/<phase|marker>/<grain>/<slug> — keeps each modality's
     # per-target listing separate (phase not overwhelmed by per-marker copies).

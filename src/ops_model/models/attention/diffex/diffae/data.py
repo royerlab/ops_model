@@ -22,6 +22,22 @@ def build_broad_table(cfg) -> pd.DataFrame:
     Fluorescent mode (cfg.marker_channel set): sample that marker's cells from the fluor
     attention CSV; the generator reads cfg.channel (GFP/mCherry) — the raw pheno-zarr channel
     carrying that marker."""
+    if getattr(cfg, "anndata_paths", ()):          # no-PMA markers: cell table from per-exp anndata
+        import anndata as ad
+        parts = []
+        for p in cfg.anndata_paths:
+            o = ad.read_h5ad(p, backed="r").obs[["perturbation", "well", "x_position", "y_position", "experiment"]].copy()
+            parts.append(o)
+        df = pd.concat(parts, ignore_index=True)
+        df["well"] = df["well"].astype(str).str.split("_").str[0]     # "A/2/0_ops.." -> "A/2/0"
+        df = df.rename(columns={"perturbation": "cls", "x_position": "x_pheno", "y_position": "y_pheno"})
+        df["segmentation"] = 0                                        # unused (mask_cell=False)
+        if len(df) > cfg.n_crops:
+            df = df.sample(n=cfg.n_crops, random_state=cfg.seed)
+        df = df.reset_index(drop=True); df["label"] = 0
+        print(f"anndata broad table [raw {cfg.channel}]: {len(df)} crops across {df['cls'].nunique()} genes")
+        return df
+
     if getattr(cfg, "marker_channel", None):
         cols = ["gene", "channel", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank_type"]
         df = pd.read_csv(cfg.fluor_csv, usecols=cols)

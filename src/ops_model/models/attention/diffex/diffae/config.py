@@ -23,6 +23,9 @@ class DiffAEConfig:
     # generator trains on the raw `channel` above. None = phase mode (samples pma_parquet).
     marker_channel: str | None = None
     fluor_csv: str = f"{PMA_PHASE_GENEKO.rsplit('/', 1)[0]}/pma_fluorescent_cells_all.csv"
+    # no-PMA markers: sample the cell table from per-experiment CellDINO anndata(s)
+    # (obs: perturbation, well, x_position, y_position, experiment) instead of an attention CSV.
+    anndata_paths: tuple = ()
     mask_cell: bool = False
     seed: int = 0
 
