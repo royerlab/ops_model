@@ -1,6 +1,31 @@
 """Submit the DiffAE training to SLURM (1 GPU, longer wall clock).
 
     python -m ops_model.models.attention.diffex.diffae.submit
+
+=============================== RUNBOOK ===============================
+Checkpoints (root /hpc/projects/icd.fast.ops/models/diffex/diffae/) and their
+best cond_ratio (emb/noise conditioning strength; higher = stronger edits):
+  phase_v1/            50k crops,  ep120, 0.468   <- PRODUCTION (all traversals use this)
+  phase_v1_500k/       500k scratch, ep12, 0.416  (undertrained; parked)
+  phase_v1_500k_warm/  500k warm-from-v1, 0.542   (more-data test; being resumed)
+
+RESUME an existing run (continue where it stopped): resume=True is the config
+default and train state (model+ema+opt+epoch) is saved EVERY epoch to
+<out>/diffae_train_state.pt. Just re-submit the SAME --out-dir/--n-crops and it
+picks up automatically. Do NOT pass --init-ckpt on a resume (train_state wins).
+
+MEMORY GOTCHA (500k): the 500k crop cache is 51 GB float32 and load_diffae_crops
+normalizes it -> ~102 GB transient peak. Use mem_gb>=200 for 500k runs; 96 GB
+OOM-kills (esp. on a shared node). 50k runs are fine at 96 GB.
+
+CHAIN across the 720-min walltime: submit N jobs, each with
+slurm_additional_parameters={"dependency": f"afterany:<prev_id>"} (see --after).
+afterany fires even on failure, so verify link 0 clears the cache-load before
+trusting the chain.
+
+WATCH cond_ratio trend:
+  python -c "import torch;h=torch.load('<out>/diffae_train_state.pt',map_location='cpu')['history'];print([round(e.get('cond_ratio',-1),3) for e in h if e.get('cond_ratio',-1)>0])"
+======================================================================
 """
 from __future__ import annotations
 
