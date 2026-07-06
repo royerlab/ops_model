@@ -94,7 +94,8 @@ _ALPHA_LEVELS = {
 
 def marker_grid(marker_channel: str = None, channel: str = None, target: str = None,
                 ckpt: str = None, label: str = None, cells=(0, 1, 2), w: float = 2.0,
-                grain: str = "geneKO", control: str = None, device: str = "cuda") -> str:
+                grain: str = "geneKO", control: str = None, fluor_csv: str = None,
+                device: str = "cuda") -> str:
     """cells×α grid for one (marker, target): render every α-level (sharing one
     gather+decoder) then composite a labeled rows=cells × cols=α grid. Returns the
     grid gif path under directions/_grids/.
@@ -108,7 +109,7 @@ def marker_grid(marker_channel: str = None, channel: str = None, target: str = N
     for ak, al in _ALPHA_LEVELS.items():
         render_all_review(grain, target, label, w=w, cells=list(cells), device=device,
                           ckpt=ckpt, tag=f"_{ak}", marker_channel=marker_channel,
-                          channel=channel, alphas=al, control=control)
+                          channel=channel, alphas=al, control=control, fluor_csv=fluor_csv)
     modality = slugify(marker_channel) if marker_channel else "phase"
     slug = _pair_slug(target, control)
     sd = f"{DEFAULT_OUT_ROOT}/directions/{modality}/{grain}/{slug}/strips"

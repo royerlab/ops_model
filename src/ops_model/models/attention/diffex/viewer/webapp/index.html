@@ -4,54 +4,103 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>DiffEx Traversal Viewer</title>
-<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="style.css?v=20"/>
 </head>
 <body>
 <header>
-  <h1>DiffEx — Counterfactual Traversal Viewer</h1>
-  <span class="sub">CellDINO / SetTransformer phenotypes · w = 2 (fixed) · α = phenotype extremeness</span>
+  <div><h1>DiffEx — Counterfactual Traversal Viewer</h1>
+  <span class="sub">CellDINO / SetTransformer phenotypes · w = 2 · α in NTC→KD gap units: α=1 = class centroid, |α|&gt;1 extrapolates</span></div>
+  <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
 </header>
 
 <div id="app">
   <aside id="controls">
-    <label>Marker
-      <select id="marker"></select>
-    </label>
-    <label>Type
-      <select id="grain">
-        <option value="all">geneKO + complex</option>
-        <option value="geneKO">geneKO</option>
-        <option value="complex">complex</option>
-      </select>
-    </label>
-    <label>Perturbation <span class="hint">(sorted by distinctiveness mAP)</span>
-      <input id="filter" type="text" placeholder="filter…" autocomplete="off"/>
-      <select id="target" size="14"></select>
-    </label>
-    <label>Cell
-      <select id="cell"></select>
-    </label>
+    <div class="tabs">
+      <button class="tab active" data-tab="browse">Browse</button>
+      <button class="tab" data-tab="anchor">Anchor &amp; display</button>
+    </div>
+
+    <div class="tabpane" id="tab-browse">
+      <label>Marker <select id="marker"></select></label>
+      <label>Type
+        <select id="grain">
+          <option value="all">geneKO + complex</option>
+          <option value="geneKO">geneKO</option>
+          <option value="complex">complex</option>
+        </select>
+      </label>
+      <label>Perturbation <span class="hint">(by distinctiveness mAP)</span>
+        <input id="filter" type="text" placeholder="filter…" autocomplete="off"/>
+        <select id="target" size="12"></select>
+      </label>
+      <div class="grp">
+        <label>Cells per page <input id="cellcount" type="number" min="1" max="12" value="4"/></label>
+        <div class="row"><button id="cprev">◀ prev cells</button><button id="cnext">next cells ▶</button></div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
+        <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
+        <ul id="panellist"></ul>
+      </div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-anchor">
+      <label>Anchor <span class="hint">(the α=0 center)</span>
+        <select id="anchor"></select>
+      </label>
+      <div class="hint">Default <b>NTC</b>. Pick another geneKO/complex to make α=0 that class and traverse toward the selected perturbation — requires precomputed A→B assets for the pair.</div>
+      <div class="grp">
+        <label class="chk"><input type="checkbox" id="showscore" checked/> classifier score on images</label>
+        <label class="chk"><input type="checkbox" id="showreal"/> show real cell row (vs generated)</label>
+      </div>
+    </div>
   </aside>
 
   <main id="stage">
-    <div id="canvas-wrap">
-      <img id="frame" alt="traversal frame"/>
-      <div id="dir-label"></div>
+    <div id="heatbar">
+      <div id="heat-grad"></div>
+      <div id="heat-real"><span>α=1 · true centroid</span></div>
+      <div id="heat-tick"></div>
+      <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">NTC (α=0)</span><span class="pos">phenotype</span></div>
     </div>
     <div id="scrub">
       <button id="play">▶</button>
-      <input id="alpha" type="range" min="0" max="10" value="5" step="1"/>
+      <div class="slider-col">
+        <input id="alpha" type="range" min="0" max="16" value="8" step="1"/>
+        <div id="ticks" title="click a tick to toggle an autoplay pause there"></div>
+      </div>
       <span id="alpha-read">α = 0.0</span>
     </div>
-    <div id="axis-cues">
-      <span class="cue neg">← opposite extreme</span>
-      <span class="cue mid">NTC (α=0)</span>
-      <span class="cue pos">KO phenotype →</span>
+    <div class="playctl">
+      <select id="speed" title="playback speed">
+        <option value="360">0.5×</option>
+        <option value="180" selected>1×</option>
+        <option value="90">2×</option>
+        <option value="45">4×</option>
+      </select>
+      <select id="alphalimit" title="limit autoplay to ±α (scrub slider stays full range)">
+        <option value="5" selected>play ±5</option>
+        <option value="4">play ±4</option>
+        <option value="3">play ±3</option>
+        <option value="2">play ±2</option>
+        <option value="1">play ±1</option>
+      </select>
     </div>
+    <div class="tickhint">tick marks = α samples; <b>click</b> to toggle an autoplay pause (● = pauses)</div>
+    <div id="score-legend">classifier confidence (target class):&nbsp; 0%<span class="bar"></span>100%</div>
+    <div id="grid"></div>
     <div id="meta"></div>
   </main>
+
+  <aside id="sidebar">
+    <div class="side-hd">Perturbation info</div>
+    <div id="info-title"></div>
+    <div id="info-sub"></div>
+    <div id="info-body"></div>
+  </aside>
 </div>
 
-<script src="app.js"></script>
+<div id="ticktip"></div>
+<script src="app.js?v=20"></script>
 </body>
 </html>

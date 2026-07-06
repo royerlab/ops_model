@@ -266,12 +266,14 @@ def _pair_slug(target, control=None):
 
 
 def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None,
-           fluor_csv=None, control=None):
+           fluor_csv=None, control=None, num_workers=None, return_images=False):
     """Expensive per-target setup shared by all cells: gather + direction + model.
     Fluor: pass marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's
     DiffAE via ckpt. Fluor gets its own out dir (<slug>__<channel>) + cache so it never
     collides with the phase pipeline. control: anchor class (default NTC); set to another class
-    for A→B traversal (direction becomes μ_target − μ_control, anchored on control cells)."""
+    for A→B traversal (direction becomes μ_target − μ_control, anchored on control cells).
+    num_workers: parallel DataLoader workers for the (I/O-bound) zarr crop materialization —
+    the gather dominates runtime, so set this to ~cpus for a big speedup."""
     dev = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
     cfg = DirConfig(grain=grain, target=target, device=device)
     if ckpt:
@@ -284,6 +286,8 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
         cfg.fluor_csv = fluor_csv
     if control:
         cfg.control = control
+    if num_workers is not None:
+        cfg.num_workers = num_workers
     slug = _pair_slug(target, control)
     # modality-first layout: directions/<phase|marker>/<grain>/<slug> — keeps each modality's
     # per-target listing separate (phase not overwhelmed by per-marker copies).
@@ -292,14 +296,15 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)          # brand-new targets have no cache dir yet
     tag = f"{slug}_{cfg.crop_size}"
-    _, embs, labels = gather(
+    images, embs, labels = gather(
         cfg, str(cache / f"crops_{tag}.npz"), str(cache / f"celldino_{tag}.npz"))
     d, _, _, _ = supervised_direction(embs, labels, cfg)
     gap = float(np.linalg.norm(embs[labels == 1].mean(0) - embs[labels == 0].mean(0)))
     fixed_dir = torch.as_tensor(d, dtype=torch.float32, device=dev)[None]
     diffae = load_diffae(cfg, dev)
     null_base = diffae.null_emb.detach()[None].to(dev)
-    return dev, cfg, slug, out, embs, labels, fixed_dir, gap, diffae, null_base
+    ctx = (dev, cfg, slug, out, embs, labels, fixed_dir, gap, diffae, null_base)
+    return (*ctx, images) if return_images else ctx
 
 
 @torch.no_grad()

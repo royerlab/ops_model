@@ -25,7 +25,7 @@ ACTIVE EFFORTS below for the current state.
 
 ## ACTIVE EFFORTS (dashboard — updated 2026-07-06)
 
-Five parallel workstreams. Each line: what · where · how to check · next step.
+Six parallel workstreams. Each line: what · where · how to check · next step.
 Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
 
 ### 1. Phase generator: 500k warm-start retrain (does more data beat v1?)
@@ -59,24 +59,55 @@ Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
   .../plots/marker_overlay/gene_best_marker.csv` (+ distinctiveness_raw matrices for live/cp/4i).
 
 ### 4. Shareable traversal viewer (MOPS-style)  ← main build
-- **Design:** static precompute → dumb web viewer (no live GPU). α=scrub timeline, w=2 fixed,
-  marker/gene/complex/cell = routing. Anchor-switch (A→B) = curated K=10 top-distinct geneKOs +
-  complexes per marker (Phase 3, not built yet — `marker_grid`/`_setup` already take `control`).
-- **Code:** `viewer/precompute.py` (α-frame WebP emitter, ~265KB/cell + manifest) · `viewer/webapp/`
-  (dependency-free JS; per-target α lists so it renders while the cache fills).
-- **Assets:** `viewer_assets/<modality>/<grain>/<slug>/cell<c>/frame_<i>.webp` + `manifest.json`.
-- **Seed batch (Phase 1):** top-8 distinct geneKOs/marker + phase, 20 cells, ±5 — array `34676911`
-  (rebuild manifest w/ `scratchpad/build_manifest.py` as it drains).
-- **LIVE DEMO on Bruno:** `http://127.0.0.1:8765` served from `viewer_assets/` on **login-01**
-  (`python -m http.server 8765 --directory .../viewer_assets`); reach via VS Code port-forward.
-- **Next:** full-coverage drain (all markers×genes×complexes, 20 cells → ~525GB, prioritized by
-  distinctiveness); build A→B anchor precompute + "from" dropdown.
+- **Design:** static precompute → dependency-free web viewer (no live GPU). α = scrub timeline
+  (gif-timed play, speed control, clickable pause ticks; default pauses = ends+middle), w=2 fixed.
+- **Code:** `viewer/precompute.py` (batched decode + threaded WebP + per-frame classifier score +
+  crop-cache cleanup) · `viewer/webapp/` (index/app/style, cache-busted `?v=N`).
+- **UI now (v14):** left tabs **Browse / Anchor & display**; grouped grid (rows=perturbation ×
+  cols=cells-per-page, one header/row, colour bar on lead cell only); **anchor menu** (default NTC,
+  swap to any class with precomputed A→B assets); heatmapped **classifier % badge** (being corrected
+  to N-way — see #6); wiki **right sidebar** (gene function + GO/Reactome, **OpenCell + GeneCards**
+  links, complex members); colorbar **α=1 "true centroid"** marker.
+- **Assets/cache:** `viewer_assets/<modality>/<grain>/<slug>/cell<c>/frame_<i>.webp` (+ meta.json,
+  scores.json); A→B at `<anchor>__to__<target>/`; `manifest.json` + webapp copied into that dir.
+  ~0.6GB now, growing. Rebuild manifest: `scratchpad/build_manifest.py`.
+- **LIVE DEMO on Bruno:** `http://login-01:8765` (`python -m http.server 8765 --bind 0.0.0.0
+  --directory .../viewer_assets`); VS Code port-forward 8765, or `http://login-01:8765` inside noVNC.
+- **Speed:** `num_workers=12` on the crop DataLoader → materialize **56s→5s (11×)**; per-target
+  ~1.5min. `precompute_target(load_workers=…)`; SLURM `cpus_per_task=12`.
+- **Cache builds running:** NTC seed re-run (fast) `34678879` (top-8/marker + phase, 20 cells);
+  A→B anchor pairs `34678847` (5xUPRE/FBL/NPM1 top-5, all ordered pairs); demo complexes `34679137`
+  (40S/60S/PolII/CCT/SF3B, phase).
+- **Next:** full NTC drain + full A→B (K=10 → ~5,400 traversals ~46GB ~150 GPU-hr) — gated on go.
 
-### 5. Infra / hosting PR (S3 static site)
-- **Target:** PR to `github.com/chanzuckerberg/sfbiohub-infra`; infra team approves → S3 bucket +
-  static hosting for the viewer (webapp + manifest + assets).
-- **Status:** NOT started. Bruno demo (#4) is the interim so we iterate while the PR is pending.
-- **Next:** draft the infra PR (bucket + CloudFront static site config) once the demo UX settles.
+### 5. Infra / hosting PR (S3 + IRSA, mimic Alex's mops-viewer)
+- **Target:** PR to `github.com/chanzuckerberg/sfbiohub-infra`; infra team approves.
+- **Drafted (NOT pushed — awaiting user review):** `scratchpad/infra_pr/terraform/accounts/
+  biohub-nonprod/diffex-viewer-dev.tf`, mirrors Alex Lin's merged **PR #47** `mops-viewer-dev.tf`:
+  `diffex-viewer-dev` S3 bucket + read-only IRSA role (`argus-diffex-viewer-rdev/diffex-viewer`) +
+  `diffex-viewer-dev-readwrite` uploader role. PR body flags storage is flexible (seed ~few GB;
+  full ~500GB) so infra isn't surprised.
+- **Note:** MOPS is a **Gradio app on Argus** reading pre-rendered images from S3 via that IRSA
+  role — same deploy fits our static viewer (serve from an Argus pod or CloudFront).
+- **Next:** user reviews the .tf → push branch `diffex-viewer-dev` → PR → infra approves →
+  `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` via the readwrite role.
+
+### 6. N-way single-cell CellDINO classifier MLPs (viewer score fix)  ← in build
+- **Why:** the viewer badge must be **1-of-N distinctiveness** `P(target class)` (out of all
+  classes), NOT the binary target-vs-NTC LR the traversal code used — that LR is trivially
+  separable (acc 1.0) → saturated 0%/100% (the SAMM50 constant-cell artifact). The real trained
+  classifier is the **bag-level SetTransformer** (attention over a set of cells → perturbation);
+  the correct per-CELL proxy is **model C = `MLPHead` on CellDINO features**, class-vs-rest-distinct.
+- **Plan:** one **N-way softmax MLP per (marker, grain)** — geneKO AND EBI-complex head per marker.
+  Trained on `embed_crops` CellDINO features (SAME space the viewer re-encodes generated cells into)
+  of top-attention cells over ALL classes incl NTC. Score: generated image → CellDINO (embed_crops,
+  already computed in precompute) → MLP → softmax → `P(target)`.
+- **Code:** `viewer/nway_clf.py::train_nway(grain, out_root, marker_channel, channel, fluor_csv,…)`
+  → `<root>/_clf/<modality>/<grain>/{mlp.pt, classes.json, metrics.json}` (val top1/top5).
+- **Scale:** ~60 markers × 2 grains + phase ≈ ~120 MLP training jobs (n_per_class≈100).
+- **Next:** validate on one (marker,grain); launch training; **swap the score in `precompute`**
+  (drop the binary LR, load the marker+grain MLP, `softmax(MLP(gemb))[target]`); re-run precompute
+  to re-score. Only HSPA5 has an old per-class binary model C on disk (`extra/HSPA5/model_C.pt`).
 
 ---
 
