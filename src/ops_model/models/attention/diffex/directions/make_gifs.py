@@ -240,14 +240,15 @@ def compare_ckpts(grain, target, cell, w, label, ckpts, device="cuda"):
 
 
 def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ckpt=None, tag="",
-                      marker_channel=None, channel=None, alphas=None, fluor_csv=None):
+                      marker_channel=None, channel=None, alphas=None, fluor_csv=None, control=None):
     """Both styles (3-way axis + 2-way half), GIF + panel PNG, for the given cells.
     ckpt overrides the DiffAE checkpoint; tag suffixes filenames. For fluor pass
     marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's DiffAE ckpt;
     fluor_csv overrides the attention CSV (use the EBI one for grain='complex').
-    alphas overrides the traversal range (e.g. tighter ±1 for strongly-conditioned models)."""
+    alphas overrides the traversal range (e.g. tighter ±1 for strongly-conditioned models).
+    control: anchor class for A→B (default NTC)."""
     ctx = _setup(grain, target, DEFAULT_OUT_ROOT, device, ckpt=ckpt,
-                 marker_channel=marker_channel, channel=channel, fluor_csv=fluor_csv)
+                 marker_channel=marker_channel, channel=channel, fluor_csv=fluor_csv, control=control)
     if alphas is not None:
         ctx[1].alphas = tuple(alphas)                 # ctx[1] = cfg
     n_ctrl = int((ctx[5] == 0).sum())                 # ctx[5] = labels
@@ -255,11 +256,22 @@ def render_all_review(grain, target, label, w=5.0, cells=None, device="cuda", ck
     return [_render_review(ctx, c, w, label, tag=tag) for c in cells]
 
 
-def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None, fluor_csv=None):
+def _pair_slug(target, control=None):
+    """Effective slug for a traversal. NTC-anchored → slug(target); class→class anchor
+    (control set to a non-NTC class) → '<control>__to__<target>' so A→B assets/caches never
+    collide with the A-vs-NTC run."""
+    if control and control != "NTC":
+        return f"{slugify(control)}__to__{slugify(target)}"
+    return slugify(target)
+
+
+def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None,
+           fluor_csv=None, control=None):
     """Expensive per-target setup shared by all cells: gather + direction + model.
     Fluor: pass marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's
     DiffAE via ckpt. Fluor gets its own out dir (<slug>__<channel>) + cache so it never
-    collides with the phase pipeline."""
+    collides with the phase pipeline. control: anchor class (default NTC); set to another class
+    for A→B traversal (direction becomes μ_target − μ_control, anchored on control cells)."""
     dev = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
     cfg = DirConfig(grain=grain, target=target, device=device)
     if ckpt:
@@ -270,7 +282,9 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
         cfg.channel = channel
     if fluor_csv:
         cfg.fluor_csv = fluor_csv
-    slug = slugify(target)
+    if control:
+        cfg.control = control
+    slug = _pair_slug(target, control)
     # modality-first layout: directions/<phase|marker>/<grain>/<slug> — keeps each modality's
     # per-target listing separate (phase not overwhelmed by per-marker copies).
     modality = slugify(cfg.marker_channel) if cfg.marker_channel else "phase"

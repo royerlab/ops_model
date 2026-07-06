@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>DiffEx Traversal Viewer</title>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<header>
+  <h1>DiffEx — Counterfactual Traversal Viewer</h1>
+  <span class="sub">CellDINO / SetTransformer phenotypes · w = 2 (fixed) · α = phenotype extremeness</span>
+</header>
+
+<div id="app">
+  <aside id="controls">
+    <label>Marker
+      <select id="marker"></select>
+    </label>
+    <label>Type
+      <select id="grain">
+        <option value="all">geneKO + complex</option>
+        <option value="geneKO">geneKO</option>
+        <option value="complex">complex</option>
+      </select>
+    </label>
+    <label>Perturbation <span class="hint">(sorted by distinctiveness mAP)</span>
+      <input id="filter" type="text" placeholder="filter…" autocomplete="off"/>
+      <select id="target" size="14"></select>
+    </label>
+    <label>Cell
+      <select id="cell"></select>
+    </label>
+  </aside>
+
+  <main id="stage">
+    <div id="canvas-wrap">
+      <img id="frame" alt="traversal frame"/>
+      <div id="dir-label"></div>
+    </div>
+    <div id="scrub">
+      <button id="play">▶</button>
+      <input id="alpha" type="range" min="0" max="10" value="5" step="1"/>
+      <span id="alpha-read">α = 0.0</span>
+    </div>
+    <div id="axis-cues">
+      <span class="cue neg">← opposite extreme</span>
+      <span class="cue mid">NTC (α=0)</span>
+      <span class="cue pos">KO phenotype →</span>
+    </div>
+    <div id="meta"></div>
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

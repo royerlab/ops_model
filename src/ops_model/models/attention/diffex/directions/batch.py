@@ -82,6 +82,47 @@ def review_all_target(grain: str, target: str, label: str, w: float = 5.0) -> li
     return render_all_review(grain, target, label, w=w)
 
 
+# cells×α grid α-levels (each a full −max→+max sweep at w). See DiffEx defaults: w=2, α 2–4;
+# ±5 included for the most subtle phenotypes where extreme α still adds signal.
+_ALPHA_LEVELS = {
+    "a2": [-2, -1.6, -1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.2, 1.6, 2],
+    "a3": [-3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3],
+    "a4": [-4, -3.2, -2.4, -1.6, -0.8, 0, 0.8, 1.6, 2.4, 3.2, 4],
+    "a5": [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5],
+}
+
+
+def marker_grid(marker_channel: str = None, channel: str = None, target: str = None,
+                ckpt: str = None, label: str = None, cells=(0, 1, 2), w: float = 2.0,
+                grain: str = "geneKO", control: str = None, device: str = "cuda") -> str:
+    """cells×α grid for one (marker, target): render every α-level (sharing one
+    gather+decoder) then composite a labeled rows=cells × cols=α grid. Returns the
+    grid gif path under directions/_grids/.
+
+    marker_channel=None → phase mode (grain parquet + Phase2D crops; pass ckpt=phase_v1).
+    grain='complex' → EBI complexes. control=None → NTC-anchored; set control to another
+    class for an A→B traversal (α=0 shows the control/anchor class, +α → target)."""
+    from .grid import make_labeled_grid
+    from .make_gifs import _pair_slug
+    label = label or target
+    for ak, al in _ALPHA_LEVELS.items():
+        render_all_review(grain, target, label, w=w, cells=list(cells), device=device,
+                          ckpt=ckpt, tag=f"_{ak}", marker_channel=marker_channel,
+                          channel=channel, alphas=al, control=control)
+    modality = slugify(marker_channel) if marker_channel else "phase"
+    slug = _pair_slug(target, control)
+    sd = f"{DEFAULT_OUT_ROOT}/directions/{modality}/{grain}/{slug}/strips"
+    grid = [[f"{sd}/{slug}_w{w:g}_cell{c}_{ak}_axis.gif" for ak in _ALPHA_LEVELS] for c in cells]
+    prefix = "fluor_" if marker_channel else ""
+    out = f"{DEFAULT_OUT_ROOT}/directions/_grids/{prefix}{modality}_{slug}_cellsxalpha.gif"
+    col_labels = [f"α=±{ak[1:]}" for ak in _ALPHA_LEVELS]  # stays in sync with _ALPHA_LEVELS
+    anchor = f"{control} → " if control and control != "NTC" else ""
+    make_labeled_grid(grid, out, row_labels=[f"cell {c}" for c in cells],
+                      col_labels=col_labels,
+                      title=f"{marker_channel or 'Phase'} — {anchor}{target} (w={w:g})", tile_w=280)
+    return out
+
+
 def build_targets(genes_csv: str, complex_csv: str, n_genes: int, n_complex: int):
     g = pd.read_csv(genes_csv).sort_values("rank_by_K10_mAP").head(n_genes)
     c = pd.read_csv(complex_csv).sort_values("rank_by_K10_mAP").head(n_complex)

@@ -18,8 +18,67 @@ Variations*, arXiv:2502.09663) explains any image classifier by generating visua
   per-class attribute ranking; classifier-agnostic & forward-only (no retraining); continuous edit
   strength α (dose-like morphs); quantitative faithfulness via re-encoding.
 
-Status: **designing the per-cell classifier** (the immediate task). Diffusion model + DiffEx
-guidance are later phases, sketched here for context.
+Status (historical): *designing the per-cell classifier* — that phase is long done; see
+ACTIVE EFFORTS below for the current state.
+
+---
+
+## ACTIVE EFFORTS (dashboard — updated 2026-07-06)
+
+Five parallel workstreams. Each line: what · where · how to check · next step.
+Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
+
+### 1. Phase generator: 500k warm-start retrain (does more data beat v1?)
+- **Goal:** see if cond_ratio climbs past v1's 0.468 with 10× data, warm-started from v1.
+- **Checkpoints** (`diffae/`): `phase_v1/`=PRODUCTION (50k, ep120, 0.468); `phase_v1_500k_warm/`
+  =warm-from-v1 (500k, resuming from ep15/0.542, the promising one); `phase_v1_500k/`=scratch
+  (500k, ep12/0.416, PARKED).
+- **Running:** resume chain `34673256 → 34673257 → 34673258` (afterany, 720min each, **mem_gb=200**
+  — 96 OOMs on the 51GB crop cache; see `diffae/submit.py` RUNBOOK).
+- **Check:** `python -c "import torch;h=torch.load('.../phase_v1_500k_warm/diffae_train_state.pt',map_location='cpu')['history'];print([round(e.get('cond_ratio',-1),3) for e in h if e.get('cond_ratio',-1)>0])"`
+- **Next:** if cond_ratio trends >0.55 → finish to ep120 + re-render a v1-vs-warm compare; if it
+  plateaus ~0.54 → stay on v1. Do NOT invest more in the scratch run.
+
+### 2. Fluorescent per-marker generators (train all ~60 markers)
+- **Goal:** a DiffAE generator per fluorescent marker; then direction/traversal per marker.
+- **Done (ep≥98, 31 markers):** all 23 launch-covered live+CP+4i + 5 early (NucleoLive, NPM3,
+  FastAct, LysoTracker, ChromaLIVE-mito) + 3 no-PMA (LMNB1, VIM, cisGolgi via anndata).
+- **Still training / undertrained:** H2BC21 (ep17), VPS35, EEA1, RAB7A, pHrodo, BODIPY, HSPA1B,
+  CLTA, c-Myc, Rb, RSP6, MAP1LC3B, b-catenin, caspase, gH2AX, and remaining launch markers
+  in array `34670327` (throttle 8).
+- **Channels/config** in `directions/_ranking/fluor_marker_launch.json` (+ recovered from training pickles).
+- **Next:** let the array drain; re-render grids/viewer assets for markers as they finish.
+
+### 3. cells×α traversal grids (review artifacts)
+- **Where:** `directions/_grids/`. Format: rows=cells × cols=α (**±2/±3/±4/±5**, w=2), via
+  `directions/batch.py::marker_grid` (now supports phase, fluor, complex, and A→B anchor).
+- **Done:** 28 complete-marker grids w/ top marker-specific geneKO (from `gene_best_marker.csv`
+  distinctiveness assignment, margin-broken); custom KIF23@NucleoLive/@H2BC21, TSEN2@MAP4,
+  phase KIF23; **40S→60S anchor-switch demo** (`34676955`).
+- **Top-gene source:** `organelle_attribution/pca_optimized_v0.3/cell_dino/zscore_per_exp/paper_v1/
+  .../plots/marker_overlay/gene_best_marker.csv` (+ distinctiveness_raw matrices for live/cp/4i).
+
+### 4. Shareable traversal viewer (MOPS-style)  ← main build
+- **Design:** static precompute → dumb web viewer (no live GPU). α=scrub timeline, w=2 fixed,
+  marker/gene/complex/cell = routing. Anchor-switch (A→B) = curated K=10 top-distinct geneKOs +
+  complexes per marker (Phase 3, not built yet — `marker_grid`/`_setup` already take `control`).
+- **Code:** `viewer/precompute.py` (α-frame WebP emitter, ~265KB/cell + manifest) · `viewer/webapp/`
+  (dependency-free JS; per-target α lists so it renders while the cache fills).
+- **Assets:** `viewer_assets/<modality>/<grain>/<slug>/cell<c>/frame_<i>.webp` + `manifest.json`.
+- **Seed batch (Phase 1):** top-8 distinct geneKOs/marker + phase, 20 cells, ±5 — array `34676911`
+  (rebuild manifest w/ `scratchpad/build_manifest.py` as it drains).
+- **LIVE DEMO on Bruno:** `http://127.0.0.1:8765` served from `viewer_assets/` on **login-01**
+  (`python -m http.server 8765 --directory .../viewer_assets`); reach via VS Code port-forward.
+- **Next:** full-coverage drain (all markers×genes×complexes, 20 cells → ~525GB, prioritized by
+  distinctiveness); build A→B anchor precompute + "from" dropdown.
+
+### 5. Infra / hosting PR (S3 static site)
+- **Target:** PR to `github.com/chanzuckerberg/sfbiohub-infra`; infra team approves → S3 bucket +
+  static hosting for the viewer (webapp + manifest + assets).
+- **Status:** NOT started. Bruno demo (#4) is the interim so we iterate while the PR is pending.
+- **Next:** draft the infra PR (bucket + CloudFront static site config) once the demo UX settles.
+
+---
 
 ### Scope (locked)
 - **4 classifiers** = 2 modalities × 2 grains:
