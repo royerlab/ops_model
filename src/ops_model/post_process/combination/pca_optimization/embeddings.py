@@ -349,6 +349,68 @@ def _score_distinctiveness(
         return None, 0.0
 
 
+def _score_ebi_plus(
+    adata_guide,
+    activity_map,
+    r,
+    total_feats,
+    plots_dir,
+    metrics_dir,
+    plt,
+    _logger,
+    distance="cosine",
+    suffix="",
+):
+    """Run EBI+ scoring (guide-level, complex-grouped), save CSV and plot.
+
+    EBI+ is a guide-level metric like distinctiveness: every guide's positive
+    group is its gene's EBI complex (else the gene itself), so complex members
+    collapse into one group and non-complex genes reduce to distinctiveness.
+    Returns ``(ebi_plus_map, ebi_plus_ratio)`` or ``(None, 0.0)`` on failure.
+    Computed across all geneKOs (``suffix`` only affects output filenames).
+    """
+    label = "all geneKOs"
+    if activity_map is None:
+        return None, 0.0
+    try:
+        from ops_utils.analysis.map_scores import phenotypic_ebi_plus
+
+        _logger.info(f"Running EBI+ ({label})...")
+        ebi_plus_map, ebi_plus_ratio = phenotypic_ebi_plus(
+            adata_guide,
+            plot_results=False,
+            null_size=100_000,
+            distance=distance,
+        )
+        ebi_plus_map.to_csv(
+            metrics_dir / f"phenotypic_ebi_plus{suffix}.csv", index=False
+        )
+        _logger.info(f"  EBI+ ({label}): {ebi_plus_ratio:.1%}")
+
+        try:
+            fig, ax = plt.subplots(figsize=(8, 7))
+            plot_map_scatter(
+                ax, ebi_plus_map, f"EBI+ ({label})", ebi_plus_ratio, show_ntc=False
+            )
+            fig.suptitle(
+                f"EBI+ ({label}) — {total_feats} features",
+                fontsize=13, fontweight="bold",
+            )
+            fig.tight_layout()
+            fig.savefig(
+                plots_dir / f"map_ebi_plus{suffix}.png", dpi=150, bbox_inches="tight"
+            )
+            plt.close(fig)
+            _logger.info(f"  Saved plots/map_ebi_plus{suffix}.png")
+        except Exception as exc:
+            _logger.warning(f"  EBI+ plot failed: {exc}")
+
+        return ebi_plus_map, ebi_plus_ratio
+    except Exception as exc:
+        _logger.error(f"  EBI+ ({label}) failed: {exc}")
+        return None, 0.0
+
+
 def _score_consistency(
     adata_gene,
     activity_map,

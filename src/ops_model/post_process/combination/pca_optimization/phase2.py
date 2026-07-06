@@ -54,6 +54,7 @@ from ops_model.post_process.combination.pca_optimization.embeddings import (
     _compute_and_plot_embeddings,
     _score_consistency,
     _score_distinctiveness,
+    _score_ebi_plus,
 )
 from ops_model.post_process.combination.pca_optimization.sweep_core import (
     _init_sweep_logger,
@@ -212,6 +213,17 @@ def aggregate_channels(
         _logger,
         distance=distance,
     )
+    ebi_plus_map, ebi_plus_ratio = _score_ebi_plus(
+        adata_guide,
+        activity_map,
+        r,
+        total_feats,
+        plots_dir,
+        metrics_dir,
+        plt,
+        _logger,
+        distance=distance,
+    )
     corum_map, corum_ratio, chad_map, chad_ratio, ebi_map, ebi_ratio = _score_consistency(
         adata_gene,
         activity_map,
@@ -302,6 +314,7 @@ def aggregate_channels(
             metric_maps={
                 "Activity": activity_map,
                 "Distinctiveness": dist_map,
+                "EBI+": ebi_plus_map,
                 "EBI": ebi_map,
                 "CHAD": chad_map,
                 "CORUM": corum_map,
@@ -949,6 +962,17 @@ def apply_second_pass_pca(
         _logger,
         distance=distance,
     )
+    ebi_plus_map, ebi_plus_ratio = _score_ebi_plus(
+        adata_guide,
+        activity_map,
+        r,
+        total_feats,
+        plots_dir,
+        metrics_dir,
+        plt,
+        _logger,
+        distance=distance,
+    )
     corum_map, corum_ratio, chad_map, chad_ratio, ebi_map, ebi_ratio = _score_consistency(
         adata_gene,
         activity_map,
@@ -1007,6 +1031,7 @@ def apply_second_pass_pca(
             metric_maps={
                 "Activity": activity_map,
                 "Distinctiveness": dist_map,
+                "EBI+": ebi_plus_map,
                 "EBI": ebi_map,
                 "CHAD": chad_map,
                 "CORUM": corum_map,

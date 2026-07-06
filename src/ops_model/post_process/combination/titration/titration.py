@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 DOWNSAMPLE_RATIO = 0.75  # multiply cell count by this each step
 MIN_CELLS = 5_000  # stop titrating below this
 NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
-METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi")
+METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi", "ebi_plus")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
 # Shared plot styling / labels (used by compare_titration_versions and below)
@@ -69,6 +69,7 @@ TITRATION_METRIC_COLORS = {
     "corum": "mediumpurple",
     "chad": "darkorange",
     "ebi": "crimson",
+    "ebi_plus": "deeppink",
 }
 TITRATION_RATIO_LABELS = {
     "activity": "% Active",
@@ -76,6 +77,7 @@ TITRATION_RATIO_LABELS = {
     "corum": "% CORUM consistent",
     "chad": "% CHAD consistent",
     "ebi": "% EBI consistent",
+    "ebi_plus": "% EBI+ significant",
 }
 TITRATION_MAP_LABELS = {
     "activity": "Activity mAP",
@@ -83,6 +85,7 @@ TITRATION_MAP_LABELS = {
     "corum": "CORUM mAP",
     "chad": "CHAD mAP",
     "ebi": "EBI mAP",
+    "ebi_plus": "EBI+ mAP",
 }
 SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
@@ -330,6 +333,7 @@ def _score_all_metrics(
         phenotypic_consistency_corum,
         phenotypic_consistency_ebi,
         phenotypic_consistency_manual_annotation,
+        phenotypic_ebi_plus,
     )
 
     result = {
@@ -343,6 +347,8 @@ def _score_all_metrics(
         "chad_map_mean": math.nan,
         "ebi_ratio": math.nan,
         "ebi_map_mean": math.nan,
+        "ebi_plus_ratio": math.nan,
+        "ebi_plus_map_mean": math.nan,
     }
 
     try:
@@ -387,6 +393,23 @@ def _score_all_metrics(
                 )
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
+
+    try:
+        ebi_plus_map, ebi_plus_ratio = phenotypic_ebi_plus(
+            g_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            distance=distance,
+        )
+        # EBI+ groups by complex, not perturbation, so subset_targets (a set of
+        # perturbation names) does not cleanly filter it — report the full ratio.
+        result["ebi_plus_ratio"] = float(ebi_plus_ratio)
+        if ebi_plus_map is not None and "mean_average_precision" in ebi_plus_map.columns:
+            result["ebi_plus_map_mean"] = float(
+                ebi_plus_map["mean_average_precision"].mean()
+            )
+    except Exception as exc:
+        _logger.warning(f"    EBI+ scoring failed: {exc}")
 
     try:
         e_norm = aggregate_to_level(
@@ -503,6 +526,7 @@ def _run_titration_points(
         "corum_ratio", "corum_map_mean",
         "chad_ratio", "chad_map_mean",
         "ebi_ratio", "ebi_map_mean",
+        "ebi_plus_ratio", "ebi_plus_map_mean",
     ]
 
     rows = []
@@ -598,6 +622,7 @@ def _run_titration_points(
             f"corum={scores['corum_ratio']:.1%}±{scores.get('corum_ratio_sem', 0):.1%} "
             f"chad={scores['chad_ratio']:.1%}±{scores.get('chad_ratio_sem', 0):.1%} "
             f"ebi={scores['ebi_ratio']:.1%}±{scores.get('ebi_ratio_sem', 0):.1%} "
+            f"ebi+={scores['ebi_plus_ratio']:.1%}±{scores.get('ebi_plus_ratio_sem', 0):.1%} "
             f"({time.time() - t_step:.0f}s)"
         )
     return pd.DataFrame(rows)
