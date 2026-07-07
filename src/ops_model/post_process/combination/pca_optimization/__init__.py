@@ -266,6 +266,36 @@ DUD_GUIDES = frozenset({
 
 
 
+def _write_run_config(args, output_dir) -> None:
+    """Record the run's full args + reconstructed command into the output dir so the
+    exact invocation is recoverable later (no reverse-engineering flags from the path).
+
+    Written as run_config.yaml next to the run outputs; overwritten on re-run so it
+    always reflects the latest invocation that produced/touched this directory.
+    """
+    import sys
+    import datetime
+    import yaml
+
+    def _ser(v):
+        return str(v) if isinstance(v, Path) else v
+
+    cfg = {
+        "command": "python -m ops_model.post_process.combination.pca_optimization "
+        + " ".join(sys.argv[1:]),
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "output_dir": str(output_dir),
+        "args": {k: _ser(v) for k, v in sorted(vars(args).items())},
+    }
+    try:
+        cfg_path = Path(output_dir) / "run_config.yaml"
+        with open(cfg_path, "w") as f:
+            yaml.safe_dump(cfg, f, sort_keys=True, default_flow_style=False)
+        print(f"Run config written: {cfg_path}")
+    except Exception as e:
+        print(f"[warn] could not write run_config.yaml: {e}")
+
+
 def main():
     # Force line-buffered stdout so progress prints appear in real time when
     # launched under `uv run`, `nohup`, or any other wrapper that pipes
@@ -490,6 +520,7 @@ def main():
         print(f"Aggregation method: {args.agg_method} — output → {output_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    _write_run_config(args, output_dir)
 
     # Dispatch to mode handler. ``--sweep-seed`` is checked first so that
     # combining it with ``--second-pca-only`` (which is also a subdir
