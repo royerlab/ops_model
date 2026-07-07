@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>DiffEx Traversal Viewer</title>
-<link rel="stylesheet" href="style.css?v=20"/>
+<link rel="stylesheet" href="style.css?v=34"/>
 </head>
 <body>
 <header>
@@ -18,6 +18,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="browse">Browse</button>
       <button class="tab" data-tab="anchor">Anchor &amp; display</button>
+      <button class="tab" data-tab="montage">Embedding</button>
     </div>
 
     <div class="tabpane" id="tab-browse">
@@ -54,6 +55,41 @@
         <label class="chk"><input type="checkbox" id="showreal"/> show real cell row (vs generated)</label>
       </div>
     </div>
+
+    <div class="tabpane hidden" id="tab-montage">
+      <div class="hint">One NTC cell morphed toward <b>every gene</b>, each tile placed at that gene's embedding position. Scroll to zoom, drag to pan; hover a cell to see its gene.</div>
+      <label>Embedding
+        <select id="m-emb">
+          <option value="umap" selected>UMAP</option>
+          <option value="phate">PHATE</option>
+        </select>
+      </label>
+      <label>α (morph strength)
+        <select id="m-alpha">
+          <option value="1">α = 1 (centroid)</option>
+          <option value="2">α = 2</option>
+          <option value="3">α = 3</option>
+          <option value="4">α = 4</option>
+          <option value="5" selected>α = 5 (exaggerated)</option>
+        </select>
+      </label>
+      <label>NTC cell <select id="m-cell"></select></label>
+      <label>Display <span class="hint">(preset — tune with sliders below)</span>
+        <select id="m-mode">
+          <option value="both" selected>images + points</option>
+          <option value="images">cell images</option>
+          <option value="points">points</option>
+        </select>
+      </label>
+      <label>Image opacity <input id="m-imgalpha" type="range" min="0" max="1" step="0.05" value="1"/></label>
+      <label>Point opacity <input id="m-ptalpha" type="range" min="0" max="1" step="0.05" value="0.8"/></label>
+      <label>Zoom detail <span class="hint">(higher = coarser tiles longer)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.1" value="0.3"/></label>
+      <label>Color by <select id="m-color"><option value="none" selected>none</option></select></label>
+      <label class="chk"><input type="checkbox" id="m-labels"/> label groups (text at group centroids)</label>
+      <div class="hint" id="m-embed"></div>
+      <div class="hint" id="m-status"></div>
+      <div id="m-legend"></div>
+    </div>
   </aside>
 
   <main id="stage">
@@ -61,7 +97,7 @@
       <div id="heat-grad"></div>
       <div id="heat-real"><span>α=1 · true centroid</span></div>
       <div id="heat-tick"></div>
-      <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">NTC (α=0)</span><span class="pos">phenotype</span></div>
+      <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (α=0)</span><span class="pos">phenotype</span></div>
     </div>
     <div id="scrub">
       <button id="play">▶</button>
@@ -90,6 +126,7 @@
     <div id="score-legend">classifier confidence (target class):&nbsp; 0%<span class="bar"></span>100%</div>
     <div id="grid"></div>
     <div id="meta"></div>
+    <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas></div>
   </main>
 
   <aside id="sidebar">
@@ -101,6 +138,8 @@
 </div>
 
 <div id="ticktip"></div>
-<script src="app.js?v=20"></script>
+<div id="m-tip"></div>
+<script src="openseadragon.min.js"></script>
+<script src="app.js?v=34"></script>
 </body>
 </html>

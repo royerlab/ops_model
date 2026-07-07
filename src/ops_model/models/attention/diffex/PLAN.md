@@ -23,10 +23,53 @@ ACTIVE EFFORTS below for the current state.
 
 ---
 
-## ACTIVE EFFORTS (dashboard — updated 2026-07-06)
+## ACTIVE EFFORTS (dashboard — updated 2026-07-07)
 
-Six parallel workstreams. Each line: what · where · how to check · next step.
+Eight parallel workstreams. Each line: what · where · how to check · next step.
 Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
+
+### CURRENT STATE (2026-07-07)
+- **Viewer cache:** 29 markers / **303 targets** (241 NTC-anchored + 62 A→B), 1.2 GB; 29 shared
+  `_anchors/<anchor>/` real-cell dirs (dedup working); **scores.json for all 303** (binary-LR score —
+  to be replaced by SetTransformer, #7). Live demo: `login-01:8765`.
+- **Canonical build code is now IN-REPO** (scratchpad drivers retired): `viewer/submit.py`
+  (`seed|anchors|manifest|montage` subcommands) + `viewer/catalog.py` (dist matrices, per-marker
+  top-gene ranking, complete-marker catalog, dist/desc maps) + `precompute.py` (`precompute_marker`
+  per-marker driver, `precompute_target`, `build_manifest`) + `build_umap_montage.py` + `webapp/`.
+- **Fluor generators:** **38/59 complete** (ep≥98); 21 still training (array `34670327`).
+- **500k warm retrain — CONCLUDED, PARK IT.** cond_ratio peaked 0.542 then *declined*
+  (0.36 → 0.34 → 0.33) → not beating v1; stay on `phase_v1` (0.468). Effort #1 closed.
+- **UMAP montage (#8):** cell 35 / α=2 built (1000/1052 genes) — all precomputed CellDINO
+  (`gene_bulked_Phase` centroids + `features_processed_Phase` z0, NO re-embed). **Array-parallelized:
+  8 GPU chunks ~2.5 min + assemble 49 s** (vs 16 min single-job).
+- **Infra PR (#5):** **SUBMITTED** — sfbiohub-infra PR #51 (open). Write access granted; no storage limit.
+  Argus is stateless (restart drops local data) → assets live in S3, deployment downloads on boot.
+  Draft `.tf` mirrors `proteohub-argus-s3-reader-dev.tf` (bucket + nonprod-cluster read-only). Ready to
+  push (pending user OK). Requesting **1 TB** ceiling. Separate app-side track: make viewer Argus-ready
+  per `czbiohub-sf/biohub-argus-example-app` + Argus MCP.
+
+### TO COMPLETE THE FULL CACHE BUILDOUT
+1. **Finish 21 remaining fluor generators** (array `34670327`) → add their slugs to
+   `catalog.COMPLETE_LAUNCH` → `submit seed`.
+2. **Full NTC drain:** seed is currently **top-8 genes/marker**. For full coverage expand per-marker
+   targets to ALL genes (~1000) → ~500 GB. Add a `submit seed --all-genes` mode (the per-marker
+   driver already amortizes the shared NTC gather, so cost scales with KD gathers).
+3. **Full A→B anchors:** `submit anchors --k 10` across ALL markers + complexes (currently only a
+   few markers' top-5).
+4. **Fluor complex traversals** (currently phase-complex only): per-marker `grain=complex` with the
+   EBI fluor CSV.
+5. **Real scores:** wire SetTransformer (#7) per-α bag `P(target)`, supersede the binary LR; add
+   `has_scores` to the manifest target entries (viewer already fetches `scores.json` directly).
+6. **S3 hosting** (#5) — access granted. Push the S3-bucket PR (bucket + nonprod-cluster
+   read-only, 1 TB ceiling) → on merge `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/`; Argus
+   downloads from S3 on boot. Then make the app Argus-ready (`biohub-argus-example-app` + Argus MCP).
+
+### MULTI-ALPHA MONTAGE — what's needed
+- Now: one montage zarr per (cell, α) — `submit montage --cell 35 --alpha 2`.
+- Multi-α: fan out `submit montage --alpha {1,2,3,4,5}` (each reuses the same z0 + gene_bulked
+  centroids; per-α decode array + a zarr per α), then an **α switch in the explorer** (latent-lens
+  napari layer per α, or a small selector). Next: add a `--alphas` flag that loops the per-α decode
+  arrays sharing one prep, and check whether latent-lens supports an α-indexed/stacked montage.
 
 ### 1. Phase generator: 500k warm-start retrain (does more data beat v1?)
 - **Goal:** see if cond_ratio climbs past v1's 0.468 with 10× data, warm-started from v1.
@@ -75,22 +118,31 @@ Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
   --directory .../viewer_assets`); VS Code port-forward 8765, or `http://login-01:8765` inside noVNC.
 - **Speed:** `num_workers=12` on the crop DataLoader → materialize **56s→5s (11×)**; per-target
   ~1.5min. `precompute_target(load_workers=…)`; SLURM `cpus_per_task=12`.
-- **Cache builds running:** NTC seed re-run (fast) `34678879` (top-8/marker + phase, 20 cells);
-  A→B anchor pairs `34678847` (5xUPRE/FBL/NPM1 top-5, all ordered pairs); demo complexes `34679137`
-  (40S/60S/PolII/CCT/SF3B, phase).
+- **PER-MARKER DRIVER** `precompute_marker(grain, targets, …)`: all a marker's geneKOs share the
+  SAME ~20 NTC/anchor base cells + seeds, so gather the control ONCE + reuse across targets; save
+  20 real cells ONCE under `<modality>/_anchors/<anchor>/` (meta carries `real_dir`). Dedups real
+  cells + amortizes ckpt load & control gather. `real.webp` toggle shows real-vs-generated row.
+- **Cache builds:** current seed = **per-marker** array `34680796` (30 jobs: 28 fluor + phase
+  geneKO + phase complex, top-8 each). A→B pairs `34678847`; 40S↔60S anchors done (viewer anchor
+  menu works); demo phase geneKOs `34679534` + complexes `34679137`.
 - **Next:** full NTC drain + full A→B (K=10 → ~5,400 traversals ~46GB ~150 GPU-hr) — gated on go.
 
-### 5. Infra / hosting PR (S3 + IRSA, mimic Alex's mops-viewer)
-- **Target:** PR to `github.com/chanzuckerberg/sfbiohub-infra`; infra team approves.
-- **Drafted (NOT pushed — awaiting user review):** `scratchpad/infra_pr/terraform/accounts/
-  biohub-nonprod/diffex-viewer-dev.tf`, mirrors Alex Lin's merged **PR #47** `mops-viewer-dev.tf`:
-  `diffex-viewer-dev` S3 bucket + read-only IRSA role (`argus-diffex-viewer-rdev/diffex-viewer`) +
-  `diffex-viewer-dev-readwrite` uploader role. PR body flags storage is flexible (seed ~few GB;
-  full ~500GB) so infra isn't surprised.
-- **Note:** MOPS is a **Gradio app on Argus** reading pre-rendered images from S3 via that IRSA
-  role — same deploy fits our static viewer (serve from an Argus pod or CloudFront).
-- **Next:** user reviews the .tf → push branch `diffex-viewer-dev` → PR → infra approves →
-  `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` via the readwrite role.
+### 5. Infra / hosting PR (S3 bucket + Argus read-only) — ACCESS GRANTED
+- **Infra guidance:** write access to `sfbiohub-infra` granted; **no storage limit**. Argus is
+  **stateless** — a restart drops local data — so the pattern is: assets in an S3 bucket in
+  `biohub-nonprod`, deployment **downloads from S3 on boot** (same-AWS copy is fast). Two tracks:
+  1. **Infra PR (this):** create the S3 bucket + permission for the **nonprod cluster to read only**.
+     Mirror existing repo practice — `proteohub-argus-s3-reader-dev.tf` is the canonical Argus+S3
+     reader (IRSA role, `s3:GetObject`/`ListBucket`).
+  2. **App-readiness (separate, app repo):** make the viewer Argus-ready per
+     `czbiohub-sf/biohub-argus-example-app`; the **Argus MCP server** helps. On boot the app pulls
+     from `s3://diffex-viewer-dev/` via the read-only role.
+- **Draft:** `scratchpad/infra_pr/terraform/accounts/biohub-nonprod/diffex-viewer-dev.tf` — bucket
+  (`cztack//aws-s3-private-bucket`) + read-only IRSA role (`argus-diffex-viewer-rdev/diffex-viewer`)
+  + `diffex-viewer-dev-readwrite` uploader role (our CLI uploads only, NOT the cluster). Already
+  matches the proteohub reader pattern. PR body requests a **1 TB ceiling** (actual footprint small).
+- **Next:** user OK → push branch `diffex-viewer-dev` → PR → merge →
+  `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` (readwrite role) → wire Argus app boot-download.
 
 ### 6. N-way single-cell CellDINO classifier MLPs (viewer score fix)  ← in build
 - **Why:** the viewer badge must be **1-of-N distinctiveness** `P(target class)` (out of all
@@ -108,6 +160,31 @@ Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
 - **Next:** validate on one (marker,grain); launch training; **swap the score in `precompute`**
   (drop the binary LR, load the marker+grain MLP, `softmax(MLP(gemb))[target]`); re-run precompute
   to re-score. Only HSPA5 has an old per-class binary model C on disk (`extra/HSPA5/model_C.pt`).
+
+### 7. REAL SetTransformer bag classifier (Option B — Alex's checkpoints, 2026-07-06)
+- **Unblock:** Alex Lin shared the trained **`cellstate-set-classifier`** (SetTransformer) checkpoints
+  on W&B (`czi.wandb.io/ai_imaging/cellstate-set-classifier`). It's the actual reported 1-of-N model
+  and is a **bag/MIL** model (set of cells → perturbation class), so the honest viewer score is a
+  **per-α `P(target)` curve** over an N(~100)-cell generated bag — NOT per-image.
+- **Runs:** 1K phase geneKO `miwkg1cy` · 1K fluorescent (pooled markers) `hx6q8byj` ·
+  EBI phase `epzvv0m1` · EBI fluorescent (pooled) `ggdfggsn` · EBI fluorescent (single-marker) `ciw91el9`.
+- **Plan:** pull ckpts via `wandb` artifacts → load a forward (set of CellDINO features → class
+  logits) → per α, feed the ~100 generated cells (embed_crops features) → `softmax → P(target)` →
+  plot the curve under the strip (shows when the traversal "convinces" the real classifier; matches
+  distinctiveness which is population-level). Reuse the `gemb` we already compute.
+- **Relationship to #6:** this SUPERSEDES the per-cell MLP as the authoritative score (real model,
+  no ~120 trainings); keep `nway_clf` MLP only as an optional per-image proxy.
+- **Next:** confirm the checkpoints load here (arch + weights via wandb), build the set→logits
+  forward, wire the per-α bag score into `precompute` / a curve panel in the viewer.
+
+### 8. Image-UMAP montage viewer (latent-lens) — idea/track
+- **Idea:** place each geneKO's generated cell (fixed source cell morphed toward that gene at α) at
+  the gene's CellDINO-UMAP coordinate → zoom the embedding to see one cell take on each
+  neighborhood's phenotype. Use **`czi-ai/latent-lens`** (`fit_umap` + `build_montage` → multiscale
+  montage zarr + napari/live viewer) — purpose-built for this; don't hand-roll the pyramid/viewer.
+- **Inputs we supply:** per-gene CellDINO embeddings (UMAP coords) + generated crops (callable) +
+  gene categories/colors. **Next:** prototype flavor-B image-UMAP on the phase genes we have, after
+  the per-marker relaunch; needs full-gene coverage for the complete embedding.
 
 ---
 

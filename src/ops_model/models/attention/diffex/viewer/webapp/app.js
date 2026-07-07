@@ -22,10 +22,11 @@ const heat = (v) => {   // classifier confidence 0→1 as white → deep red (#9
 };
 const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, anchor, slug: t.slug,
   asset_dir: t.asset_dir, alphas: t.alphas, n_cells: t.n_cells, has_real: t.has_real,
-  key: markerName + "|" + t.slug });
+  real_dir: t.real_dir || t.asset_dir, key: markerName + "|" + t.slug });
 
 async function boot() {
   state.manifest = await (await fetch(MANIFEST_URL)).json();
+  state.geneDesc = await fetch(`${BASE}gene_desc.json`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
   const mkSel = $("marker");
   state.manifest.markers.forEach((m, i) => {
     const o = document.createElement("option");
@@ -60,8 +61,189 @@ async function boot() {
   document.querySelectorAll(".tab").forEach(b => b.onclick = () => {   // left-panel tabs
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
     document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + b.dataset.tab));
+    const mont = b.dataset.tab === "montage";
+    $("stage").classList.toggle("montage-active", mont);
+    if (mont) ensureMontage();
   });
+  for (let c = 0; c < 20; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; $("m-cell").appendChild(o); }
+  $("m-emb").onchange = loadMontage;
+  $("m-alpha").onchange = loadMontage;
+  $("m-cell").onchange = loadMontage;
+  $("m-mode").onchange = () => setMode($("m-mode").value);
+  $("m-imgalpha").oninput = () => { mont.imgAlpha = +$("m-imgalpha").value; applyLayers(); };
+  $("m-ptalpha").oninput = () => { mont.ptAlpha = +$("m-ptalpha").value; drawOverlay(); };
+  $("m-detail").oninput = () => {
+    mont.detail = +$("m-detail").value;
+    if (mont.osd) { mont.osd.minPixelRatio = mont.detail; if (mont.osd.world.getItemCount()) mont.osd.world.getItemAt(0).minPixelRatio = mont.detail; mont.osd.forceRedraw(); }
+  };
+  $("m-color").onchange = setField;
+  $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
   selectMarker(0);
+}
+
+// ---- Montage tab: OpenSeadragon image pyramid + synced points overlay (color-by categories) ----
+const MPAL = (i, n) => `hsl(${Math.round((360 * i / Math.max(n, 1)) * 2.4) % 360},68%,60%)`;  // spread hues
+const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology terms) at ~n chars
+  const words = String(s).split(/[\s_]+/), lines = []; let cur = "";
+  for (const w of words) { if (cur && (cur + " " + w).length > n) { lines.push(cur); cur = w; } else cur = cur ? cur + " " + w : w; }
+  if (cur) lines.push(cur); return lines;
+};
+// display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
+const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
+const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false };
+
+function ensureMontage() { if (!mont.osd) loadMontage(); else drawOverlay(); }
+function montageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`; }
+
+async function loadMontage() {
+  const base = montageBase();
+  const tj = await fetch(`${base}/tiles.json`).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!tj) { $("m-status").textContent = "this α/cell montage isn't built yet"; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
+  $("m-status").textContent = `${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
+  $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
+  mont.W = tj.width;
+  const maxLevel = Math.ceil(Math.log2(Math.max(tj.width, tj.height)));
+  const src = { width: tj.width, height: tj.height, tileSize: tj.tileSize, tileOverlap: 0,
+    minLevel: maxLevel - (tj.levels.length - 1), maxLevel,
+    getTileUrl: (l, x, y) => `${base}/L${maxLevel - l}/${x}_${y}.png` };
+  const dimKey = `${tj.width}x${tj.height}`;
+  if (mont.osd && mont.dimKey && mont.dimKey !== dimKey) { mont.osd.destroy(); mont.osd = null; }  // aspect change (umap↔phate) → full reset, no residue
+  mont.dimKey = dimKey;
+  const keep = (mont.osd && mont.osd.world.getItemCount()) ? mont.osd.viewport.getBounds() : null;  // preserve viewpoint
+  if (!mont.osd) {
+    mont.osd = OpenSeadragon({ id: "osd", tileSources: src, showNavigationControl: false,
+      crossOriginPolicy: false, gestureSettingsMouse: { clickToZoom: false, scrollToZoom: true },
+      zoomPerScroll: 1.7, animationTime: 0.25, springStiffness: 9,
+      minPixelRatio: mont.detail,                           // level-of-detail (live via Zoom detail slider)
+      minZoomImageRatio: 0.4, maxZoomPixelRatio: 8, background: "#000" });
+    ["update-viewport", "animation", "animation-finish", "resize"].forEach(ev => mont.osd.addHandler(ev, drawOverlay));
+    wireHover();
+  } else { mont.osd.world.removeAll(); mont.osd.open(src); }   // clear old embedding's tiles before loading new
+  mont.osd.addOnceHandler("open", () => {
+    if (keep) mont.osd.viewport.fitBounds(keep, true);         // α/cell switch keeps current pan/zoom
+    mont.osd.world.getItemAt(0).setOpacity(mont.imgAlpha);
+  });
+  populateColorFields(tj.color_fields || []);
+  fetch(`${base}/labels.json`).then(r => r.ok ? r.json() : []).then(l => { mont.labels = l; setField(); }).catch(() => { mont.labels = []; });
+}
+
+// color-by dropdown, populated from all anndata categorical fields; leiden/ontology resolutions grouped
+function populateColorFields(cf) {
+  const sel = $("m-color"), prev = sel.value;
+  sel.innerHTML = '<option value="none">none</option>';
+  const grp = { other: [], leiden: [], onto: [] };
+  cf.forEach(f => (f.startsWith("leiden_r") ? grp.leiden : f.startsWith("top_ontology_r") ? grp.onto : grp.other).push(f));
+  const add = (label, arr, fmt) => {
+    if (!arr.length) return;
+    const og = document.createElement("optgroup"); og.label = label;
+    arr.forEach(f => { const o = document.createElement("option"); o.value = f; o.textContent = fmt ? fmt(f) : f; og.appendChild(o); });
+    sel.appendChild(og);
+  };
+  add("fields", grp.other);
+  add("Leiden resolution", grp.leiden, f => "leiden " + f.split("_r")[1]);
+  add("Top ontology (per-resolution)", grp.onto, f => "ontology r" + f.split("_r")[1]);
+  sel.value = cf.includes(prev) || prev === "none" ? prev : "none";   // keep selection across α/cell/embedding switches
+}
+
+function buildCmap() {
+  mont.cmap = {}; mont.centroids = {};
+  if (mont.field === "none") return;
+  const vals = [...new Set(mont.labels.map(L => L[mont.field]).filter(v => v))].sort();
+  vals.forEach((v, i) => { mont.cmap[v] = MPAL(i, vals.length); });
+  const acc = {};                                   // group centroids (image coords) for text labels
+  for (const L of mont.labels) { const v = L[mont.field]; if (!v) continue; const a = acc[v] || (acc[v] = [0, 0, 0]); a[0] += L.nx * mont.W; a[1] += L.ny * mont.W; a[2]++; }
+  for (const v in acc) mont.centroids[v] = { x: acc[v][0] / acc[v][2], y: acc[v][1] / acc[v][2] };
+}
+const colorOf = (L) => mont.field === "none" ? "#26c6ff" : (mont.cmap[L[mont.field]] || "#555");
+
+function renderLegend() {
+  const el = $("m-legend"); el.innerHTML = "";
+  if (mont.field === "none") return;
+  const vals = Object.keys(mont.cmap);
+  el.innerHTML = `<div class="leg-hd">${mont.field} · ${vals.length}</div>`;
+  vals.slice(0, 60).forEach(v => {
+    const d = document.createElement("div"); d.className = "leg-i";
+    d.innerHTML = `<span class="sw" style="background:${mont.cmap[v]}"></span>${v}`;
+    el.appendChild(d);
+  });
+  if (vals.length > 60) el.insertAdjacentHTML("beforeend", `<div class="leg-i more">…+${vals.length - 60} more</div>`);
+}
+
+// points overlay synced to the OSD viewport. images mode → dots only where a gene lacks a crop; points mode → all.
+function drawOverlay() {
+  const cv = $("m-overlay"); if (!cv || !mont.osd) return;
+  const ctx = cv.getContext("2d"), r = mont.osd.container.getBoundingClientRect();
+  if (cv.width !== r.width || cv.height !== r.height) { cv.width = r.width; cv.height = r.height; }
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!mont.labels.length || !mont.W || mont.ptAlpha <= 0) return;
+  ctx.globalAlpha = mont.ptAlpha;
+  const rad = mont.imgAlpha < 0.5 ? 4 : 3;                        // bigger dots when images are faded (points focus)
+  for (const L of mont.labels) {
+    const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(L.nx * mont.W, L.ny * mont.W), true);
+    if (p.x < -5 || p.y < -5 || p.x > cv.width + 5 || p.y > cv.height + 5) continue;
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 6.2832);
+    ctx.fillStyle = colorOf(L); ctx.fill();
+    if (L.crop) { ctx.strokeStyle = "rgba(255,255,255,.45)"; ctx.lineWidth = 0.6; ctx.stroke(); }
+  }
+  if (mont.showLabels && mont.field !== "none") {   // category name at each group centroid (outlined for legibility)
+    ctx.globalAlpha = 1; ctx.font = "bold 13px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (const cat in mont.centroids) {
+      const c = mont.centroids[cat];
+      const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(c.x, c.y), true);
+      if (p.x < 0 || p.y < 0 || p.x > cv.width || p.y > cv.height) continue;
+      const lines = wrapLabel(cat, 20);
+      lines.forEach((ln, li) => {
+        const yy = p.y + (li - (lines.length - 1) / 2) * 15;
+        ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.85)"; ctx.strokeText(ln, p.x, yy);
+        ctx.fillStyle = mont.cmap[cat] || "#fff"; ctx.fillText(ln, p.x, yy);
+      });
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function applyLayers() {
+  if (mont.osd && mont.osd.world.getItemCount()) mont.osd.world.getItemAt(0).setOpacity(mont.imgAlpha);
+  drawOverlay();
+}
+function setMode(m) {                              // preset → set both sliders, then apply
+  mont.mode = m; const c = MODES[m] || MODES.both;
+  mont.imgAlpha = c.img; mont.ptAlpha = c.pt;
+  $("m-imgalpha").value = c.img; $("m-ptalpha").value = c.pt;
+  applyLayers();
+}
+function setField() { mont.field = $("m-color").value; buildCmap(); renderLegend(); drawOverlay(); }
+
+function nearestLabel(p) {
+  let best = null, bd = Infinity;
+  for (const L of mont.labels) { const dx = L.nx * mont.W - p.x, dy = L.ny * mont.W - p.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = L; } }
+  return best;
+}
+function findTargetEntry(gene) {   // manifest target entry for a gene (prefer phase geneKO) → info sidebar
+  for (const m of state.manifest.markers) { const e = m.targets.find(t => t.target === gene && !t.control && t.grain === "geneKO"); if (e) return e; }
+  for (const m of state.manifest.markers) { const e = m.targets.find(t => t.target === gene && !t.control); if (e) return e; }
+  return null;
+}
+function wireHover() {
+  const tip = $("m-tip");
+  mont.osd.addHandler("canvas-exit", () => { tip.style.display = "none"; });
+  mont.osd.container.addEventListener("mousemove", (e) => {
+    if (!mont.labels.length || !mont.W) { tip.style.display = "none"; return; }
+    const r = mont.osd.container.getBoundingClientRect();
+    const best = nearestLabel(mont.osd.viewport.viewportToImageCoordinates(mont.osd.viewport.pointFromPixel(new OpenSeadragon.Point(e.clientX - r.left, e.clientY - r.top))));
+    if (best) {
+      const extra = mont.field !== "none" && best[mont.field] ? ` · ${best[mont.field]}` : "";
+      tip.textContent = best.g + extra + (best.crop ? "" : " (no crop)");
+      tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`;
+    }
+  });
+  mont.osd.addHandler("canvas-click", (e) => {   // click a cell/point → show that gene in the info sidebar
+    if (!e.quick || !mont.labels.length) return;
+    const best = nearestLabel(mont.osd.viewport.viewportToImageCoordinates(mont.osd.viewport.pointFromPixel(e.position)));
+    if (!best) return;
+    renderInfo(findTargetEntry(best.g) || { target: best.g, grain: "geneKO", desc: (state.geneDesc || {})[best.g] });
+    $("sidebar").classList.remove("hidden");
+  });
 }
 
 function selectMarker(i) { state.marker = state.manifest.markers[i]; refreshTargets(); }
@@ -157,7 +339,7 @@ function rebuild() {
       const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
       for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
         const rp = document.createElement("div"); rp.className = "panel";
-        const rimg = document.createElement("img"); rimg.src = `${BASE}${p.asset_dir}/cell${c}/real.webp`;
+        const rimg = document.createElement("img"); rimg.src = `${BASE}${p.real_dir}/cell${c}/real.webp`;
         rp.appendChild(rimg); rr.appendChild(rp);
       }
       const gl = document.createElement("div"); gl.className = "rowlbl"; gl.textContent = "generated α-traversal ↓";
@@ -227,7 +409,7 @@ function renderInfo(t) {
     body.appendChild(d);
   };
   const gc = (g) => `<a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${encodeURIComponent(g)}" target="_blank" rel="noopener">${g}</a>`;
-  const s = t.desc, gi = s.indexOf("GO:"), ri = s.indexOf("Reactome:");
+  const s = t.desc;
   if (s.startsWith("Members")) {   // complex: members link out to GeneCards
     const mem = s.replace(/^Members \(\d+\):\s*/, "").split(", ").map(x => gc(x.trim())).join(", ");
     sec("Complex members", mem);
@@ -235,10 +417,9 @@ function renderInfo(t) {
   }
   const g = encodeURIComponent(t.target);
   sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${g}" target="_blank" rel="noopener">GeneCards ↗</a>`);
-  const name = (gi >= 0 ? s.slice(0, gi) : s).replace(/\.\s*$/, "");
-  sec("Function", name);
-  if (gi >= 0) sec("GO biological process", s.slice(gi + 3, ri >= 0 ? ri : undefined).replace(/^\s*|\.\s*$/g, ""));
-  if (ri >= 0) sec("Reactome pathways", s.slice(ri + 9).replace(/^\s*|\.\s*$/g, ""));
+  const parts = s.split(" || ");   // "<function> || GO biological process: … || Reactome: … || CORUM complex: …"
+  sec("Function", parts[0]);
+  parts.slice(1).forEach(p => { const i = p.indexOf(": "); if (i > 0) sec(p.slice(0, i), p.slice(i + 2)); });
 }
 
 // clickable α tick marks under the slider; click toggles an autoplay pause there.
@@ -285,7 +466,12 @@ function buildPlaySeq(alphas) {
 function togglePlay() {
   state.playing = !state.playing;
   $("play").textContent = state.playing ? "❚❚" : "▶";
-  if (state.playing) tick();
+  if (state.playing) {
+    const cur = +$("alpha").value;                 // resume the sweep from the current tick, not the left end
+    const pos = state.playSeq.indexOf(cur);
+    state.playPos = pos >= 0 ? pos : 0;
+    tick();
+  }
 }
 function tick() {
   if (!state.playing) return;
