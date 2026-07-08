@@ -1,7 +1,7 @@
 :root{--bg:#0d0f13;--panel:#161a21;--line:#2a2f3a;--fg:#e6e8ec;--mut:#8b93a1;
       --neg:#f0a020;--mid:#26c6ff;--pos:#ff5252;--accent:#26c6ff;}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
+body{margin:0;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;height:100vh;overflow:hidden;
      font:14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
        align-items:center;justify-content:space-between;gap:16px}
@@ -22,8 +22,31 @@ header .sub{color:var(--mut);font-size:12px}
 #info-body .empty{color:var(--mut);font-style:italic}
 #info-body a{color:var(--accent);text-decoration:none}
 #info-body a:hover{text-decoration:underline}
-#app{display:flex;height:calc(100vh - 58px)}
-#controls{width:310px;padding:16px;border-right:1px solid var(--line);
+#app{display:flex;flex:1;min-height:0}
+/* top crossbar: the core selection controls, laid out horizontally */
+#topbar{display:flex;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);
+        background:var(--panel);align-items:flex-start;flex-wrap:wrap;flex:none}
+.tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
+.tb-field.tb-grow{flex:1;min-width:240px}
+.tb-field>label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+.tb-field .hint{text-transform:none;letter-spacing:0;font-size:11px;opacity:.7}
+#topbar select,#topbar input{width:100%}
+#topbar select.mini{width:auto;display:inline-block;padding:2px 4px;font-size:11px;margin-left:4px}
+#topbar .row{display:flex;gap:6px;align-items:center}
+#topbar .row #cellcount{width:56px}
+#topbar .row button{flex:none;padding:7px 11px}
+/* combobox: input shows the selection; focus reveals a scrollable (~10-row) filtered list */
+.combo{position:relative}
+.combo-list{position:absolute;top:100%;left:0;right:0;z-index:60;margin-top:2px;
+   background:var(--panel);border:1px solid var(--accent);border-radius:6px;
+   max-height:264px;overflow:auto;box-shadow:0 10px 24px rgba(0,0,0,.55)}
+.combo-list.hidden{display:none}
+.combo-item{padding:6px 9px;font:13px/1.3 ui-monospace,Menlo,Consolas,monospace;cursor:pointer;
+   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.combo-item:hover{background:var(--line)}
+.combo-item.sel{color:var(--accent)}
+.combo-empty{padding:8px 9px;color:var(--mut);font-style:italic;font-size:12px}
+#controls{width:290px;padding:16px;border-right:1px solid var(--line);
           display:flex;flex-direction:column;gap:14px;overflow:auto}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .tabs .tab{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;
@@ -48,10 +71,10 @@ button{background:var(--panel);color:var(--fg);border:1px solid var(--line);bord
        padding:7px 10px;font-size:13px;cursor:pointer}
 button:hover{border-color:var(--accent)}
 .hidden{display:none!important}
-#panellist{list-style:none;margin:6px 0 0;padding:0;font-size:12px;font-family:ui-monospace,monospace}
-#panellist li{display:flex;justify-content:space-between;gap:6px;padding:4px 6px;background:var(--panel);
+#panellist,#a-panellist{list-style:none;margin:6px 0 0;padding:0;font-size:12px;font-family:ui-monospace,monospace}
+#panellist li,#a-panellist li{display:flex;justify-content:space-between;gap:6px;padding:4px 6px;background:var(--panel);
               border:1px solid var(--line);border-radius:5px;margin-bottom:4px}
-#panellist li button{padding:0 6px;font-size:12px}
+#panellist li button,#a-panellist li button{padding:0 6px;font-size:12px}
 
 #stage{flex:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px;overflow:auto}
 #heatbar{position:relative;width:min(80vw,720px);margin-top:22px}
@@ -120,3 +143,34 @@ button:hover{border-color:var(--accent)}
        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #m-legend .leg-i.more{font-style:italic;opacity:.7}
 #m-legend .sw{width:11px;height:11px;border-radius:2px;flex:none}
+
+/* dual-handle range: two overlaid range inputs sharing one track (clim min + max) */
+.dual{position:relative;height:22px}
+.dual::before{content:"";position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:4px;background:var(--line);border-radius:2px}
+.dual input[type=range]{position:absolute;left:0;top:0;width:100%;height:22px;margin:0;background:none;
+   pointer-events:none;-webkit-appearance:none;appearance:none}
+.dual input[type=range]::-webkit-slider-thumb{pointer-events:auto;-webkit-appearance:none;appearance:none;
+   width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);cursor:pointer;box-shadow:0 0 3px #000}
+.dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:14px;height:14px;border-radius:50%;
+   background:var(--accent);border:2px solid var(--bg);cursor:pointer}
+.dual input[type=range]::-webkit-slider-runnable-track{background:none}
+.dual input[type=range]::-moz-range-track{background:none}
+
+/* Attention-head view: grid of real phenotype crops with per-head inferno attribution overlay */
+#attn-view{display:none;width:100%;max-width:1100px;flex-direction:column;gap:12px}
+#stage.attn-active{justify-content:flex-start}
+#stage.attn-active>*{display:none}
+#stage.attn-active>#attn-view{display:flex}
+#attn-head-lbl{font:650 16px ui-monospace,Menlo,monospace;color:var(--fg);line-height:1.35}
+#attn-head-lbl .sub{display:block;font:400 12px ui-monospace,monospace;color:var(--mut);margin-top:3px}
+#attn-grid{display:flex;flex-direction:column;gap:20px}
+.agroup{display:flex;flex-direction:column;gap:8px}
+.agroup-hd{font:650 15px ui-monospace,Menlo,monospace}   /* colored per perturbation */
+.arow{display:flex;gap:10px;align-items:stretch}
+.arow-lbl{flex:0 0 92px;border-left:4px solid;padding-left:8px;font:11px/1.3 ui-monospace,monospace;
+   color:var(--mut);display:flex;align-items:center}
+.arow-cells{flex:1;display:grid;gap:8px;grid-template-columns:repeat(var(--acols,4),minmax(0,1fr))}
+.acell{position:relative}
+.acell canvas{width:100%;aspect-ratio:1;background:#000;border:1px solid var(--line);border-radius:6px;display:block}
+.acell .cap{font-size:10px;color:var(--mut);font-family:ui-monospace,monospace;text-align:center;margin-top:2px}
+#attn-view .empty{color:var(--mut);font-style:italic;padding:24px;text-align:center}

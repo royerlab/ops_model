@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>DiffEx Traversal Viewer</title>
-<link rel="stylesheet" href="style.css?v=34"/>
+<link rel="stylesheet" href="style.css?v=50"/>
 </head>
 <body>
 <header>
@@ -13,39 +13,54 @@
   <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
 </header>
 
+<!-- top crossbar: the core selection (drives every view). The left panel below is reserved for view tabs. -->
+<div id="topbar">
+  <div class="tb-field">
+    <label>Marker</label>
+    <div class="combo">
+      <input id="markerfilter" type="text" placeholder="search markers…" autocomplete="off"/>
+      <div class="combo-list hidden" id="marker-list"></div>
+    </div>
+  </div>
+  <div class="tb-field">
+    <label>Type</label>
+    <select id="grain">
+      <option value="all">geneKO + complex</option>
+      <option value="geneKO">geneKO</option>
+      <option value="complex">complex</option>
+    </select>
+  </div>
+  <div class="tb-field tb-grow">
+    <label>Perturbation
+      <select id="target-sort" class="mini" title="list order">
+        <option value="map" selected>by mAP</option>
+        <option value="alpha">A–Z</option>
+      </select>
+    </label>
+    <div class="combo">
+      <input id="filter" type="text" placeholder="search perturbations…" autocomplete="off"/>
+      <div class="combo-list hidden" id="target-list"></div>
+    </div>
+  </div>
+  <div class="tb-field">
+    <label>Cells per page</label>
+    <div class="row">
+      <input id="cellcount" type="number" min="1" max="12" value="4"/>
+      <button id="cprev" title="previous cells">◀</button>
+      <button id="cnext" title="next cells">▶</button>
+    </div>
+  </div>
+</div>
+
 <div id="app">
   <aside id="controls">
     <div class="tabs">
-      <button class="tab active" data-tab="browse">Browse</button>
-      <button class="tab" data-tab="anchor">Anchor &amp; display</button>
+      <button class="tab active" data-tab="traversal">Traversal</button>
       <button class="tab" data-tab="montage">Embedding</button>
+      <button class="tab" data-tab="attn">Attention heads</button>
     </div>
 
-    <div class="tabpane" id="tab-browse">
-      <label>Marker <select id="marker"></select></label>
-      <label>Type
-        <select id="grain">
-          <option value="all">geneKO + complex</option>
-          <option value="geneKO">geneKO</option>
-          <option value="complex">complex</option>
-        </select>
-      </label>
-      <label>Perturbation <span class="hint">(by distinctiveness mAP)</span>
-        <input id="filter" type="text" placeholder="filter…" autocomplete="off"/>
-        <select id="target" size="12"></select>
-      </label>
-      <div class="grp">
-        <label>Cells per page <input id="cellcount" type="number" min="1" max="12" value="4"/></label>
-        <div class="row"><button id="cprev">◀ prev cells</button><button id="cnext">next cells ▶</button></div>
-      </div>
-      <div class="grp">
-        <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
-        <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
-        <ul id="panellist"></ul>
-      </div>
-    </div>
-
-    <div class="tabpane hidden" id="tab-anchor">
+    <div class="tabpane" id="tab-traversal">
       <label>Anchor <span class="hint">(the α=0 center)</span>
         <select id="anchor"></select>
       </label>
@@ -54,6 +69,39 @@
         <label class="chk"><input type="checkbox" id="showscore" checked/> classifier score on images</label>
         <label class="chk"><input type="checkbox" id="showreal"/> show real cell row (vs generated)</label>
       </div>
+      <div class="grp">
+        <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
+        <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
+        <ul id="panellist"></ul>
+      </div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-attn">
+      <div class="hint">Real phenotype cells (the same top-attention cells the traversal targets) overlaid with each attention head's <b>pixel weights</b> in inferno. <b>Phase · geneKO only.</b></div>
+      <label>Attention head <span class="hint">(ranked by NTC-distinctiveness)</span>
+        <select id="a-head"></select>
+      </label>
+      <label>Normalization
+        <select id="a-norm">
+          <option value="map" selected>per-cell (brightest per tile)</option>
+          <option value="gene">per-gene (compare cells/heads)</option>
+          <option value="fixed">fixed (compare across genes)</option>
+        </select>
+      </label>
+      <label>Heatmap clim <span class="hint">(min–max window; narrower = brighter)</span></label>
+      <div class="dual">
+        <input id="a-climlo" type="range" min="0" max="1" step="0.02" value="0"/>
+        <input id="a-climhi" type="range" min="0" max="1" step="0.02" value="1"/>
+      </div>
+      <label>Heatmap opacity <input id="a-alpha" type="range" min="0" max="1" step="0.05" value="0.6"/></label>
+      <label>Cell image opacity <input id="a-img" type="range" min="0" max="1" step="0.05" value="1"/></label>
+      <div class="row"><button id="a-reset" title="reset all display settings">↺ reset controls</button></div>
+      <div class="grp">
+        <span class="lbl">Pin perturbations <span class="hint">(compare geneKOs; current always shown)</span></span>
+        <div class="row"><button id="a-pin">+ pin current</button><button id="a-pinclear">clear</button></div>
+        <ul id="a-panellist"></ul>
+      </div>
+      <div class="hint" id="a-status"></div>
     </div>
 
     <div class="tabpane hidden" id="tab-montage">
@@ -83,7 +131,7 @@
       </label>
       <label>Image opacity <input id="m-imgalpha" type="range" min="0" max="1" step="0.05" value="1"/></label>
       <label>Point opacity <input id="m-ptalpha" type="range" min="0" max="1" step="0.05" value="0.8"/></label>
-      <label>Zoom detail <span class="hint">(higher = coarser tiles longer)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.1" value="0.3"/></label>
+      <label>Zoom detail <span class="hint">(higher = coarser tiles longer)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.1" value="0.7"/></label>
       <label>Color by <select id="m-color"><option value="none" selected>none</option></select></label>
       <label class="chk"><input type="checkbox" id="m-labels"/> label groups (text at group centroids)</label>
       <div class="hint" id="m-embed"></div>
@@ -127,6 +175,7 @@
     <div id="grid"></div>
     <div id="meta"></div>
     <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas></div>
+    <div id="attn-view"><div id="attn-head-lbl"></div><div id="attn-grid"></div></div>
   </main>
 
   <aside id="sidebar">
@@ -140,6 +189,6 @@
 <div id="ticktip"></div>
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
-<script src="app.js?v=34"></script>
+<script src="app.js?v=50"></script>
 </body>
 </html>

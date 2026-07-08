@@ -23,168 +23,67 @@ ACTIVE EFFORTS below for the current state.
 
 ---
 
-## ACTIVE EFFORTS (dashboard — updated 2026-07-07)
+## ACTIVE EFFORTS (dashboard — updated 2026-07-08)
 
-Eight parallel workstreams. Each line: what · where · how to check · next step.
-Root for everything: `/hpc/projects/icd.fast.ops/models/diffex/`.
+### LATEST (2026-07-08) — phenotype-cell handoff, v2 mAP, EBI matrix, viewer embedding tab
+- **Phenotype-cell CSV for Ritvik** (`viewer/phenotype_cells.py`) → `viewer_assets/phenotype_cells_for_attention.csv`.
+  20 cells × (geneKO + EBI complex) × marker, for SetTransformer attention pixel-patches on the REAL
+  phenotype cells. **160,420 cells / 53 markers** (phase + 52 fluor). Cols incl `map_score`, `geneKO`,
+  `ebi_complex`, `rank_source`, `segmentation_id` (=pma `segmentation`), `x/y_pheno`, `rank`, `pma_attention`.
+  - **Per-marker top-20, NOT the model's global top-20** — the pma `rank` is GLOBAL per geneKO (across all
+    56 channels), so `_csv_top` re-ranks WITHIN each (channel, perturbation) and takes the 20 highest-attention
+    cells present in that channel (two-pass chunked `head` keeps memory bounded).
+  - **Fluor filtered by mAP ≥ 0.2** (phase = ALL perturbations): geneKO by distinctiveness, complex by EBI mAP.
+  - **`rank_source` col:** `"model"` (all current cells). Reserved `"fallback"` for markers not in the model.
+- **v2 distinctiveness switch:** `catalog.dist_matrix` now reads `paper_v2/with_cp/with_4i/all_livecell`
+  (single 56-reporter matrix: 43 live + 7 CP + 6 4i), replacing the paper_v1 3-way split. Added 4i
+  `FIXED_REP` mappings (p53/pRb/pS6/p21/b-catenin/c-Myc). **52/56 pma channels now map**; the 4
+  excluded (NFkB, RSP6, Rb, gH2AX) are EXPECTED — genuinely absent from the v2 matrix.
+- **EBI complex mAP matrix** (`viewer/build_complex_ebi_map.py`) → `complex_reporter_ebi_map.csv` (98×56).
+  Runs copairs `phenotypic_consistency_ebi` per-marker on the v2 `with_cp/with_4i` per_signal gene
+  embeddings, over ALL perturbations (activity_map=None), NOT the wrong `complex_reporter_chad_consistency`.
+  `catalog.complex_dist()` reads it. Also wired into the aggregation pipeline
+  (`post_process/combination/pca_optimization/aggregation.py` → `complex_reporter_ebi_consistency.csv`).
+- **3 new live-cell markers (cisGolgi, VIM, LMNB1):** HAVE v2 distinctiveness + EBI mAP, but are NOT in
+  Alex's pma cell CSVs yet (his attention output predates them) → no attention-ranked cells with crop
+  metadata. **FALLBACK (per user, TODO):** select cells around the CENTROID of the existing CellDINO
+  embeddings. Source found: `{exp}/3-assembly/cell_dino_features_v2/anndata_objects/features_processed_<reporter>.h5ad`
+  (e.g. `mStayGold-CENPRaltORF`, `VIM`, `LMNB1`) — 1024-d embedding + crop metadata (`label_int`=segmentation,
+  `x/y_position`, `well`, `experiment`, `perturbation`). Per (marker, pert): centroid → 20 closest →
+  `rank_source="fallback"`, `pma_attention`/`rank` null. (Or wait for Alex's reprocessed pma CSV.)
+- **SetTransformer scoring** (`viewer/set_classifier.py`): reconstructed Alex's cellstate-set-classifier
+  (ISAB/PMA/cosine head); ckpts downloaded to `v4/wandb/cellstate_set_classifier/`. Bridge test (our
+  `embed_crops` → classifier) FAILED (OOD, cos 0.47) → per-α bag scoring PARKED on Alex's v2 CellDINO extraction.
+- **Model-metrics curves** (`diffae/plot_metrics.py`): loss + cond_ratio over epochs, one line per DiffAE
+  → `model_metrics_curves.png/.svg`.
+- **Viewer embedding tab** (`build_umap_montage.py` + `webapp/`): OSD montage, UMAP↔PHATE, points/images
+  toggle, 44 anndata color-by fields, opacity/zoom sliders, click→perturbation sidebar; gene descriptions
+  from the gene-embedding h5ad (`gene_desc.json`, fixes VAMP2-style blanks).
 
-### CURRENT STATE (2026-07-07)
-- **Viewer cache:** 29 markers / **303 targets** (241 NTC-anchored + 62 A→B), 1.2 GB; 29 shared
-  `_anchors/<anchor>/` real-cell dirs (dedup working); **scores.json for all 303** (binary-LR score —
-  to be replaced by SetTransformer, #7). Live demo: `login-01:8765`.
-- **Canonical build code is now IN-REPO** (scratchpad drivers retired): `viewer/submit.py`
-  (`seed|anchors|manifest|montage` subcommands) + `viewer/catalog.py` (dist matrices, per-marker
-  top-gene ranking, complete-marker catalog, dist/desc maps) + `precompute.py` (`precompute_marker`
-  per-marker driver, `precompute_target`, `build_manifest`) + `build_umap_montage.py` + `webapp/`.
-- **Fluor generators:** **38/59 complete** (ep≥98); 21 still training (array `34670327`).
-- **500k warm retrain — CONCLUDED, PARK IT.** cond_ratio peaked 0.542 then *declined*
-  (0.36 → 0.34 → 0.33) → not beating v1; stay on `phase_v1` (0.468). Effort #1 closed.
-- **UMAP montage (#8):** cell 35 / α=2 built (1000/1052 genes) — all precomputed CellDINO
-  (`gene_bulked_Phase` centroids + `features_processed_Phase` z0, NO re-embed). **Array-parallelized:
-  8 GPU chunks ~2.5 min + assemble 49 s** (vs 16 min single-job).
-- **Infra PR (#5):** **SUBMITTED** — sfbiohub-infra PR #51 (open). Write access granted; no storage limit.
-  Argus is stateless (restart drops local data) → assets live in S3, deployment downloads on boot.
-  Draft `.tf` mirrors `proteohub-argus-s3-reader-dev.tf` (bucket + nonprod-cluster read-only). Ready to
-  push (pending user OK). Requesting **1 TB** ceiling. Separate app-side track: make viewer Argus-ready
-  per `czbiohub-sf/biohub-argus-example-app` + Argus MCP.
+### STATUS SUMMARY (historical detail condensed 2026-07-08)
+- **Generators:** phase `phase_v1` = PRODUCTION (0.468); 500k warm retrain PARKED (peaked 0.542 then
+  declined). Fluor **50/50 markers trained** (ep≥98). v2/v3 aug did NOT beat v1. Directions default =
+  deterministic **mean_diff** α (see build log for the full DiffAE saga).
+- **Viewer** (`viewer/` — `submit.py`, `catalog.py`, `precompute.py`, `build_umap_montage.py`, `webapp/`):
+  static precompute → dependency-free web app; per-marker driver shares the NTC gather + dedups real
+  cells; embedding tab (see LATEST). Live demo `login-01:8765`.
+- **Score:** authoritative = Alex's **SetTransformer** bag `P(target)` (§7 ckpts downloaded) — supersedes
+  the per-cell N-way MLP (`nway_clf.py`) and the old binary LR badge. Bag scoring parked on Alex's v2 extraction.
+- **Infra PR (#51):** S3 bucket + nonprod read-only `.tf` drafted (mirrors `proteohub-argus-s3-reader-dev.tf`,
+  1 TB ceiling); pending push/merge → `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` → Argus boot-download.
 
-### TO COMPLETE THE FULL CACHE BUILDOUT
-1. **Finish 21 remaining fluor generators** (array `34670327`) → add their slugs to
-   `catalog.COMPLETE_LAUNCH` → `submit seed`.
-2. **Full NTC drain:** seed is currently **top-8 genes/marker**. For full coverage expand per-marker
-   targets to ALL genes (~1000) → ~500 GB. Add a `submit seed --all-genes` mode (the per-marker
-   driver already amortizes the shared NTC gather, so cost scales with KD gathers).
-3. **Full A→B anchors:** `submit anchors --k 10` across ALL markers + complexes (currently only a
-   few markers' top-5).
-4. **Fluor complex traversals** (currently phase-complex only): per-marker `grain=complex` with the
-   EBI fluor CSV.
-5. **Real scores:** wire SetTransformer (#7) per-α bag `P(target)`, supersede the binary LR; add
-   `has_scores` to the manifest target entries (viewer already fetches `scores.json` directly).
-6. **S3 hosting** (#5) — access granted. Push the S3-bucket PR (bucket + nonprod-cluster
-   read-only, 1 TB ceiling) → on merge `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/`; Argus
-   downloads from S3 on boot. Then make the app Argus-ready (`biohub-argus-example-app` + Argus MCP).
-
-### MULTI-ALPHA MONTAGE — what's needed
-- Now: one montage zarr per (cell, α) — `submit montage --cell 35 --alpha 2`.
-- Multi-α: fan out `submit montage --alpha {1,2,3,4,5}` (each reuses the same z0 + gene_bulked
-  centroids; per-α decode array + a zarr per α), then an **α switch in the explorer** (latent-lens
-  napari layer per α, or a small selector). Next: add a `--alphas` flag that loops the per-α decode
-  arrays sharing one prep, and check whether latent-lens supports an α-indexed/stacked montage.
-
-### 1. Phase generator: 500k warm-start retrain (does more data beat v1?)
-- **Goal:** see if cond_ratio climbs past v1's 0.468 with 10× data, warm-started from v1.
-- **Checkpoints** (`diffae/`): `phase_v1/`=PRODUCTION (50k, ep120, 0.468); `phase_v1_500k_warm/`
-  =warm-from-v1 (500k, resuming from ep15/0.542, the promising one); `phase_v1_500k/`=scratch
-  (500k, ep12/0.416, PARKED).
-- **Running:** resume chain `34673256 → 34673257 → 34673258` (afterany, 720min each, **mem_gb=200**
-  — 96 OOMs on the 51GB crop cache; see `diffae/submit.py` RUNBOOK).
-- **Check:** `python -c "import torch;h=torch.load('.../phase_v1_500k_warm/diffae_train_state.pt',map_location='cpu')['history'];print([round(e.get('cond_ratio',-1),3) for e in h if e.get('cond_ratio',-1)>0])"`
-- **Next:** if cond_ratio trends >0.55 → finish to ep120 + re-render a v1-vs-warm compare; if it
-  plateaus ~0.54 → stay on v1. Do NOT invest more in the scratch run.
-
-### 2. Fluorescent per-marker generators (train all ~60 markers)
-- **Goal:** a DiffAE generator per fluorescent marker; then direction/traversal per marker.
-- **Done (ep≥98, 31 markers):** all 23 launch-covered live+CP+4i + 5 early (NucleoLive, NPM3,
-  FastAct, LysoTracker, ChromaLIVE-mito) + 3 no-PMA (LMNB1, VIM, cisGolgi via anndata).
-- **Still training / undertrained:** H2BC21 (ep17), VPS35, EEA1, RAB7A, pHrodo, BODIPY, HSPA1B,
-  CLTA, c-Myc, Rb, RSP6, MAP1LC3B, b-catenin, caspase, gH2AX, and remaining launch markers
-  in array `34670327` (throttle 8).
-- **Channels/config** in `directions/_ranking/fluor_marker_launch.json` (+ recovered from training pickles).
-- **Next:** let the array drain; re-render grids/viewer assets for markers as they finish.
-
-### 3. cells×α traversal grids (review artifacts)
-- **Where:** `directions/_grids/`. Format: rows=cells × cols=α (**±2/±3/±4/±5**, w=2), via
-  `directions/batch.py::marker_grid` (now supports phase, fluor, complex, and A→B anchor).
-- **Done:** 28 complete-marker grids w/ top marker-specific geneKO (from `gene_best_marker.csv`
-  distinctiveness assignment, margin-broken); custom KIF23@NucleoLive/@H2BC21, TSEN2@MAP4,
-  phase KIF23; **40S→60S anchor-switch demo** (`34676955`).
-- **Top-gene source:** `organelle_attribution/pca_optimized_v0.3/cell_dino/zscore_per_exp/paper_v1/
-  .../plots/marker_overlay/gene_best_marker.csv` (+ distinctiveness_raw matrices for live/cp/4i).
-
-### 4. Shareable traversal viewer (MOPS-style)  ← main build
-- **Design:** static precompute → dependency-free web viewer (no live GPU). α = scrub timeline
-  (gif-timed play, speed control, clickable pause ticks; default pauses = ends+middle), w=2 fixed.
-- **Code:** `viewer/precompute.py` (batched decode + threaded WebP + per-frame classifier score +
-  crop-cache cleanup) · `viewer/webapp/` (index/app/style, cache-busted `?v=N`).
-- **UI now (v14):** left tabs **Browse / Anchor & display**; grouped grid (rows=perturbation ×
-  cols=cells-per-page, one header/row, colour bar on lead cell only); **anchor menu** (default NTC,
-  swap to any class with precomputed A→B assets); heatmapped **classifier % badge** (being corrected
-  to N-way — see #6); wiki **right sidebar** (gene function + GO/Reactome, **OpenCell + GeneCards**
-  links, complex members); colorbar **α=1 "true centroid"** marker.
-- **Assets/cache:** `viewer_assets/<modality>/<grain>/<slug>/cell<c>/frame_<i>.webp` (+ meta.json,
-  scores.json); A→B at `<anchor>__to__<target>/`; `manifest.json` + webapp copied into that dir.
-  ~0.6GB now, growing. Rebuild manifest: `scratchpad/build_manifest.py`.
-- **LIVE DEMO on Bruno:** `http://login-01:8765` (`python -m http.server 8765 --bind 0.0.0.0
-  --directory .../viewer_assets`); VS Code port-forward 8765, or `http://login-01:8765` inside noVNC.
-- **Speed:** `num_workers=12` on the crop DataLoader → materialize **56s→5s (11×)**; per-target
-  ~1.5min. `precompute_target(load_workers=…)`; SLURM `cpus_per_task=12`.
-- **PER-MARKER DRIVER** `precompute_marker(grain, targets, …)`: all a marker's geneKOs share the
-  SAME ~20 NTC/anchor base cells + seeds, so gather the control ONCE + reuse across targets; save
-  20 real cells ONCE under `<modality>/_anchors/<anchor>/` (meta carries `real_dir`). Dedups real
-  cells + amortizes ckpt load & control gather. `real.webp` toggle shows real-vs-generated row.
-- **Cache builds:** current seed = **per-marker** array `34680796` (30 jobs: 28 fluor + phase
-  geneKO + phase complex, top-8 each). A→B pairs `34678847`; 40S↔60S anchors done (viewer anchor
-  menu works); demo phase geneKOs `34679534` + complexes `34679137`.
-- **Next:** full NTC drain + full A→B (K=10 → ~5,400 traversals ~46GB ~150 GPU-hr) — gated on go.
-
-### 5. Infra / hosting PR (S3 bucket + Argus read-only) — ACCESS GRANTED
-- **Infra guidance:** write access to `sfbiohub-infra` granted; **no storage limit**. Argus is
-  **stateless** — a restart drops local data — so the pattern is: assets in an S3 bucket in
-  `biohub-nonprod`, deployment **downloads from S3 on boot** (same-AWS copy is fast). Two tracks:
-  1. **Infra PR (this):** create the S3 bucket + permission for the **nonprod cluster to read only**.
-     Mirror existing repo practice — `proteohub-argus-s3-reader-dev.tf` is the canonical Argus+S3
-     reader (IRSA role, `s3:GetObject`/`ListBucket`).
-  2. **App-readiness (separate, app repo):** make the viewer Argus-ready per
-     `czbiohub-sf/biohub-argus-example-app`; the **Argus MCP server** helps. On boot the app pulls
-     from `s3://diffex-viewer-dev/` via the read-only role.
-- **Draft:** `scratchpad/infra_pr/terraform/accounts/biohub-nonprod/diffex-viewer-dev.tf` — bucket
-  (`cztack//aws-s3-private-bucket`) + read-only IRSA role (`argus-diffex-viewer-rdev/diffex-viewer`)
-  + `diffex-viewer-dev-readwrite` uploader role (our CLI uploads only, NOT the cluster). Already
-  matches the proteohub reader pattern. PR body requests a **1 TB ceiling** (actual footprint small).
-- **Next:** user OK → push branch `diffex-viewer-dev` → PR → merge →
-  `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` (readwrite role) → wire Argus app boot-download.
-
-### 6. N-way single-cell CellDINO classifier MLPs (viewer score fix)  ← in build
-- **Why:** the viewer badge must be **1-of-N distinctiveness** `P(target class)` (out of all
-  classes), NOT the binary target-vs-NTC LR the traversal code used — that LR is trivially
-  separable (acc 1.0) → saturated 0%/100% (the SAMM50 constant-cell artifact). The real trained
-  classifier is the **bag-level SetTransformer** (attention over a set of cells → perturbation);
-  the correct per-CELL proxy is **model C = `MLPHead` on CellDINO features**, class-vs-rest-distinct.
-- **Plan:** one **N-way softmax MLP per (marker, grain)** — geneKO AND EBI-complex head per marker.
-  Trained on `embed_crops` CellDINO features (SAME space the viewer re-encodes generated cells into)
-  of top-attention cells over ALL classes incl NTC. Score: generated image → CellDINO (embed_crops,
-  already computed in precompute) → MLP → softmax → `P(target)`.
-- **Code:** `viewer/nway_clf.py::train_nway(grain, out_root, marker_channel, channel, fluor_csv,…)`
-  → `<root>/_clf/<modality>/<grain>/{mlp.pt, classes.json, metrics.json}` (val top1/top5).
-- **Scale:** ~60 markers × 2 grains + phase ≈ ~120 MLP training jobs (n_per_class≈100).
-- **Next:** validate on one (marker,grain); launch training; **swap the score in `precompute`**
-  (drop the binary LR, load the marker+grain MLP, `softmax(MLP(gemb))[target]`); re-run precompute
-  to re-score. Only HSPA5 has an old per-class binary model C on disk (`extra/HSPA5/model_C.pt`).
-
-### 7. REAL SetTransformer bag classifier (Option B — Alex's checkpoints, 2026-07-06)
-- **Unblock:** Alex Lin shared the trained **`cellstate-set-classifier`** (SetTransformer) checkpoints
-  on W&B (`czi.wandb.io/ai_imaging/cellstate-set-classifier`). It's the actual reported 1-of-N model
-  and is a **bag/MIL** model (set of cells → perturbation class), so the honest viewer score is a
-  **per-α `P(target)` curve** over an N(~100)-cell generated bag — NOT per-image.
-- **Runs:** 1K phase geneKO `miwkg1cy` · 1K fluorescent (pooled markers) `hx6q8byj` ·
-  EBI phase `epzvv0m1` · EBI fluorescent (pooled) `ggdfggsn` · EBI fluorescent (single-marker) `ciw91el9`.
-- **Plan:** pull ckpts via `wandb` artifacts → load a forward (set of CellDINO features → class
-  logits) → per α, feed the ~100 generated cells (embed_crops features) → `softmax → P(target)` →
-  plot the curve under the strip (shows when the traversal "convinces" the real classifier; matches
-  distinctiveness which is population-level). Reuse the `gemb` we already compute.
-- **Relationship to #6:** this SUPERSEDES the per-cell MLP as the authoritative score (real model,
-  no ~120 trainings); keep `nway_clf` MLP only as an optional per-image proxy.
-- **Next:** confirm the checkpoints load here (arch + weights via wandb), build the set→logits
-  forward, wire the per-α bag score into `precompute` / a curve panel in the viewer.
-
-### 8. Image-UMAP montage viewer (latent-lens) — idea/track
-- **Idea:** place each geneKO's generated cell (fixed source cell morphed toward that gene at α) at
-  the gene's CellDINO-UMAP coordinate → zoom the embedding to see one cell take on each
-  neighborhood's phenotype. Use **`czi-ai/latent-lens`** (`fit_umap` + `build_montage` → multiscale
-  montage zarr + napari/live viewer) — purpose-built for this; don't hand-roll the pyramid/viewer.
-- **Inputs we supply:** per-gene CellDINO embeddings (UMAP coords) + generated crops (callable) +
-  gene categories/colors. **Next:** prototype flavor-B image-UMAP on the phase genes we have, after
-  the per-marker relaunch; needs full-gene coverage for the complete embedding.
+### OPEN BUILDOUT
+1. **Full NTC drain** — seed is top-8 genes/marker; expand to ALL ~1000 genes (`submit seed --all-genes`, ~500 GB).
+2. **Full A→B anchors** — `submit anchors --k 10` across all markers + complexes.
+3. **Fluor complex traversals** — per-marker `grain=complex` (currently phase-complex only).
+4. **Wire SetTransformer bag score** into `precompute` + a per-α curve panel (needs Alex's v2 CellDINO extraction).
+5. **S3 hosting** — push PR #51 → sync → make app Argus-ready (`biohub-argus-example-app` + Argus MCP).
+6. **Centroid fallback** for cisGolgi/VIM/LMNB1 (see LATEST).
+7. **Multi-α montage** — `--alphas` flag looping per-α decodes + an α switch in the explorer.
+8. **Image-UMAP montage** (`czi-ai/latent-lens`) — idea track; needs full-gene coverage.
+9. **Attention-head tab + viewer reorientation** (NEXT, design below) — new tab overlaying CellDINO
+   attention-head pixel weights (inferno) on the real phenotype cells; make Browse (marker+perturbation)
+   the single selection that drives ALL views. See `### 2026-07-08 — Attention-head tab` build-log entry.
 
 ---
 
@@ -602,3 +501,81 @@ DiffAE renders). Fix: during DiffAE training, augment the TARGET image with the 
 the (fixed) noise latent, phenotype carried by the embedding → traversals stop rotating. Do NOT
 recompute CellDINO on the augmented crop (defeats the decoupling). Also serves as general aug to
 sharpen conditioning.
+
+### 2026-07-08 — Attention-head tab + viewer reorientation (BUILT)
+**Status: built + deployed to `viewer_assets/`.** `viewer/build_attention_heads.py` rendered **984/1000**
+phase geneKO genes (16 npz still corrupt/mid-write by Kevin — `BTF3L4, BUB1B, DAD1, DHRS9, FECH,
+FOXD4L1, GTPBP4, INO80D, MTOR, NCBP2, NRAS, POLR2F, RPS19BP1, TWF1, TYK2, YIPF5` — builder is idempotent,
+skips-loud, re-run picks them up). `global_max=2.44`. Webapp reoriented (`webapp/{index.html,app.js,
+style.css}` v36, copied to `viewer_assets/`): persistent `#browse` block (marker+grain+perturbation+
+cells/page) drives 3 view tabs — Traversal / Embedding / **Attention heads**. Attn view = inferno LUT +
+live per-map/per-gene/fixed normalization + opacity, head dropdown from `heads.json`; greys out for
+non-phase / complex / missing-gene. Embedding now rings + pans to the selection. **Availability decoupled
+from manifest** — app fetches `attention_heads/phase/index.json` (no `precompute.build_manifest` change).
+- **Fluor: OUT (decided 2026-07-08).** `celldino_attention_head_analysis/fluorescence_attention/<MARKER>.npz`
+  (46 markers) hold only head-ranking **features** `(N_genes,24,16,2)` + `genes` — **no `maps`/`crops`**,
+  so they can't feed the inferno overlay. Tab stays phase·geneKO; would need Kevin to dump a fluor
+  pixel_attribution cache (maps+crops) to extend.
+- **16 corrupt phase genes: left as-is (decided 2026-07-08).** Full-size but bad-zip at SOURCE
+  (identical in `phase/` and Kevin's `celldino_attention_head_analysis/pixel_attribution_cache/`) — needs
+  Kevin to regenerate, not a re-run. Viewer greys them out; 984/1000 shipped.
+
+### 2026-07-08 — Attention-head tab + viewer reorientation (design)
+New viewer view: overlay CellDINO **attention-head pixel weights** (inferno) on the **real phenotype
+cells** (`viewer/phenotype_cells.py` output), so you can see WHERE in each cell each top attention head
+looks — the classifier's spatial evidence, alongside the generative counterfactual morph.
+
+**Data (Kevin L., already under `viewer_assets/attention_heads/`, verified 2026-07-08):**
+- `phase/pixel_attribution_cache/<GENE>.npz` (1000 geneKO genes): `maps (20,6,128,128) f16` ∈ [0,~0.34]
+  (20 cells × top-6 heads × pixel attribution), `crops (20,128,128) f32` (z-scored cell crops),
+  `heads (6,2) int32` = the ranked (layer,head) pairs, `patch_masks (20,196) bool` (14×14 ViT patches).
+- `phase/head_rankings_per_gene.json`: per-gene ranked heads + metrics (`layer,head,feature,spec_p10,
+  spec_min,auroc_vs_ntc`); order matches the npz `heads` array. **The 20 cells ARE the phase·geneKO
+  top-20 phenotype cells** from `phenotype_cells.py` (same selection).
+- `celldino_attention_head_analysis/fluorescence_attention/<MARKER>.npz` — per-marker fluor analog
+  (structure TBD) → follow-on. **v1 scope = phase · geneKO only** (no complexes: head_rankings is gene-keyed).
+
+**Precompute (`viewer/build_attention_heads.py`, to write):** ship **raw** data so normalization + inferno
++ opacity are LIVE display options (user-selectable, per decision). Per gene → per cell: write
+`cell<c>/crop.webp` (grayscale, per-crop robust min-max) + per head `cell<c>/head<h>.webp` (grayscale
+attribution scaled by a FIXED global max so absolute intensity is preserved). Per-gene `heads.json` =
+ranked-head metrics (`layer,head,feature,spec_p10,spec_min,auroc_vs_ntc`) + `n_cells` + `gene_max` +
+`global_max`. The webapp applies a 256-entry **inferno LUT** in a canvas and composites over the crop —
+so a Display dropdown offers **per-map / per-gene / fixed** normalization live (per-map = rescale by the
+loaded tile's own max; per-gene = by `gene_max`; fixed = by `global_max`), plus an opacity slider, without
+re-fetching. Count ≈ 1000×20×(6+1) ≈ 140k grayscale WebP (traversal already ~370k). Keeps the app
+dependency-free; no 3×-image blowup from baking each norm.
+
+**Viewer reorientation (`webapp/index.html` + `app.js`):** today the left panel is 3 *control* tabs
+(Browse / Anchor / Embedding), each with its own selectors, and the Embedding montage ignores the
+Browse (marker,perturbation) selection. **Reorient:** make Browse (marker + grain + perturbation) a
+PERSISTENT selector block = single source of truth (`state.marker`, `state.target`); below it a **View
+switcher** — Traversal | Embedding | Attention heads — each rendering the main stage for the CURRENT
+selection. Fold today's Anchor/display controls under Traversal; α/cell/embedding-mode under Embedding;
+head selector + overlay-opacity under Attention heads. Embedding also gains browse→highlight/pan and
+keeps montage-click→browse select (closes the selection loop).
+
+**Attention-head view UI:** grid of the 20 phenotype crops with the selected head's inferno overlay;
+head dropdown lists the 6 ranked heads with `(L,H) · AUROC·NTC / spec`; overlay-opacity slider; raw-crop
+toggle. Reuses Browse's cells-per-page paging.
+
+**Manifest:** add per-(marker,target) `attn` availability + `n_heads` so the View switcher greys out
+Attention heads where absent (v1: present only for phase geneKO genes with an npz).
+
+**Decisions (locked 2026-07-08):** (a) normalization = **live user option** in Display settings
+(per-map / per-gene / fixed) via the grayscale+LUT approach above; (b) full reorientation approved
+(persistent Browse + view switcher); (c) **phase-only v1**, fluor (Kevin's per-marker npz) is a follow-on.
+
+### 2026-07-08 — phenotype-cell handoff CSV + v2 mAP + EBI matrix (see dashboard LATEST)
+- **`viewer/phenotype_cells.py`** — the Ritvik handoff: top-20 REAL phenotype cells per (marker × perturbation)
+  → `viewer_assets/phenotype_cells_for_attention.csv` (160,420 cells / 53 markers). Key correctness fix:
+  the pma `rank` is GLOBAL per geneKO (across all channels), so `_csv_top` re-ranks WITHIN each
+  (channel, perturbation) and takes each marker's own top-20 by attention (two-pass chunked `head`).
+  Fluor filtered by mAP ≥ 0.2; phase = ALL. Added `map_score`, `geneKO`, `ebi_complex`, `rank_source` cols.
+- **v2 mAP:** `catalog.dist_matrix` → `paper_v2/with_cp/with_4i/all_livecell` (56 reporters, live+CP+4i);
+  added 4i `FIXED_REP`; 52/56 pma channels map (NFkB/RSP6/Rb/gH2AX expected-excluded).
+- **`viewer/build_complex_ebi_map.py`** — complex×reporter EBI mAP (98×56) via copairs
+  `phenotypic_consistency_ebi`, all-perturbation, on v2 per_signal; also emitted by the aggregation pipeline.
+- **Pending:** centroid fallback for cisGolgi/VIM/LMNB1 (mAP present, no pma cells) from
+  `cell_dino_features_v2/features_processed_<reporter>.h5ad` (embedding + crop metadata); SetTransformer
+  bag scoring parked on Alex's v2 CellDINO extraction.
