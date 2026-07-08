@@ -1658,6 +1658,13 @@ def _build_parser():
     parser.add_argument("--no-cache", dest="cache", action="store_false", default=True,
                         help="Disable row-level caching (recompute every titration point even "
                              "if an existing <reporter>_titration.csv already has it).")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Delete existing per-reporter titration CSVs + per-target shards "
+                             "(<reporter>_titration*.csv) before running, so bins regenerate "
+                             "fresh from the current schedule. Use when the cell pool changed "
+                             "(e.g. an experiment was added) and the per-guide-median bins "
+                             "shifted — otherwise stale-bin points from the prior run get "
+                             "merged in and appear as near-duplicate points on the curve.")
     parser.add_argument(
         "--per-target-slurm", dest="per_target_slurm",
         action="store_true", default=True,
@@ -2314,6 +2321,23 @@ def main():
 
     print(f"Found {len(cells_files)} reporters in {per_signal_dir}")
     print(f"Titration output: {titration_dir}")
+
+    if args.clear_cache:
+        # Purge prior per-reporter titration CSVs + per-target shards so bins
+        # regenerate fresh from the current schedule. Without this, a shifted
+        # schedule (e.g. after adding an experiment) leaves stale bins that
+        # dedupe-on-bin-value can't collapse, showing as near-duplicate points.
+        n_purged = 0
+        for cf in cells_files:
+            sig_safe = cf.name[: -len("_cells.h5ad")]
+            rdir = titration_dir / sig_safe
+            if not rdir.is_dir():
+                continue
+            for old in rdir.glob(f"{sig_safe}_titration*.csv"):
+                old.unlink()
+                n_purged += 1
+        print(f"[clear-cache] removed {n_purged} stale titration CSV(s)/shard(s) "
+              f"across {len(cells_files)} reporters — bins will regenerate fresh.")
 
     # --per-target-slurm is the default; silently fall back to
     # one-job-per-reporter for the two cases where it isn't compatible.
