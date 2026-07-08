@@ -15,8 +15,8 @@ from ..classifier.config import slugify
 OUT = "/hpc/projects/icd.fast.ops/models/diffex"
 DD = f"{OUT}/diffae"
 _DIST_BASE = ("/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
-              "zscore_per_exp/paper_v1")
-_DIST_RELS = ["all_livecell", "only_cp/all_livecell", "only_4i/all_livecell"]
+              "zscore_per_exp/paper_v2/with_cp/with_4i")
+_DIST_RELS = ["all_livecell"]   # v2 with_cp/with_4i: single 56-reporter matrix (live + CP + 4i)
 LAUNCH_JSON = f"{OUT}/directions/_ranking/fluor_marker_launch.json"
 GENE_PANEL = "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
 EBI_YAML = "/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"
@@ -30,6 +30,8 @@ FIXED_REP = {
     "Microtubules_Tubulin": "microtubules, Tubulin (cp)", "Mitochondria_TOMM20": "mitochondria, TOMM20 (cp)",
     "Nucleus_Hoechst": "nuclei, Hoechst (cp)", "Nucleoli_NPM1": "nucleoli, NPM1 (cp)",
     "Plasma Membrane_Wheat Germ Agglutinin": "plasma membrane, WGA (cp)", "NFkB_NFkB (mouse-488)": "NFkB (4i)",
+    "p53_p53 (mouse-488)": "p53 (4i)", "pRb_pRb (rabbit-647)": "pRb (4i)", "pS6_pS6 (rabbit-647)": "pS6 (4i)",
+    "p21_p21 (rabbit-647)": "p21 (4i)", "b-catenin_b-catenin (mouse-488)": "b-catenin (4i)", "c-Myc_c-Myc (mouse-488)": "c-Myc (4i)",
 }
 # launch-complete fluorescent markers (ep≥98) by generator-dir slug
 COMPLETE_LAUNCH = {
@@ -66,6 +68,15 @@ def dist_matrix():
     return pd.concat([pd.read_csv(f"{_DIST_BASE}/{v}/fixed_80%/cosine/plots/marker_overlay/"
                                   "gene_reporter_distinctiveness_raw.csv", index_col=0) for v in _DIST_RELS],
                      axis=1)
+
+
+COMPLEX_EBI_MAP_CSV = f"{OUT}/complex_reporter_ebi_map.csv"
+
+
+def complex_dist():
+    """Complex(name) × reporter EBI mAP — the copairs/EBI-Complex-Portal metric computed per-marker
+    by `build_complex_ebi_map` (NOT the chad_consistency file). Columns = reporters (match dist_matrix)."""
+    return pd.read_csv(COMPLEX_EBI_MAP_CSV, index_col=0)
 
 
 def _assignment(dist):

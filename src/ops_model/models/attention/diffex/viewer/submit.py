@@ -120,7 +120,7 @@ def cmd_fluor_complex(args):
                       ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12, batch=args.batch), "fluor_complex")
             for d, mc, ch in markers]
     print(f"fluor-complex: {len(jobs)} markers × {len(cx)} complexes (batch={args.batch}, no constraint/cap)")
-    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 360}
+    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 720}
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs", slurm_params=sp,
                          log_dir="diffex_gifs", wait_for_completion=False)
 
@@ -137,7 +137,7 @@ def cmd_phase_full(args):
                   dict(grain="complex", targets=ch, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, batch=args.batch), "phase_full")
              for i, ch in enumerate(_chunks(cx, args.chunk_size))]
     print(f"phase-full: {len(genes)} geneKO + {len(cx)} complex → {len(jobs)} chunked jobs (batch={args.batch}, no constraint/cap)")
-    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 360}
+    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 720}
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs", slurm_params=sp,
                          log_dir="diffex_gifs", wait_for_completion=False)
 

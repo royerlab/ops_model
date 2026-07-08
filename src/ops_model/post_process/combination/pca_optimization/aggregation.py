@@ -169,7 +169,7 @@ def _score_single_reporter_metrics(
         chad_df             : per-CHAD-complex consistency mAP
       Each DataFrame is None if its scoring step failed.
     """
-    from ops_model.post_process.combination.pca_optimization import CHAD_ANNOTATION_PATH
+    from ops_model.post_process.combination.pca_optimization import CHAD_ANNOTATION_PATH, EBI_ANNOTATION_PATH
     import math
 
     result = {
@@ -253,6 +253,19 @@ def _score_single_reporter_metrics(
         result["chad_all"] = result["chad"]
         result["chad_df"] = chad_df
 
+        # EBI Complex Portal consistency per reporter (over ALL geneKOs, like corum/chad above)
+        ebi_df, ebi_ratio = phenotypic_consistency_manual_annotation(
+            e_norm,
+            plot_results=False,
+            null_size=null_size,
+            cache_similarity=True,
+            distance=distance,
+            annotation_path=EBI_ANNOTATION_PATH,
+        )
+        result["ebi"] = float(ebi_ratio)
+        result["ebi_all"] = result["ebi"]
+        result["ebi_df"] = ebi_df
+
     except Exception as exc:
         _logger.warning(f"  Per-reporter metrics scoring failed: {exc}")
     return result
@@ -315,6 +328,7 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
             "distinctiveness": reporter_metrics.get("distinctiveness_df"),
             "corum": reporter_metrics.get("corum_df"),
             "chad": reporter_metrics.get("chad_df"),
+            "ebi": reporter_metrics.get("ebi_df"),
         }
 
         report_rows.append(
@@ -484,6 +498,10 @@ def _save_per_reporter_metric_matrices(
     _pivot(
         "chad", "complex_num", "mean_average_precision",
         overlay_dir / "complex_reporter_chad_consistency.csv",
+    )
+    _pivot(
+        "ebi", "complex_num", "mean_average_precision",
+        overlay_dir / "complex_reporter_ebi_consistency.csv",
     )
 
 
