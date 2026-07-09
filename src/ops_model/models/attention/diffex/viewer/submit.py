@@ -39,17 +39,26 @@ def cmd_seed(args):
     dist = C.dist_matrix(); jobs = []
     for d, mc, ch in C.complete_markers():
         rep = C.rep_of(dist, mc)
-        tg = C.top_genes(dist, rep, args.n) if rep else []
+        if not rep or rep not in dist.columns:
+            continue
+        if args.map_thr:                                     # full buildout: ALL genes the marker distinguishes >= thr
+            sc = dist[rep]
+            tg = [g for g in sc.index[sc >= args.map_thr] if not str(g).startswith("NTC")]
+        else:
+            tg = C.top_genes(dist, rep, args.n)
         if tg:
             jobs.append(_job(f"pm_{slugify(mc)[:20]}", precompute_marker,
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12), "seed"))
-    jobs.append(_job("pm_phase_geneKO", precompute_marker,
-                     dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
-                          ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
-    jobs.append(_job("pm_phase_complex", precompute_marker,
-                     dict(grain="complex", targets=PHASE_COMPLEXES, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
-    print(f"seed: {len(jobs)} per-marker jobs")
+    if not args.map_thr:                                     # phase already fully built — only (re)seed with top-N mode
+        jobs.append(_job("pm_phase_geneKO", precompute_marker,
+                         dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
+                              ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
+        jobs.append(_job("pm_phase_complex", precompute_marker,
+                         dict(grain="complex", targets=PHASE_COMPLEXES, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
+    tgt = sum(len(j["kwargs"]["targets"]) for j in jobs)
+    print(f"seed: {len(jobs)} per-marker jobs, {tgt} total targets"
+          + (f" (mAP>={args.map_thr} filter)" if args.map_thr else f" (top-{args.n})"))
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs",
                          slurm_params=_gpu(timeout_min=180, slurm_array_parallelism=args.parallel),
                          log_dir="diffex_gifs", wait_for_completion=False)
@@ -145,7 +154,7 @@ def cmd_phase_full(args):
 def main():
     ap = argparse.ArgumentParser(description="Build the DiffEx viewer cache")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--parallel", type=int, default=10); s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--parallel", type=int, default=10); s.set_defaults(fn=cmd_seed)
     a = sub.add_parser("anchors"); a.add_argument("--k", type=int, default=5); a.add_argument("--markers", nargs="*"); a.add_argument("--parallel", type=int, default=12); a.set_defaults(fn=cmd_anchors)
     m = sub.add_parser("manifest"); m.set_defaults(fn=cmd_manifest)
     g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=[0]); g.add_argument("--alphas", type=float, nargs="+", default=[2.0]); g.add_argument("--embeddings", nargs="+", default=["umap"]); g.set_defaults(fn=cmd_montage)

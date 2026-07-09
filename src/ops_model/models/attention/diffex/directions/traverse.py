@@ -43,16 +43,24 @@ def _ddim(diffae, x, emb, cfg, inverse: bool):
 @torch.no_grad()
 def _sample_guided(diffae, xT, emb, emb_base, w, cfg):
     """DDIM sample from xT. Edit-guidance: ε̃ = ε(base) + w·(ε(emb) − ε(base)).
-    w=1 → plain ε(emb); w>1 amplifies the embedding edit's effect on the image."""
+    w=1 → plain ε(emb); w>1 amplifies the embedding edit's effect on the image.
+    Speed: both guidance forwards (c, c0) run as ONE batched UNet call, the base ε(c0) is computed
+    once per step (was 2×), and the UNet runs under fp16 autocast (scheduler math stays fp32)."""
     fwd = DDIMScheduler(num_train_timesteps=cfg.train_timesteps)
     fwd.set_timesteps(cfg.ddim_steps)
-    c, c0 = diffae.cond(emb), diffae.cond(emb_base)
+    c = diffae.cond(emb)
     x = xT
+    if w == 1.0:
+        for t in fwd.timesteps:
+            with torch.autocast("cuda", dtype=torch.float16):
+                e = diffae.denoise(x, t, c).float()
+            x = fwd.step(e, t, x).prev_sample
+        return x
+    cc = torch.cat([c, diffae.cond(emb_base)], 0)           # batch both conditionings into one forward
     for t in fwd.timesteps:
-        e = diffae.denoise(x, t, c)
-        if w != 1.0:
-            e = diffae.denoise(x, t, c0) + w * (e - diffae.denoise(x, t, c0))
-        x = fwd.step(e, t, x).prev_sample
+        with torch.autocast("cuda", dtype=torch.float16):
+            ec, ec0 = diffae.denoise(torch.cat([x, x], 0), t, cc).float().chunk(2, 0)
+        x = fwd.step(ec0 + w * (ec - ec0), t, x).prev_sample
     return x
 
 
