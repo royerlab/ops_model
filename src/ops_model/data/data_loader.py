@@ -463,7 +463,14 @@ class CellProfileDataset(BaseDataset):
         fov = self.stores[ci.store_key][well]["0"]
         mask_label = getattr(ci, "mask_label", "cell_seg")
         cell_mask_fov = self.stores[ci.store_key][well]["labels"][mask_label]["0"]
-        nuc_mask_fov = self.stores[ci.store_key][well]["labels"]["nuclear_seg"]["0"]
+        # Nuclear mask: prefer native-20x `nuclei_seg` (from the
+        # `submit_nuclei_segmentation_jobs` step), fall back to legacy
+        # `nuclear_seg` (5x-upscaled, from `segment_and_stitch_pheno`).
+        # Both labels are 20x-shaped at level 0 so bbox slicing is unchanged.
+        # See ops_process PR #113.
+        _labels_group = self.stores[ci.store_key][well]["labels"]
+        _nuc_label = "nuclei_seg" if "nuclei_seg" in _labels_group else "nuclear_seg"
+        nuc_mask_fov = _labels_group[_nuc_label]["0"]
         bbox = ast.literal_eval(ci.bbox)
         gene_label = self.label_int_lut[ci.gene_name]
         total_index = ci.total_index
