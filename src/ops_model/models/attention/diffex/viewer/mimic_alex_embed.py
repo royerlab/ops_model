@@ -179,6 +179,191 @@ def validate(exp="ops0031_20250424", genes=("HSPA5", "KIF11", "POLR1B", "TIMM23"
               f"| {cos_all[gi].mean():.3f}")
 
 
+def cellpose_masks(crops01, diameter=None, flow_threshold=0.4, batch=64):
+    """Segment GENERATED phase crops (N,H,W) in [0,1] with Cellpose-SAM → central-cell boolean masks.
+    The morphed cell is centered, so keep the label covering the crop centre (fallback: nearest label).
+    Lets us mask fake images the same way training masks real cells (the load-bearing step)."""
+    import torch
+    from cellpose import models
+    from scipy import ndimage as ndi
+    m = models.CellposeModel(gpu=True, device=torch.device("cuda"))
+    H, W = crops01.shape[-2:]; cy, cx = H // 2, W // 2
+    out = []
+    for i in range(0, len(crops01), batch):
+        labs = m.eval(list(crops01[i:i + batch]), diameter=diameter, flow_threshold=flow_threshold)[0]
+        for lab in labs:
+            c = lab[cy, cx]
+            if c == 0 and lab.max() > 0:                       # centre is background → nearest cell
+                idx = ndi.distance_transform_edt(lab == 0, return_distances=False, return_indices=True)
+                c = lab[tuple(v[cy, cx] for v in idx)]
+            out.append(lab == c if c > 0 else np.zeros_like(lab, bool))
+    return np.stack(out)
+
+
+def test_cellpose(genes=("HSPA5", "POLR1B", "TIMM23"), n=20, alpha_frame=8):
+    """Load real GENERATED α-frames from the viewer cache, Cellpose-SAM segment them, keep the
+    central cell → report mask coverage + timing/cell (feasibility of masking fake images)."""
+    from PIL import Image
+    cache = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets/phase/geneKO"
+    crops = []
+    for g in genes:
+        for c in range(n):
+            f = f"{cache}/{g}/cell{c}/frame_{alpha_frame:02d}.webp"
+            try:
+                crops.append(np.asarray(Image.open(f).convert("L"), np.float32) / 255.0)
+            except Exception:
+                pass
+    crops = np.stack(crops)
+    print(f"loaded {len(crops)} generated crops {crops.shape[1:]}")
+    t0 = time.time()
+    masks = cellpose_masks(crops)
+    per = (time.time() - t0) / len(crops)
+    cov = masks.reshape(len(masks), -1).mean(1)
+    nonempty = (cov > 0).mean()
+    print(f"[cellpose] {per*1000:.1f} ms/cell | central-cell found: {nonempty*100:.0f}% | "
+          f"mean coverage {cov.mean()*100:.1f}% of the {crops.shape[1]}px crop")
+    print(f"[scale] {per:.3f} s/cell → 119k ≈ {per*119000/3600:.1f} GPU-hr for masking")
+
+
+def _zstd_per_exp(embs, exps, is_ntc):
+    """z-standardize per experiment on that experiment's NTC control (fallback: all cells)."""
+    out = embs.copy()
+    for e in np.unique(exps):
+        me = exps == e
+        ctrl = embs[me & is_ntc]
+        if len(ctrl) < 10:
+            ctrl = embs[me]
+        out[me] = (embs[me] - ctrl.mean(0)) / (ctrl.std(0) + 1e-6)
+    return out
+
+
+def validate_bags(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), per_exp=30, max_exp=25,
+                  bag=100, draws=20, run="miwkg1cy"):
+    """FIDELITY-AT-SCALE test: reproduce cells across MANY experiments (per-exp z-std), then compare
+    mimic vs Alex's own embeddings at realistic bag sizes — does 0.91 fidelity give correct argmax?"""
+    m, g2i, c2i = load_set_classifier(run)
+    i2g = {v: k for k, v in g2i.items()}
+    glist = list(genes) + (["NTC"] if "NTC" in g2i else [])
+    crops_l, mk_l, pc_l, alex_l, gcol, ecol = [], [], [], [], [], []
+    for gene in glist:
+        df, alex = flatten_pt(gene)
+        # cap per experiment, cap #experiments — keeps I/O bounded
+        df = df.reset_index(drop=True)
+        parts = []
+        for e, g in df.groupby("experiment"):
+            parts.append(g.head(per_exp))
+            if len(parts) >= max_exp:
+                break
+        df = pd.concat(parts); alex = alex[df.index.to_numpy()]
+        for e, g in df.groupby("experiment"):
+            c, mk, pc, keep = load_raw(e, g)
+            if c is None:
+                continue
+            pos = [g.index.get_loc(i) for i in keep]
+            crops_l.append(c); mk_l.append(mk); pc_l.append(pc)
+            alex_l.append(alex[[df.index.get_loc(i) for i in keep]])
+            gcol += [gene] * len(keep); ecol += [e] * len(keep)
+        print(f"  {gene}: {sum(x==gene for x in gcol)} cells across experiments")
+    crops = np.concatenate(crops_l); masks = np.concatenate(mk_l); pcts = np.concatenate(pc_l)
+    alex_emb = np.concatenate(alex_l); gcol = np.array(gcol); ecol = np.array(ecol)
+
+    raw, per = _celldino(compose(crops, masks, pcts, mask=True, pct="none"))
+    print(f"[timing] {per*1000:.1f} ms/cell CellDINO, N={len(raw)}")
+    is_ntc = gcol == "NTC"
+    mine = _zstd_per_exp(raw, ecol, is_ntc)
+    alex_z = alex_emb                                        # already control-z-std by Alex
+    cos = ((mine/ (np.linalg.norm(mine,axis=1,keepdims=True)+1e-9)) *
+           (alex_z/(np.linalg.norm(alex_z,axis=1,keepdims=True)+1e-9))).sum(1)
+    print(f"[fidelity] mean cos(mine, Alex) = {cos.mean():.3f}\n")
+
+    ci = c2i.get("Phase", 0); rng = np.random.default_rng(0)
+    print(f"{'gene':8s} | {'MINE hit-rate  meanP':22s} | {'ALEX hit-rate  meanP':22s}")
+    for gene in genes:
+        gi = np.where(gcol == gene)[0]
+        if len(gi) < bag:
+            print(f"  {gene}: only {len(gi)} cells (<{bag}) — skip"); continue
+        def _eval(E):
+            bags = np.stack([E[rng.choice(gi, bag, replace=False)] for _ in range(draws)])
+            p = score_bags(m, bags, channel_idx=ci)
+            hits = np.mean([i2g[int(r.argmax())] == gene for r in p])
+            return hits, p[:, g2i[gene]].mean()
+        hm, pm = _eval(mine); ha, pa = _eval(alex_z)
+        print(f"  {gene:6s} | {hm*100:5.0f}%  P={pm:.3f}          | {ha*100:5.0f}%  P={pa:.3f}")
+
+
+CTRL_REF = "/hpc/projects/icd.fast.ops/models/diffex/control_ref_phase.npz"
+CACHE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets"
+
+
+def build_control_ref(per_exp=40, max_exp=25, out=CTRL_REF):
+    """Global NTC control reference (per-feature mean/std of mimic-embedded REAL NTC cells) → used to
+    z-standardize GENERATED cells into the classifier space (they have no experiment of their own)."""
+    import os
+    if os.path.exists(out):
+        d = np.load(out); return d["mu"], d["sd"]
+    df, _ = flatten_pt("NTC")
+    parts = [g.head(per_exp) for _, g in df.groupby("experiment")][:max_exp]
+    df = pd.concat(parts)
+    crops = []
+    for e, g in df.groupby("experiment"):
+        c, mk, pc, keep = load_raw(e, g)
+        if c is not None:
+            crops.append(compose(c, mk, pc, mask=True, pct="none"))
+    x = np.concatenate(crops)
+    raw, _ = _celldino(x)
+    mu, sd = raw.mean(0), raw.std(0) + 1e-6
+    np.savez(out, mu=mu, sd=sd)
+    print(f"[control_ref] {len(raw)} NTC cells -> {out}")
+    return mu, sd
+
+
+def _load_gen(gene, grain="geneKO", modality="phase", n_cells=20, train_px=128):
+    """Load a traversal's cache α-frames → (n_alpha, n_cells, 128,128) center-cropped to the training
+    FOV, + the α list. Frames are 256px; center-crop to 128 so the cell fills the crop like training."""
+    import json
+    from PIL import Image
+    base = f"{CACHE}/{modality}/{grain}/{gene}"
+    meta = json.load(open(f"{base}/cell0/meta.json")) if __import__("os").path.exists(f"{base}/cell0/meta.json") \
+        else json.load(open(f"{base}/meta.json"))
+    alphas = meta["alphas"]
+    frames = [[] for _ in alphas]
+    for c in range(n_cells):
+        for ai in range(len(alphas)):
+            im = np.asarray(Image.open(f"{base}/cell{c}/frame_{ai:02d}.webp").convert("L"), np.float32) / 255.0
+            h = (im.shape[0] - train_px) // 2
+            frames[ai].append(im[h:h + train_px, h:h + train_px] if h > 0 else im)
+    return np.array(frames), alphas
+
+
+def score_generated(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), grain="geneKO",
+                    modality="phase", n_cells=20, run="miwkg1cy"):
+    """End-to-end per-α classifier score for GENERATED traversals: cellpose-mask each fake frame →
+    mimic-CellDINO → z-std(control ref) → bag P(target) per α. Prints the α-curve (should rise toward
+    the target as |α| increases if the counterfactual convinces the classifier)."""
+    m, g2i, c2i = load_set_classifier(run)
+    i2g = {v: k for k, v in g2i.items()}
+    mu, sd = build_control_ref()
+    ci = c2i.get("Phase", 0)
+    for gene in genes:
+        if gene not in g2i:
+            print(f"{gene}: not in classifier"); continue
+        try:
+            frames, alphas = _load_gen(gene, grain, modality, n_cells)
+        except Exception as e:
+            print(f"{gene}: load failed ({e})"); continue
+        na, nc = frames.shape[:2]
+        flat = frames.reshape(na * nc, *frames.shape[2:])
+        masks = cellpose_masks(flat)
+        raw, _ = _celldino((flat * masks)[:, None].astype(np.float32))
+        emb = ((raw - mu) / sd).reshape(na, nc, -1)
+        ptarget = [float(score_bags(m, e[None], channel_idx=ci)[0, g2i[gene]]) for e in emb]
+        top = [i2g[int(score_bags(m, e[None], channel_idx=ci)[0].argmax())] for e in emb]
+        print(f"\n{gene} (grain={grain}) per-α P(target):")
+        for a, p, t in zip(alphas, ptarget, top):
+            bar = "#" * int(p * 40)
+            print(f"  α={a:+.1f}  P={p:.3f} {bar:40s} argmax={t}{'  <TARGET' if t == gene else ''}")
+
+
 def sweep(exp="ops0031_20250424", genes=("HSPA5", "POLR1B"), per_gene=150, run="miwkg1cy"):
     """Load raw cells ONCE, embed several (mask × percentile) variants, report cosine-to-Alex +
     P(target) for each → find the preprocessing recipe that best reproduces Alex's space."""
