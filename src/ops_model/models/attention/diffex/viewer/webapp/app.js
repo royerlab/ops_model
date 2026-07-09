@@ -125,12 +125,13 @@ const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points:
 const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.7, field: "none", cmap: {}, centroids: {}, showLabels: false };
 
 function ensureMontage() { if (!mont.osd) loadMontage(); else drawOverlay(); }
-function montageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`; }
+// montage is per-marker: phase (default) or the selected fluor marker's own gene embedding
+function montageBase() { return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`; }
 
 async function loadMontage() {
   const base = montageBase();
   const tj = await fetch(`${base}/tiles.json`).then(r => r.ok ? r.json() : null).catch(() => null);
-  if (!tj) { $("m-status").textContent = "this α/cell montage isn't built yet"; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
+  if (!tj) { $("m-status").textContent = `no embedding montage built for ${state.marker.marker_channel || "Phase"} · ${$("m-emb").value} · cell ${$("m-cell").value} · α${$("m-alpha").value}`; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
   $("m-status").textContent = `${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
   $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
   mont.W = tj.width;
@@ -323,7 +324,11 @@ function wireCombo(inputId, listId, renderList, currentLabel) {
 }
 
 const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].marker_channel || "Phase");
-function selectMarker(i) { state.markerIdx = i; state.marker = state.manifest.markers[i]; refreshTargets(); }
+function selectMarker(i) {
+  state.markerIdx = i; state.marker = state.manifest.markers[i];
+  refreshTargets();
+  if (state.view === "montage") loadMontage();   // switch to this marker's embedding montage
+}
 function renderMarkerList() {
   const q = $("markerfilter").value.trim().toLowerCase(), list = $("marker-list"); list.innerHTML = ""; let n = 0;
   state.manifest.markers.forEach((m, i) => {

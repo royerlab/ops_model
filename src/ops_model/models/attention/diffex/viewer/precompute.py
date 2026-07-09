@@ -50,14 +50,45 @@ def _save_webp(path, arr, upsize):
     im.save(path, quality=90, method=6)
 
 
+def _rows_from_anndata(h5ad_glob, marker_channel, cc, n_keep=1000):
+    """pma-CSV-equivalent cell table from per_signal features_processed anndata (for markers with NO
+    pma attention CSV, e.g. cisGolgi/VIM/LMNB1). No attention rank exists → rank cells by distance to
+    each perturbation's CellDINO CENTROID (closest = rank 1), keeping the n_keep most-representative."""
+    import glob
+
+    import anndata as ad
+    frames = []
+    for f in sorted(glob.glob(h5ad_glob)):
+        a = ad.read_h5ad(f)
+        X = np.asarray(a.X if a.X is not None else a.obsm["X_pca"], dtype=np.float32)
+        ob = a.obs
+        df = pd.DataFrame({cc: ob["perturbation"].astype(str).values,
+                           "experiment": ob["experiment"].astype(str).values,
+                           "well": ob["well"].astype(str).values,
+                           "segmentation": ob["label_int"].values,
+                           "x_pheno": ob["x_position"].values, "y_pheno": ob["y_position"].values})
+        rank = np.empty(len(df), int)
+        for _, idx in df.groupby(cc).groups.items():
+            ii = np.asarray(idx); e = X[ii]
+            d = np.linalg.norm(e - e.mean(0), axis=1)        # distance to perturbation centroid
+            rank[ii[np.argsort(d)]] = np.arange(1, len(ii) + 1)
+        df["rank"] = rank
+        frames.append(df[df["rank"] <= n_keep])
+    out = pd.concat(frames, ignore_index=True)
+    out["channel"] = marker_channel; out["rank_type"] = "top"; out["pma_attention"] = 1.0 / out["rank"]
+    return out
+
+
 def _gather_class(cfg, value, n):
     """Materialize + CellDINO-embed the top-n attention cells of ONE class → (images, embs)."""
     cc = GRAINS[cfg.grain]["class_col"]
     if getattr(cfg, "marker_channel", None):
-        cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
-        rows = pd.read_csv(cfg.fluor_csv, usecols=cols)
-        rows = rows[(rows["channel"] == cfg.marker_channel) & (rows["rank_type"] == "top")
-                    & (rows[cc].astype(str) == str(value))].sort_values("rank").head(n)
+        pre = getattr(cfg, "_fluor_rows", None)          # per-marker preloaded rows (read the 12GB CSV ONCE)
+        if pre is None:
+            cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
+            pre = pd.read_csv(cfg.fluor_csv, usecols=cols)
+            pre = pre[(pre["channel"] == cfg.marker_channel) & (pre["rank_type"] == "top")]
+        rows = pre[pre[cc].astype(str) == str(value)].sort_values("rank").head(n)
         rows = rows.rename(columns={cc: "cls"}).copy()
     else:
         rows = _top_cells(GRAINS[cfg.grain]["parquet"], cc, value, n)   # returns 'cls' + base cols
@@ -74,7 +105,7 @@ def _gather_class(cfg, value, n):
 def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, channel="Phase2D",
                       fluor_csv=None, control="NTC", n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
-                      load_workers=12, n_per_class=1000):
+                      load_workers=12, n_per_class=1000, fluor_rows_h5ad=None):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -86,6 +117,16 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     if marker_channel: cfg.marker_channel = marker_channel
     if channel: cfg.channel = channel
     if fluor_csv: cfg.fluor_csv = fluor_csv
+    if marker_channel:                                   # preload the marker's cell table ONCE (all targets share it)
+        cc = GRAINS[grain]["class_col"]
+        if fluor_rows_h5ad:                              # no pma CSV (cisGolgi/VIM/LMNB1) → anndata + centroid rank
+            cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
+            print(f"[fluor] {len(cfg._fluor_rows)} '{marker_channel}' rows from anndata (centroid-ranked)")
+        else:                                            # read the 12GB fluor CSV ONCE for this marker
+            _cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
+            _all = pd.read_csv(cfg.fluor_csv, usecols=_cols)
+            cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
+            print(f"[fluor] preloaded {len(cfg._fluor_rows)} '{marker_channel}' top rows (1 CSV read for all targets)")
     modality = slugify(marker_channel) if marker_channel else "phase"
     al = sorted(alphas); A = len(al); H = cfg.crop_size
     anchor = "NTC" if (not control or str(control).upper() == "NTC") else slugify(control)
@@ -172,6 +213,89 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         print(f"[viewer] {modality}/{grain}/{slug}: {ncell}×{A}" + (" +scores" if score else ""))
     print(f"[marker] {modality}/{grain} ({anchor}-anchored): {done}/{len(targets)} targets, real cells shared")
     return {"modality": modality, "grain": grain, "anchor": anchor, "n_targets": done}
+
+
+@torch.no_grad()
+def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=None, channel="Phase2D",
+                              fluor_csv=None, n_cells=20, w=2.0, alphas=VIEWER_ALPHAS, device="cuda",
+                              upsize=256, batch=48, n_workers=8, load_workers=12, n_per_class=1000,
+                              fluor_rows_h5ad=None):
+    """A→B anchors among `classes` for ONE marker: gather each class's cells ONCE (single CSV read),
+    then generate every ordered pair a→b (anchor a's cells morphed toward b's centroid). The gather is
+    amortized across all K·(K−1) pairs; the mean-diff direction is b_centroid − a_centroid."""
+    dev = torch.device(device if torch.cuda.is_available() else "cpu")
+    cfg = DirConfig(grain=grain, target=classes[0], device=device)
+    cfg.num_workers = load_workers
+    if ckpt: cfg.diffae_ckpt = ckpt
+    if marker_channel: cfg.marker_channel = marker_channel
+    if channel: cfg.channel = channel
+    if fluor_csv: cfg.fluor_csv = fluor_csv
+    modality = slugify(marker_channel) if marker_channel else "phase"
+    if marker_channel:                                   # preload the marker's cell table ONCE
+        cc = GRAINS[grain]["class_col"]
+        if fluor_rows_h5ad:
+            cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
+        else:
+            _cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
+            _all = pd.read_csv(cfg.fluor_csv, usecols=_cols)
+            cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
+    cache = {}                                           # gather each class ONCE (in-memory filter, no re-read)
+    for cls in classes:
+        imgs, embs = _gather_class(cfg, cls, n_per_class)
+        if len(embs):
+            cache[cls] = (imgs, embs)
+    al = sorted(alphas); A = len(al); H = cfg.crop_size
+    diffae = load_diffae(cfg, dev); null_base = diffae.null_emb.detach()[None].to(dev)
+    done = 0
+    for a in classes:
+        if a not in cache:
+            continue
+        a_imgs, a_embs = cache[a]; ncell = min(n_cells, len(a_embs))
+        z0 = torch.as_tensor(a_embs[:ncell], dtype=torch.float32, device=dev)
+        xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
+                          for c in range(ncell)])
+        mu_a = a_embs.mean(0); anchor = slugify(a)
+        realdir = Path(out_root) / "viewer_assets" / modality / "_anchors" / anchor
+        if not (realdir / "cell0" / "real.webp").exists():
+            real = normalize(a_imgs[:ncell]); rp = ThreadPoolExecutor(max_workers=n_workers)
+            for c in range(ncell):
+                (realdir / f"cell{c}").mkdir(parents=True, exist_ok=True)
+                rp.submit(_save_webp, realdir / f"cell{c}" / "real.webp", real[c, 0], upsize)
+            rp.shutdown(wait=True)
+        for b in classes:
+            if b == a or b not in cache:
+                continue
+            slug = f"{anchor}__to__{slugify(b)}"
+            adir = Path(out_root) / "viewer_assets" / modality / grain / slug
+            if (adir / "meta.json").exists():
+                done += 1; continue
+            d = cache[b][1].mean(0) - mu_a; gap = float(np.linalg.norm(d))
+            fixed_dir = torch.as_tensor(d / (gap + 1e-9), dtype=torch.float32, device=dev)[None]
+            conds, xts, keys = [], [], []
+            for c in range(ncell):
+                for ai, av in enumerate(al):
+                    conds.append(z0[c:c + 1] + (av * gap) * fixed_dir); xts.append(xT[c:c + 1]); keys.append((c, ai))
+            gen = np.empty((ncell, A, H, H), np.float32)
+            for i0 in range(0, len(conds), batch):
+                cb = torch.cat(conds[i0:i0 + batch], 0); xb = torch.cat(xts[i0:i0 + batch], 0)
+                outb = _sample_guided(diffae, xb, cb, null_base.expand(cb.shape[0], -1), w, cfg).cpu().numpy()[:, 0]
+                for j, (c, ai) in enumerate(keys[i0:i0 + batch]):
+                    gen[c, ai] = outb[j]
+            fp = ThreadPoolExecutor(max_workers=n_workers)
+            for c in range(ncell):
+                cdir = adir / f"cell{c}"; cdir.mkdir(parents=True, exist_ok=True)
+                for ai in range(A):
+                    fp.submit(_save_webp, cdir / f"frame_{ai:02d}.webp", gen[c, ai], upsize)
+            fp.shutdown(wait=True)
+            (adir / "meta.json").write_text(json.dumps(
+                {"grain": grain, "target": b, "modality": modality, "control": a, "marker_channel": marker_channel,
+                 "channel": channel, "slug": slug, "w": w, "alphas": al, "gap": gap, "n_cells": ncell,
+                 "has_scores": False, "has_real": True, "real_dir": f"{modality}/_anchors/{anchor}",
+                 "asset_dir": f"{modality}/{grain}/{slug}"}))
+            done += 1
+            print(f"[anchor] {modality}/{grain}/{slug}: {ncell}×{A}")
+    print(f"[anchors] {modality}/{grain}: {done} pairs across {len(cache)} classes")
+    return {"modality": modality, "grain": grain, "n_pairs": done}
 
 
 @torch.no_grad()

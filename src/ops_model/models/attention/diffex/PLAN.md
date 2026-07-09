@@ -81,9 +81,18 @@ ACTIVE EFFORTS below for the current state.
 6. **Centroid fallback** for cisGolgi/VIM/LMNB1 (see LATEST).
 7. **Multi-α montage** — `--alphas` flag looping per-α decodes + an α switch in the explorer.
 8. **Image-UMAP montage** (`czi-ai/latent-lens`) — idea track; needs full-gene coverage.
-9. **Attention-head tab + viewer reorientation** (NEXT, design below) — new tab overlaying CellDINO
-   attention-head pixel weights (inferno) on the real phenotype cells; make Browse (marker+perturbation)
-   the single selection that drives ALL views. See `### 2026-07-08 — Attention-head tab` build-log entry.
+9. **Attention-head tab + viewer reorientation** (DONE) — new tab overlaying CellDINO attention-head
+   pixel weights (inferno) on the real phenotype cells; Browse (marker+perturbation) drives ALL views.
+   See `### 2026-07-08 — Attention-head tab` build-log entry.
+10. **Per-marker embedding montages** (FUTURE) — the Embedding tab now switches its IMAGES per marker but
+    reuses the SHARED phase gene-UMAP LAYOUT for every marker (`submit montage` loops modalities, all with
+    the phase `UMAP_H5AD`; only tiles swap). Fluor markers currently place only their ~8 seed geneKO frames
+    (sparse). FUTURE: give each marker its OWN gene embedding (per-reporter CellDINO gene UMAP/PHATE), so
+    genes sit at that marker's coordinates. Needs a per-marker gene-embedding h5ad (`obsm X_umap/X_phate` per
+    gene) — does NOT exist yet (`pca_optimized_v0.3/.../paper_v2/` only has aggregate combos: phase_only,
+    all_livecell, with_cp, no_phase, only_cp — no per-single-marker layout). Build = aggregate per-marker
+    CellDINO gene embeddings → PCA → UMAP/PHATE per reporter, then `build_montage_web(modality=<slug>,
+    h5ad=<per-marker>)`. Also depends on fuller fluor geneKO traversals (item 1) to be non-sparse.
 
 ---
 
@@ -512,13 +521,20 @@ cells/page) drives 3 view tabs — Traversal / Embedding / **Attention heads**. 
 live per-map/per-gene/fixed normalization + opacity, head dropdown from `heads.json`; greys out for
 non-phase / complex / missing-gene. Embedding now rings + pans to the selection. **Availability decoupled
 from manifest** — app fetches `attention_heads/phase/index.json` (no `precompute.build_manifest` change).
-- **Fluor: OUT (decided 2026-07-08).** `celldino_attention_head_analysis/fluorescence_attention/<MARKER>.npz`
-  (46 markers) hold only head-ranking **features** `(N_genes,24,16,2)` + `genes` — **no `maps`/`crops`**,
-  so they can't feed the inferno overlay. Tab stays phase·geneKO; would need Kevin to dump a fluor
-  pixel_attribution cache (maps+crops) to extend.
-- **16 corrupt phase genes: left as-is (decided 2026-07-08).** Full-size but bad-zip at SOURCE
-  (identical in `phase/` and Kevin's `celldino_attention_head_analysis/pixel_attribution_cache/`) — needs
-  Kevin to regenerate, not a re-run. Viewer greys them out; 984/1000 shipped.
+- **ALL 4 modality×grain combos now IN (2026-07-08 pm).** Kevin dumped pixel_attribution (maps+crops+
+  patch_masks) for fluor geneKO (`fluorescence_pixel_attribution/<marker>/`), phase complex + fluor complex
+  (`complex_pixel_attribution/{phase,fluorescence/<marker>}/`) — same npz schema as phase. Builder rewritten
+  **SLURM-parallel** (`build_attention_heads.py render` → `submit_parallel_jobs`, 40 shards, ~1 min) into a
+  uniform `attention_heads/<modality>/<grain>/<key>/` layout + single `attention_heads/index.json`
+  ({global_max, assets:{modality:{grain:[keys]}}}). **23 modalities, 1455 keys** (phase geneKO 984 + phase
+  complex 93 + 16 fluor markers). Webapp resolves assets by (marker→`jsSlug(marker_channel)`|"phase", grain,
+  target→gene|slug); non-phase-geneKO lack ranking metrics (auroc/spec) but render fine from the npz `heads`.
+  (`fluorescence_attention/<MARKER>.npz` = the older ranking-features-only dump, superseded.)
+- **16 corrupt phase genes: left as-is.** Full-size but bad-zip at SOURCE — needs Kevin to regenerate; 984/1000.
+- **Attn viewer UX (2026-07-08 pm):** top-crossbar selection (marker+perturbation comboboxes w/ search, mAP|A–Z
+  sort) drives Traversal/Embedding/Attention-heads tabs; attn view = per-perturbation color-coded blocks
+  (rows=heads, cols=cells), pin/reset controls, per-cell/gene/fixed norm + dual clim + opacity sliders,
+  Ritvik-faithful overlay (σ=2 smooth + cell mask + inferno@α0.6); embedding click → selects in search box.
 
 ### 2026-07-08 — Attention-head tab + viewer reorientation (design)
 New viewer view: overlay CellDINO **attention-head pixel weights** (inferno) on the **real phenotype

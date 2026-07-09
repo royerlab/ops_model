@@ -317,9 +317,9 @@ def build_control_ref(per_exp=40, max_exp=25, out=CTRL_REF):
     return mu, sd
 
 
-def _load_gen(gene, grain="geneKO", modality="phase", n_cells=20, train_px=128):
-    """Load a traversal's cache α-frames → (n_alpha, n_cells, 128,128) center-cropped to the training
-    FOV, + the α list. Frames are 256px; center-crop to 128 so the cell fills the crop like training."""
+def _load_gen(gene, grain="geneKO", modality="phase", n_cells=20):
+    """Load a traversal's cache α-frames → (n_alpha, n_cells, 256, 256) FULL frames + the α list.
+    Cellpose segments on the FULL FOV (robust); the crop to the 128 training FOV happens AFTER masking."""
     import json
     from PIL import Image
     base = f"{CACHE}/{modality}/{grain}/{gene}"
@@ -329,9 +329,7 @@ def _load_gen(gene, grain="geneKO", modality="phase", n_cells=20, train_px=128):
     frames = [[] for _ in alphas]
     for c in range(n_cells):
         for ai in range(len(alphas)):
-            im = np.asarray(Image.open(f"{base}/cell{c}/frame_{ai:02d}.webp").convert("L"), np.float32) / 255.0
-            h = (im.shape[0] - train_px) // 2
-            frames[ai].append(im[h:h + train_px, h:h + train_px] if h > 0 else im)
+            frames[ai].append(np.asarray(Image.open(f"{base}/cell{c}/frame_{ai:02d}.webp").convert("L"), np.float32) / 255.0)
     return np.array(frames), alphas
 
 
@@ -352,9 +350,12 @@ def score_generated(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), grain="geneKO"
         except Exception as e:
             print(f"{gene}: load failed ({e})"); continue
         na, nc = frames.shape[:2]
-        flat = frames.reshape(na * nc, *frames.shape[2:])
-        masks = cellpose_masks(flat)
-        raw, _ = _celldino((flat * masks)[:, None].astype(np.float32))
+        flat = frames.reshape(na * nc, *frames.shape[2:])   # full 256 frames
+        masks = cellpose_masks(flat)                         # segment on the FULL FOV (robust)
+        masked = flat * masks
+        h = (masked.shape[1] - 128) // 2                     # crop to the 128 training FOV AFTER masking
+        masked = masked[:, h:h + 128, h:h + 128] if h > 0 else masked
+        raw, _ = _celldino(masked[:, None].astype(np.float32))
         emb = ((raw - mu) / sd).reshape(na, nc, -1)
         ptarget = [float(score_bags(m, e[None], channel_idx=ci)[0, g2i[gene]]) for e in emb]
         top = [i2g[int(score_bags(m, e[None], channel_idx=ci)[0].argmax())] for e in emb]

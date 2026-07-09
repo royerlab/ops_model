@@ -78,9 +78,11 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
     return out_zarr, genes
 
 
-def build_montage_web(h5ad, out_zarr, cell=0, alpha=2.0, embedding="umap"):
-    """One step for the viewer: harvest the cache → montage zarr → PNG tiles + labels (in `embedding`)."""
-    _, placed = montage_from_cache(h5ad, out_zarr, cell=cell, alpha=alpha, embedding=embedding)
+def build_montage_web(h5ad, out_zarr, cell=0, alpha=2.0, embedding="umap", modality="phase"):
+    """One step for the viewer: harvest the cache → montage zarr → PNG tiles + labels (in `embedding`).
+    `modality` selects which traversal frames to place (phase | slugified marker); the LAYOUT always
+    comes from the shared `h5ad` (phase gene embedding) so every marker shares the same gene positions."""
+    _, placed = montage_from_cache(h5ad, out_zarr, cell=cell, alpha=alpha, embedding=embedding, modality=modality)
     return montage_to_tiles(out_zarr, h5ad, out_dir=str(out_zarr)[:-5] + "_tiles", placed=set(placed), embedding=embedding)
 
 

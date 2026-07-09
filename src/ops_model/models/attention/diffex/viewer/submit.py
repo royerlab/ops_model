@@ -37,7 +37,7 @@ def _job(name, func, kwargs, stage):
 def cmd_seed(args):
     """Per-marker NTC traversals: every complete fluorescent marker (top-N genes) + phase geneKO + phase complex."""
     dist = C.dist_matrix(); jobs = []
-    for d, mc, ch in C.complete_markers():
+    for d, mc, ch in C.complete_markers(min_ep=args.min_ep):
         rep = C.rep_of(dist, mc)
         if not rep or rep not in dist.columns:
             continue
@@ -49,7 +49,8 @@ def cmd_seed(args):
         if tg:
             jobs.append(_job(f"pm_{slugify(mc)[:20]}", precompute_marker,
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
-                                  ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12), "seed"))
+                                  ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
+                                  score=not args.no_score), "seed"))
     if not args.map_thr:                                     # phase already fully built — only (re)seed with top-N mode
         jobs.append(_job("pm_phase_geneKO", precompute_marker,
                          dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
@@ -98,19 +99,31 @@ def cmd_manifest(args):
 
 
 def cmd_montage(args):
-    """UMAP montage: harvest each gene's cached α-frame (correct top-attention direction) + place at
-    its gene-UMAP coord. No decode/re-embed — reads the phase geneKO traversal cache. CPU-only, one job."""
+    """Per-marker UMAP montage: place each gene's cached α-frame at its gene-UMAP coord. Layout is ALWAYS
+    the shared phase gene embedding (UMAP_H5AD); only the images swap per marker (modality). Builds phase +
+    every marker with geneKO traversals. No decode/re-embed — reads the traversal cache. CPU-only."""
+    import glob
+    from pathlib import Path
+    va = f"{C.OUT}/viewer_assets"
+    mods = ["phase"]                                     # phase + markers that have geneKO traversal frames
+    for mdir in sorted(glob.glob(f"{va}/*/geneKO")):
+        mod = Path(mdir).parent.name
+        if mod != "phase" and glob.glob(f"{mdir}/*/cell*/frame_*.webp"):
+            mods.append(mod)
+    if args.markers:
+        mods = [m for m in mods if m in args.markers or slugify(m) in args.markers]
     jobs = []
-    for emb in args.embeddings:
-        for cell in args.cells:
-            for a in args.alphas:
-                zarr = f"{C.OUT}/viewer_assets/_montage/phase_geneKO_{emb}_cell{cell}_a{a:g}.zarr"
-                jobs.append(_job(f"montage_{emb}_c{cell}_a{a:g}", build_montage_web,
-                                 dict(h5ad=UMAP_H5AD, out_zarr=zarr, cell=cell, alpha=a, embedding=emb), "montage"))
-    print(f"montage: {len(jobs)} montages ({len(args.embeddings)} emb × {len(args.cells)} cell × {len(args.alphas)} α)")
+    for mod in mods:
+        for emb in args.embeddings:
+            for cell in args.cells:
+                for a in args.alphas:
+                    zarr = f"{va}/_montage/{mod}_geneKO_{emb}_cell{cell}_a{a:g}.zarr"
+                    jobs.append(_job(f"mtg_{mod[:12]}_{emb}_c{cell}_a{a:g}", build_montage_web,
+                                     dict(h5ad=UMAP_H5AD, out_zarr=zarr, cell=cell, alpha=a, embedding=emb, modality=mod), "montage"))
+    print(f"montage: {len(jobs)} montages across {len(mods)} markers (shared phase layout)")
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs",
                          slurm_params={"slurm_partition": "cpu", "cpus_per_task": 8, "mem_gb": 64, "timeout_min": 45,
-                                       "slurm_array_parallelism": min(len(jobs), 30)},
+                                       "slurm_array_parallelism": min(len(jobs), 40)},
                          log_dir="diffex_gifs", wait_for_completion=False)
 
 
@@ -154,10 +167,10 @@ def cmd_phase_full(args):
 def main():
     ap = argparse.ArgumentParser(description="Build the DiffEx viewer cache")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--parallel", type=int, default=10); s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=98); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=10); s.set_defaults(fn=cmd_seed)
     a = sub.add_parser("anchors"); a.add_argument("--k", type=int, default=5); a.add_argument("--markers", nargs="*"); a.add_argument("--parallel", type=int, default=12); a.set_defaults(fn=cmd_anchors)
     m = sub.add_parser("manifest"); m.set_defaults(fn=cmd_manifest)
-    g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=[0]); g.add_argument("--alphas", type=float, nargs="+", default=[2.0]); g.add_argument("--embeddings", nargs="+", default=["umap"]); g.set_defaults(fn=cmd_montage)
+    g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=[1]); g.add_argument("--alphas", type=float, nargs="+", default=[5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.set_defaults(fn=cmd_montage)
     fc = sub.add_parser("fluor-complex"); fc.add_argument("--markers", nargs="*"); fc.add_argument("--batch", type=int, default=24); fc.set_defaults(fn=cmd_fluor_complex)
     pf = sub.add_parser("phase-full"); pf.add_argument("--chunk-size", type=int, default=50); pf.add_argument("--batch", type=int, default=24); pf.set_defaults(fn=cmd_phase_full)
     args = ap.parse_args(); args.fn(args)
