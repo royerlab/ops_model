@@ -37,7 +37,7 @@ const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, ancho
 async function boot() {
   state.manifest = await (await fetch(MANIFEST_URL)).json();
   state.geneDesc = await fetch(`${BASE}gene_desc.json`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
-  state.attnIndex = await fetch(`${BASE}attention_heads/phase/index.json`).then(r => r.ok ? r.json() : null).catch(() => null);  // attention-head availability + global_max
+  state.attnIndex = await fetch(`${BASE}attention_heads/index.json`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
   wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
   $("target-sort").onchange = () => { state.targetSort = $("target-sort").value; renderTargetList(); $("target-list").classList.remove("hidden"); };
@@ -83,8 +83,8 @@ async function boot() {
     renderAttn();
   };
   $("a-pin").onclick = () => {   // pin the current perturbation for comparison (mirrors traversal pin)
-    const g = attnCurrentGene();
-    if (g && !state.attnPinned.includes(g)) { state.attnPinned.push(g); renderAttnPinned(); renderAttn(); }
+    const r = attnCurrentRef();
+    if (r && !state.attnPinned.some(p => sameRef(p, r))) { state.attnPinned.push(r); renderAttnPinned(); renderAttn(); }
   };
   $("a-pinclear").onclick = () => { state.attnPinned = []; renderAttnPinned(); renderAttn(); };
   document.querySelectorAll(".tab").forEach(b => b.onclick = () => {   // view switcher (all views share the browse selection)
@@ -581,10 +581,27 @@ function tick() {
 // ---- Attention-head view: real phenotype crops + per-head inferno pixel-attribution overlay ----
 // Assets = viewer/build_attention_heads.py output (phase·geneKO only). Grayscale crop + head maps
 // are composited live so normalization (per-map/per-gene/fixed) + opacity are display options.
-function loadAttnHeads(gene) {
-  if (state.attnHeadsCache[gene] !== undefined) return Promise.resolve(state.attnHeadsCache[gene]);
-  return fetch(`${BASE}attention_heads/phase/${gene}/heads.json`).then(r => r.ok ? r.json() : null)
-    .catch(() => null).then(j => { state.attnHeadsCache[gene] = j; return j; });
+// attention assets are keyed by (modality, grain, key): modality = "phase" | slugify(marker_channel),
+// grain = geneKO|complex, key = gene (geneKO) or complex-slug. A "ref" bundles that + a display label.
+const jsSlug = (s) => String(s).replace(/[^A-Za-z0-9]/g, "_").replace(/^_+|_+$/g, "");
+const attnModality = () => (state.marker && state.marker.marker_channel) ? jsSlug(state.marker.marker_channel) : "phase";
+const attnBase = (ref) => `${BASE}attention_heads/${ref.modality}/${ref.grain}/${ref.key}`;
+const sameRef = (a, b) => a.modality === b.modality && a.grain === b.grain && a.key === b.key;
+function haveAttn(modality, grain, key) {
+  const a = state.attnIndex && state.attnIndex.assets && state.attnIndex.assets[modality];
+  return !!(a && a[grain] && a[grain].includes(key));
+}
+function attnRefOf(t, modality) {   // manifest target → ref if its attention assets exist
+  if (!t) return null;
+  const key = t.grain === "geneKO" ? t.target : t.slug;
+  return haveAttn(modality, t.grain, key) ? { modality, grain: t.grain, key, label: t.target } : null;
+}
+const attnCurrentRef = () => attnRefOf(state.target, attnModality());
+function loadAttnHeads(ref) {
+  const base = attnBase(ref);
+  if (state.attnHeadsCache[base] !== undefined) return Promise.resolve(state.attnHeadsCache[base]);
+  return fetch(`${base}/heads.json`).then(r => r.ok ? r.json() : null)
+    .catch(() => null).then(j => { state.attnHeadsCache[base] = j; return j; });
 }
 function loadImg(url) {
   if (state.attnImgCache[url]) return state.attnImgCache[url];
@@ -599,9 +616,9 @@ function imgData(im) {   // grayscale image → ImageData (a copy; safe to reuse
   const c = _ascratch.getContext("2d"); c.drawImage(im, 0, 0);
   return c.getImageData(0, 0, W, H);
 }
-function populateAttnHeadSelect(heads) {
-  const sel = $("a-head"), sig = heads.gene + ":" + heads.heads.length;
-  if (sel._sig === sig) return;                       // same gene's head list already populated
+function populateAttnHeadSelect(heads, sig) {
+  const sel = $("a-head");
+  if (sel._sig === sig) return;                       // same target's head list already populated
   sel._sig = sig; sel.innerHTML = "";
   const all = document.createElement("option"); all.value = "all"; all.textContent = "all heads"; sel.appendChild(all);
   heads.heads.forEach((hd, i) => {
@@ -652,18 +669,13 @@ async function drawAttnCell(cv, cropUrl, maskUrl, headUrl, geneMax) {
   cv.getContext("2d").putImageData(out, 0, 0);
 }
 const attnHeadLabel = (heads, i) => { const hd = heads.heads[i]; return `#${i + 1} L${hd.layer}·H${hd.head}`; };
-// the browse-selected gene, iff it has attention-head data (phase · geneKO · present in the index)
-function attnCurrentGene() {
-  const t = state.target, isPhase = !state.marker.marker_channel;
-  const gene = t && t.grain === "geneKO" ? t.target : null;
-  return (state.attnIndex && gene && isPhase && state.attnIndex.genes.includes(gene)) ? gene : null;
-}
 function renderAttnPinned() {   // pinned-perturbation list (mirrors the traversal pin list), color-coded
   const ul = $("a-panellist"); ul.innerHTML = "";
-  state.attnPinned.forEach((g, i) => {
+  state.attnPinned.forEach((r, i) => {
     const li = document.createElement("li");
-    li.style.color = PALETTE[(i + 1) % PALETTE.length];   // +1: current gene owns PALETTE[0]
-    li.innerHTML = `<span>${g}</span>`;
+    li.style.color = PALETTE[(i + 1) % PALETTE.length];   // +1: current selection owns PALETTE[0]
+    const ctx = r.modality === "phase" ? "" : ` · ${r.modality}`;
+    li.innerHTML = `<span>${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => { state.attnPinned.splice(i, 1); renderAttnPinned(); renderAttn(); };
     li.appendChild(b); ul.appendChild(li);
@@ -672,38 +684,36 @@ function renderAttnPinned() {   // pinned-perturbation list (mirrors the travers
 async function renderAttn() {
   const grid = $("attn-grid"), lbl = $("attn-head-lbl"), status = $("a-status");
   renderAttnPinned();
-  const cur = attnCurrentGene();
+  const cur = attnCurrentRef();
   if (!cur) {
-    const isPhase = !state.marker.marker_channel, t = state.target;
     lbl.textContent = ""; status.textContent = "";
-    grid.innerHTML = `<div class="empty">${!isPhase ? "Attention heads are phase-only (v1)."
-      : !(t && t.grain === "geneKO") ? "Select a geneKO perturbation — complexes have no head rankings."
-      : "No attention-head data for this gene."}</div>`;
+    grid.innerHTML = `<div class="empty">${!state.target ? "Select a perturbation."
+      : "No attention-head data for this marker × perturbation."}</div>`;
     return;
   }
-  const genes = [cur, ...state.attnPinned.filter(g => g !== cur)];   // current first, then pins
+  const refs = [cur, ...state.attnPinned.filter(r => !sameRef(r, cur))];   // current first, then pins
   const heads0 = await loadAttnHeads(cur);
   if (!heads0) { grid.innerHTML = '<div class="empty">failed to load attention data</div>'; return; }
-  populateAttnHeadSelect(heads0);
+  populateAttnHeadSelect(heads0, attnBase(cur));
   const nh = heads0.heads.length;
   const headMode = state.attnHead === "all" ? `all ${nh} heads` : `head ${attnHeadLabel(heads0, Math.min(state.attnHead, nh - 1))}`;
-  lbl.innerHTML = `${genes.length} perturbation${genes.length > 1 ? "s" : ""} · ${headMode}` +
+  lbl.innerHTML = `${refs.length} perturbation${refs.length > 1 ? "s" : ""} · ${headMode}` +
     `<span class="sub">rows = heads · columns = cells · left bar colors the perturbation</span>`;
   status.textContent = `norm=${state.attnNorm} · clim [${state.attnClimLo}, ${state.attnClimHi}] · α ${state.attnAlpha}`;
   grid.innerHTML = "";
-  for (let gi = 0; gi < genes.length; gi++) {
-    const heads = gi === 0 ? heads0 : await loadAttnHeads(genes[gi]);
-    if (heads) buildAttnGroup(grid, genes[gi], PALETTE[gi % PALETTE.length], heads);
+  for (let gi = 0; gi < refs.length; gi++) {
+    const heads = gi === 0 ? heads0 : await loadAttnHeads(refs[gi]);
+    if (heads) buildAttnGroup(grid, refs[gi], PALETTE[gi % PALETTE.length], heads);
   }
 }
-function buildAttnGroup(grid, gene, color, heads) {   // one perturbation block: colored header + head rows
-  const base = `${BASE}attention_heads/phase/${gene}`;
+function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: colored header + head rows
+  const base = attnBase(ref);
   const N = state.cellCount, start = state.page * N, end = Math.min(start + N, heads.n_cells);
   const ncols = Math.max(end - start, 1);
   const headIdxs = state.attnHead === "all" ? heads.heads.map((_, i) => i) : [Math.min(state.attnHead, heads.heads.length - 1)];
   const group = document.createElement("div"); group.className = "agroup";
   const hd = document.createElement("div"); hd.className = "agroup-hd"; hd.style.color = color;
-  hd.textContent = `${gene} · cells ${start}–${end - 1}`;
+  hd.textContent = `${ref.label}${ref.grain === "complex" ? " ·cx" : ""} · cells ${start}–${end - 1}`;
   group.appendChild(hd);
   for (const h of headIdxs) {
     const row = document.createElement("div"); row.className = "arow";
