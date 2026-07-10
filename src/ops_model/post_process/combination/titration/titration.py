@@ -194,6 +194,57 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
+def _bootstrap_indices_per_group(
+    group_codes: np.ndarray, budget: int, rng: np.random.RandomState, replace: bool,
+) -> np.ndarray:
+    """Return positional indices keeping up to ``budget`` cells per group.
+
+    ``group_codes`` is an integer code per cell (e.g. ``pd.Categorical.codes``);
+    cells with a negative code (missing / NaN group) are dropped — matching the
+    legacy loops where ``sgrnas == nan`` selected nothing. For each group, keeps
+    ``min(count, budget)`` cells drawn uniformly:
+
+    - ``replace=False`` — without replacement (subsample). Same semantics as the
+      legacy per-group ``rng.choice(..., replace=False)`` loop, but in one pass.
+    - ``replace=True`` — with replacement (true nonparametric bootstrap). The
+      returned array MAY contain duplicate positions; callers must preserve them
+      (do not de-duplicate) so aggregation counts each resampled cell.
+
+    Fully vectorized: cost is O(N log N) instead of the legacy O(n_groups * N)
+    ``np.where``-per-group scan — the dominant per-draw cost on large reporters
+    like Phase (~60M cells).
+    """
+    codes = np.asarray(group_codes)
+    pos = np.nonzero(codes >= 0)[0]
+    if pos.size == 0:
+        return pos
+    codes = codes[pos]
+    if replace:
+        # Stable sort just groups equal codes contiguously; within-group order
+        # is irrelevant because we draw random offsets below.
+        order = np.argsort(codes, kind="stable")
+    else:
+        # A random key per cell + lexsort groups by code AND randomizes order
+        # within each group, so taking the first k of a group == a random k.
+        keys = rng.random(codes.size)
+        order = np.lexsort((keys, codes))
+    pos_sorted = pos[order]
+    codes_sorted = codes[order]
+    _uniq, sizes = np.unique(codes_sorted, return_counts=True)
+    starts = np.concatenate(([0], np.cumsum(sizes)[:-1]))
+    k = np.minimum(sizes, int(budget))
+    if replace:
+        grp = np.repeat(np.arange(sizes.size), k)
+        offs = np.floor(rng.random(int(k.sum())) * sizes[grp]).astype(np.intp)
+        # Guard the measure-zero case where random() rounds up to the size.
+        offs = np.minimum(offs, sizes[grp] - 1)
+        kept = pos_sorted[starts[grp] + offs]
+    else:
+        rank = np.arange(codes_sorted.size) - np.repeat(starts, sizes)
+        kept = pos_sorted[rank < np.repeat(k, sizes)]
+    return kept
+
+
 def _subsample_per_ko_and_aggregate(
     adata_cells: ad.AnnData, cells_per_ko: int, rng: np.random.RandomState,
 ) -> ad.AnnData:
@@ -217,6 +268,7 @@ def _subsample_per_ko_and_aggregate(
 
 def _subsample_per_guide_and_aggregate(
     adata_cells: ad.AnnData, cells_per_guide: int, rng: np.random.RandomState,
+    replace: bool = False,
 ) -> ad.AnnData:
     """Subsample up to ``cells_per_guide`` cells per sgRNA, then aggregate to guide level.
 
@@ -224,11 +276,35 @@ def _subsample_per_guide_and_aggregate(
     level, so NTC shares one budget across its ~8 sgRNAs while gene KOs split across
     ~4 sgRNAs), this samples directly at sgRNA level so every guide — NTC or KO —
     gets the same cell budget.
+
+    ``replace=True`` switches from subsample-without-replacement to a true
+    nonparametric bootstrap (draw ``min(count, budget)`` cells per guide *with*
+    replacement). The per-guide cell count is unchanged from the legacy path, so
+    ``n_cells`` / x-axis bookkeeping stays directly comparable — only the draw
+    changes. The bootstrap path is also fully vectorized (see
+    :func:`_bootstrap_indices_per_group`).
     """
     guide_col_name = _guide_col(adata_cells)
     if guide_col_name not in adata_cells.obs.columns:
         raise ValueError(
             f"Per-guide titration requires {guide_col_name!r} column in obs"
+        )
+    if replace:
+        codes = pd.Categorical(adata_cells.obs[guide_col_name].values).codes
+        kept_idx = _bootstrap_indices_per_group(
+            codes, cells_per_guide, rng, replace=True,
+        )
+        # Preserve duplicates (do NOT de-dup); sort only to make the row order
+        # deterministic for aggregation.
+        kept_idx = np.sort(kept_idx)
+        sub = adata_cells[kept_idx].copy()
+        # With replacement, obs_names repeat — make them unique so downstream
+        # AnnData ops don't choke; guide-level grouping is by the guide column,
+        # not the index, so this doesn't affect aggregation.
+        sub.obs_names_make_unique()
+        return aggregate_to_level(
+            sub, level="guide", method="mean",
+            preserve_batch_info=False, subsample_controls=False,
         )
     sgrnas = adata_cells.obs[guide_col_name].values
     kept_idx = []
@@ -481,7 +557,7 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
 
 def _run_titration_points(
     adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
-    min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1,
+    min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1, replace=False,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
@@ -495,6 +571,14 @@ def _run_titration_points(
     # Drop signal col if present (not needed for scoring, can interfere with aggregation)
     if "signal" in adata_cells.obs.columns:
         adata_cells.obs = adata_cells.obs.drop(columns=["signal"])
+
+    # `replace` (with-replacement bootstrap) is only wired into the per-guide
+    # sampler for now. Warn rather than silently ignore for other modes.
+    if replace and not per_guide:
+        _logger.warning(
+            "replace=True (with-replacement bootstrap) is only supported for "
+            "per-guide sampling; ignoring for this mode."
+        )
 
     base_seed = int(rng.randint(0, 2**31 - 1))
     metric_cols = [
@@ -521,7 +605,9 @@ def _run_titration_points(
         for b in range(n_bootstraps):
             draw_rng = np.random.RandomState(base_seed + b * 9973 + target)
             if per_guide:
-                g_sub = _subsample_per_guide_and_aggregate(adata_cells, target, draw_rng)
+                g_sub = _subsample_per_guide_and_aggregate(
+                    adata_cells, target, draw_rng, replace=replace,
+                )
             elif per_ko:
                 g_sub = _subsample_per_ko_and_aggregate(adata_cells, target, draw_rng)
             else:
@@ -705,6 +791,7 @@ def titrate_single_reporter(
     per_guide_median: bool = False,
     n_bootstraps: int = 1,
     cache: bool = True,
+    replace: bool = False,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -811,6 +898,7 @@ def titrate_single_reporter(
             per_ko=per_ko,
             per_guide=per_guide,
             n_bootstraps=n_bootstraps,
+            replace=replace,
         )
     else:
         df_new = pd.DataFrame()
@@ -1638,6 +1726,11 @@ def _build_parser():
     parser.add_argument("--bootstrap", type=int, default=1, metavar="N",
                         help="Run N bootstrap draws per titration point (default: 1 = no bootstrap). "
                              "Adds {metric}_sem columns and error bars on plots.")
+    parser.add_argument("--bootstrap-replace", dest="bootstrap_replace",
+                        action="store_true", default=False,
+                        help="Draw each bootstrap sample WITH replacement (true nonparametric "
+                             "bootstrap) instead of subsampling without replacement. "
+                             "Per-guide sampling only. Default: without replacement.")
     parser.add_argument("--per-guide-max-titration", action="store_true",
                         help="Titrate by cells-per-sgRNA. Schedule starts at MAX non-NTC "
                              "cells/guide — large guides keep gaining, small guides cap out. "
@@ -1962,6 +2055,7 @@ def titrate_single_target_for_reporter(
     per_ko: bool = False,
     per_guide: bool = False,
     n_bootstraps: int = 1,
+    replace: bool = False,
 ) -> str:
     """Score one reporter at ONE schedule target; write a shard CSV.
 
@@ -2000,6 +2094,7 @@ def titrate_single_target_for_reporter(
         per_ko=per_ko,
         per_guide=per_guide,
         n_bootstraps=n_bootstraps,
+        replace=replace,
     )
     shard_csv = reporter_dir / f"{sig_safe}_titration_t{int(target)}.csv"
     df.to_csv(shard_csv, index=False)
@@ -2261,6 +2356,7 @@ def main():
                             or args.per_guide_median_titration
                         ),
                         "n_bootstraps": int(args.bootstrap),
+                        "replace": bool(args.bootstrap_replace),
                     },
                 })
 
@@ -2331,6 +2427,7 @@ def main():
                     "per_guide_median": args.per_guide_median_titration,
                     "n_bootstraps": int(args.bootstrap),
                     "cache": bool(args.cache),
+                    "replace": bool(args.bootstrap_replace),
                 },
             }
 
@@ -2456,6 +2553,7 @@ def main():
                 per_guide_median=args.per_guide_median_titration,
                 n_bootstraps=int(args.bootstrap),
                 cache=bool(args.cache),
+                replace=bool(args.bootstrap_replace),
             )
             print(f"  {result}")
 
