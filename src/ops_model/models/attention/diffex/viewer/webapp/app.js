@@ -2,6 +2,8 @@
 // α scrubs precomputed WebP frames. One grid: perturbation rows (current + pinned) × cells-per-page.
 const MANIFEST_URL = window.MANIFEST_URL || "manifest.json";
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
+const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
+                                      // so reloads always get the freshly-rebuilt data; images stay cached
 const PAD = (i) => String(i).padStart(2, "0");
 const $ = (id) => document.getElementById(id);
 
@@ -13,6 +15,7 @@ const state = {
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
   rangeLo: 0, rangeHi: 0, alphaLimit: 5,   // autoplay sweeps only within ±alphaLimit (scrub stays full)
   targetSort: "map",                       // perturbation list order: "map" (distinctiveness, default) | "alpha"
+  altAnchorsOnly: false,                    // filter perturbation list to those with a non-NTC (A→B) anchor
   view: "traversal",                       // active view: traversal | montage | attn (all driven by browse selection)
   attnIndex: null, attnHeadsCache: {}, attnImgCache: {},   // attention-head assets
   attnHead: "all", attnNorm: "map",     // default: show ALL heads per cell; per-cell (per-tile max) normalization
@@ -35,12 +38,13 @@ const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, ancho
   real_dir: t.real_dir || t.asset_dir, key: markerName + "|" + t.slug });
 
 async function boot() {
-  state.manifest = await (await fetch(MANIFEST_URL)).json();
-  state.geneDesc = await fetch(`${BASE}gene_desc.json`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
-  state.attnIndex = await fetch(`${BASE}attention_heads/index.json`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
+  state.manifest = await (await fetch(MANIFEST_URL + NOCACHE)).json();
+  state.geneDesc = await fetch(`${BASE}gene_desc.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
+  state.attnIndex = await fetch(`${BASE}attention_heads/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
   wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
   $("target-sort").onchange = () => { state.targetSort = $("target-sort").value; renderTargetList(); $("target-list").classList.remove("hidden"); };
+  $("altanchor").onchange = () => { state.altAnchorsOnly = $("altanchor").checked; refreshTargets(); };
   $("grain").onchange = refreshTargets;
   $("cellcount").onchange = () => { state.cellCount = Math.max(1, +$("cellcount").value | 0); state.page = 0; rebuild(); if (state.view === "attn") renderAttn(); };
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); };
@@ -93,22 +97,25 @@ async function boot() {
     document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + view));
     $("stage").classList.toggle("montage-active", view === "montage");
     $("stage").classList.toggle("attn-active", view === "attn");
-    if (view === "montage") { ensureMontage(); focusMontageOnSelection(); }
+    if (view === "montage") { if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
     if (view === "attn") renderAttn();
   });
   for (let c = 0; c < 20; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; $("m-cell").appendChild(o); }
   $("m-cell").value = 1;   // default NTC cell = 1
-  $("m-emb").onchange = loadMontage;
-  $("m-alpha").onchange = loadMontage;
-  $("m-cell").onchange = loadMontage;
-  $("m-mode").onchange = () => setMode($("m-mode").value);
-  $("m-imgalpha").oninput = () => { mont.imgAlpha = +$("m-imgalpha").value; applyLayers(); };
-  $("m-ptalpha").oninput = () => { mont.ptAlpha = +$("m-ptalpha").value; drawOverlay(); };
+  const LIVE = () => mont.renderMode === "live";
+  $("m-render").onchange = setRenderMode;
+  $("m-emb").onchange = () => LIVE() ? liveLoad() : loadMontage();
+  $("m-alpha").onchange = () => LIVE() ? liveRefresh() : loadMontage();
+  $("m-cell").onchange = () => LIVE() ? liveRefresh() : loadMontage();
+  $("m-mode").onchange = () => { setMode($("m-mode").value); if (LIVE()) liveDraw(); };
+  $("m-imgalpha").oninput = () => { mont.imgAlpha = +$("m-imgalpha").value; LIVE() ? liveDraw() : applyLayers(); };
+  $("m-ptalpha").oninput = () => { mont.ptAlpha = +$("m-ptalpha").value; LIVE() ? liveDraw() : drawOverlay(); };
+  $("m-tilesize").oninput = () => { mont.tileSize = +$("m-tilesize").value; liveDraw(); };
   $("m-detail").oninput = () => {
     mont.detail = +$("m-detail").value;
     if (mont.osd) { mont.osd.minPixelRatio = mont.detail; if (mont.osd.world.getItemCount()) mont.osd.world.getItemAt(0).minPixelRatio = mont.detail; mont.osd.forceRedraw(); }
   };
-  $("m-color").onchange = setField;
+  $("m-color").onchange = () => { setField(); if (LIVE()) { live.cmap = null; liveDraw(); } };
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
   selectMarker(0); $("markerfilter").value = markerLabel(0);   // default = phase marker
 }
@@ -122,7 +129,7 @@ const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology
 };
 // display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
 const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
-const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.7, field: "none", cmap: {}, centroids: {}, showLabels: false };
+const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.7, field: "none", cmap: {}, centroids: {}, showLabels: false, renderMode: "tiles", tileSize: 0.02 };
 
 function ensureMontage() { if (!mont.osd) loadMontage(); else drawOverlay(); }
 // montage is per-marker: phase (default) or the selected fluor marker's own gene embedding
@@ -130,7 +137,7 @@ function montageBase() { return `${BASE}_montage/${attnModality()}_geneKO_${$("m
 
 async function loadMontage() {
   const base = montageBase();
-  const tj = await fetch(`${base}/tiles.json`).then(r => r.ok ? r.json() : null).catch(() => null);
+  const tj = await fetch(`${base}/tiles.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
   if (!tj) { $("m-status").textContent = `no embedding montage built for ${state.marker.marker_channel || "Phase"} · ${$("m-emb").value} · cell ${$("m-cell").value} · α${$("m-alpha").value}`; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
   $("m-status").textContent = `${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
   $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
@@ -157,7 +164,113 @@ async function loadMontage() {
     mont.osd.world.getItemAt(0).setOpacity(mont.imgAlpha);
   });
   populateColorFields(tj.color_fields || []);
-  fetch(`${base}/labels.json`).then(r => r.ok ? r.json() : []).then(l => { mont.labels = l; setField(); if (state.view === "montage") focusMontageOnSelection(); }).catch(() => { mont.labels = []; });
+  fetch(`${base}/labels.json${NOCACHE}`).then(r => r.ok ? r.json() : []).then(l => { mont.labels = l; setField(); if (state.view === "montage") focusMontageOnSelection(); }).catch(() => { mont.labels = []; });
+}
+
+// ---- Live embedding mode: place the EXISTING cache frames at gene coords on a pan/zoom canvas ----
+// No montage precompute, no image duplication — reads the shared layout JSON + the traversal frames.
+const live = { cv: null, ctx: null, byEmb: {}, layout: [], byGene: {}, scale: 1, tx: 0, ty: 0,
+               imgCache: new Map(), cmap: null, raf: 0, drag: null };
+const lsx = (nx) => nx * live.scale + live.tx, lsy = (ny) => ny * live.scale + live.ty;
+function liveEnsure() {
+  if (live.cv) return;
+  live.cv = $("m-live"); live.ctx = live.cv.getContext("2d");
+  live.cv.addEventListener("mousedown", (e) => { live.drag = { x: e.clientX, y: e.clientY, tx: live.tx, ty: live.ty }; live.cv.classList.add("drag"); });
+  window.addEventListener("mouseup", () => { live.drag = null; live.cv.classList.remove("drag"); });
+  live.cv.addEventListener("mousemove", (e) => {
+    if (live.drag) { live.tx = live.drag.tx + (e.clientX - live.drag.x); live.ty = live.drag.ty + (e.clientY - live.drag.y); liveDraw(); return; }
+    liveHover(e);
+  });
+  live.cv.addEventListener("wheel", (e) => {
+    e.preventDefault(); const r = live.cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const f = Math.exp(-e.deltaY * 0.0015), wx = (mx - live.tx) / live.scale, wy = (my - live.ty) / live.scale;
+    live.scale *= f; live.tx = mx - wx * live.scale; live.ty = my - wy * live.scale; liveDraw();
+  }, { passive: false });
+  live.cv.addEventListener("click", (e) => { const b = liveNearest(e); if (b) { selectGeneFromMontage(b); $("sidebar").classList.remove("hidden"); } });
+  window.addEventListener("resize", () => { if (state.view === "montage" && mont.renderMode === "live") { liveResize(); liveDraw(); } });
+}
+async function liveLoad() {   // (re)fetch layout for the current embedding, fit, draw
+  liveEnsure();
+  const emb = $("m-emb").value;
+  if (!live.byEmb[emb]) live.byEmb[emb] = await fetch(`${BASE}_montage/layout_${emb}.json${NOCACHE}`)
+    .then(r => r.ok ? r.json() : { genes: [], color_fields: [] }).catch(() => ({ genes: [], color_fields: [] }));
+  const L = live.byEmb[emb];
+  live.layout = L.genes || []; live.byGene = {}; live.layout.forEach(g => live.byGene[g.g] = g);
+  populateColorFields(L.color_fields || []);
+  live.cmap = null; live.imgCache.clear();
+  liveResize(); liveFit(); liveDraw();
+}
+function liveRefresh() { live.imgCache.clear(); liveDraw(); }   // marker/cell/α changed (keep pan/zoom)
+function liveResize() { const r = $("montage-view").getBoundingClientRect(); live.cv.width = r.width; live.cv.height = r.height; }
+function liveFit() { const s = Math.min(live.cv.width, live.cv.height) * 0.85; live.scale = s; live.tx = (live.cv.width - s) / 2; live.ty = (live.cv.height - s) / 2; }
+function liveSchedule() { if (live.raf) return; live.raf = requestAnimationFrame(() => { live.raf = 0; liveDraw(); }); }
+function liveImg(u) { let im = live.imgCache.get(u); if (im) return im; im = new Image(); im.onload = liveSchedule; im.src = u; live.imgCache.set(u, im); return im; }
+const liveTargets = () => state.marker ? state.marker.targets.filter(t => !t.control && t.grain === "geneKO") : [];
+function liveAi() { const a = +$("m-alpha").value, arr = state.manifest.alphas, i = arr.indexOf(a); return i < 0 ? arr.length - 1 : i; }
+function liveColor(g) {
+  if (mont.field === "none") return "#26c6ff";
+  if (!live.cmap) { live.cmap = {}; const vals = [...new Set(live.layout.map(x => x[mont.field]).filter(Boolean))].sort(); vals.forEach((v, i) => live.cmap[v] = MPAL(i, vals.length)); }
+  return live.cmap[g[mont.field]] || "#555";
+}
+function liveDraw() {
+  if (!live.ctx) return;
+  const ctx = live.ctx, W = live.cv.width, H = live.cv.height;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (!live.layout.length) return;
+  const cell = +$("m-cell").value, iop = mont.imgAlpha, pop = mont.ptAlpha, ai = liveAi();
+  const cw = mont.tileSize * live.scale;           // world-pinned: tiles grow/shrink with zoom (like the montage)
+  if (iop > 0) {                                   // place each present gene's cache frame at its coord
+    ctx.globalAlpha = iop;
+    for (const t of liveTargets()) {
+      const g = live.byGene[t.target]; if (!g || (t.n_cells || 0) <= cell) continue;
+      const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2;
+      if (x > W || y > H || x + cw < 0 || y + cw < 0) continue;
+      const im = liveImg(`${BASE}${t.asset_dir}/cell${cell}/frame_${PAD(ai)}.webp`);
+      if (im.complete && im.naturalWidth) ctx.drawImage(im, x, y, cw, cw);
+    }
+    const ntc = liveImg(`${BASE}${attnModality()}/_anchors/NTC/cell${cell}/real.webp`);   // the NTC anchor cell
+    if (ntc.complete && ntc.naturalWidth) for (const g of live.layout) {
+      if (!g.g.startsWith("NTC")) continue;
+      const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2;
+      if (x > W || y > H || x + cw < 0 || y + cw < 0) continue;
+      ctx.drawImage(ntc, x, y, cw, cw);            // same anchor cell shown at each NTC group node
+    }
+    ctx.globalAlpha = 1;
+    if (cw >= 34) {                                // perturbation title at each crop's top-left (once readable)
+      ctx.font = "600 10px ui-monospace,monospace"; ctx.textBaseline = "top";
+      const lab = (name, x, y) => { ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.85)"; ctx.strokeText(name, x, y); ctx.fillStyle = "#fff"; ctx.fillText(name, x, y); };
+      for (const t of liveTargets()) {
+        const g = live.byGene[t.target]; if (!g || (t.n_cells || 0) <= cell) continue;
+        const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2;
+        if (x > W || y > H || x + cw < 0 || y + cw < 0) continue;
+        lab(t.target, x + 3, y + 2);
+      }
+      for (const g of live.layout) { if (!g.g.startsWith("NTC")) continue; const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2; if (x > W || y > H || x + cw < 0 || y + cw < 0) continue; lab("NTC", x + 3, y + 2); }
+    }
+  }
+  if (pop > 0) {                                   // colored dots (all layout nodes)
+    ctx.globalAlpha = pop;
+    for (const g of live.layout) { const x = lsx(g.nx), y = lsy(g.ny); if (x < 0 || y < 0 || x > W || y > H) continue; ctx.beginPath(); ctx.arc(x, y, 2.5, 0, 6.2832); ctx.fillStyle = liveColor(g); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  if (state.target) {                              // selection ring
+    const g = live.byGene[state.target.target];
+    if (g) { const x = lsx(g.nx), y = lsy(g.ny); ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.2832); ctx.strokeStyle = "#ff2d2d"; ctx.lineWidth = 3; ctx.stroke(); ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.2832); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.stroke(); }
+  }
+}
+function liveNearestXY(mx, my) { let b = null, bd = 1e9; for (const g of live.layout) { const dx = lsx(g.nx) - mx, dy = lsy(g.ny) - my, d = dx * dx + dy * dy; if (d < bd) { bd = d; b = g; } } return { g: b, d: bd }; }
+function liveNearest(e) { const r = live.cv.getBoundingClientRect(), n = liveNearestXY(e.clientX - r.left, e.clientY - r.top); return n.g && n.d < 900 ? n.g.g : null; }
+function liveHover(e) {
+  const tip = $("m-tip"), r = live.cv.getBoundingClientRect(), n = liveNearestXY(e.clientX - r.left, e.clientY - r.top);
+  if (n.g && n.d < 400) { const ex = mont.field !== "none" && n.g[mont.field] ? ` · ${n.g[mont.field]}` : ""; tip.textContent = n.g.g + ex; tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`; }
+  else tip.style.display = "none";
+}
+function setRenderMode() {   // toggle between precomputed tile montage and live cache-frame placement
+  mont.renderMode = $("m-render").value;
+  $("montage-view").classList.toggle("live", mont.renderMode === "live");
+  $("tab-montage").classList.toggle("liverender", mont.renderMode === "live");   // swap renderer-specific controls
+  if (state.view !== "montage") return;
+  if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); }
 }
 
 // pan the embedding to the browse-selected gene (no-op until OSD + labels are ready)
@@ -327,7 +440,7 @@ const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].marker_ch
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   refreshTargets();
-  if (state.view === "montage") loadMontage();   // switch to this marker's embedding montage
+  if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage());   // switch to this marker
 }
 function renderMarkerList() {
   const q = $("markerfilter").value.trim().toLowerCase(), list = $("marker-list"); list.innerHTML = ""; let n = 0;
@@ -344,7 +457,9 @@ function pickMarker(i) { selectMarker(i); $("markerfilter").value = markerLabel(
 const targetLabel = (t) => `${t.target}${t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : ""}${t.grain === "complex" ? " ·cx" : ""}`;
 function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
   const g = $("grain").value;
-  state.targets = state.marker.targets.filter(t => !t.control && (g === "all" || t.grain === g));
+  const altSet = new Set(state.marker.targets.filter(e => e.control).map(e => e.target));   // names with a non-NTC anchor
+  state.targets = state.marker.targets.filter(t => !t.control && (g === "all" || t.grain === g)
+    && (!state.altAnchorsOnly || altSet.has(t.target)));
   let t = state.target && state.targets.find(x => x.slug === state.target.slug);
   if (!t) t = state.targets[0];
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
@@ -369,7 +484,7 @@ function selectTarget(slug) {
   populateAnchors(state.target.target);
   state.page = 0; rebuild();
   if (state.view === "attn") renderAttn();          // selection drives the attention-head view
-  if (state.view === "montage") focusMontageOnSelection();   // ...and pans/highlights the embedding
+  if (state.view === "montage") (mont.renderMode === "live" ? liveDraw() : focusMontageOnSelection());   // update embedding selection
 }
 
 // anchors = NTC + any class that has a precomputed A→this-target traversal in this marker.
@@ -474,7 +589,7 @@ function rebuild() {
 function fetchScores(dir) {
   if (state.scores[dir] !== undefined) return;   // cached or pending
   state.scores[dir] = null;
-  fetch(`${BASE}${dir}/scores.json`).then(r => r.ok ? r.json() : null)
+  fetch(`${BASE}${dir}/scores.json${NOCACHE}`).then(r => r.ok ? r.json() : null)
     .then(j => { state.scores[dir] = j; showIdx(state.idx); }).catch(() => {});
 }
 
@@ -605,7 +720,7 @@ const attnCurrentRef = () => attnRefOf(state.target, attnModality());
 function loadAttnHeads(ref) {
   const base = attnBase(ref);
   if (state.attnHeadsCache[base] !== undefined) return Promise.resolve(state.attnHeadsCache[base]);
-  return fetch(`${base}/heads.json`).then(r => r.ok ? r.json() : null)
+  return fetch(`${base}/heads.json${NOCACHE}`).then(r => r.ok ? r.json() : null)
     .catch(() => null).then(j => { state.attnHeadsCache[base] = j; return j; });
 }
 function loadImg(url) {

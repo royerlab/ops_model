@@ -51,9 +51,21 @@ ACTIVE EFFORTS below for the current state.
   (e.g. `mStayGold-CENPRaltORF`, `VIM`, `LMNB1`) — 1024-d embedding + crop metadata (`label_int`=segmentation,
   `x/y_position`, `well`, `experiment`, `perturbation`). Per (marker, pert): centroid → 20 closest →
   `rank_source="fallback"`, `pma_attention`/`rank` null. (Or wait for Alex's reprocessed pma CSV.)
-- **SetTransformer scoring** (`viewer/set_classifier.py`): reconstructed Alex's cellstate-set-classifier
-  (ISAB/PMA/cosine head); ckpts downloaded to `v4/wandb/cellstate_set_classifier/`. Bridge test (our
-  `embed_crops` → classifier) FAILED (OOD, cos 0.47) → per-α bag scoring PARKED on Alex's v2 CellDINO extraction.
+- **SetTransformer accuracy scoring (`viewer/set_classifier.py` + `viewer/mimic_alex_embed.py`) — PARKED,
+  waiting on SetTransformer v2 (no-mask classifier).** Full journey + why:
+  - Reconstructed Alex's cellstate-set-classifier (ISAB/PMA/cosine head); 5 ckpts in `v4/wandb/cellstate_set_classifier/`.
+    Real-bag CEILING validated: feeding Alex's own `.pt` embeddings → P(target) 0.90–0.999 (HSPA5/KIF11/POLR1B/TIMM23 all hit).
+  - Raw `embed_crops` → classifier FAILS (OOD, cos 0.47, constant argmax). Built `mimic_alex_embed` to reproduce Alex's
+    exact pipeline: **128 Phase2D crop → seg-mask (`cell_seg`) → percentile-norm → CellDINO → z-std(control)**. Findings:
+    the **segmentation mask is the load-bearing step** (cos 0.47→0.91); percentile-norm is canceled by CellDINO's z-score.
+    At realistic bag sizes (100 cells, per-experiment z-std) the mimic matches the ceiling: **95–100% hit-rate** on real cells.
+  - Generated-cell per-α curve works end-to-end for **POLR1B** (P 0.01→0.98, flips to target at α≥1.5) — proof the pipeline
+    is correct — but **the segmentation of GENERATED cells is the blocker**: cellpose on fake crops unreliably captures the
+    cell (latches onto the bright nucleolus, not the whole body), so only nucleolar-phenotype genes (POLR1B) score; HSPA5/
+    KIF11/TIMM23 stay at P≈0 despite healthy embeddings. Diameter/centroid tuning didn't fix it robustly.
+  - **DECISION:** masking generated cells is too fragile to rely on. **Wait for SetTransformer v2 — a classifier trained
+    WITHOUT masks** → then our unmasked `embed_crops` is in-distribution, no cellpose needed, and the per-α bag score works
+    for all genes. The mimic (mask path) + POLR1B validation are kept as a reference/cross-check.
 - **Model-metrics curves** (`diffae/plot_metrics.py`): loss + cond_ratio over epochs, one line per DiffAE
   → `model_metrics_curves.png/.svg`.
 - **Viewer embedding tab** (`build_umap_montage.py` + `webapp/`): OSD montage, UMAP↔PHATE, points/images
@@ -68,16 +80,25 @@ ACTIVE EFFORTS below for the current state.
   static precompute → dependency-free web app; per-marker driver shares the NTC gather + dedups real
   cells; embedding tab (see LATEST). Live demo `login-01:8765`.
 - **Score:** authoritative = Alex's **SetTransformer** bag `P(target)` (§7 ckpts downloaded) — supersedes
-  the per-cell N-way MLP (`nway_clf.py`) and the old binary LR badge. Bag scoring parked on Alex's v2 extraction.
-- **Infra PR (#51):** S3 bucket + nonprod read-only `.tf` drafted (mirrors `proteohub-argus-s3-reader-dev.tf`,
-  1 TB ceiling); pending push/merge → `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/` → Argus boot-download.
+  the per-cell N-way MLP (`nway_clf.py`) and the old binary LR badge. Generated-cell bag scoring PARKED: the
+  mask-mimic works on real cells (95–100%) + POLR1B generated, but segmenting fake cells is too fragile →
+  waiting for SetTransformer v2 (no-mask classifier). See LATEST.
+- **Infra PR (#51): OPENED + ACCEPTED/MERGED** — `diffex-viewer-dev.tf` in `sfbiohub-infra` (S3 bucket
+  `diffex-viewer-dev` + nonprod read-only IRSA role `biohub-nonprod-diffex-viewer` for SA `diffex-viewer` in
+  ns `argus-diffex-viewer-rdev` + read-write uploader role; mirrors `proteohub-argus-s3-reader-dev.tf`, 1 TB
+  ceiling). `terraform apply` provisions the bucket/roles → then `aws s3 sync viewer_assets/ s3://diffex-viewer-dev/`
+  → Argus boot-download. Next: create the app repo + `argus register` (see App-staging build-log entry).
 
 ### OPEN BUILDOUT
 1. **Full NTC drain** — seed is top-8 genes/marker; expand to ALL ~1000 genes (`submit seed --all-genes`, ~500 GB).
 2. **Full A→B anchors** — `submit anchors --k 10` across all markers + complexes.
 3. **Fluor complex traversals** — per-marker `grain=complex` (currently phase-complex only).
-4. **Wire SetTransformer bag score** into `precompute` + a per-α curve panel (needs Alex's v2 CellDINO extraction).
-5. **S3 hosting** — push PR #51 → sync → make app Argus-ready (`biohub-argus-example-app` + Argus MCP).
+4. **Wire SetTransformer bag score** into `precompute` + a per-α curve panel — BLOCKED on **SetTransformer v2
+   (no-mask classifier)**; the mask path is too fragile on generated cells (see LATEST). Once v2 lands, unmasked
+   `embed_crops` bags score directly (no cellpose).
+5. **S3 hosting** — infra PR #51 MERGED. Argus app scaffold built (`/hpc/mydata/gav.sturm/diffex-viewer`, forked
+   from `czbiohub-sf/mops-viewer`). Remaining: `terraform apply` → create `czbiohub-sf/diffex-viewer` repo →
+   `argus register`/bootstrap (needs argus CLI) → upload `viewer_assets/` (or hand to Kyle) → PR+`stack` label. See build-log.
 6. **Centroid fallback** for cisGolgi/VIM/LMNB1 (see LATEST).
 7. **Multi-α montage** — `--alphas` flag looping per-α decodes + an α switch in the explorer.
 8. **Image-UMAP montage** (`czi-ai/latent-lens`) — idea track; needs full-gene coverage.
@@ -595,3 +616,21 @@ Attention heads where absent (v1: present only for phase geneKO genes with an np
 - **Pending:** centroid fallback for cisGolgi/VIM/LMNB1 (mAP present, no pma cells) from
   `cell_dino_features_v2/features_processed_<reporter>.h5ad` (embedding + crop metadata); SetTransformer
   bag scoring parked on Alex's v2 CellDINO extraction.
+
+### 2026-07-09 — Argus app staging (S3 hosting)
+- **Infra PR #51 OPENED + ACCEPTED/MERGED** (`sfbiohub-infra`, branch `diffex-viewer-dev`,
+  `terraform/accounts/biohub-nonprod/diffex-viewer-dev.tf`): S3 bucket `diffex-viewer-dev`, read-only IRSA
+  role `biohub-nonprod-diffex-viewer` (trusts SA `diffex-viewer` in ns `argus-diffex-viewer-rdev`), read-write
+  uploader role `diffex-viewer-dev-readwrite`. 1 TB ceiling. → `terraform apply` provisions bucket+roles.
+- **App scaffold built** at `/hpc/mydata/gav.sturm/diffex-viewer` — forked from `czbiohub-sf/mops-viewer`
+  (same Argus+S3 pattern; names already align with the `.tf`). Serving layer swapped Gradio → **static nginx**:
+  - `Dockerfile` (nginx, bakes `webapp/` shell) + `nginx.conf` (port 8080, `/healthz`) + `docker-entrypoint-diffex.sh`
+    (drops shell into the S3-populated webroot, starts nginx).
+  - `.infra/common.yaml`: aws-cli `fetch-assets` init container (`aws s3 cp s3://diffex-viewer-dev/ → /usr/share/nginx/html/`),
+    `web` emptyDir, serviceAccount `diffex-viewer`, OIDC proxy; `.infra/rdev/values.yaml` carries the read-only role ARN.
+  - `.argus-ci.yaml` app=`diffex-viewer`; `scripts/uploader/*` sync `viewer_assets/` (manifest.json at bucket ROOT) via the readwrite role; `DEPLOY.md` runbook.
+  - Static because the webapp reads assets by relative path from `manifest.json`; the S3 sync drops assets as siblings of the baked shell.
+- **Remaining to deploy:** `terraform apply` → create `czbiohub-sf/diffex-viewer` repo + push → `argus register app`
+  (team-sci-biohub) + bootstrap/reconcile `.github` (needs argus CLI, interactive) → upload `viewer_assets/` (our
+  role, or **Kyle from HPC** — he offered) → PR + `stack` label → Argus builds + deploys rdev behind Okta. Confirm
+  the registered namespace/SA matches `argus-diffex-viewer-rdev`/`diffex-viewer` before relying on the IRSA trust.

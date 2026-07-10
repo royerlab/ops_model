@@ -14,7 +14,7 @@ from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
 from ..classifier.config import slugify
 from . import catalog as C
-from .build_umap_montage import build_montage_web
+from .build_umap_montage import build_montage_grid, build_montage_web
 from .precompute import build_manifest, precompute_marker, precompute_target
 
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
@@ -51,6 +51,20 @@ def cmd_seed(args):
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
                                   score=not args.no_score), "seed"))
+    for d, mc, ch, rep in C.NO_PMA_MARKERS:                  # no-PMA markers: build from features_processed anndata
+        r = C.rep_of(dist, mc)
+        if not r or r not in dist.columns:
+            continue
+        if args.map_thr:
+            sc = dist[r]; tg = [g for g in sc.index[sc >= args.map_thr] if not str(g).startswith("NTC")]
+        else:
+            tg = C.top_genes(dist, r, args.n)
+        if tg:
+            jobs.append(_job(f"pm_nopma_{slugify(mc)[:16]}", precompute_marker,
+                             dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
+                                  ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
+                                  fluor_rows_h5ad=C.NO_PMA_H5AD.format(rep=rep),
+                                  score=not args.no_score), "seed"))
     if not args.map_thr:                                     # phase already fully built — only (re)seed with top-N mode
         jobs.append(_job("pm_phase_geneKO", precompute_marker,
                          dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
@@ -60,9 +74,11 @@ def cmd_seed(args):
     tgt = sum(len(j["kwargs"]["targets"]) for j in jobs)
     print(f"seed: {len(jobs)} per-marker jobs, {tgt} total targets"
           + (f" (mAP>={args.map_thr} filter)" if args.map_thr else f" (top-{args.n})"))
+    sync = getattr(args, "sync", False)                  # --sync: wait, then refresh manifest/attention/montages
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs",
                          slurm_params=_gpu(timeout_min=180, slurm_array_parallelism=args.parallel),
-                         log_dir="diffex_gifs", wait_for_completion=False)
+                         log_dir="diffex_gifs", wait_for_completion=sync,
+                         post_completion_callback=(lambda *_: run_full_sync()) if sync else None)
 
 
 def cmd_anchors(args):
@@ -100,31 +116,83 @@ def cmd_manifest(args):
 
 def cmd_montage(args):
     """Per-marker UMAP montage: place each gene's cached α-frame at its gene-UMAP coord. Layout is ALWAYS
-    the shared phase gene embedding (UMAP_H5AD); only the images swap per marker (modality). Builds phase +
-    every marker with geneKO traversals. No decode/re-embed — reads the traversal cache. CPU-only."""
+    the shared phase gene embedding (UMAP_H5AD); only the images swap per marker (modality). ONE SLURM job
+    per discrete montage (marker × emb × cell × α) for maximal concurrency; content-aware skip at submit
+    time so only stale montages are even queued. No decode/re-embed — reads the traversal cache. CPU-only."""
     import glob
+    import os
+    import shutil
+    import time
     from pathlib import Path
     va = f"{C.OUT}/viewer_assets"
+    # sweep orphan montage zarrs (transient intermediates now live in _montage_zarr, outside viewer_assets;
+    # each job deletes its own, but killed jobs leave them). Also sweep the legacy viewer_assets/_montage
+    # location for old stragglers. Skip any <10 min old so a concurrently-running build isn't disturbed.
+    now = time.time(); freed = 0
+    for zdir in (f"{C.OUT}/_montage_zarr", f"{va}/_montage"):
+        for z in glob.glob(f"{zdir}/*.zarr"):
+            if now - os.path.getmtime(z) > 600:
+                shutil.rmtree(z, ignore_errors=True); freed += 1
+    if freed:
+        print(f"[montage] swept {freed} orphan zarr intermediates")
     mods = ["phase"]                                     # phase + markers that have geneKO traversal frames
     for mdir in sorted(glob.glob(f"{va}/*/geneKO")):
         mod = Path(mdir).parent.name
-        if mod != "phase" and glob.glob(f"{mdir}/*/cell*/frame_*.webp"):
+        if mod != "phase" and any(e.is_dir() for e in os.scandir(mdir)):   # cheap: ≥1 gene dir (don't enumerate all frames)
             mods.append(mod)
     if args.markers:
         mods = [m for m in mods if m in args.markers or slugify(m) in args.markers]
-    jobs = []
+    jobs = []                                            # one job PER (marker, emb, cell, α) = a discrete unit
     for mod in mods:
+        gk = f"{va}/{mod}/geneKO"
+        cache_mtime = os.path.getmtime(gk) if os.path.isdir(gk) else 0   # bumps when a new gene traversal lands
         for emb in args.embeddings:
             for cell in args.cells:
                 for a in args.alphas:
-                    zarr = f"{va}/_montage/{mod}_geneKO_{emb}_cell{cell}_a{a:g}.zarr"
-                    jobs.append(_job(f"mtg_{mod[:12]}_{emb}_c{cell}_a{a:g}", build_montage_web,
-                                     dict(h5ad=UMAP_H5AD, out_zarr=zarr, cell=cell, alpha=a, embedding=emb, modality=mod), "montage"))
-    print(f"montage: {len(jobs)} montages across {len(mods)} markers (shared phase layout)")
+                    oz = f"{va}/_montage/{mod}_geneKO_{emb}_cell{cell}_a{a:g}.zarr"
+                    tj = f"{oz[:-5]}_tiles/tiles.json"
+                    if not args.force and os.path.exists(tj) and os.path.getmtime(tj) >= cache_mtime:
+                        continue                         # already reflects the current cache → don't even queue it
+                    jobs.append(_job(f"mtg_{mod[:10]}_{emb[:2]}_c{cell}_a{a:g}", build_montage_web,
+                                     dict(h5ad=UMAP_H5AD, out_zarr=oz, cell=cell, alpha=a, embedding=emb, modality=mod), "montage"))
+    print(f"montage: {len(jobs)} discrete jobs across {len(mods)} markers "
+          f"(≤{len(mods) * len(args.embeddings) * len(args.cells) * len(args.alphas)} combos; skipped up-to-date)")
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs",
-                         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 8, "mem_gb": 64, "timeout_min": 45,
-                                       "slurm_array_parallelism": min(len(jobs), 40)},
-                         log_dir="diffex_gifs", wait_for_completion=False)
+                         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 4, "mem_gb": 24, "timeout_min": 60,
+                                       "slurm_array_parallelism": args.parallel},
+                         log_dir="diffex_gifs", wait_for_completion=getattr(args, "wait", False))
+
+
+def run_full_sync():
+    """Refresh the entire viewer from the CURRENT cache (all incremental): manifest → attention render →
+    per-marker montages (full cell×α×emb grid). Safe to re-run; only new/missing assets are built.
+    Top-level (picklable) so it can be a submitit job func or a seed post-completion callback."""
+    import argparse
+    from .build_attention_heads import submit as attn_submit
+    # content-aware montage skip handles freshness (rebuilds only montages older than the marker's cache)
+    ns = argparse.Namespace(cells=list(range(20)), alphas=[1., 2., 3., 4., 5.],
+                            embeddings=["umap", "phate"], markers=None, force=False, wait=True, parallel=100)
+    print("[sync] 1/3 manifest"); cmd_manifest(ns)
+    print("[sync] 2/3 attention-head render"); attn_submit(parallel=40)      # waits + rebuilds index.json
+    print("[sync] 3/3 montages"); cmd_montage(ns)                            # waits
+    print("[sync] viewer refreshed")
+    return "sync complete"
+
+
+def cmd_sync(args):
+    """Make the viewer current. Inline by default; with --after <jobids>, submit a SLURM gate job that
+    runs the refresh automatically once those (seed) jobs finish (afterany dependency)."""
+    if getattr(args, "after", None):
+        ids = ":".join(str(j) for j in args.after)
+        print(f"[sync] gating on afterany:{ids} → will refresh when the seed build finishes")
+        submit_parallel_jobs(
+            jobs_to_submit=[{"name": "viewer_sync", "func": run_full_sync, "kwargs": {}, "metadata": {"stage": "sync"}}],
+            experiment="diffex_sync",
+            slurm_params={"slurm_partition": "cpu", "cpus_per_task": 4, "mem_gb": 16, "timeout_min": 600,
+                          "slurm_additional_parameters": {"dependency": f"afterany:{ids}"}},
+            log_dir="diffex_sync", wait_for_completion=False)
+    else:
+        run_full_sync()
 
 
 def _chunks(lst, n):
@@ -167,12 +235,13 @@ def cmd_phase_full(args):
 def main():
     ap = argparse.ArgumentParser(description="Build the DiffEx viewer cache")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=98); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=10); s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=98); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=10); s.add_argument("--sync", action="store_true", help="on completion, auto-refresh manifest + attention + montages"); s.set_defaults(fn=cmd_seed)
     a = sub.add_parser("anchors"); a.add_argument("--k", type=int, default=5); a.add_argument("--markers", nargs="*"); a.add_argument("--parallel", type=int, default=12); a.set_defaults(fn=cmd_anchors)
     m = sub.add_parser("manifest"); m.set_defaults(fn=cmd_manifest)
-    g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=[1]); g.add_argument("--alphas", type=float, nargs="+", default=[5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.set_defaults(fn=cmd_montage)
+    g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=list(range(20))); g.add_argument("--alphas", type=float, nargs="+", default=[1.0, 2.0, 3.0, 4.0, 5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.add_argument("--force", action="store_true", help="rebuild montages even if tiles already exist"); g.add_argument("--parallel", type=int, default=100, help="max concurrent SLURM tasks"); g.set_defaults(fn=cmd_montage)
     fc = sub.add_parser("fluor-complex"); fc.add_argument("--markers", nargs="*"); fc.add_argument("--batch", type=int, default=24); fc.set_defaults(fn=cmd_fluor_complex)
     pf = sub.add_parser("phase-full"); pf.add_argument("--chunk-size", type=int, default=50); pf.add_argument("--batch", type=int, default=24); pf.set_defaults(fn=cmd_phase_full)
+    sy = sub.add_parser("sync", help="refresh manifest + attention + montages from the current cache"); sy.add_argument("--after", nargs="+", help="SLURM job IDs to gate on (afterany); refreshes when they finish"); sy.set_defaults(fn=cmd_sync)
     args = ap.parse_args(); args.fn(args)
 
 

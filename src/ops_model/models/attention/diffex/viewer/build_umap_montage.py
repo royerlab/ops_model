@@ -8,6 +8,7 @@ centroids (those are all-cell means → ~13× too weak → collapsed morphs). La
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ from ..classifier.config import slugify
 from .precompute import VIEWER_ALPHAS
 
 OUT = "/hpc/projects/icd.fast.ops/models/diffex"
+ZARR_SCRATCH = f"{OUT}/_montage_zarr"   # transient montage zarrs live OUTSIDE viewer_assets so they never sync to the app
 
 
 def _embed_coords(ann, embedding, span=12.0):
@@ -35,6 +37,38 @@ def _embed_coords(ann, embedding, span=12.0):
         if nc[1] < mid[1]: c[:, 1] = lo[1] + hi[1] - c[:, 1]   # NTC → large y (bottom, since y maps top→bottom)
     lo = c.min(0); s = span / max((c.max(0) - lo).max(), 1e-9)
     return (c - lo) * s
+
+
+def build_layout(h5ad, out_dir, embeddings=("umap", "phate")):
+    """Emit the SHARED gene layout the live viewer places cache frames onto: gene → (nx, ny) in [0,1]
+    + categorical color fields, one small JSON per embedding. Replaces the per-montage tile precompute —
+    the layout is identical across every marker/cell/α (it's the phase gene embedding), so it's built once."""
+    import json
+    ann = ad.read_h5ad(h5ad); obs = ann.obs
+    color_fields = []                                    # same auto-detect as montage_to_tiles
+    for c in obs.columns:
+        s = obs[c]
+        if s.dtype.kind in "fiu":
+            continue
+        v = s.astype(str); n = v.nunique()
+        if 2 <= n <= 300 and v.str.startswith("[").mean() <= 0.3 and v.str.len().mean() <= 60:
+            color_fields.append(c)
+    _cat = lambda x: "" if str(x) in ("nan", "NaN", "None", "") else str(x)
+    os.makedirs(out_dir, exist_ok=True)
+    outs = []
+    for emb in embeddings:
+        c = _embed_coords(ann, emb); lo = c.min(0); rng = c.max(0) - lo; rng[rng == 0] = 1
+        genes = []
+        for i, g in enumerate(obs["perturbation"]):
+            rec = {"g": str(g), "nx": float((c[i, 0] - lo[0]) / rng[0]), "ny": float((c[i, 1] - lo[1]) / rng[1])}
+            for cf in color_fields:
+                rec[cf] = _cat(obs[cf].iloc[i])
+            genes.append(rec)
+        p = f"{out_dir}/layout_{emb}.json"
+        json.dump({"embedding": emb, "color_fields": color_fields, "genes": genes}, open(p, "w"))
+        print(f"[layout] {p}: {len(genes)} genes, {len(color_fields)} color fields")
+        outs.append(p)
+    return outs
 
 
 def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grain="geneKO",
@@ -54,10 +88,7 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
     for g, xy in gc.items():
         if str(g).startswith("NTC"):                      # NTC is split into ~50 NTC_grp* embedding nodes
             ntc.append((g, xy)); continue
-        p = f"{va}/{slugify(g)}/cell{cell}/frame_{ai:02d}.webp"
-        try:
-            Image.open(p)   # exists + readable
-        except Exception:
+        if not os.path.exists(f"{va}/{slugify(g)}/cell{cell}/frame_{ai:02d}.webp"):   # cheap stat, not Image.open
             continue
         genes.append(g); coords.append(xy); srcs.append((slugify(g), cell, ai))
     ntc_ref = srcs[0][0] if srcs else None
@@ -78,12 +109,40 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
     return out_zarr, genes
 
 
+def build_montage_grid(h5ad, montage_dir, modality, embedding, cells, alphas, force=False):
+    """One SLURM job: build every (cell, alpha) montage for one (marker, embedding). Content-aware skip:
+    a montage is rebuilt only if the marker's geneKO cache changed after it was last built (or force),
+    so re-runs after the cache grows only touch what's stale — nothing redundant."""
+    gk = f"{OUT}/viewer_assets/{modality}/geneKO"
+    cache_mtime = os.path.getmtime(gk) if os.path.isdir(gk) else 0   # bumps when a new gene traversal is added
+    outs = skipped = 0
+    for cell in cells:
+        for a in alphas:
+            oz = f"{montage_dir}/{modality}_geneKO_{embedding}_cell{cell}_a{a:g}.zarr"
+            tj = f"{oz[:-5]}_tiles/tiles.json"
+            if not force and os.path.exists(tj) and os.path.getmtime(tj) >= cache_mtime:
+                skipped += 1; continue                # montage already reflects the current cache
+            build_montage_web(h5ad, oz, cell=cell, alpha=a, embedding=embedding, modality=modality)
+            outs += 1
+    print(f"[montage] {modality}/{embedding}: built {outs}, {skipped} up-to-date")
+    return {"modality": modality, "embedding": embedding, "built": outs, "skipped": skipped}
+
+
 def build_montage_web(h5ad, out_zarr, cell=0, alpha=2.0, embedding="umap", modality="phase"):
     """One step for the viewer: harvest the cache → montage zarr → PNG tiles + labels (in `embedding`).
     `modality` selects which traversal frames to place (phase | slugified marker); the LAYOUT always
-    comes from the shared `h5ad` (phase gene embedding) so every marker shares the same gene positions."""
-    _, placed = montage_from_cache(h5ad, out_zarr, cell=cell, alpha=alpha, embedding=embedding, modality=modality)
-    return montage_to_tiles(out_zarr, h5ad, out_dir=str(out_zarr)[:-5] + "_tiles", placed=set(placed), embedding=embedding)
+    comes from the shared `h5ad` (phase gene embedding) so every marker shares the same gene positions.
+    `out_zarr` names the output; the served `_tiles/` go next to it (in viewer_assets), but the transient
+    `.zarr` intermediate is written to ZARR_SCRATCH (outside viewer_assets) and deleted after transcoding —
+    so no zarr ever lands in the served dir even if this job is killed mid-run."""
+    import shutil
+    tiles_dir = str(out_zarr)[:-5] + "_tiles"                    # served output (viewer_assets/_montage/<stem>_tiles)
+    os.makedirs(ZARR_SCRATCH, exist_ok=True)
+    scratch_zarr = f"{ZARR_SCRATCH}/{os.path.basename(out_zarr)}"   # transient zarr, outside viewer_assets
+    _, placed = montage_from_cache(h5ad, scratch_zarr, cell=cell, alpha=alpha, embedding=embedding, modality=modality)
+    tiles = montage_to_tiles(scratch_zarr, h5ad, out_dir=tiles_dir, placed=set(placed), embedding=embedding)
+    shutil.rmtree(scratch_zarr, ignore_errors=True)             # ~225MB each × thousands — never persisted
+    return tiles
 
 
 def montage_to_tiles(zarr_path, h5ad, out_dir=None, tile=512, placed=None,
@@ -101,6 +160,14 @@ def montage_to_tiles(zarr_path, h5ad, out_dir=None, tile=512, placed=None,
     if out.exists():
         shutil.rmtree(out)                          # clear stale tiles from prior builds (else orphan crops persist)
     out.mkdir(parents=True, exist_ok=True)
+    ann = ad.read_h5ad(h5ad); obs = ann.obs
+    # Only transcode tiles that actually contain a crop (sparse montage) — compute occupied (col,row)
+    # per level from the placed gene pixel positions instead of scanning the whole (mostly-empty) canvas.
+    coords = _embed_coords(ann, embedding)
+    pu = ext["px_per_umap"]; crop0 = int(at.get("crop_size", 256))
+    placed = placed or set()
+    px0 = [((coords[i, 0] - ext["xmin"]) * pu, (coords[i, 1] - ext["ymin"]) * pu)
+           for i, g in enumerate(obs["perturbation"]) if str(g) in placed]
     W0 = H0 = 0
     for k in levels:
         a = zg[k]                                     # (3, Y, X) float32 in [0,1]
@@ -108,16 +175,22 @@ def montage_to_tiles(zarr_path, h5ad, out_dir=None, tile=512, placed=None,
         if k == "0":
             W0, H0 = X, Y
         ld = out / f"L{k}"; ld.mkdir(exist_ok=True)
-        for row in range(0, Y, tile):
-            for col in range(0, X, tile):
-                blk = np.asarray(a[:, row:row + tile, col:col + tile])
-                if not blk.any():
-                    continue                          # skip background (sparse montage) → OSD treats as transparent
-                img = (np.clip(blk.transpose(1, 2, 0), 0, 1) * 255).astype(np.uint8)
-                Image.fromarray(img).save(ld / f"{col // tile}_{row // tile}.png")
+        ds = 2 ** int(k); half = crop0 / ds / 2 + tile   # +1 tile margin so we never clip a crop
+        occ = set()
+        for x, y in px0:
+            cx, cy = x / ds, y / ds
+            for col in range(max(0, int((cx - half) // tile)), int((cx + half) // tile) + 1):
+                for row in range(max(0, int((cy - half) // tile)), int((cy + half) // tile) + 1):
+                    if col * tile < X and row * tile < Y:
+                        occ.add((col, row))
+        for col, row in occ:
+            blk = np.asarray(a[:, row * tile:(row + 1) * tile, col * tile:(col + 1) * tile])
+            if not blk.any():
+                continue                              # margin over-includes; drop the truly-empty ones
+            img = (np.clip(blk.transpose(1, 2, 0), 0, 1) * 255).astype(np.uint8)
+            Image.fromarray(img).save(ld / f"{col}_{row}.png")
     # color-by fields: ALL usable categorical obs columns (auto-detected) — non-numeric, 2–300 distinct,
     # not list-like, not free-text. Covers complexes, all leiden/ontology resolutions, GO/Reactome/KEGG, etc.
-    ann = ad.read_h5ad(h5ad); obs = ann.obs
     if color_fields is None:
         color_fields = []
         for c in obs.columns:

@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>DiffEx Traversal Viewer</title>
-<link rel="stylesheet" href="style.css?v=52"/>
+<title>OPSin — OPS interpretability viewer</title>
+<link rel="stylesheet" href="style.css?v=65"/>
 </head>
 <body>
 <header>
-  <div><h1>DiffEx — Counterfactual Traversal Viewer</h1>
-  <span class="sub">CellDINO / SetTransformer phenotypes · w = 2 · α in NTC→KD gap units: α=1 = class centroid, |α|&gt;1 extrapolates</span></div>
+  <div><h1>OPSin<span style="color:var(--mut);font-weight:400"> · OPS interpretability viewer</span></h1>
+  <span class="sub">counterfactual traversals · gene embedding · attention heads · CellDINO / SetTransformer phenotypes</span></div>
   <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
 </header>
 
@@ -68,6 +68,7 @@
       <div class="grp">
         <label class="chk"><input type="checkbox" id="showscore" checked/> classifier score on images</label>
         <label class="chk"><input type="checkbox" id="showreal"/> show real cell row (vs generated)</label>
+        <label class="chk"><input type="checkbox" id="altanchor"/> only perturbations with alt anchors</label>
       </div>
       <div class="grp">
         <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
@@ -106,6 +107,12 @@
 
     <div class="tabpane hidden" id="tab-montage">
       <div class="hint">One NTC cell morphed toward <b>every gene</b>, each tile placed at that gene's embedding position — for the <b>selected marker</b> (phase by default). Scroll to zoom, drag to pan; hover a cell to see its gene.</div>
+      <label>Renderer
+        <select id="m-render">
+          <option value="tiles" selected>Montage (precomputed, multiscale)</option>
+          <option value="live">Live (cache frames, no build)</option>
+        </select>
+      </label>
       <label>Embedding
         <select id="m-emb">
           <option value="umap" selected>UMAP</option>
@@ -131,7 +138,8 @@
       </label>
       <label>Image opacity <input id="m-imgalpha" type="range" min="0" max="1" step="0.05" value="1"/></label>
       <label>Point opacity <input id="m-ptalpha" type="range" min="0" max="1" step="0.05" value="0.8"/></label>
-      <label>Zoom detail <span class="hint">(higher = coarser tiles longer)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.1" value="0.7"/></label>
+      <label class="tiles-only">Zoom detail <span class="hint">(higher = coarser tiles longer)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.1" value="0.7"/></label>
+      <label class="live-only">Tile size <input id="m-tilesize" type="range" min="0.004" max="0.1" step="0.002" value="0.02"/></label>
       <label>Color by <select id="m-color"><option value="none" selected>none</option></select></label>
       <label class="chk"><input type="checkbox" id="m-labels"/> label groups (text at group centroids)</label>
       <div class="hint" id="m-embed"></div>
@@ -174,7 +182,7 @@
     <div id="score-legend">classifier confidence (target class):&nbsp; 0%<span class="bar"></span>100%</div>
     <div id="grid"></div>
     <div id="meta"></div>
-    <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas></div>
+    <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas><canvas id="m-live"></canvas></div>
     <div id="attn-view"><div id="attn-head-lbl"></div><div id="attn-grid"></div></div>
   </main>
 
@@ -189,6 +197,6 @@
 <div id="ticktip"></div>
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
-<script src="app.js?v=52"></script>
+<script src="app.js?v=65"></script>
 </body>
 </html>

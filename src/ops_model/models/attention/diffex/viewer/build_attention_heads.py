@@ -111,22 +111,27 @@ def _render_one(path, out_dir, rankings, upsize, n_workers):
     return gene_max
 
 
-def render_shard(modality, grain, npz_paths, out_root=AH_ROOT, upsize=256, n_workers=8, use_rankings=False):
+def render_shard(modality, grain, npz_paths, out_root=AH_ROOT, upsize=256, n_workers=8, use_rankings=False, force=False):
     """SLURM job unit: render a list of npz for one (modality, grain) into <out_root>/<modality>/<grain>/<key>/.
-    Skips unreadable npz loudly (16 phase genes are corrupt at source). Returns a small summary."""
+    Incremental by default (skips keys whose heads.json already exists); `force` re-renders. Skips
+    unreadable npz loudly (corrupt-at-source). Returns a small summary."""
     rankings = json.load(open(RANKINGS)) if (use_rankings and os.path.exists(RANKINGS)) else {}
     base = Path(out_root) / modality / grain
-    done, bad = [], []
+    done, bad, skip = [], [], 0
     for p in npz_paths:
         key = Path(p).stem
+        out_dir = base / key
+        if not force and (out_dir / "heads.json").exists():
+            skip += 1
+            continue
         try:
-            _render_one(p, base / key, rankings, upsize, n_workers)
+            _render_one(p, out_dir, rankings, upsize, n_workers)
             done.append(key)
         except Exception as e:
             bad.append(key)
             print(f"[attn] SKIP {modality}/{grain}/{key}: {type(e).__name__}")
-    print(f"[attn] {modality}/{grain}: {len(done)} rendered, {len(bad)} skipped")
-    return {"modality": modality, "grain": grain, "rendered": len(done), "bad": bad}
+    print(f"[attn] {modality}/{grain}: {len(done)} rendered, {skip} already-present, {len(bad)} unreadable")
+    return {"modality": modality, "grain": grain, "rendered": len(done), "skipped": skip, "bad": bad}
 
 
 def build_index(out_root=AH_ROOT):
@@ -150,8 +155,9 @@ def build_index(out_root=AH_ROOT):
     return f"{out_root}/index.json"
 
 
-def submit(dry_run=False, parallel=40, chunk=150, local=False, upsize=256):
-    """Fan out render_shard over all four trees (chunked), then aggregate index.json."""
+def submit(dry_run=False, parallel=40, chunk=150, local=False, upsize=256, force=False):
+    """Fan out render_shard over all four trees (chunked), then aggregate index.json. Incremental by
+    default — only new/unrendered npz are processed, so re-running picks up Kevin's newly-dumped markers."""
     jobs = []
     for modality, grain, cache in sources():
         paths = sorted(glob.glob(f"{cache}/*.npz"))
@@ -160,7 +166,7 @@ def submit(dry_run=False, parallel=40, chunk=150, local=False, upsize=256):
             jobs.append({"name": f"ah_{modality[:12]}_{grain[:2]}_{i // chunk}",
                          "func": render_shard,
                          "kwargs": dict(modality=modality, grain=grain, npz_paths=paths[i:i + chunk],
-                                        use_rankings=use_r, upsize=upsize),
+                                        use_rankings=use_r, upsize=upsize, force=force),
                          "metadata": {"modality": modality, "grain": grain}})
     total = sum(len(glob.glob(f'{c}/*.npz')) for _, _, c in sources())
     print(f"[attn] {len(jobs)} shard jobs across {len(sources())} trees ({total} npz, chunk={chunk})")
@@ -186,6 +192,7 @@ if __name__ == "__main__":
     r.add_argument("--parallel", type=int, default=40)
     r.add_argument("--chunk", type=int, default=150)
     r.add_argument("--upsize", type=int, default=256)
+    r.add_argument("--force", action="store_true", help="re-render even if heads.json already exists")
     sub.add_parser("index", help="(re)aggregate index.json from rendered dirs")
     args = ap.parse_args()
     if args.cmd == "index":
@@ -193,4 +200,4 @@ if __name__ == "__main__":
     else:
         submit(dry_run=getattr(args, "dry_run", False), parallel=getattr(args, "parallel", 40),
                chunk=getattr(args, "chunk", 150), local=getattr(args, "local", False),
-               upsize=getattr(args, "upsize", 256))
+               upsize=getattr(args, "upsize", 256), force=getattr(args, "force", False))
