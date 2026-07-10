@@ -53,6 +53,7 @@ def pca_sweep_pooled_signal(
     cells_per_guide: int = 250,
     agg_method: str = "mean",
     apply_iss_sidecar: bool = False,
+    cell_paths: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -110,12 +111,19 @@ def pca_sweep_pooled_signal(
         f"Processing signal group: {signal} ({n_exps} experiments, features: {feature_dir})"
     )
 
+    def _resolve(exp_: str, ch_: str):
+        """Explicit-path override (external mode) else standard discovery."""
+        if cell_paths and (exp_, ch_) in cell_paths:
+            _pp = Path(cell_paths[(exp_, ch_)])
+            return _pp if _pp.exists() else None
+        return find_cell_h5ad_path(exp_, ch_, storage_roots, feature_dir, maps_path)
+
     # --- Pass 1: Lightweight pre-scan for cell counts (no full matrix load) ---
     import h5py
 
     exp_cell_counts = {}  # (exp, ch) -> n_cells
     for exp, ch in exp_channel_pairs:
-        cell_file = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+        cell_file = _resolve(exp, ch)
         if cell_file is not None:
             try:
                 with h5py.File(cell_file, "r") as f:
@@ -140,7 +148,7 @@ def pca_sweep_pooled_signal(
         for exp, ch in exp_channel_pairs:
             if (exp, ch) not in exp_cell_counts or exp_cell_counts[(exp, ch)] == 0:
                 continue
-            path = find_cell_h5ad_path(exp, ch, storage_roots, feature_dir, maps_path)
+            path = _resolve(exp, ch)
             if path is None:
                 continue
             try:
@@ -240,15 +248,14 @@ def pca_sweep_pooled_signal(
             # carry stale labels into PCA + aggregation. See
             # ops_model.data.iss_drift_fix for how the sidecars are built.
             from ops_model.features.anndata_utils import load_features_corrected
-            cell_path = find_cell_h5ad_path(
-                exp, ch, storage_roots, feature_dir, maps_path
-            )
+            cell_path = _resolve(exp, ch)
             adata = (
                 load_features_corrected(cell_path, drop_orphans=True)
                 if cell_path is not None else None
             )
         else:
-            adata = load_cell_h5ad(exp, ch, storage_roots, feature_dir, maps_path)
+            _cp = _resolve(exp, ch)
+            adata = ad.read_h5ad(_cp) if _cp is not None else None
         if adata is None:
             continue
 

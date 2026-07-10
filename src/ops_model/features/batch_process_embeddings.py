@@ -28,8 +28,7 @@ from datetime import datetime
 import yaml
 
 
-from ops_model.features.evaluate_embeddings import process_embedding_csv
-from ops_model.features.evaluate_cp import process
+from ops_model.features.processing_common import process_features_csv
 
 
 # Base directory for OPS experiments
@@ -144,10 +143,7 @@ def process_experiment(
         # Process
         print(f"\nProcessing {feature_type} features...")
         try:
-            if feature_type == "cellprofiler":
-                adata = process(str(csv_path), config_path=config_path)
-            else:
-                adata = process_embedding_csv(str(csv_path), config_path=config_path)
+            adata = process_features_csv(str(csv_path), config_path=config_path)
             print(f"✓ Processing complete")
         except Exception as e:
             print(f"✗ Processing failed: {e}")

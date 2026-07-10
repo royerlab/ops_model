@@ -17,7 +17,7 @@ from ops_model.post_process.anndata_processing.anndata_validator import AnndataV
 from ops_model.eval.metrics import mean_cosine_sim_within_groups
 
 MANUAL_ANNOTATION_YAML_PATH = (
-    "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+    "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
 )
 
 

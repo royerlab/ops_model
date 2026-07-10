@@ -50,7 +50,7 @@ DISCORDANCE_THRESHOLD = 0.15
 TOP_N_LABELS = 10
 SLOPE_MAX_BG = 120
 
-_CHAD_YAML = "/hpc/projects/icd.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
+_CHAD_YAML = "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v4.yml"
 _EBI_YAML = (
     "/hpc/projects/icd.fast.ops/configs/gene_clusters/"
     "EBI_complexes_v1_old_gene_names.yaml"

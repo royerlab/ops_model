@@ -7,7 +7,7 @@ against real data:
      per gene knockout,
   2. run ``extract_*_features`` (crops are pulled from the real
      ``phenotyping_v3.zarr`` at the subsampled bboxes),
-  3. convert the resulting feature CSV to AnnData via ``process_embedding_csv``.
+  3. convert the resulting feature CSV to AnnData via ``process_features_csv``.
 
 Outputs at each step are verified, and everything is written under pytest's
 ``tmp_path`` — only the link CSV / zarr / checkpoints are read.
@@ -35,7 +35,7 @@ import yaml
 from ops_model.models.cell_dino import extract_cell_dino_features
 from ops_model.models.dinov3 import extract_dinov3_features
 from ops_model.models.subcell import extract_subcell_features
-from ops_model.features.evaluate_embeddings import process_embedding_csv
+from ops_model.features.processing_common import process_features_csv
 
 # Integration test: heavy + needs a GPU, so keep it out of the default run and
 # don't let incidental torch/monai/anndata warnings fail it (the suite treats
@@ -228,7 +228,7 @@ def test_extractor_end_to_end(spec, subsampled_link_dir, tmp_path, _require_gpu)
         assert meta_col in feats.columns, f"missing metadata column {meta_col}"
 
     # --- Step 3: feature CSV -> AnnData --------------------------------------
-    adata = process_embedding_csv(str(feature_csv), config_path=str(config_path))
+    adata = process_features_csv(str(feature_csv), config_path=str(config_path))
 
     anndata_dir = feature_csv.parent / "anndata_objects"
     produced = list(anndata_dir.glob("features_processed_*.h5ad"))
