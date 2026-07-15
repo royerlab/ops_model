@@ -55,7 +55,7 @@ PLOT_DIR = EXPANSION / "plots"
 
 K_BINS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 12500, 15000, 20000, 50000, 100000]
 PERCENTILES = [10, 20, 25, 30, 40, 50]
-HEADS = ("ebi", "chad", "geneko")
+HEADS = ("ebi", "chad", "geneko", "set_accuracy", "set_accuracy_ebi")
 
 
 # ---------------------------------------------------------------------------
@@ -84,25 +84,28 @@ def _open_concat(exps: Optional[List[str]] = None) -> ad.AnnData:
     return ad.concat(adatas, axis=0, join="outer", merge="first", index_unique=None)
 
 
-def _uncovered_gene_cells(obs: pd.DataFrame, rank_col: str) -> np.ndarray:
+def _uncovered_gene_cells(obs: pd.DataFrame, rank_col: str,
+                            group_col: str = "perturbation") -> np.ndarray:
     """Positions of cells whose gene is NOT in the head's coverage (i.e. no
     cell anywhere in obs has a rank for that gene under this head).
 
-    Including these cells in the per-head sweep is what lets EBI/CHAD curves
-    saturate to the all-cells baseline at high K — the head's PMA panel only
-    covers ~300 of the 1001 genes, so without this the curve would be capped
-    by the head-covered subset.
+    ``group_col`` is which column defines "gene identity" for the head. For
+    set_accuracy_ebi we pass Alex's authoritative gene name column
+    (``set_accuracy_ebi_gene``) instead of ``perturbation`` because Alex's
+    sgRNA→gene lookup differs from the h5ad's for some cells (NTC reassignments,
+    barcode-mapping drift).
     """
     has = obs[rank_col].notna()
-    covered_genes = set(obs.loc[has, "perturbation"].astype(str).unique())
+    covered_genes = set(obs.loc[has, group_col].astype(str).unique())
     keep = (
         (obs["perturbation"] != "NTC")
-        & (~obs["perturbation"].astype(str).isin(covered_genes))
+        & (~obs[group_col].astype(str).isin(covered_genes))
     )
     return np.flatnonzero(keep.to_numpy())
 
 
-def _select_top_per_gene(obs: pd.DataFrame, rank_col: str, K: int) -> np.ndarray:
+def _select_top_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
+                          group_col: str = "perturbation") -> np.ndarray:
     """Top-K cells per gene for head-covered genes; ALL cells for genes the
     head doesn't cover (saturation parity with all-cells baseline).
     """
@@ -110,14 +113,15 @@ def _select_top_per_gene(obs: pd.DataFrame, rank_col: str, K: int) -> np.ndarray
     mask = obs[rank_col].notna() & (obs[f"{rank_col}_type"] == "top")
     if mask.any():
         sub = obs.loc[mask].sort_values(rank_col)
-        top_idx = sub.groupby("perturbation").head(K).index.to_numpy(dtype=np.int64)
+        top_idx = sub.groupby(group_col).head(K).index.to_numpy(dtype=np.int64)
     else:
         top_idx = np.array([], dtype=np.int64)
-    uncovered_idx = _uncovered_gene_cells(obs, rank_col)
+    uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
     return np.unique(np.concatenate([top_idx, uncovered_idx]))
 
 
-def _select_bottom_per_gene(obs: pd.DataFrame, rank_col: str, K: int) -> np.ndarray:
+def _select_bottom_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
+                             group_col: str = "perturbation") -> np.ndarray:
     """Bottom-K per gene (largest rank values) for head-covered genes; ALL
     cells for genes outside the head's panel.
 
@@ -128,10 +132,10 @@ def _select_bottom_per_gene(obs: pd.DataFrame, rank_col: str, K: int) -> np.ndar
     mask = obs[rank_col].notna()
     if mask.any():
         sub = obs.loc[mask].sort_values(rank_col, ascending=False)
-        bot_idx = sub.groupby("perturbation").head(K).index.to_numpy(dtype=np.int64)
+        bot_idx = sub.groupby(group_col).head(K).index.to_numpy(dtype=np.int64)
     else:
         bot_idx = np.array([], dtype=np.int64)
-    uncovered_idx = _uncovered_gene_cells(obs, rank_col)
+    uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
     return np.unique(np.concatenate([bot_idx, uncovered_idx]))
 
 
@@ -245,10 +249,22 @@ def _select_for_bin(obs: pd.DataFrame, bin_id: str, seed: int = 0) -> np.ndarray
         sel = _select_random_per_gene(obs, meta["K"], seed=seed)
     elif meta["direction"] in ("top", "low"):
         rank_col = f"{meta['head']}_rank"
-        if meta["direction"] == "top":
-            sel = _select_top_per_gene(obs, rank_col, meta["K"])
+        # For set_accuracy heads, group by Alex's authoritative gene name
+        # (attached alongside the rank), not the h5ad's perturbation. Alex's
+        # sgRNA→gene lookup differs from the h5ad's for some cells (NTC
+        # reassignments, barcode-mapping drift).
+        if meta["head"] == "set_accuracy_ebi":
+            group_col = "set_accuracy_ebi_gene"
+        elif meta["head"] == "set_accuracy":
+            group_col = "set_accuracy_gene"
         else:
-            sel = _select_bottom_per_gene(obs, rank_col, meta["K"])
+            group_col = "perturbation"
+        if meta["direction"] == "top":
+            sel = _select_top_per_gene(obs, rank_col, meta["K"],
+                                        group_col=group_col)
+        else:
+            sel = _select_bottom_per_gene(obs, rank_col, meta["K"],
+                                           group_col=group_col)
     elif meta["direction"] == "intersection_removed":
         sel = _select_intersection_removed(obs, P=meta["percentile"],
                                              K=meta["K"], seed=seed)
@@ -278,7 +294,11 @@ def build_bin_guide_means(bin_id: str, guide_dir: Path = GUIDE_DIR) -> Optional[
     # ---- Pass A: global obs table ----
     obs_cols = ["perturbation", "sgRNA",
                 "ebi_rank", "chad_rank", "geneko_rank",
-                "ebi_rank_type", "chad_rank_type", "geneko_rank_type"]
+                "ebi_rank_type", "chad_rank_type", "geneko_rank_type",
+                "set_accuracy_rank", "set_accuracy_rank_type",
+                "set_accuracy_gene",
+                "set_accuracy_ebi_rank", "set_accuracy_ebi_rank_type",
+                "set_accuracy_ebi_gene"]
     obs_blocks = []
     for exp_idx, p in enumerate(paths):
         a = ad.read_h5ad(p, backed="r")
