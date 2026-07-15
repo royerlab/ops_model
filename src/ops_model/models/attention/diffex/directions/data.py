@@ -26,9 +26,13 @@ def _gather_df(cfg):
     """target+control cell table — phase: grain parquet; fluor: marker CSV (cfg.marker_channel)."""
     cc = GRAINS[cfg.grain]["class_col"]
     if getattr(cfg, "marker_channel", None):        # fluorescent mode
-        cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
-        rows = pd.read_csv(cfg.fluor_csv, usecols=cols)
-        rows = rows[(rows["channel"] == cfg.marker_channel) & (rows["rank_type"] == "top")]
+        acc = getattr(cfg, "accuracy_fluor_csv", None)
+        if acc:                                     # accuracy variant: per-channel parquet (channel-filtered, class_col renamed)
+            rows = pd.read_parquet(acc)
+        else:
+            cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
+            rows = pd.read_csv(cfg.fluor_csv, usecols=cols)
+            rows = rows[(rows["channel"] == cfg.marker_channel) & (rows["rank_type"] == "top")]
 
         def top(value, label):
             d = rows[rows[cc] == value].sort_values("rank").head(cfg.n_per_class)
@@ -39,8 +43,9 @@ def _gather_df(cfg):
         return pd.concat([top(cfg.target, 1), top(cfg.control, 0)], ignore_index=True)
 
     g = GRAINS[cfg.grain]                            # phase mode
-    pos = _top_cells(g["parquet"], g["class_col"], cfg.target, cfg.n_per_class); pos["label"] = 1
-    ctl = _top_cells(g["parquet"], g["class_col"], cfg.control, cfg.n_per_class); ctl["label"] = 0
+    pq = getattr(cfg, "accuracy_parquet", None) or g["parquet"]   # accuracy variant overrides the attention parquet (both A & B)
+    pos = _top_cells(pq, g["class_col"], cfg.target, cfg.n_per_class); pos["label"] = 1
+    ctl = _top_cells(pq, g["class_col"], cfg.control, cfg.n_per_class); ctl["label"] = 0
     return pd.concat([pos, ctl], ignore_index=True)
 
 

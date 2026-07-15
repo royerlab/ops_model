@@ -266,7 +266,8 @@ def _pair_slug(target, control=None):
 
 
 def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, channel=None,
-           fluor_csv=None, control=None, num_workers=None, return_images=False):
+           fluor_csv=None, control=None, num_workers=None, return_images=False,
+           accuracy_parquet=None, variant=None, accuracy_fluor_csv=None):
     """Expensive per-target setup shared by all cells: gather + direction + model.
     Fluor: pass marker_channel (fluor-CSV channel) + channel (raw GFP/mCherry) + the marker's
     DiffAE via ckpt. Fluor gets its own out dir (<slug>__<channel>) + cache so it never
@@ -288,10 +289,14 @@ def _setup(grain, target, out_root, device, ckpt=None, marker_channel=None, chan
         cfg.control = control
     if num_workers is not None:
         cfg.num_workers = num_workers
+    if accuracy_parquet:
+        cfg.accuracy_parquet = accuracy_parquet       # accuracy-variant cell selection (both A & B)
+    if accuracy_fluor_csv:
+        cfg.accuracy_fluor_csv = accuracy_fluor_csv   # fluor accuracy: per-channel parquet (anchor gather)
     slug = _pair_slug(target, control)
     # modality-first layout: directions/<phase|marker>/<grain>/<slug> — keeps each modality's
     # per-target listing separate (phase not overwhelmed by per-marker copies).
-    modality = slugify(cfg.marker_channel) if cfg.marker_channel else "phase"
+    modality = (slugify(cfg.marker_channel) if cfg.marker_channel else "phase") + (f"_{variant}" if variant else "")
     out = Path(out_root) / "directions" / modality / grain / slug
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)          # brand-new targets have no cache dir yet
