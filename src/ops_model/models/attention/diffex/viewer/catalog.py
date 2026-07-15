@@ -42,6 +42,16 @@ COMPLETE_LAUNCH = {
     "fluor_ER_golgi_bridge_VAPA", "fluor_F_actin_Phalloidin", "fluor_cell_proliferation_marker_MKI67",
     "fluor_Nucleus_Hoechst", "fluor_Nucleoli_NPM1", "fluor_Plasma_Membrane_Wheat_Germ_Agglutinin", "fluor_NFkB_NFkB__mouse_488",
 }
+# no-PMA markers: NOT in Alex's attention CSV (built after it) → traversals built from the per_signal
+# `features_processed` anndata, centroid-ranked (see precompute._rows_from_anndata).
+# (generator dir, marker_channel [→ dist reporter], raw channel, features_processed reporter for the h5ad).
+NO_PMA_H5AD = ("/hpc/projects/icd.fast.ops/ops0*/3-assembly/cell_dino_features_v2/"
+               "anndata_objects/features_processed_{rep}.h5ad")
+NO_PMA_MARKERS = [
+    ("fluor_cisGolgi_mStayGold", "cis-Golgi_mStayGold-CENPRaltORF", "GFP", "mStayGold-CENPRaltORF"),
+    ("fluor_VIM", "intermediate filaments_VIM", "GFP", "VIM"),
+    ("fluor_LMNB1", "laminin_LMNB1", "GFP", "LMNB1"),
+]
 # early (pre-launch) fluorescent markers: (generator dir, marker_channel, raw channel) recovered from training pickles
 EARLY_MARKERS = [
     ("fluor_NucleoLive", "nucleus_NucleoLIVE Live Cell dye", "mCherry"),
@@ -102,9 +112,11 @@ def rep_of(dist, marker_channel):
     return {c.replace(", ", "_"): c for c in dist.columns}.get(marker_channel) or FIXED_REP.get(marker_channel)
 
 
-def complete_markers(min_ep=98):
-    """[(generator_dir, marker_channel, raw_channel)] for fluorescent markers whose generator has
-    trained to ≥min_ep (detected on disk, so `submit seed` auto-includes newly-finished markers)."""
+def complete_markers(min_ep=0):
+    """[(generator_dir, marker_channel, raw_channel)] for fluorescent markers with a trained generator
+    (diffae_best.pt + train_state on disk). Default min_ep=0 = no epoch gate — epoch count is NOT a quality
+    signal (cond_ratio peaks ~ep40-55 then declines; diffae_best.pt banks the peak). Pass min_ep only to
+    re-impose a floor. `submit seed` auto-includes any marker with a checkpoint."""
     import os
     import torch
     launch = json.load(open(LAUNCH_JSON))
@@ -162,11 +174,27 @@ def dist_map_for_assets(viewer_assets):
     import glob
     dist = dist_matrix()
     dd = dist.drop(index=[g for g in dist.index if str(g).startswith("NTC")], errors="ignore")
+    try:
+        cx = complex_dist()                                   # complex × reporter EBI mAP (complexes aren't in the gene matrix)
+    except Exception:
+        cx = None
+    try:
+        mb = json.load(open(f"{viewer_assets}/_minibinder_meta.json"))   # minibinders → per-binder cell_score
+    except Exception:
+        mb = {}
     out = {}
     for mj in glob.glob(f"{viewer_assets}/*/*/*/meta.json"):
         m = json.load(open(mj))
         rep = (rep_of(dist, m["marker_channel"]) if m.get("marker_channel") else "Phase")
-        if rep in dd.columns and m["target"] in dd.index:
+        if m["grain"] == "minibinder":                        # minibinders → cell_score (no mAP)
+            if m["slug"] in mb:
+                out[(m["modality"], m["grain"], m["slug"])] = float(mb[m["slug"]]["cell_score"])
+        elif m["grain"] == "complex":                         # complexes → EBI complex mAP
+            if cx is not None and m["target"] in cx.index and rep in cx.columns:
+                v = cx.at[m["target"], rep]
+                if pd.notna(v):
+                    out[(m["modality"], m["grain"], m["slug"])] = float(v)
+        elif rep in dd.columns and m["target"] in dd.index:   # geneKO → distinctiveness mAP
             v = dd.at[m["target"], rep]
             if pd.notna(v):
                 out[(m["modality"], m["grain"], m["slug"])] = float(v)

@@ -62,9 +62,11 @@ def _rows_from_anndata(h5ad_glob, marker_channel, cc, n_keep=1000):
         a = ad.read_h5ad(f)
         X = np.asarray(a.X if a.X is not None else a.obsm["X_pca"], dtype=np.float32)
         ob = a.obs
+        # obs['well'] is the mashed 'A/2/0_ops0139_20260325' → keep just the row/col/fov position path
+        well = ob["well"].astype(str).str.extract(r"^([A-Za-z]+/\d+/\d+)")[0]
         df = pd.DataFrame({cc: ob["perturbation"].astype(str).values,
                            "experiment": ob["experiment"].astype(str).values,
-                           "well": ob["well"].astype(str).values,
+                           "well": well.values,
                            "segmentation": ob["label_int"].values,
                            "x_pheno": ob["x_position"].values, "y_pheno": ob["y_position"].values})
         rank = np.empty(len(df), int)
@@ -79,8 +81,9 @@ def _rows_from_anndata(h5ad_glob, marker_channel, cc, n_keep=1000):
     return out
 
 
-def _gather_class(cfg, value, n):
-    """Materialize + CellDINO-embed the top-n attention cells of ONE class → (images, embs)."""
+def _gather_class(cfg, value, n, parquet=None):
+    """Materialize + CellDINO-embed the top-n cells of ONE class → (images, embs). `parquet` overrides
+    the grain's attention parquet (phase only) — e.g. an accuracy-ranked table for the top-accuracy variant."""
     cc = GRAINS[cfg.grain]["class_col"]
     if getattr(cfg, "marker_channel", None):
         pre = getattr(cfg, "_fluor_rows", None)          # per-marker preloaded rows (read the 12GB CSV ONCE)
@@ -91,7 +94,7 @@ def _gather_class(cfg, value, n):
         rows = pre[pre[cc].astype(str) == str(value)].sort_values("rank").head(n)
         rows = rows.rename(columns={cc: "cls"}).copy()
     else:
-        rows = _top_cells(GRAINS[cfg.grain]["parquet"], cc, value, n)   # returns 'cls' + base cols
+        rows = _top_cells(parquet or GRAINS[cfg.grain]["parquet"], cc, value, n)   # returns 'cls' + base cols
     if rows.empty:
         H = cfg.crop_size
         return np.empty((0, 1, H, H), np.float32), np.empty((0, 1024), np.float32)
@@ -105,7 +108,8 @@ def _gather_class(cfg, value, n):
 def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, channel="Phase2D",
                       fluor_csv=None, control="NTC", n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
-                      load_workers=12, n_per_class=1000, fluor_rows_h5ad=None):
+                      load_workers=12, n_per_class=1000, fluor_rows_h5ad=None,
+                      accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -122,12 +126,17 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         if fluor_rows_h5ad:                              # no pma CSV (cisGolgi/VIM/LMNB1) → anndata + centroid rank
             cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
             print(f"[fluor] {len(cfg._fluor_rows)} '{marker_channel}' rows from anndata (centroid-ranked)")
+        elif accuracy_fluor_csv:                         # fluor ACCURACY ranking (ebi_class_channel): label_name→class, per-complex rank
+            _a = pd.read_csv(accuracy_fluor_csv, usecols=["label_name", "channel", "experiment", "well", "x_pheno", "y_pheno", "segmentation_id", "score", "rank"])
+            _a = _a[_a["channel"] == marker_channel].rename(columns={"label_name": cc, "segmentation_id": "segmentation", "score": "pma_attention"})
+            _a["rank_type"] = "top"; cfg._fluor_rows = _a
+            print(f"[fluor-acc] {len(cfg._fluor_rows)} accuracy rows for '{marker_channel}' ({cfg._fluor_rows[cc].nunique()} complexes)")
         else:                                            # read the 12GB fluor CSV ONCE for this marker
             _cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
             _all = pd.read_csv(cfg.fluor_csv, usecols=_cols)
             cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
             print(f"[fluor] preloaded {len(cfg._fluor_rows)} '{marker_channel}' top rows (1 CSV read for all targets)")
-    modality = slugify(marker_channel) if marker_channel else "phase"
+    modality = (slugify(marker_channel) if marker_channel else "phase") + (f"_{variant}" if variant else "")
     al = sorted(alphas); A = len(al); H = cfg.crop_size
     anchor = "NTC" if (not control or str(control).upper() == "NTC") else slugify(control)
     realdir = Path(out_root) / "viewer_assets" / modality / "_anchors" / anchor
@@ -161,15 +170,15 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     for tgt in targets:
         slug = slugify(tgt) if anchor == "NTC" else f"{anchor}__to__{slugify(tgt)}"
         adir = Path(out_root) / "viewer_assets" / modality / grain / slug
-        if (adir / "meta.json").exists():           # resume: target already rendered
+        if not force and (adir / "meta.json").exists():   # resume: target already rendered (force = overwrite in place)
             print(f"[done] {modality}/{grain}/{slug}"); done += 1; continue
         # direction cache: (d_vec, gap) is CellDINO-derived + ckpt-independent → gather once, reuse
         dcache = Path(out_root) / "viewer_assets" / "_directions" / modality / grain / f"{slug}.npz"
-        if dcache.exists():
+        if not force and dcache.exists():
             z = np.load(dcache); d_vec = z["d_vec"]; gap = float(z["gap"]); lr_w = z["lr_w"]; lr_b = float(z["lr_b"])
             print(f"[cache] direction <- {dcache}")
         else:
-            kd_imgs, kd_embs = _gather_class(cfg, tgt, n_per_class)
+            kd_imgs, kd_embs = _gather_class(cfg, tgt, n_per_class, parquet=accuracy_parquet)
             if not len(kd_embs):
                 print(f"[skip] {tgt}: no cells"); continue
             embs = np.concatenate([kd_embs, ctrl_embs], 0)
@@ -302,20 +311,23 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
 def precompute_target(grain, target, ckpt, out_root, marker_channel=None, channel=None,
                       fluor_csv=None, control=None, n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
-                      load_workers=10, keep_crops=False):
+                      load_workers=10, keep_crops=False, accuracy_parquet=None, variant=None,
+                      accuracy_fluor_csv=None):
     """Decode + save the α-frame sequence for the first n_cells control cells of one
     (marker, target). Batched GPU decode, batched re-encode → per-image classifier
     confidence (sigmoid of the control→KD LR logit), threaded WebP save. Writes frames +
     meta.json + scores.json. control=None → NTC-anchored; else an A→B anchor class.
-    load_workers: parallel zarr crop-read workers (the gather dominates runtime)."""
+    load_workers: parallel zarr crop-read workers (the gather dominates runtime).
+    accuracy_parquet/variant: accuracy-selected cells (both A & B) into a variant modality (phase_topacc)."""
     ctx = _setup(grain, target, out_root, device, ckpt=ckpt, marker_channel=marker_channel,
                  channel=channel, fluor_csv=fluor_csv, control=control, num_workers=load_workers,
-                 return_images=True)
+                 return_images=True, accuracy_parquet=accuracy_parquet, variant=variant,
+                 accuracy_fluor_csv=accuracy_fluor_csv)
     dev, cfg, slug, _out, embs, labels, fixed_dir, gap, diffae, null_base, real_imgs = ctx
     ci = np.flatnonzero(labels == 0)
     ncell = min(n_cells, len(ci))
     H, al, A = cfg.crop_size, sorted(alphas), len(sorted(alphas))
-    modality = slugify(marker_channel) if marker_channel else "phase"
+    modality = (slugify(marker_channel) if marker_channel else "phase") + (f"_{variant}" if variant else "")
     adir = Path(out_root) / "viewer_assets" / modality / grain / slug
 
     # per-cell fixed noise (identity anchor); assemble all (cell, α) latents for batched decode
@@ -372,12 +384,19 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
     dist_map: optional {(modality, grain, slug): mAP} to attach for sorting targets.
     desc_map: optional {target_name: description} (gene function / complex members)."""
     root = Path(out_root) / "viewer_assets"
+    try:
+        mb = json.loads((root / "_minibinder_meta.json").read_text())   # per-binder cell_score/binder_prob/gene_target
+    except Exception:
+        mb = {}
     markers = {}
     for mj in sorted(root.glob("*/*/*/meta.json")):
         m = json.loads(mj.read_text())
         mod = m["modality"]
+        if mod == "phase_minibinder":                          # orphan from a cancelled mis-structured run (couldn't rm on shared FS); minibinders live under phase/minibinder
+            continue
+        label = m["marker_channel"] or "Phase"                 # phase = canonical (accuracy-selected as of 2026-07-12 swap)
         mk = markers.setdefault(mod, {"modality": mod, "marker_channel": m["marker_channel"],
-                                      "channel": m["channel"], "targets": []})
+                                      "label": label, "channel": m["channel"], "targets": []})
         key = (mod, m["grain"], m["slug"])
         adir = m["asset_dir"]
         if adir.startswith("viewer_assets/"):        # normalize pre-fix-era meta.json
@@ -387,11 +406,14 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
                               "has_real": m.get("has_real", False), "real_dir": m.get("real_dir"),
                               "n_cells": m["n_cells"], "asset_dir": adir, "alphas": m["alphas"],
                               "dist_map": (dist_map or {}).get(key),
-                              "desc": (desc_map or {}).get(m["target"])})
+                              "desc": (desc_map or {}).get(m["target"]),
+                              **({"binder_prob": mb[m["slug"]]["binder_prob"], "gene_target": mb[m["slug"]]["gene_target"],
+                                  "phenotype": mb[m["slug"]]["phenotype"], "cell_score": mb[m["slug"]]["cell_score"]}
+                                 if m["grain"] == "minibinder" and m["slug"] in mb else {})})
     for mk in markers.values():
         mk["targets"].sort(key=lambda t: (-(t["dist_map"] or -1), t["target"]))
     manifest = {"alphas": list(VIEWER_ALPHAS), "w": 2.0,
-                "markers": sorted(markers.values(), key=lambda x: x["marker_channel"] or "")}
+                "markers": sorted(markers.values(), key=lambda x: (x["marker_channel"] or "", x["modality"]))}
     out = root / "manifest.json"
     out.write_text(json.dumps(manifest, indent=2))
     n_t = sum(len(mk["targets"]) for mk in markers.values())

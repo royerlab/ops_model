@@ -41,7 +41,7 @@ def cmd_seed(args):
         rep = C.rep_of(dist, mc)
         if not rep or rep not in dist.columns:
             continue
-        if args.map_thr:                                     # full buildout: ALL genes the marker distinguishes >= thr
+        if args.map_thr is not None:                         # full buildout: ALL genes the marker distinguishes >= thr (0 → all ~1000)
             sc = dist[rep]
             tg = [g for g in sc.index[sc >= args.map_thr] if not str(g).startswith("NTC")]
         else:
@@ -55,7 +55,7 @@ def cmd_seed(args):
         r = C.rep_of(dist, mc)
         if not r or r not in dist.columns:
             continue
-        if args.map_thr:
+        if args.map_thr is not None:
             sc = dist[r]; tg = [g for g in sc.index[sc >= args.map_thr] if not str(g).startswith("NTC")]
         else:
             tg = C.top_genes(dist, r, args.n)
@@ -65,7 +65,7 @@ def cmd_seed(args):
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
                                   fluor_rows_h5ad=C.NO_PMA_H5AD.format(rep=rep),
                                   score=not args.no_score), "seed"))
-    if not args.map_thr:                                     # phase already fully built — only (re)seed with top-N mode
+    if args.map_thr is None:                                 # phase already fully built — only (re)seed with top-N mode
         jobs.append(_job("pm_phase_geneKO", precompute_marker,
                          dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
                               ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
@@ -73,11 +73,13 @@ def cmd_seed(args):
                          dict(grain="complex", targets=PHASE_COMPLEXES, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
     tgt = sum(len(j["kwargs"]["targets"]) for j in jobs)
     print(f"seed: {len(jobs)} per-marker jobs, {tgt} total targets"
-          + (f" (mAP>={args.map_thr} filter)" if args.map_thr else f" (top-{args.n})"))
+          + (f" (mAP>={args.map_thr} filter)" if args.map_thr is not None else f" (top-{args.n})"))
     sync = getattr(args, "sync", False)                  # --sync: wait, then refresh manifest/attention/montages
+    sp = _gpu(timeout_min=args.timeout)
+    if args.parallel is not None:                        # default None = no concurrency cap (all markers at once)
+        sp["slurm_array_parallelism"] = args.parallel
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs",
-                         slurm_params=_gpu(timeout_min=180, slurm_array_parallelism=args.parallel),
-                         log_dir="diffex_gifs", wait_for_completion=sync,
+                         slurm_params=sp, log_dir="diffex_gifs", wait_for_completion=sync,
                          post_completion_callback=(lambda *_: run_full_sync()) if sync else None)
 
 
@@ -235,7 +237,7 @@ def cmd_phase_full(args):
 def main():
     ap = argparse.ArgumentParser(description="Build the DiffEx viewer cache")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=98); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=10); s.add_argument("--sync", action="store_true", help="on completion, auto-refresh manifest + attention + montages"); s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=0, help="min generator epoch to include; default 0 = no epoch gate (diffae_best.pt banks the peak regardless — epoch != quality)"); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=None, help="max concurrent SLURM tasks; default None = no cap"); s.add_argument("--timeout", type=int, default=180, help="per-marker SLURM timeout (min); bump for full ~1000-gene buildouts"); s.add_argument("--sync", action="store_true", help="on completion, auto-refresh manifest + attention + montages"); s.set_defaults(fn=cmd_seed)
     a = sub.add_parser("anchors"); a.add_argument("--k", type=int, default=5); a.add_argument("--markers", nargs="*"); a.add_argument("--parallel", type=int, default=12); a.set_defaults(fn=cmd_anchors)
     m = sub.add_parser("manifest"); m.set_defaults(fn=cmd_manifest)
     g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=list(range(20))); g.add_argument("--alphas", type=float, nargs="+", default=[1.0, 2.0, 3.0, 4.0, 5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.add_argument("--force", action="store_true", help="rebuild montages even if tiles already exist"); g.add_argument("--parallel", type=int, default=100, help="max concurrent SLURM tasks"); g.set_defaults(fn=cmd_montage)

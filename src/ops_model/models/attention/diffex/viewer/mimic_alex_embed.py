@@ -179,6 +179,19 @@ def validate(exp="ops0031_20250424", genes=("HSPA5", "KIF11", "POLR1B", "TIMM23"
               f"| {cos_all[gi].mean():.3f}")
 
 
+def _crop_on_centroid(masked, masks, size=128):
+    """Crop size×size CENTERED ON each mask's centroid (matches training crops centered on the cell
+    at x_pheno,y_pheno) — not the frame center. Returns (cropped masked imgs, cropped masks)."""
+    from scipy import ndimage as ndi
+    H, W = masked.shape[-2:]; h = size // 2
+    oi, om = [], []
+    for im, mk in zip(masked, masks):
+        cy, cx = ndi.center_of_mass(mk) if mk.any() else (H / 2, W / 2)
+        cy = int(np.clip(round(cy), h, H - h)); cx = int(np.clip(round(cx), h, W - h))
+        oi.append(im[cy - h:cy + h, cx - h:cx + h]); om.append(mk[cy - h:cy + h, cx - h:cx + h])
+    return np.stack(oi), np.stack(om)
+
+
 def cellpose_masks(crops01, diameter=None, flow_threshold=0.4, batch=64):
     """Segment GENERATED phase crops (N,H,W) in [0,1] with Cellpose-SAM → central-cell boolean masks.
     The morphed cell is centered, so keep the label covering the crop centre (fallback: nearest label).
@@ -196,7 +209,11 @@ def cellpose_masks(crops01, diameter=None, flow_threshold=0.4, batch=64):
             if c == 0 and lab.max() > 0:                       # centre is background → nearest cell
                 idx = ndi.distance_transform_edt(lab == 0, return_distances=False, return_indices=True)
                 c = lab[tuple(v[cy, cx] for v in idx)]
-            out.append(lab == c if c > 0 else np.zeros_like(lab, bool))
+            if c > 0:
+                out.append(lab == c)
+            else:                                              # cellpose found nothing → central-disk fallback
+                yy, xx = np.ogrid[:H, :W]
+                out.append((yy - cy) ** 2 + (xx - cx) ** 2 <= (min(H, W) * 0.35) ** 2)
     return np.stack(out)
 
 
@@ -352,10 +369,11 @@ def score_generated(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), grain="geneKO"
         na, nc = frames.shape[:2]
         flat = frames.reshape(na * nc, *frames.shape[2:])   # full 256 frames
         masks = cellpose_masks(flat)                         # segment on the FULL FOV (robust)
-        masked = flat * masks
-        h = (masked.shape[1] - 128) // 2                     # crop to the 128 training FOV AFTER masking
-        masked = masked[:, h:h + 128, h:h + 128] if h > 0 else masked
+        masked, maskc = _crop_on_centroid(flat * masks, masks, 128)  # 128 crop CENTERED ON THE CELL
         raw, _ = _celldino(masked[:, None].astype(np.float32))
+        cov = maskc.reshape(len(maskc), -1).mean(1)
+        print(f"[diag] {gene}: mask coverage {cov.mean()*100:.1f}% (empty {int((cov<0.01).sum())}/{len(cov)}) "
+              f"| raw-emb norm {np.linalg.norm(raw,axis=1).mean():.1f}")
         emb = ((raw - mu) / sd).reshape(na, nc, -1)
         ptarget = [float(score_bags(m, e[None], channel_idx=ci)[0, g2i[gene]]) for e in emb]
         top = [i2g[int(score_bags(m, e[None], channel_idx=ci)[0].argmax())] for e in emb]
@@ -363,6 +381,40 @@ def score_generated(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), grain="geneKO"
         for a, p, t in zip(alphas, ptarget, top):
             bar = "#" * int(p * 40)
             print(f"  α={a:+.1f}  P={p:.3f} {bar:40s} argmax={t}{'  <TARGET' if t == gene else ''}")
+
+
+def viz_masks(genes=("HSPA5", "POLR1B", "KIF11", "TIMM23"), n_cells=6, alpha_idxs=(8, 16),
+              out="/hpc/projects/icd.fast.ops/models/diffex/mask_review.png"):
+    """Render a PNG montage of GENERATED crops with their Cellpose mask (red contour) + the 128px
+    center-crop box, for review. Rows = gene × α; cols = cells. α idx 8 = α0 (recon), 16 = α+5."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    plt.rcParams["pdf.fonttype"] = 42
+    rows = [(g, ai) for g in genes for ai in alpha_idxs]
+    fig, ax = plt.subplots(len(rows), n_cells, figsize=(n_cells * 2.1, len(rows) * 2.1))
+    for r, (gene, ai) in enumerate(rows):
+        frames, alphas = _load_gen(gene, n_cells=n_cells)
+        imgs = frames[ai]                                       # (n_cells, 256, 256)
+        masks = cellpose_masks(imgs)
+        from scipy import ndimage as ndi
+        H = imgs.shape[1]
+        for c in range(n_cells):
+            a = ax[r, c]
+            a.imshow(imgs[c], cmap="gray"); a.contour(masks[c], levels=[0.5], colors="red", linewidths=0.8)
+            cy, cx = ndi.center_of_mass(masks[c]) if masks[c].any() else (H / 2, H / 2)
+            cy = int(np.clip(round(cy), 64, H - 64)); cx = int(np.clip(round(cx), 64, H - 64))
+            a.add_patch(Rectangle((cx - 64, cy - 64), 128, 128, fill=False, ec="cyan", lw=0.8, ls="--"))
+            cov = masks[c].mean() * 100
+            a.set_xticks([]); a.set_yticks([])
+            if c == 0:
+                a.set_ylabel(f"{gene}\nα={alphas[ai]:+.0f}", fontsize=8)
+            a.set_title(f"{cov:.0f}%", fontsize=7)
+    fig.suptitle("Generated crops + Cellpose mask (red) + 128px crop box (cyan)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out, dpi=130, bbox_inches="tight")
+    print(f"[viz] {out}")
 
 
 def sweep(exp="ops0031_20250424", genes=("HSPA5", "POLR1B"), per_gene=150, run="miwkg1cy"):
