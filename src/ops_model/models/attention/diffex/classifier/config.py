@@ -19,6 +19,7 @@ PMA_PHASE_EBI = f"{_V4}/pma_phase_cells_ebi_all.parquet"
 GRAINS = {
     "geneKO": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},
     "complex": {"parquet": PMA_PHASE_EBI, "class_col": "predicted_class"},
+    "minibinder": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},   # NTC anchor from phase geneKO; targets supplied via accuracy_parquet
 }
 
 # Default output root; per-run results land under <root>/<grain>/<class-slug>/.
