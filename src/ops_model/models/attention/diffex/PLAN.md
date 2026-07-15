@@ -90,9 +90,15 @@ ACTIVE EFFORTS below for the current state.
   → Argus boot-download. Next: create the app repo + `argus register` (see App-staging build-log entry).
 
 ### OPEN BUILDOUT
-1. **Full NTC drain** — seed is top-8 genes/marker; expand to ALL ~1000 genes (`submit seed --all-genes`, ~500 GB).
+1. **Full NTC drain — LAUNCHED 2026-07-11** (master job `34826112`): all ~1000 geneKO genes/marker for the
+   46 valid-`rep` fluor markers (was top-8 seed; 42 were partial ~100–194, 4 hub markers already ~complete).
+   Command = `submit seed --map-thr 0 --timeout 720` (**not** `--all-genes`; that flag never existed — the
+   `--map-thr 0` = every gene with distinctiveness ≥ 0 = all ~1000). Resume is automatic (skips built targets).
+   The 4 rep=None markers (NFkB/RSP6/Rb/gH2AX) are intentionally excluded. ~500 GB. See build-log 2026-07-11.
 2. **Full A→B anchors** — `submit anchors --k 10` across all markers + complexes.
-3. **Fluor complex traversals** — per-marker `grain=complex` (currently phase-complex only).
+3. **Fluor complex traversals — DONE (resume 2026-07-11, master `34826156`)**: 98 EBI complexes × 50 markers
+   were already ~complete; only 5 markers partial (peroxisome_Peroxi, pS6, pRb, NPM3, SRRM2) → `submit
+   fluor-complex` resume finishes them. (phase complex = 190 = 98 NTC-anchored + 92 complex→complex anchor pairs.)
 4. **Wire SetTransformer bag score** into `precompute` + a per-α curve panel — BLOCKED on **SetTransformer v2
    (no-mask classifier)**; the mask path is too fragile on generated cells (see LATEST). Once v2 lands, unmasked
    `embed_crops` bags score directly (no cellpose).
@@ -634,3 +640,73 @@ Attention heads where absent (v1: present only for phase geneKO genes with an np
   (team-sci-biohub) + bootstrap/reconcile `.github` (needs argus CLI, interactive) → upload `viewer_assets/` (our
   role, or **Kyle from HPC** — he offered) → PR + `stack` label → Argus builds + deploys rdev behind Okta. Confirm
   the registered namespace/SA matches `argus-diffex-viewer-rdev`/`diffex-viewer` before relying on the IRSA trust.
+
+### 2026-07-11 — full 1k-geneKO + complex buildout LAUNCHED
+- **geneKO (master `34826112`, 49 jobs):** `submit seed --map-thr 0 --timeout 720` — all ~1000 geneKO
+  genes/marker for the 46 valid-`rep` fluor markers (49,000 targets). Resume skips the ~100–194 already
+  seeded per marker; the 4 hub markers (ChromaLIVE_561 957, LysoTracker 932, NPM3 930, NucleoLIVE 780)
+  were already near-complete. Runs with **no concurrency cap**.
+- **complex (master `34826156`, 50 jobs):** `submit fluor-complex` resume — nearly all 98 EBI complexes
+  were already built for ~45 markers; only 5 partial (peroxisome_Peroxi 35, pS6 35, pRb 59, NPM3 86, SRRM2 88).
+- **`submit.py` fixes made for this run:**
+  - **BUG:** `cmd_seed` used `if args.map_thr:` — `0` is falsy, so `--map-thr 0` silently fell back to top-8
+    (a wrong launch, 34826071, was cancelled). Changed all gates to `args.map_thr is not None` → `--map-thr 0`
+    now correctly means all ~1000 genes.
+  - **`--parallel` now defaults to `None` = no concurrency cap** (only sets `slurm_array_parallelism` when given),
+    so full buildouts don't need `--parallel 100`. Added `--timeout` (default 180) to override the per-marker wall.
+- **After the builds land:** `submit sync` to refresh manifest + attention + montages from the new cache.
+- The 4 rep=None markers (NFkB/RSP6/Rb/gH2AX) remain intentionally excluded (no v2 distinctiveness reporter column).
+
+### 2026-07-12 — DiffAE cond_ratio PEAKS EARLY then declines; check before extending/rebuilding
+Resumed the 6 under-trained (ep55) fluor DiffAEs to ep120 (dihedral). Key lesson: **most peaked their
+conditioning ratio around ep39–55 and then DECLINED** — extending to 120 did NOT improve them:
+| marker | best cond_ratio | peaked @ | verdict |
+|---|---|---|---|
+| CLTA | 0.390 | ep54 | plateaued/declined → no gain |
+| ATP1B3 | 0.171 | ep54 | plateaued/declined → no gain |
+| PSMB7 | 0.830 | ep54 | declined to ~0.49 → **stopped** |
+| TFRC | 0.320 | ep39 | declined to ~0.21 → **stopped** |
+| VAMP3 | 0.231 | ep54 | declined to ~0.17 → **stopped** |
+| **SLC3A2** | **0.277** | **ep109** | still climbing (>pre55 0.259) → **kept running** |
+
+**RULES (to not repeat the wasted compute):**
+1. `diffae_best.pt` is saved on BEST cond_ratio, so it already captures the peak regardless of final epoch —
+   a longer run does NOT give a better checkpoint unless best_ratio actually advanced.
+2. **Before extending training** past its current point, check the cond_ratio trajectory
+   (`torch.load(train_state)['history']`). If it peaked early and is declining, stop — the best is already banked.
+3. **Before clearing + rebuilding a marker's traversals** (1k geneKO / 98 complex / anchors), confirm the model
+   IMPROVED: compare `diffae_best.pt` mtime + best_ratio vs the value the existing traversals were built on.
+   Only rebuild if the best genuinely advanced PAST what the current traversals used.
+- **Rebuild status:** CLTA/ATP1B3/PSMB7/TFRC/VAMP3 = NO rebuild (best@≤ep54 already used by the Jul-11 traversals).
+  **SLC3A2 = the one rebuild candidate** — its best advanced to 0.277@ep109 (Jul 12) vs the Jul-11 traversal
+  checkpoint (~0.259); once it finishes, clear + rebuild ONLY SLC3A2's traversals with the improved model.
+### 2026-07-12 — accuracy-selected cell variant (Kevin's accuracy_ranking CSVs)
+Cell selection can now use **classifier-accuracy rank** instead of **attention rank**. Source =
+`…/alex_lin_attention/v4/accuracy_ranking/`: `pergene_phase_cell_rankings.csv` (geneKO·phase),
+`ebi_pergene_phase_cell_rankings.csv` (complex·phase), `ebi_class_channel_cell_rankings.csv` (complex·fluor,
+55 marker channels). NTC has NO accuracy data → NTC anchor always stays attention-sourced (shared/cached).
+- **phase** = side-by-side A/B: modality `phase` (attention, "phase_attention") vs `phase_topacc`
+  ("phase_accuracy"). Full 1k geneKO + 98 complex + 182 anchors built for phase_topacc. Hooks:
+  `_gather_class(parquet=…)`, `precompute_marker(accuracy_parquet=, variant=)`, and the anchor path
+  `_gather_df`/`_setup`/`precompute_target(accuracy_parquet=, variant=)`. Accuracy dirs have LARGER
+  control→KD gaps (cleaner separation) than attention.
+- **fluor** = REPLACED IN PLACE (no `_acc` duplicate), via `precompute_marker(accuracy_fluor_csv=, force=True)`.
+  **⚠️ COVERAGE SPLIT:** the fluor accuracy CSV only covers the complexes each marker actually distinguishes
+  (a SUBSET of the 98 — **median 13/marker, range 1–32, 53 distinct total**), so each fluor marker's `complex/` set is now MIXED:
+  accuracy-selected for its covered complexes, still attention-selected for the rest. This is intentional/interim
+  — we will get full 98-complex + 1k-geneKO accuracy coverage for every marker later and **rebuild the entire
+  cache anyway**, at which point the split disappears. geneKO fluor has NO accuracy CSV yet (phase-only + complex-fluor).
+- **fluor complex→complex ANCHORS: NET-NEW with accuracy** (didn't exist in attention). Per marker: top-5
+  accuracy-covered complexes (by `class_channel_acc`) → 20 A→B pairs, accuracy cells for both, via per-channel
+  parquets in `accuracy_ranking/fluor_complex_by_channel/`. 54 markers × ~20 ≈ 982 pairs → `<marker>/complex/<A__to__B>`.
+- **PHASE SWAP DONE (2026-07-12): accuracy is now the canonical `phase`.** `viewer_assets/phase` (attention) +
+  its `_directions/phase` archived to `viewer_assets_backup/{phase_attention,_directions_phase_attention}` (same FS,
+  reversible); `phase_topacc` → `phase`. Manifest label reverted to plain "Phase". NOTE: the separate build-cache
+  `…/diffex/directions/{phase,phase_topacc}/` (anchor gather cache, OUTSIDE viewer_assets) was NOT renamed — only the
+  served `viewer_assets` traversals + `_directions` were swapped; a future full rebuild regenerates it anyway.
+
+- **min-ep gate REMOVED as default** (`submit seed --min-ep` default 98→**0**; `catalog.complete_markers` default
+  98→**0**). Epoch count is NOT a quality signal — a marker peaking at ep54 is as usable as one at ep120, and
+  `diffae_best.pt` banks the peak. Inclusion now gates on **checkpoint presence** (diffae_best.pt + train_state),
+  not epoch. Pass `--min-ep N` only to re-impose a floor. (Right now all 56 markers pass either way since the
+  Jul-11 resume pushed the 6 past ep98, but the default now won't silently drop a future under-trained marker.)
