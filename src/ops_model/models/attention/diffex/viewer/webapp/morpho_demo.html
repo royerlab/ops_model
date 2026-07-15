@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>DiffEx — Morphometrics demo</title>
+<style>
+  body{margin:0;background:#0d0f14;color:#e6e9ef;font:13px/1.4 system-ui,sans-serif}
+  header{padding:10px 16px;border-bottom:1px solid #232833;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  h1{font-size:15px;margin:0;font-weight:600}
+  label{font-size:12px;color:#aab}
+  select,input{background:#161a22;color:#e6e9ef;border:1px solid #2a2f3a;border-radius:5px;padding:3px 6px}
+  #main{display:flex;gap:20px;padding:16px;align-items:flex-start;flex-wrap:wrap}
+  #grid{display:grid;grid-template-columns:repeat(3,180px);gap:10px}
+  .cellwrap{position:relative;width:180px;height:180px;border:1px solid #232833;border-radius:4px;overflow:hidden}
+  .cellwrap canvas{position:absolute;top:0;left:0;width:180px;height:180px}
+  #side{width:420px}
+  #refbox{max-width:380px}
+  #plot-cap{color:#eef1f6;font-size:14px;line-height:1.5;margin-top:8px}
+  #refgrid .rcell{width:180px;height:180px;border:1px solid #232833;border-radius:4px;overflow:hidden;position:relative}
+  #refgrid .rcell canvas{width:180px;height:180px}
+  #plot{width:420px;height:240px;background:#11141b;border:1px solid #232833;border-radius:6px}
+  .hint{color:#7a8296;font-size:11px}
+  #alpha-read{font-variant-numeric:tabular-nums;color:#26c6ff;font-weight:600}
+  .legend{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px}
+  .bar{width:120px;height:10px;border-radius:2px;background:linear-gradient(90deg,#000004,#420a68,#932667,#dd513a,#fca50a,#fcffa4)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Morphometrics — real organelle_profiler seg on generated cells</h1>
+  <label>Target <select id="target"></select></label>
+  <label>Feature <select id="ffeat" title="full org-profiler feature set; ★ = has real NTC→KO reference. Drives the plot + (where colorable) the overlay."></select></label>
+  <label>Overlay <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.75"/></label>
+  <label>α <input type="range" id="alpha" min="0" max="16" value="8"/> <span id="alpha-read">0.0</span></label>
+  <label>Plot <select id="units"><option value="pct" selected>% change</option><option value="raw">real units</option></select></label>
+</header>
+<div id="main">
+  <div id="grid"></div>
+  <div id="side">
+    <div class="hint">Blobs = real org-seg, colored by the selected feature (fixed clim, shared with the reference cells). Scrub α → watch the phenotype amplify.</div>
+    <div class="legend"><span id="clim-lo">–</span><span class="bar"></span><span id="clim-hi">–</span><span id="feat-lbl"></span></div>
+    <canvas id="plot" width="420" height="240"></canvas>
+    <div class="hint" id="plot-cap"></div>
+  </div>
+  <div id="refbox">
+    <div class="hint" style="color:#c9cfdc"><b>Real cells</b> (same org-seg + colormap)</div>
+    <div id="refgrid"></div>
+  </div>
+</div>
+<script>
+const BASE = "";                                   // served from viewer_assets root
+const TARGETS = [                                  // (label, morpho dir, traversal dir, marker root)
+  ["MICOS13 geneKO (mito·ChromaLIVE561, attention)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/geneKO/MICOS13", "mitochondria_ChromaLIVE_561_excitation/geneKO/MICOS13", "mitochondria_ChromaLIVE_561_excitation"],
+  ["TOMM20 geneKO (mito·ChromaLIVE561, attention)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/geneKO/TOMM20", "mitochondria_ChromaLIVE_561_excitation/geneKO/TOMM20", "mitochondria_ChromaLIVE_561_excitation"],
+  ["TIM23 complex (mito·ChromaLIVE561, ACCURACY)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation"],
+  ["CCT complex (NPM3 nucleoli, ACCURACY)", "_morphometrics/nucleolus_GC_NPM3/complex/Chaperonin_containing_T_complex", "nucleolus_GC_NPM3/complex/Chaperonin_containing_T_complex", "nucleolus_GC_NPM3"],
+];
+const AGGMAP = {area:"total_area", mean_int:"mean_int", ecc:"mean_ecc", skel:"total_skel", num_objects:"count"};  // per-organelle (or aggregate) → plot series
+let PORG = ["area","mean_int","ecc"];              // set dynamically per target (network → skel; vesicular → ecc)
+const INFERNO = [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]];
+const $ = id => document.getElementById(id);
+let M=null, feats=null, climCache={}, imgCache={};
+const PADn=i=>String(i).padStart(2,"0");
+const _loadImg=(url,key)=>new Promise(res=>{const im=new Image();im.onload=im.onerror=()=>{imgCache[key]=im;res();};im.src=url;});
+
+function lerp(a,b,t){return a+(b-a)*t}
+function inferno(t){t=Math.max(0,Math.min(1,t));const x=t*(INFERNO.length-1),i=Math.floor(x),f=x-i;
+  const a=INFERNO[i],b=INFERNO[Math.min(i+1,INFERNO.length-1)];
+  return `rgb(${lerp(a[0],b[0],f)|0},${lerp(a[1],b[1],f)|0},${lerp(a[2],b[2],f)|0})`;}
+
+async function loadTarget(idx){
+  const [,mdir,tdir]=TARGETS[idx];
+  M=await (await fetch(`${BASE}${mdir}/morpho.json`)).json();
+  M.mdir=mdir; M.tdir=tdir; M.root=TARGETS[idx][3];
+  M.ref=await fetch(`${BASE}${mdir}/_ref.json`).then(r=>r.ok?r.json():null).catch(()=>null);   // real reference cells
+  M.ff=await fetch(`${BASE}${mdir}/full_features.json`).then(r=>r.ok?r.json():null).catch(()=>null);   // FULL org-profiler feature set + real NTC→KO ref
+  if(M.ff){                                          // grouped plot-feature dropdown (★ = has real reference)
+    const order=["Network","Object morphology","Intensity","Texture","Cell"];
+    $("ffeat").innerHTML=order.filter(g=>M.ff.groups[g]).map(g=>
+      `<optgroup label="${g} (${M.ff.groups[g].length})">`+M.ff.groups[g].slice().sort().map(f=>
+        `<option value="${f}">${f.replace(/^(network_mcherry_seg_|obj_)/,"")}${M.ff.real_ref[f]?" ★":""}</option>`).join("")+`</optgroup>`).join("");
+    let bf=null,bs=-1;                               // default = ref'd feature whose generated α-trajectory swings most
+    for(const f in M.ff.agg){const s=M.ff.agg[f];if(!s||!M.ff.real_ref[f])continue;const z=s.length>>1;
+      const sw=Math.abs((s[s.length-1]-s[z])/((Math.abs(s[z])||1e-9)));if(isFinite(sw)&&sw>bs){bs=sw;bf=f;}}
+    if(bf)$("ffeat").value=bf;
+  }
+  // preload per-(cell,α) feats FIRST, so we can derive which per-organelle features exist
+  feats={};
+  await Promise.all(Array.from({length:M.n_cells},(_,c)=>Promise.all(M.alphas.map((_,ai)=>
+    fetch(`${BASE}${mdir}/cell${c}/a${String(ai).padStart(2,"0")}_feats.json`).then(r=>r.ok?r.json():{}).then(j=>{feats[`${c}_${ai}`]=j;})))));
+  // per-object feature keys available for OVERLAY coloring (network markers expose 'skel'; vesicular 'ecc')
+  let anyOrg=null; for(const k in feats){for(const id in feats[k]){anyOrg=feats[k][id];break;} if(anyOrg)break;}
+  M.objKeys = anyOrg ? new Set(Object.keys(anyOrg)) : new Set();
+  // PRELOAD all frames + actual-seg masks (generated + reference) ONCE → render/scrub is synchronous (no flicker)
+  imgCache={}; const jobs=[];
+  for(let c=0;c<M.n_cells;c++)for(let ai=0;ai<M.alphas.length;ai++){
+    jobs.push(_loadImg(`${BASE}${M.tdir}/cell${c}/frame_${PADn(ai)}.webp`,`g_${c}_${ai}_f`));
+    jobs.push(_loadImg(`${BASE}${M.mdir}/cell${c}/a${PADn(ai)}_labels.png`,`g_${c}_${ai}_m`));
+  }
+  if(M.ref)for(const grp of M.ref.groups)for(const cell of (M.ref.cells[grp]||[])){
+    const b=`${BASE}${M.mdir}/${M.ref.img_dir||"_ref"}/${grp}/cell${cell.cell}`;
+    jobs.push(_loadImg(`${b}.webp`,`r_${grp}_${cell.cell}_f`)); jobs.push(_loadImg(`${b}_labels.png`,`r_${grp}_${cell.cell}_m`));
+  }
+  await Promise.all(jobs);
+  buildGrid(); render(); renderRef();
+}
+
+function buildGrid(){
+  $("grid").innerHTML="";
+  for(let c=0;c<M.n_cells;c++){
+    const w=document.createElement("div");w.className="cellwrap";
+    w.innerHTML=`<canvas id="img${c}" width="256" height="256"></canvas>`;   // single canvas: frame + blobs
+    $("grid").appendChild(w);
+  }
+}
+function climOf(feat){
+  if(feat==="num_objects")return [0,1];                          // aggregate: overlay is uniform, no per-component range
+  if(climCache[feat])return climCache[feat];
+  let lo=1e9,hi=-1e9;
+  for(const k in feats)for(const id in feats[k]){const v=feats[k][id][feat];if(v<lo)lo=v;if(v>hi)hi=v;}
+  if(M.ref)for(const grp of M.ref.groups)for(const cell of (M.ref.cells[grp]||[]))for(const id in (cell.feats||{})){const v=cell.feats[id][feat];if(v!=null){if(v<lo)lo=v;if(v>hi)hi=v;}}
+  return climCache[feat]=[lo,hi];
+}
+function overlayBase(ff){                             // map a full feature → a per-object overlay-colorable key (else null = uniform)
+  if(!ff||!M.objKeys) return null; const h=k=>M.objKeys.has(k);
+  if(ff.includes("intensity")&&h("mean_int")) return "mean_int";
+  if(ff.includes("eccentric")&&h("ecc")) return "ecc";
+  if((ff.includes("branch")||ff.includes("skeleton"))&&h("skel")) return "skel";
+  if(ff.includes("area")&&h("area")) return "area";
+  return null;
+}
+function render(){
+  const ai=+$("alpha").value, op=+$("opacity").value, ff=$("ffeat").value;
+  $("alpha-read").textContent=M.alphas[ai].toFixed(1);
+  const ofeat=overlayBase(ff), uni=!ofeat, [lo,hi]=uni?[0,1]:climOf(ofeat);
+  if(uni){$("clim-lo").textContent="";$("clim-hi").textContent="all objects";}
+  else{$("clim-lo").textContent=lo.toFixed(1);$("clim-hi").textContent=hi.toFixed(1);}
+  $("feat-lbl").textContent= uni?"(objects · uniform)":ofeat;
+  for(let c=0;c<M.n_cells;c++)
+    drawCell($("img"+c).getContext("2d"), imgCache[`g_${c}_${ai}_f`], imgCache[`g_${c}_${ai}_m`], feats[`${c}_${ai}`]||{}, uni?"__uni__":ofeat, lo, hi, op);
+  if(M.ff&&ff) drawPlot(M.ff.agg[ff], (M.ff.real_ref||{})[ff], ff, ai);
+}                                                   // NOTE: renderRef is NOT called here (α scrub must not reload ref cells)
+const _off=document.createElement("canvas");_off.width=_off.height=256;
+function infernoRGB(t){t=Math.max(0,Math.min(1,t));const x=t*(INFERNO.length-1),i=Math.floor(x),f=x-i;
+  const a=INFERNO[i],b=INFERNO[Math.min(i+1,INFERNO.length-1)];return [lerp(a[0],b[0],f)|0,lerp(a[1],b[1],f)|0,lerp(a[2],b[2],f)|0];}
+function drawCell(cx, frame, mask, F, feat, lo, hi, op){          // SYNCHRONOUS: preloaded frame + actual seg mask
+  cx.clearRect(0,0,256,256);
+  if(frame&&frame.naturalWidth) cx.drawImage(frame,0,0,256,256);
+  if(!mask||!mask.naturalWidth) return;
+  const oc=_off.getContext("2d"); oc.clearRect(0,0,256,256); oc.drawImage(mask,0,0,256,256);
+  const d=oc.getImageData(0,0,256,256), px=d.data, agg=(feat==="num_objects"||feat==="__uni__");   // aggregate/non-colorable → uniform color per object
+  for(let i=0;i<px.length;i+=4){const v=px[i];                   // 8-bit mask: R = component index (0 = bg)
+    const o=v?F[String(v)]:null;
+    if(!o){px[i+3]=0;continue;}
+    const t = agg ? 0.6 : (o[feat]==null?null:(o[feat]-lo)/(hi-lo+1e-9));
+    if(t==null){px[i+3]=0;continue;}
+    const c=infernoRGB(t); px[i]=c[0];px[i+1]=c[1];px[i+2]=c[2];px[i+3]=Math.round(op*255);}
+  oc.putImageData(d,0,0); cx.drawImage(_off,0,0);
+}
+function renderRef(){
+  const g=$("refgrid");if(!M.ref){g.innerHTML="<span class='hint'>(no reference cells cached)</span>";return;}
+  const ff=$("ffeat").value, ofeat=overlayBase(ff), uni=!ofeat, cl=uni?[0,1]:climOf(ofeat), op=+$("opacity").value;g.innerHTML="";
+  for(const grp of M.ref.groups){
+    const cells=(M.ref.cells[grp]||[]).slice(0,2);        // 2 per group at traversal size (prominent)
+    const row=document.createElement("div");row.style="margin:8px 0";
+    row.innerHTML=`<div class="hint" style="color:#8a90a0;margin-bottom:4px">real ${grp}</div>`;
+    const strip=document.createElement("div");strip.style="display:flex;gap:8px;flex-wrap:wrap";
+    cells.forEach(cell=>{
+      const wrap=document.createElement("div");wrap.className="rcell";
+      const cv=document.createElement("canvas");cv.width=cv.height=256;wrap.appendChild(cv);
+      drawCell(cv.getContext("2d"), imgCache[`r_${grp}_${cell.cell}_f`], imgCache[`r_${grp}_${cell.cell}_m`], cell.feats||{}, uni?"__uni__":ofeat, cl[0], cl[1], op);
+      strip.appendChild(wrap);
+    });
+    row.appendChild(strip);g.appendChild(row);
+  }
+}
+function drawPlot(raw,rr,label,cur){
+  // Toggle: 'pct' = Δ% from α0 (scale-independent, NTC=0%); 'raw' = absolute values (generated + store units).
+  const p=$("plot").getContext("2d"),W=420,H=240,m=46;p.clearRect(0,0,W,H);
+  if(!raw||!raw.length){p.fillStyle="#aab";p.font="11px system-ui";p.fillText("no data for "+label,m,20);return;}
+  raw=raw.map(v=>Number.isFinite(v)?v:0);            // guard NaN (α with no objects)
+  const mode=$("units").value, feat=label, n=raw.length, z=n>>1;
+  let s, ntcV=null, koV=null, koS=0, ntS=0;
+  if(mode==="raw"){ s=raw.slice(); if(rr&&rr.ntc&&rr.ntc[0]!=null){ntcV=rr.ntc[0];koV=rr.ko[0];koS=rr.ko[1]||0;ntS=rr.ntc[1]||0;} }
+  else { const b=raw[z]||1e-9; s=raw.map(v=>(v-b)/b*100); if(rr&&rr.ntc&&rr.ntc[0]!=null){const nm=rr.ntc[0]||1e-9;ntcV=0;koV=(rr.ko[0]-nm)/nm*100;koS=(rr.ko[1]||0)/nm*100;ntS=(rr.ntc[1]||0)/nm*100;} }
+  const all=s.concat(ntcV!=null?[ntcV+ntS,ntcV-ntS,koV+koS,koV-koS]:[]);
+  let lo=Math.min(...all),hi=Math.max(...all);if(hi-lo<1e-6){hi+=1;lo-=1;}const pad=(hi-lo)*0.12;lo-=pad;hi+=pad;
+  const X=i=>m+(W-m-12)*i/(n-1), Y=v=>H-24-(H-42)*(v-lo)/(hi-lo);
+  if(ntcV!=null){                                   // real NTC (gray) + target (green) reference lines ±SEM
+    p.fillStyle="rgba(150,152,170,.16)";p.fillRect(m,Y(ntcV+ntS),W-m-12,Math.max(1,Y(ntcV-ntS)-Y(ntcV+ntS)));
+    p.strokeStyle="#8a90a0";p.setLineDash([4,3]);p.beginPath();p.moveTo(m,Y(ntcV));p.lineTo(W-12,Y(ntcV));p.stroke();p.setLineDash([]);
+    p.fillStyle="#8a90a0";p.font="10px system-ui";p.fillText(`real NTC${mode==="pct"?" 0%":" "+ntcV.toFixed(1)}`,W-96,Y(ntcV)-3);
+    p.fillStyle="rgba(90,209,122,.15)";p.fillRect(m,Y(koV+koS),W-m-12,Math.max(1,Y(koV-koS)-Y(koV+koS)));
+    p.strokeStyle="#5ad17a";p.setLineDash([5,3]);p.beginPath();p.moveTo(m,Y(koV));p.lineTo(W-12,Y(koV));p.stroke();p.setLineDash([]);
+    p.fillStyle="#5ad17a";p.fillText(`real ${M.target} ${mode==="pct"?(koV>0?"+":"")+koV.toFixed(0)+"%":koV.toFixed(1)}`,m+3,Y(koV)-3);}
+  p.strokeStyle="#26c6ff";p.lineWidth=2;p.beginPath();s.forEach((v,i)=>i?p.lineTo(X(i),Y(v)):p.moveTo(X(i),Y(v)));p.stroke();
+  s.forEach((v,i)=>{p.fillStyle=i===cur?"#fca50a":"#26c6ff";p.beginPath();p.arc(X(i),Y(v),i===cur?5:2.5,0,6.283);p.fill();});
+  const zx=X(z);p.strokeStyle="#f05a5a";p.setLineDash([4,3]);p.lineWidth=1.5;p.beginPath();p.moveTo(zx,14);p.lineTo(zx,H-24);p.stroke();p.setLineDash([]);p.lineWidth=1;
+  p.fillStyle="#f05a5a";p.font="10px system-ui";p.fillText("centroid (α0)",zx+3,H-27);   // real control centroid = traversal anchor (vertical)
+  p.fillStyle="#eef1f6";p.font="600 13px system-ui";p.fillText(`${feat}: generated ${mode==="pct"?"Δ% from α0":"(raw units)"} vs real NTC→${M.target}`,m,15);
+  $("plot-cap").textContent = mode==="pct"
+    ? `generated ${s[n-1]>0?"+":""}${s[n-1].toFixed(0)}% @α${M.alphas[n-1]}`+(koV!=null?`  ·  real NTC→${M.target} ${koV>0?"+":""}${koV.toFixed(1)}%`:"")
+    : `generated ${s[z].toFixed(1)}→${s[n-1].toFixed(1)} (raw)`+(koV!=null?`  ·  real NTC ${ntcV.toFixed(1)} / ${M.target} ${koV.toFixed(1)}`:"");
+}
+$("target").innerHTML=TARGETS.map((t,i)=>`<option value="${i}">${t[0]}</option>`).join("");
+["target"].forEach(id=>$(id).onchange=()=>{climCache={};loadTarget(+$("target").value);});
+$("alpha").oninput=render;                                    // α scrub: generated grid + plot only (ref stays put)
+$("units").onchange=render;                                   // % change ↔ real units (plot only)
+["ffeat","opacity"].forEach(id=>$(id).oninput=()=>{climCache={};render();renderRef();});   // single Feature selector drives overlay + plot + ref
+loadTarget(0);
+</script>
+</body>
+</html>
