@@ -68,6 +68,19 @@ ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
     "per_experiment_v4_attn.parquet"
 )
+# Combined sidecar (base + set_accuracy per-cell pct from Alex's
+# accuracy_ranking/pergene_phase_cell_rankings.csv). Used only by the
+# set_accuracy strategy.
+ATTN_SIDECAR_WITH_SET_ACC = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
+    "per_experiment_v4_attn_with_set_accuracy.parquet"
+)
+# Extended sidecar with both set_accuracy (per-gene) and set_accuracy_ebi
+# (per-complex) columns.
+ATTN_SIDECAR_WITH_SET_ACC_EBI = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
+    "per_experiment_v4_attn_with_set_accuracy_and_ebi.parquet"
+)
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
     "per_experiment_v4_attn_fluor.parquet"
@@ -172,6 +185,18 @@ def _resolve_strategy(name: str) -> dict:
         # Fallback hierarchy: use EBI attention where present (panel-member
         # cells get EBI-trained weighting), else geneKO attention, else 1.0.
         return {"op": "fallback", "cols": ["attn_ebi", "attn_geneko"]}
+    if name == "set_accuracy":
+        # Per-cell pct from Alex's set-accuracy classifier ranking (each cell
+        # scored under its own assigned gene). NaN → 1 (cells not in the CSV
+        # get uniform weight, matches the "column" op semantics). Sidecar
+        # column added to the combined parquet (ATTN_SIDECAR_WITH_SET_ACC).
+        return {"op": "column", "col": "set_accuracy"}
+    if name == "set_accuracy_ebi":
+        # Per-cell pct from Alex's set-accuracy classifier — but scored under
+        # each cell's own EBI COMPLEX (not gene). NaN → 1 (cells outside the
+        # EBI panel get uniform weight). Sidecar column added to the extended
+        # parquet (ATTN_SIDECAR_WITH_SET_ACC_EBI).
+        return {"op": "column", "col": "set_accuracy_ebi"}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -308,6 +333,8 @@ STRATEGIES = [
     "acc_select_geneko_raw", "acc_select_geneko_weighted",
     "acc_select_chad_raw", "acc_select_chad_weighted",
     "ebi_then_geneko",
+    "set_accuracy",
+    "set_accuracy_ebi",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -362,6 +389,16 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
     fluor_path = str(FLUOR_ATTN_SIDECAR) if use_fluor else None
     fluor_dir = str(V4_PER_EXP_FLUOR) if use_fluor else None
 
+    # Route to the combined sidecar (with set_accuracy column) only when
+    # the strategy actually needs it. Everything else keeps reading the
+    # base sidecar so shared consumers stay untouched.
+    if strategy_name == "set_accuracy":
+        phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC
+    elif strategy_name == "set_accuracy_ebi":
+        phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC_EBI
+    else:
+        phase_sidecar = ATTN_SIDECAR
+
     import ops_utils.hpc.slurm_batch_utils as sbu
     _orig_submit = sbu.submit_parallel_jobs
 
@@ -370,7 +407,7 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
             orig_func = job["func"]
             if getattr(orig_func, "__name__", "") == "pca_sweep_pooled_signal":
                 job["func"] = make_patched_phase1_worker(
-                    orig_func, str(ATTN_SIDECAR), spec, str(V4_PER_EXP),
+                    orig_func, str(phase_sidecar), spec, str(V4_PER_EXP),
                     fluor_sidecar_path=fluor_path,
                     v4_fluor_dir=fluor_dir,
                 )
@@ -436,7 +473,13 @@ def main() -> int:
     _install_patches(args.attn_strategy, use_fluor=use_fluor)
     print(f"✓ installed v4-attn patches (strategy={args.attn_strategy})")
     print(f"  v4 dir: {V4_PER_EXP}")
-    print(f"  phase sidecar: {ATTN_SIDECAR}")
+    if args.attn_strategy == "set_accuracy":
+        phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC
+    elif args.attn_strategy == "set_accuracy_ebi":
+        phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC_EBI
+    else:
+        phase_sidecar = ATTN_SIDECAR
+    print(f"  phase sidecar: {phase_sidecar}")
     if use_fluor:
         print(f"  fluor sidecar: {FLUOR_ATTN_SIDECAR}")
         print(f"  v4 fluor dir:  {V4_PER_EXP_FLUOR}")
