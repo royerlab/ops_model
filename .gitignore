@@ -110,6 +110,7 @@ scratch/
 scripts/
 # Deprecated, kept locally only (see models/CLEANUP.md)
 src/ops_model/deprecated/
+src/ops_model/vesuvius/
 
 # Generated figures / data exports
 *.pdf
