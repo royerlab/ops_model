@@ -464,7 +464,7 @@ def _read_well_labels(args):
     # is re-run, so default to the live 3-assembly CSV ("original").
     labels_tmp = pd.read_csv(OpsPaths(exp_name, well=well).links["original"])
     labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
-    from ops_model.data.qc.qc_labels import filter_small_bboxes
+    from ops_model.data.labels import filter_small_bboxes
 
     labels_tmp, _ = filter_small_bboxes(labels_tmp, threshold=5)
     labels_tmp["store_key"] = exp_name

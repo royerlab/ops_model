@@ -27,7 +27,7 @@ from viscy.transforms import (
 )
 
 from .paths import OpsPaths
-from .qc.qc_labels import filter_small_bboxes
+from .labels import filter_small_bboxes
 from .collate_utils import (
     collate_basic_dataset,
     collate_variable_size_cells,

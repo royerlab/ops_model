@@ -5,9 +5,11 @@ Column names are auto-detected from the CSV: CP naming (cp_bbox, cp_cell_seg_id,
 is tried first, with 4i naming (4i_bbox, 4i_segmentation_id, ...) as fallback.
 """
 
+from ast import literal_eval
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
 _DEFAULT_BASE_PATH = "/hpc/projects/intracellular_dashboard/fast_ops"
 
@@ -34,6 +36,28 @@ def _resolve(candidates: list[str], columns: set[str], name: str) -> str:
     raise ValueError(f"No column found for {name}: tried {candidates}")
 
 
+def filter_small_bboxes(
+    df: pd.DataFrame,
+    threshold: int = 5,
+) -> pd.DataFrame:
+
+    def bbox_y_length(s):
+        t = literal_eval(s)
+        return (t[2] - t[0]) > threshold
+
+    def bbox_x_length(s):
+        t = literal_eval(s)
+        return (t[3] - t[1]) > threshold
+
+    y_pass = df["bbox"].apply(bbox_y_length)
+    x_pass = df["bbox"].apply(bbox_x_length)
+    length_pass = y_pass & x_pass
+    filtered_df = df[length_pass]
+    num_cells_removed = len(df) - len(filtered_df)
+
+    return filtered_df, num_cells_removed
+
+
 def load_immunostaining_labels(
     experiments: dict,
     filename_template: str,
@@ -52,8 +76,6 @@ def load_immunostaining_labels(
     Returns:
         labels_df ready to pass to OpsDataManager.construct_dataloaders()
     """
-    from ops_model.data.qc.qc_labels import filter_small_bboxes
-
     if base_path is None:
         base_path = _DEFAULT_BASE_PATH
 
