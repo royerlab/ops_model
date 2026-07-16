@@ -107,7 +107,7 @@ ENV/
 
 configs/
 scratch/
-scripts/compare_dino_cp_map.py
+scripts/
 # Deprecated, kept locally only (see models/CLEANUP.md)
 src/ops_model/deprecated/
 
