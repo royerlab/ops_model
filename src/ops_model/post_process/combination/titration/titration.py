@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 DOWNSAMPLE_RATIO = 0.75  # multiply cell count by this each step
 MIN_CELLS = 5_000  # stop titrating below this
 NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
-METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi")
+METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi", "ebi_plus")
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
 # Shared plot styling / labels (used by compare_titration_versions and below)
@@ -69,6 +69,7 @@ TITRATION_METRIC_COLORS = {
     "corum": "mediumpurple",
     "chad": "darkorange",
     "ebi": "crimson",
+    "ebi_plus": "deeppink",
 }
 TITRATION_RATIO_LABELS = {
     "activity": "% Active",
@@ -76,6 +77,7 @@ TITRATION_RATIO_LABELS = {
     "corum": "% CORUM consistent",
     "chad": "% CHAD consistent",
     "ebi": "% EBI consistent",
+    "ebi_plus": "% EBI+ significant",
 }
 TITRATION_MAP_LABELS = {
     "activity": "Activity mAP",
@@ -83,6 +85,7 @@ TITRATION_MAP_LABELS = {
     "corum": "CORUM mAP",
     "chad": "CHAD mAP",
     "ebi": "EBI mAP",
+    "ebi_plus": "EBI+ mAP",
 }
 SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
@@ -194,6 +197,57 @@ def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     return adata
 
 
+def _bootstrap_indices_per_group(
+    group_codes: np.ndarray, budget: int, rng: np.random.RandomState, replace: bool,
+) -> np.ndarray:
+    """Return positional indices keeping up to ``budget`` cells per group.
+
+    ``group_codes`` is an integer code per cell (e.g. ``pd.Categorical.codes``);
+    cells with a negative code (missing / NaN group) are dropped — matching the
+    legacy loops where ``sgrnas == nan`` selected nothing. For each group, keeps
+    ``min(count, budget)`` cells drawn uniformly:
+
+    - ``replace=False`` — without replacement (subsample). Same semantics as the
+      legacy per-group ``rng.choice(..., replace=False)`` loop, but in one pass.
+    - ``replace=True`` — with replacement (true nonparametric bootstrap). The
+      returned array MAY contain duplicate positions; callers must preserve them
+      (do not de-duplicate) so aggregation counts each resampled cell.
+
+    Fully vectorized: cost is O(N log N) instead of the legacy O(n_groups * N)
+    ``np.where``-per-group scan — the dominant per-draw cost on large reporters
+    like Phase (~60M cells).
+    """
+    codes = np.asarray(group_codes)
+    pos = np.nonzero(codes >= 0)[0]
+    if pos.size == 0:
+        return pos
+    codes = codes[pos]
+    if replace:
+        # Stable sort just groups equal codes contiguously; within-group order
+        # is irrelevant because we draw random offsets below.
+        order = np.argsort(codes, kind="stable")
+    else:
+        # A random key per cell + lexsort groups by code AND randomizes order
+        # within each group, so taking the first k of a group == a random k.
+        keys = rng.random(codes.size)
+        order = np.lexsort((keys, codes))
+    pos_sorted = pos[order]
+    codes_sorted = codes[order]
+    _uniq, sizes = np.unique(codes_sorted, return_counts=True)
+    starts = np.concatenate(([0], np.cumsum(sizes)[:-1]))
+    k = np.minimum(sizes, int(budget))
+    if replace:
+        grp = np.repeat(np.arange(sizes.size), k)
+        offs = np.floor(rng.random(int(k.sum())) * sizes[grp]).astype(np.intp)
+        # Guard the measure-zero case where random() rounds up to the size.
+        offs = np.minimum(offs, sizes[grp] - 1)
+        kept = pos_sorted[starts[grp] + offs]
+    else:
+        rank = np.arange(codes_sorted.size) - np.repeat(starts, sizes)
+        kept = pos_sorted[rank < np.repeat(k, sizes)]
+    return kept
+
+
 def _subsample_per_ko_and_aggregate(
     adata_cells: ad.AnnData, cells_per_ko: int, rng: np.random.RandomState,
 ) -> ad.AnnData:
@@ -217,6 +271,7 @@ def _subsample_per_ko_and_aggregate(
 
 def _subsample_per_guide_and_aggregate(
     adata_cells: ad.AnnData, cells_per_guide: int, rng: np.random.RandomState,
+    replace: bool = False,
 ) -> ad.AnnData:
     """Subsample up to ``cells_per_guide`` cells per sgRNA, then aggregate to guide level.
 
@@ -224,11 +279,35 @@ def _subsample_per_guide_and_aggregate(
     level, so NTC shares one budget across its ~8 sgRNAs while gene KOs split across
     ~4 sgRNAs), this samples directly at sgRNA level so every guide — NTC or KO —
     gets the same cell budget.
+
+    ``replace=True`` switches from subsample-without-replacement to a true
+    nonparametric bootstrap (draw ``min(count, budget)`` cells per guide *with*
+    replacement). The per-guide cell count is unchanged from the legacy path, so
+    ``n_cells`` / x-axis bookkeeping stays directly comparable — only the draw
+    changes. The bootstrap path is also fully vectorized (see
+    :func:`_bootstrap_indices_per_group`).
     """
     guide_col_name = _guide_col(adata_cells)
     if guide_col_name not in adata_cells.obs.columns:
         raise ValueError(
             f"Per-guide titration requires {guide_col_name!r} column in obs"
+        )
+    if replace:
+        codes = pd.Categorical(adata_cells.obs[guide_col_name].values).codes
+        kept_idx = _bootstrap_indices_per_group(
+            codes, cells_per_guide, rng, replace=True,
+        )
+        # Preserve duplicates (do NOT de-dup); sort only to make the row order
+        # deterministic for aggregation.
+        kept_idx = np.sort(kept_idx)
+        sub = adata_cells[kept_idx].copy()
+        # With replacement, obs_names repeat — make them unique so downstream
+        # AnnData ops don't choke; guide-level grouping is by the guide column,
+        # not the index, so this doesn't affect aggregation.
+        sub.obs_names_make_unique()
+        return aggregate_to_level(
+            sub, level="guide", method="mean",
+            preserve_batch_info=False, subsample_controls=False,
         )
     sgrnas = adata_cells.obs[guide_col_name].values
     kept_idx = []
@@ -330,6 +409,7 @@ def _score_all_metrics(
         phenotypic_consistency_corum,
         phenotypic_consistency_ebi,
         phenotypic_consistency_manual_annotation,
+        phenotypic_ebi_plus,
     )
 
     result = {
@@ -343,6 +423,8 @@ def _score_all_metrics(
         "chad_map_mean": math.nan,
         "ebi_ratio": math.nan,
         "ebi_map_mean": math.nan,
+        "ebi_plus_ratio": math.nan,
+        "ebi_plus_map_mean": math.nan,
     }
 
     try:
@@ -387,6 +469,23 @@ def _score_all_metrics(
                 )
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
+
+    try:
+        ebi_plus_map, ebi_plus_ratio = phenotypic_ebi_plus(
+            g_copairs,
+            plot_results=False,
+            null_size=NULL_SIZE,
+            distance=distance,
+        )
+        # EBI+ groups by complex, not perturbation, so subset_targets (a set of
+        # perturbation names) does not cleanly filter it — report the full ratio.
+        result["ebi_plus_ratio"] = float(ebi_plus_ratio)
+        if ebi_plus_map is not None and "mean_average_precision" in ebi_plus_map.columns:
+            result["ebi_plus_map_mean"] = float(
+                ebi_plus_map["mean_average_precision"].mean()
+            )
+    except Exception as exc:
+        _logger.warning(f"    EBI+ scoring failed: {exc}")
 
     try:
         e_norm = aggregate_to_level(
@@ -481,7 +580,7 @@ def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
 
 def _run_titration_points(
     adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
-    min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1,
+    min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1, replace=False,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
@@ -496,6 +595,14 @@ def _run_titration_points(
     if "signal" in adata_cells.obs.columns:
         adata_cells.obs = adata_cells.obs.drop(columns=["signal"])
 
+    # `replace` (with-replacement bootstrap) is only wired into the per-guide
+    # sampler for now. Warn rather than silently ignore for other modes.
+    if replace and not per_guide:
+        _logger.warning(
+            "replace=True (with-replacement bootstrap) is only supported for "
+            "per-guide sampling; ignoring for this mode."
+        )
+
     base_seed = int(rng.randint(0, 2**31 - 1))
     metric_cols = [
         "activity_ratio", "activity_map_mean",
@@ -503,6 +610,7 @@ def _run_titration_points(
         "corum_ratio", "corum_map_mean",
         "chad_ratio", "chad_map_mean",
         "ebi_ratio", "ebi_map_mean",
+        "ebi_plus_ratio", "ebi_plus_map_mean",
     ]
 
     rows = []
@@ -521,7 +629,9 @@ def _run_titration_points(
         for b in range(n_bootstraps):
             draw_rng = np.random.RandomState(base_seed + b * 9973 + target)
             if per_guide:
-                g_sub = _subsample_per_guide_and_aggregate(adata_cells, target, draw_rng)
+                g_sub = _subsample_per_guide_and_aggregate(
+                    adata_cells, target, draw_rng, replace=replace,
+                )
             elif per_ko:
                 g_sub = _subsample_per_ko_and_aggregate(adata_cells, target, draw_rng)
             else:
@@ -598,6 +708,7 @@ def _run_titration_points(
             f"corum={scores['corum_ratio']:.1%}±{scores.get('corum_ratio_sem', 0):.1%} "
             f"chad={scores['chad_ratio']:.1%}±{scores.get('chad_ratio_sem', 0):.1%} "
             f"ebi={scores['ebi_ratio']:.1%}±{scores.get('ebi_ratio_sem', 0):.1%} "
+            f"ebi+={scores['ebi_plus_ratio']:.1%}±{scores.get('ebi_plus_ratio_sem', 0):.1%} "
             f"({time.time() - t_step:.0f}s)"
         )
     return pd.DataFrame(rows)
@@ -705,6 +816,7 @@ def titrate_single_reporter(
     per_guide_median: bool = False,
     n_bootstraps: int = 1,
     cache: bool = True,
+    replace: bool = False,
 ) -> str:
     """Run cell-count titration for a single reporter.
 
@@ -811,6 +923,7 @@ def titrate_single_reporter(
             per_ko=per_ko,
             per_guide=per_guide,
             n_bootstraps=n_bootstraps,
+            replace=replace,
         )
     else:
         df_new = pd.DataFrame()
@@ -1638,6 +1751,11 @@ def _build_parser():
     parser.add_argument("--bootstrap", type=int, default=1, metavar="N",
                         help="Run N bootstrap draws per titration point (default: 1 = no bootstrap). "
                              "Adds {metric}_sem columns and error bars on plots.")
+    parser.add_argument("--bootstrap-replace", dest="bootstrap_replace",
+                        action="store_true", default=False,
+                        help="Draw each bootstrap sample WITH replacement (true nonparametric "
+                             "bootstrap) instead of subsampling without replacement. "
+                             "Per-guide sampling only. Default: without replacement.")
     parser.add_argument("--per-guide-max-titration", action="store_true",
                         help="Titrate by cells-per-sgRNA. Schedule starts at MAX non-NTC "
                              "cells/guide — large guides keep gaining, small guides cap out. "
@@ -1737,6 +1855,131 @@ def _resolve_output_dir(args) -> Path:
 
     output_dir = output_dir / args.distance
     return output_dir
+
+
+def _plot_labelfree_vs_pack(
+    titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
+    x_col="cells_per_guide", x_label="Cells / Guide", scale="log10",
+    metrics=("activity", "distinctiveness", "ebi"),
+    rows=(("ratio", True), ("map_mean", False)),
+    multicolor_pack=False,
+    include_brightfield=True,
+    title_override=None,
+    xlim=None,
+    ylim=None,
+    font_scale=1.0,
+    pack_linewidth=1.8,
+    pack_markersize=4,
+    filename="titration_midslice_phase2d_vs_pack_perguide_log10",
+):
+    """Focused 'money plot' for dark slides: fluorescent pack behind, only
+    BF-mid + Phase2D highlighted. Transparent background, white borders/text.
+    `metrics`/`rows` subset the panels; `multicolor_pack` colors each marker
+    distinctly instead of gray. Saved to vs_fluor_pack/.
+    """
+    plt.rcParams["pdf.fonttype"] = 42
+    titration_dir = Path(titration_dir)
+    csvs = sorted(titration_dir.glob("*/*_titration.csv"))
+    if not csvs:
+        return
+    comb = pd.concat([pd.read_csv(f) for f in csvs], ignore_index=True)
+    bg = None
+    bgf = sorted(glob.glob(fluor_pack_glob))
+    if bgf:
+        bg = pd.concat([pd.read_csv(f) for f in bgf], ignore_index=True)
+        bg = bg[~bg["signal"].astype(str).str.lower().str.contains("phase")]
+
+    names = {"activity": "Activity", "distinctiveness": "Distinctiveness", "ebi": "EBI"}
+    metrics = list(metrics)
+    rows = list(rows)
+    # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
+    highlight = {"Phase2D": ("#ffffff", "Phase Reconstruction")}
+    if include_brightfield:
+        highlight["BF_z3"] = ("#2ec4d6", "Brightfield")
+    x_all = comb[x_col].values
+    xmin, xmax = float(x_all.min()), float(x_all.max())
+    if xlim is not None:
+        xmin, xmax = float(xlim[0]), float(xlim[1])
+    _scale_sfx = {"linear": "", "log2": " (log₂)", "log10": " (log₁₀)"}[scale]
+
+    pack_colors = None
+    if multicolor_pack and bg is not None:
+        _sigs = sorted(bg["signal"].unique())
+        _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
+        pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
+
+    from matplotlib.ticker import (LogLocator, LogFormatterSciNotation,
+                                   NullFormatter, AutoMinorLocator)
+    nrows, ncols = len(rows), len(metrics)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(11 * ncols, 11 * nrows),
+                             squeeze=False)
+    for r, (suf, as_pct) in enumerate(rows):
+        for c, m in enumerate(metrics):
+            ax = axes[r][c]
+            col = f"{m}_{suf}"
+            if bg is not None and col in bg.columns:
+                for sig, bs in bg.groupby("signal", observed=True):
+                    bs = bs.sort_values(x_col)
+                    color = pack_colors[sig] if pack_colors else "0.7"
+                    ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
+                            color=color, alpha=0.55, linewidth=pack_linewidth,
+                            marker="o", markersize=pack_markersize,
+                            zorder=0.5, solid_capstyle="round")
+            for sig, (color, lab) in highlight.items():
+                s = comb[comb["signal"] == sig].sort_values(x_col)
+                if col in s.columns and len(s):
+                    ax.plot(s[x_col], s[col] * (100 if as_pct else 1),
+                            color=color, linewidth=3.5, marker="o", markersize=9,
+                            label=lab, zorder=5)
+            _apply_x_scale(ax, [xmin, xmax], scale,
+                           tick_fontsize=int(round(19 * font_scale)))
+            ax.grid(False)
+            # Tick marks: decade 10^n (log) or evenly-spaced (linear), with
+            # minor ticks so the axis is easy to read.
+            if scale == "linear":
+                ax.xaxis.set_minor_locator(AutoMinorLocator())
+            else:
+                ax.xaxis.set_major_locator(LogLocator(base=10.0))
+                ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
+                ax.xaxis.set_minor_locator(
+                    LogLocator(base=10.0, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
+                ax.xaxis.set_minor_formatter(NullFormatter())
+            ax.tick_params(axis="x", which="both", colors="white", rotation=0)
+            ax.tick_params(axis="x", which="major", length=9, width=1.5)
+            ax.tick_params(axis="x", which="minor", length=5, width=1.0)
+            ax.set_box_aspect(1)  # square panel
+            if xlim is not None:
+                ax.set_xlim(*xlim)
+            else:
+                ax.set_xlim(xmin * 0.7, xmax * 1.3)
+            if ylim is not None:
+                ax.set_ylim(*ylim)
+            ax.set_xlabel(f"{x_label}{_scale_sfx}", fontsize=24 * font_scale)
+            ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24 * font_scale)
+            ax.set_title(title_override or (names[m] if as_pct else f"{names[m]} mAP"),
+                         fontsize=26 * font_scale)
+            # White borders + text for a dark slide background.
+            for spine in ax.spines.values():
+                spine.set_color("white")
+            ax.tick_params(axis="both", colors="white", labelsize=19 * font_scale)
+            ax.xaxis.label.set_color("white")
+            ax.yaxis.label.set_color("white")
+            ax.title.set_color("white")
+    if bg is not None and not multicolor_pack:
+        axes[0][0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
+                        label=f"fluor / 4i / CP markers (n={bg['signal'].nunique()})")
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20 * font_scale,
+                     bbox_to_anchor=(0.5, 0.005), labelcolor="white")
+    leg.get_frame().set_facecolor("none")
+    leg.get_frame().set_edgecolor("white")
+    fig.tight_layout(rect=[0, 0.06, 1, 0.97])
+    out = titration_dir / "vs_fluor_pack"
+    out.mkdir(exist_ok=True)
+    stem = out / filename
+    fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight", transparent=True)
+    fig.savefig(f"{stem}.svg", bbox_inches="tight", transparent=True)
+    plt.close(fig)
 
 
 def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
@@ -1863,6 +2106,26 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             filename_prefix="titration_vs_fluor_pack_cap3k",
             x_cap=3000, perpert_log10_only=True)
         print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
+        # Focused money plot: pack in gray, only BF-mid + Phase2D highlighted.
+        _plot_labelfree_vs_pack(titration_dir, plt)
+        # Single-panel distinctiveness mean-mAP, multicolor fluorescent pack.
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",),
+            rows=(("map_mean", False),), multicolor_pack=True, title_override="geneKO mean mAP",
+            filename="titration_midslice_phase2d_vs_pack_distinct_meanmap_perguide_log10_multicolor")
+        # Same, but Phase only (no brightfield mid-slice curve).
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",),
+            rows=(("map_mean", False),), multicolor_pack=True, include_brightfield=False,
+            title_override="geneKO mean mAP",
+            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_log10_multicolor")
+        # Linear-scale zoom on the workhorse regime (100-1000 cells/guide), Phase only.
+        _plot_labelfree_vs_pack(
+            titration_dir, plt, metrics=("distinctiveness",), rows=(("map_mean", False),),
+            multicolor_pack=True, include_brightfield=False, title_override="geneKO mean mAP",
+            scale="linear", xlim=(100, 1000), ylim=(0.0, 0.25),
+            font_scale=1.25, pack_linewidth=3.5, pack_markersize=9,
+            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
 
     if minibinder_subset:
         mb_base = titration_dir / "minibinder"
@@ -1962,6 +2225,7 @@ def titrate_single_target_for_reporter(
     per_ko: bool = False,
     per_guide: bool = False,
     n_bootstraps: int = 1,
+    replace: bool = False,
 ) -> str:
     """Score one reporter at ONE schedule target; write a shard CSV.
 
@@ -2000,6 +2264,7 @@ def titrate_single_target_for_reporter(
         per_ko=per_ko,
         per_guide=per_guide,
         n_bootstraps=n_bootstraps,
+        replace=replace,
     )
     shard_csv = reporter_dir / f"{sig_safe}_titration_t{int(target)}.csv"
     df.to_csv(shard_csv, index=False)
@@ -2261,6 +2526,7 @@ def main():
                             or args.per_guide_median_titration
                         ),
                         "n_bootstraps": int(args.bootstrap),
+                        "replace": bool(args.bootstrap_replace),
                     },
                 })
 
@@ -2331,6 +2597,7 @@ def main():
                     "per_guide_median": args.per_guide_median_titration,
                     "n_bootstraps": int(args.bootstrap),
                     "cache": bool(args.cache),
+                    "replace": bool(args.bootstrap_replace),
                 },
             }
 
@@ -2456,6 +2723,7 @@ def main():
                 per_guide_median=args.per_guide_median_titration,
                 n_bootstraps=int(args.bootstrap),
                 cache=bool(args.cache),
+                replace=bool(args.bootstrap_replace),
             )
             print(f"  {result}")
 

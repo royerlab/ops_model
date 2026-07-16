@@ -177,6 +177,7 @@ from ops_model.post_process.combination.pca_optimization.embeddings import (
     _compute_and_plot_embeddings,
     _score_consistency,
     _score_distinctiveness,
+    _score_ebi_plus,
 )
 from ops_model.post_process.combination.pca_optimization.phase1 import (
     pca_sweep_pooled_signal,
