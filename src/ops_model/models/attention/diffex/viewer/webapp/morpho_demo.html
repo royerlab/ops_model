@@ -30,9 +30,13 @@
   <h1>Morphometrics — real organelle_profiler seg on generated cells</h1>
   <label>Target <select id="target"></select></label>
   <label>Feature <select id="ffeat" title="full org-profiler feature set; ★ = has real NTC→KO reference. Drives the plot + (where colorable) the overlay."></select></label>
+  <button id="ffeat-prev" title="previous feature (← arrow)">◀</button><button id="ffeat-next" title="next feature (→ arrow)">▶</button>
+  <span id="ffeat-pos" style="font:11px ui-monospace,monospace;color:#8a90a0"></span>
+  <label title="rank features by how well the generated trajectory matches the real phenotype: same direction under +α and closest in % change, weighted toward larger real changes"><input type="checkbox" id="fmatch" checked/> match-rank</label>
+  <label title="collapse feature variants (aggregations mean/median/…, texture directions) to one canonical feature — like the PC tab"><input type="checkbox" id="fdedup" checked/> dedup</label>
   <label>Overlay <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.75"/></label>
   <label>α <input type="range" id="alpha" min="0" max="16" value="8"/> <span id="alpha-read">0.0</span></label>
-  <label>Plot <select id="units"><option value="pct" selected>% change</option><option value="raw">real units</option></select></label>
+  <label>Plot <select id="units"><option value="pct" selected>% change vs NTC</option><option value="raw">real units</option></select></label>
 </header>
 <div id="main">
   <div id="grid"></div>
@@ -49,11 +53,20 @@
 </div>
 <script>
 const BASE = "";                                   // served from viewer_assets root
+const CB = "?v=" + Date.now();                     // per-page-load cache-bust: a plain refresh always pulls fresh json/images
 const TARGETS = [                                  // (label, morpho dir, traversal dir, marker root)
+  ["MICOS13 geneKO (Phase2D tubular, ACCURACY)", "_morphometrics/phase/geneKO/MICOS13", "phase/geneKO/MICOS13", "phase"],
+  ["TOMM20 geneKO (Phase2D tubular, ACCURACY)", "_morphometrics/phase/geneKO/TOMM20", "phase/geneKO/TOMM20", "phase"],
   ["MICOS13 geneKO (mito·ChromaLIVE561, attention)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/geneKO/MICOS13", "mitochondria_ChromaLIVE_561_excitation/geneKO/MICOS13", "mitochondria_ChromaLIVE_561_excitation"],
   ["TOMM20 geneKO (mito·ChromaLIVE561, attention)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/geneKO/TOMM20", "mitochondria_ChromaLIVE_561_excitation/geneKO/TOMM20", "mitochondria_ChromaLIVE_561_excitation"],
-  ["TIM23 complex (mito·ChromaLIVE561, ACCURACY)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation"],
+  ["TIM23 complex (Phase2D tubular, ACCURACY)", "_morphometrics/phase/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "phase/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "phase"],
+  ["TIM23 complex (mito·ChromaLIVE561, frangi)", "_morphometrics/mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", "mitochondria_ChromaLIVE_561_excitation"],
   ["CCT complex (NPM3 nucleoli, ACCURACY)", "_morphometrics/nucleolus_GC_NPM3/complex/Chaperonin_containing_T_complex", "nucleolus_GC_NPM3/complex/Chaperonin_containing_T_complex", "nucleolus_GC_NPM3"],
+  ["POLR1B geneKO (NPM3 nucleoli, MO)", "_morphometrics/nucleolus_GC_NPM3/geneKO/POLR1B", "nucleolus_GC_NPM3/geneKO/POLR1B", "nucleolus_GC_NPM3"],
+  ["GBF1 geneKO (ER/Golgi COP-II SEC23A, MO)", "_morphometrics/ER_Golgi_COP_II_SEC23A/geneKO/GBF1", "ER_Golgi_COP_II_SEC23A/geneKO/GBF1", "ER_Golgi_COP_II_SEC23A"],
+  ["KIF23 geneKO (NucleoLIVE tubular)", "_morphometrics/nucleus_NucleoLIVE_Live_Cell_dye/geneKO/KIF23", "nucleus_NucleoLIVE_Live_Cell_dye/geneKO/KIF23", "nucleus_NucleoLIVE_Live_Cell_dye"],
+  ["ARP2/3 complex (FastAct actin, frangi)", "_morphometrics/actin_filament_FastAct_SPY555_Live_Cell_Dye/complex/Actin_related_protein_2_3_complex__ARPC1A_ACTR3B_ARPC5_variant", "actin_filament_FastAct_SPY555_Live_Cell_Dye/complex/Actin_related_protein_2_3_complex__ARPC1A_ACTR3B_ARPC5_variant", "actin_filament_FastAct_SPY555_Live_Cell_Dye"],
+  ["CAPZB geneKO (FastAct actin, frangi)", "_morphometrics/actin_filament_FastAct_SPY555_Live_Cell_Dye/geneKO/CAPZB", "actin_filament_FastAct_SPY555_Live_Cell_Dye/geneKO/CAPZB", "actin_filament_FastAct_SPY555_Live_Cell_Dye"],
 ];
 const AGGMAP = {area:"total_area", mean_int:"mean_int", ecc:"mean_ecc", skel:"total_skel", num_objects:"count"};  // per-organelle (or aggregate) → plot series
 let PORG = ["area","mean_int","ecc"];              // set dynamically per target (network → skel; vesicular → ecc)
@@ -68,38 +81,36 @@ function inferno(t){t=Math.max(0,Math.min(1,t));const x=t*(INFERNO.length-1),i=M
   const a=INFERNO[i],b=INFERNO[Math.min(i+1,INFERNO.length-1)];
   return `rgb(${lerp(a[0],b[0],f)|0},${lerp(a[1],b[1],f)|0},${lerp(a[2],b[2],f)|0})`;}
 
+window.addEventListener("unhandledrejection",e=>{const g=$("grid");if(g)g.innerHTML="<span class='hint' style='color:#f88'>load error: "+((e.reason&&(e.reason.stack||e.reason.message))||e.reason)+"</span>";});
+window.addEventListener("error",e=>{const g=$("grid");if(g&&!g.children.length)g.innerHTML="<span class='hint' style='color:#f88'>JS error: "+(e.message||e)+"</span>";});
 async function loadTarget(idx){
   const [,mdir,tdir]=TARGETS[idx];
-  M=await (await fetch(`${BASE}${mdir}/morpho.json`)).json();
-  M.mdir=mdir; M.tdir=tdir; M.root=TARGETS[idx][3];
-  M.ref=await fetch(`${BASE}${mdir}/_ref.json`).then(r=>r.ok?r.json():null).catch(()=>null);   // real reference cells
-  M.ff=await fetch(`${BASE}${mdir}/full_features.json`).then(r=>r.ok?r.json():null).catch(()=>null);   // FULL org-profiler feature set + real NTC→KO ref
-  if(M.ff){                                          // grouped plot-feature dropdown (★ = has real reference)
-    const order=["Network","Object morphology","Intensity","Texture","Cell"];
-    $("ffeat").innerHTML=order.filter(g=>M.ff.groups[g]).map(g=>
-      `<optgroup label="${g} (${M.ff.groups[g].length})">`+M.ff.groups[g].slice().sort().map(f=>
-        `<option value="${f}">${f.replace(/^(network_mcherry_seg_|obj_)/,"")}${M.ff.real_ref[f]?" ★":""}</option>`).join("")+`</optgroup>`).join("");
-    let bf=null,bs=-1;                               // default = ref'd feature whose generated α-trajectory swings most
-    for(const f in M.ff.agg){const s=M.ff.agg[f];if(!s||!M.ff.real_ref[f])continue;const z=s.length>>1;
-      const sw=Math.abs((s[s.length-1]-s[z])/((Math.abs(s[z])||1e-9)));if(isFinite(sw)&&sw>bs){bs=sw;bf=f;}}
-    if(bf)$("ffeat").value=bf;
+  const ff0=await fetch(`${BASE}${mdir}/full_features.json${CB}`).then(r=>r.ok?r.json():null).catch(()=>null);   // FULL org-profiler feature set + real NTC→KO ref
+  M=await fetch(`${BASE}${mdir}/morpho.json${CB}`).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(!M){                                                          // phase targets have no morpho.json → synthesize M from full_features.json
+    if(!ff0){$("grid").innerHTML="<span class='hint'>no data cached for this target</span>";return;}
+    M={alphas:ff0.alphas, target:ff0.target, n_cells:ff0.n_cells||12};
   }
+  M.mdir=mdir; M.tdir=tdir; M.root=TARGETS[idx][3];
+  M.ref=await fetch(`${BASE}${mdir}/_ref.json${CB}`).then(r=>r.ok?r.json():null).catch(()=>null);   // real reference cells
+  M.ff=ff0;
+  if(M.ff) buildFeatList();
   // preload per-(cell,α) feats FIRST, so we can derive which per-organelle features exist
   feats={};
   await Promise.all(Array.from({length:M.n_cells},(_,c)=>Promise.all(M.alphas.map((_,ai)=>
-    fetch(`${BASE}${mdir}/cell${c}/a${String(ai).padStart(2,"0")}_feats.json`).then(r=>r.ok?r.json():{}).then(j=>{feats[`${c}_${ai}`]=j;})))));
+    fetch(`${BASE}${mdir}/cell${c}/a${String(ai).padStart(2,"0")}_feats.json${CB}`).then(r=>r.ok?r.json():{}).then(j=>{feats[`${c}_${ai}`]=j;})))));
   // per-object feature keys available for OVERLAY coloring (network markers expose 'skel'; vesicular 'ecc')
   let anyOrg=null; for(const k in feats){for(const id in feats[k]){anyOrg=feats[k][id];break;} if(anyOrg)break;}
   M.objKeys = anyOrg ? new Set(Object.keys(anyOrg)) : new Set();
   // PRELOAD all frames + actual-seg masks (generated + reference) ONCE → render/scrub is synchronous (no flicker)
   imgCache={}; const jobs=[];
   for(let c=0;c<M.n_cells;c++)for(let ai=0;ai<M.alphas.length;ai++){
-    jobs.push(_loadImg(`${BASE}${M.tdir}/cell${c}/frame_${PADn(ai)}.webp`,`g_${c}_${ai}_f`));
-    jobs.push(_loadImg(`${BASE}${M.mdir}/cell${c}/a${PADn(ai)}_labels.png`,`g_${c}_${ai}_m`));
+    jobs.push(_loadImg(`${BASE}${M.tdir}/cell${c}/frame_${PADn(ai)}.webp${CB}`,`g_${c}_${ai}_f`));
+    jobs.push(_loadImg(`${BASE}${M.mdir}/cell${c}/a${PADn(ai)}_labels.png${CB}`,`g_${c}_${ai}_m`));
   }
   if(M.ref)for(const grp of M.ref.groups)for(const cell of (M.ref.cells[grp]||[])){
     const b=`${BASE}${M.mdir}/${M.ref.img_dir||"_ref"}/${grp}/cell${cell.cell}`;
-    jobs.push(_loadImg(`${b}.webp`,`r_${grp}_${cell.cell}_f`)); jobs.push(_loadImg(`${b}_labels.png`,`r_${grp}_${cell.cell}_m`));
+    jobs.push(_loadImg(`${b}.webp${CB}`,`r_${grp}_${cell.cell}_f`)); jobs.push(_loadImg(`${b}_labels.png${CB}`,`r_${grp}_${cell.cell}_m`));
   }
   await Promise.all(jobs);
   buildGrid(); render(); renderRef();
@@ -175,38 +186,116 @@ function renderRef(){
   }
 }
 function drawPlot(raw,rr,label,cur){
-  // Toggle: 'pct' = Δ% from α0 (scale-independent, NTC=0%); 'raw' = absolute values (generated + store units).
-  const p=$("plot").getContext("2d"),W=420,H=240,m=46;p.clearRect(0,0,W,H);
-  if(!raw||!raw.length){p.fillStyle="#aab";p.font="11px system-ui";p.fillText("no data for "+label,m,20);return;}
-  raw=raw.map(v=>Number.isFinite(v)?v:0);            // guard NaN (α with no objects)
-  const mode=$("units").value, feat=label, n=raw.length, z=n>>1;
-  let s, ntcV=null, koV=null, koS=0, ntS=0;
-  if(mode==="raw"){ s=raw.slice(); if(rr&&rr.ntc&&rr.ntc[0]!=null){ntcV=rr.ntc[0];koV=rr.ko[0];koS=rr.ko[1]||0;ntS=rr.ntc[1]||0;} }
-  else { const b=raw[z]||1e-9; s=raw.map(v=>(v-b)/b*100); if(rr&&rr.ntc&&rr.ntc[0]!=null){const nm=rr.ntc[0]||1e-9;ntcV=0;koV=(rr.ko[0]-nm)/nm*100;koS=(rr.ko[1]||0)/nm*100;ntS=(rr.ntc[1]||0)/nm*100;} }
-  const all=s.concat(ntcV!=null?[ntcV+ntS,ntcV-ntS,koV+koS,koV-koS]:[]);
-  let lo=Math.min(...all),hi=Math.max(...all);if(hi-lo<1e-6){hi+=1;lo-=1;}const pad=(hi-lo)*0.12;lo-=pad;hi+=pad;
-  const X=i=>m+(W-m-12)*i/(n-1), Y=v=>H-24-(H-42)*(v-lo)/(hi-lo);
-  if(ntcV!=null){                                   // real NTC (gray) + target (green) reference lines ±SEM
-    p.fillStyle="rgba(150,152,170,.16)";p.fillRect(m,Y(ntcV+ntS),W-m-12,Math.max(1,Y(ntcV-ntS)-Y(ntcV+ntS)));
-    p.strokeStyle="#8a90a0";p.setLineDash([4,3]);p.beginPath();p.moveTo(m,Y(ntcV));p.lineTo(W-12,Y(ntcV));p.stroke();p.setLineDash([]);
-    p.fillStyle="#8a90a0";p.font="10px system-ui";p.fillText(`real NTC${mode==="pct"?" 0%":" "+ntcV.toFixed(1)}`,W-96,Y(ntcV)-3);
-    p.fillStyle="rgba(90,209,122,.15)";p.fillRect(m,Y(koV+koS),W-m-12,Math.max(1,Y(koV-koS)-Y(koV+koS)));
-    p.strokeStyle="#5ad17a";p.setLineDash([5,3]);p.beginPath();p.moveTo(m,Y(koV));p.lineTo(W-12,Y(koV));p.stroke();p.setLineDash([]);
-    p.fillStyle="#5ad17a";p.fillText(`real ${M.target} ${mode==="pct"?(koV>0?"+":"")+koV.toFixed(0)+"%":koV.toFixed(1)}`,m+3,Y(koV)-3);}
+  // 'pct' = % change vs NTC (NTC = 0%, y-axis auto-scaled to the data); 'raw' = absolute values.
+  const p=$("plot").getContext("2d"),W=420,H=240,mL=54,mB=28,mT=18,mR=12;p.clearRect(0,0,W,H);
+  if(!raw||!raw.length){p.fillStyle="#aab";p.font="11px system-ui";p.fillText("no data for "+label,mL,20);return;}
+  raw=raw.map(v=>Number.isFinite(v)?v:0);            // guard NaN
+  const mode=$("units").value, feat=label, n=raw.length, z=n>>1, hasRef=rr&&rr.ntc&&rr.ntc[0]!=null;
+  let s, koV=null, koS=0, ntS=0, pctGen=null, pctKO=null;
+  if(mode==="raw"){ s=raw.slice(); if(hasRef){koV=rr.ko[0];koS=rr.ko[1]||0;ntS=rr.ntc[1]||0;} }
+  else if(hasRef){                                   // % change vs baseline (both cross 0 at α=0): generated vs its own α=0, real KO vs real NTC
+    const gb=Math.abs(raw[z])||1e-9, nm=rr.ntc[0], nmp=Math.abs(nm)||1e-9;
+    s=raw.map(v=>(v-raw[z])/gb*100);                 // blue: % vs its own α=0 baseline → crosses 0 at baseline
+    koV=(rr.ko[0]-nm)/nmp*100; koS=(rr.ko[1]||0)/nmp*100; ntS=(rr.ntc[1]||0)/nmp*100;   // green KO: real % change NTC→KO
+    pctGen=s[n-1]; pctKO=koV;
+  } else { s=raw.slice(); }
+  const gbs=Math.abs(raw[z])||1e-9, asem=(M.ff.agg_sem||{})[feat];
+  const semS = asem ? asem.map(e=>mode==="raw"?e:e/gbs*100) : null;   // per-α generated SEM (n cells), in plot units
+  const base=mode==="raw"?(hasRef?rr.ntc[0]:0):0;    // pct: NTC baseline = 0%
+  let lo,hi;
+  { // robust y-range: IQR-fence the points + cap SEM so one extreme α (or huge SEM) can't blow out the axis;
+    // off-scale points/error bars still clip inside the plot box (p.clip below).
+    const med3=arr=>{const a=arr.filter(Number.isFinite).slice().sort((x,y)=>x-y);return a.length?a[a.length>>1]*3:0;};
+    const semCap=semS?med3(semS):0;
+    const pts=s.filter(Number.isFinite).slice().sort((x,y)=>x-y);
+    const qt=p=>pts[Math.max(0,Math.min(pts.length-1,Math.round(p*(pts.length-1))))];
+    const iqr=(qt(0.75)-qt(0.25))||Math.max(1,Math.abs(qt(0.5))*0.1);
+    let dlo=Math.max(qt(0),qt(0.25)-2.5*iqr), dhi=Math.min(qt(1),qt(0.75)+2.5*iqr);
+    const ref=hasRef?[base,koV]:[base]; dlo=Math.min(dlo,...ref); dhi=Math.max(dhi,...ref);
+    dlo-=semCap; dhi+=semCap;
+    lo=dlo;hi=dhi;if(hi-lo<1e-6){hi+=1;lo-=1;}const pad=(hi-lo)*0.08;lo-=pad;hi+=pad; }
+  const X=i=>mL+(W-mL-mR)*i/(n-1), Y=v=>H-mB-(H-mB-mT)*(v-lo)/(hi-lo);
+  // --- gridlines + y ticks + x (α) ticks + axes ---
+  p.font="10px system-ui";p.textAlign="right";
+  for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);
+    p.strokeStyle="#20242c";p.lineWidth=1;p.beginPath();p.moveTo(mL,yy);p.lineTo(W-mR,yy);p.stroke();
+    p.fillStyle="#aab";p.fillText(mode==="raw"?v.toFixed(1):v.toFixed(0)+"%",mL-5,yy+3);}
+  p.textAlign="center";p.font="8px system-ui";                       // every α value on the x-axis
+  for(let i=0;i<n;i++)p.fillText(""+M.alphas[i],X(i),H-mB+11);
+  p.font="10px system-ui";
+  p.strokeStyle="#3a404c";p.lineWidth=1;p.beginPath();p.moveTo(mL,mT);p.lineTo(mL,H-mB);p.lineTo(W-mR,H-mB);p.stroke();
+  p.textAlign="left";
+  if(hasRef){                                        // KO (green) ±SEM
+    p.fillStyle="rgba(90,209,122,.15)";p.fillRect(mL,Y(koV+koS),W-mL-mR,Math.max(1,Y(koV-koS)-Y(koV+koS)));
+    p.strokeStyle="#5ad17a";p.setLineDash([5,3]);p.beginPath();p.moveTo(mL,Y(koV));p.lineTo(W-mR,Y(koV));p.stroke();p.setLineDash([]);
+    p.fillStyle="#5ad17a";p.font="10px system-ui";p.fillText(`real ${M.target} ${mode==="raw"?koV.toFixed(1):(koV>0?"+":"")+koV.toFixed(0)+"%"}`,mL+3,Y(koV)-3);
+    const zx=X(z);                                   // NTC baseline (white cross): 0 horizontal + α0 vertical
+    p.strokeStyle="rgba(238,241,246,.55)";p.setLineDash([3,4]);
+    p.beginPath();p.moveTo(mL,Y(base));p.lineTo(W-mR,Y(base));p.stroke();
+    p.beginPath();p.moveTo(zx,mT);p.lineTo(zx,H-mB);p.stroke();p.setLineDash([]);
+    p.fillStyle="#eef1f6";p.fillText(`real NTC ${mode==="raw"?rr.ntc[0].toFixed(1):"0%"}`,W-82,Y(base)-4);}
+  p.save();p.beginPath();p.rect(mL,mT,W-mL-mR,H-mB-mT);p.clip();     // clip generated line to the axis box (off-scale overshoot won't rescale)
+  if(semS){p.strokeStyle="rgba(38,198,255,.9)";p.lineWidth=1.2;const cap=3;   // generated ±SEM error bars (n cells) — visible like the figure
+    for(let i=0;i<n;i++){const x=X(i),yt=Y(s[i]+semS[i]),yb=Y(s[i]-semS[i]);
+      p.beginPath();p.moveTo(x,yt);p.lineTo(x,yb);
+      p.moveTo(x-cap,yt);p.lineTo(x+cap,yt);p.moveTo(x-cap,yb);p.lineTo(x+cap,yb);p.stroke();}}
   p.strokeStyle="#26c6ff";p.lineWidth=2;p.beginPath();s.forEach((v,i)=>i?p.lineTo(X(i),Y(v)):p.moveTo(X(i),Y(v)));p.stroke();
   s.forEach((v,i)=>{p.fillStyle=i===cur?"#fca50a":"#26c6ff";p.beginPath();p.arc(X(i),Y(v),i===cur?5:2.5,0,6.283);p.fill();});
-  const zx=X(z);p.strokeStyle="#f05a5a";p.setLineDash([4,3]);p.lineWidth=1.5;p.beginPath();p.moveTo(zx,14);p.lineTo(zx,H-24);p.stroke();p.setLineDash([]);p.lineWidth=1;
-  p.fillStyle="#f05a5a";p.font="10px system-ui";p.fillText("centroid (α0)",zx+3,H-27);   // real control centroid = traversal anchor (vertical)
-  p.fillStyle="#eef1f6";p.font="600 13px system-ui";p.fillText(`${feat}: generated ${mode==="pct"?"Δ% from α0":"(raw units)"} vs real NTC→${M.target}`,m,15);
-  $("plot-cap").textContent = mode==="pct"
-    ? `generated ${s[n-1]>0?"+":""}${s[n-1].toFixed(0)}% @α${M.alphas[n-1]}`+(koV!=null?`  ·  real NTC→${M.target} ${koV>0?"+":""}${koV.toFixed(1)}%`:"")
-    : `generated ${s[z].toFixed(1)}→${s[n-1].toFixed(1)} (raw)`+(koV!=null?`  ·  real NTC ${ntcV.toFixed(1)} / ${M.target} ${koV.toFixed(1)}`:"");
+  p.restore();
+  p.fillStyle="#eef1f6";p.font="600 12px system-ui";p.fillText(`${feat} ${mode==="raw"?"(raw)":"(% change vs NTC)"}`,mL,13);
+  $("plot-cap").textContent = mode==="raw"
+    ? `generated ${s[z].toFixed(1)}→${s[n-1].toFixed(1)} (raw)`+(hasRef?`  ·  real NTC ${rr.ntc[0].toFixed(1)} / ${M.target} ${rr.ko[0].toFixed(1)}`:"")
+    : (hasRef?`generated ${pctGen>0?"+":""}${pctGen.toFixed(0)}% vs NTC   ·   real ${M.target} ${pctKO>0?"+":""}${pctKO.toFixed(0)}%`:"generated (no real reference for this feature)");
+}
+const FEAT_LABEL=f=>f.replace(/^(network_\w+?_seg_|obj_)/,"");
+// dedup family key (mirrors the PC-tab collapse): strip aggregation + texture direction/offset variants → one canonical feature
+const dedupKey=f=>f.replace(/_(mean|median|std|sum|min|max|count)$/,"").replace(/_(0|45|90|135)(?=(_|$))/g,"").replace(/_offset\d+/g,"");
+// phenotype-match score: generated must move the SAME direction as the real NTC→KO change under +α and land close in %.
+// score = |realΔ|(magnitude) × capture(closeness) × conf(low real SEM) × bidirectional(−α moves the OPPOSITE way).
+function matchScore(f){
+  const s=M.ff.agg[f], rr=(M.ff.real_ref||{})[f];
+  if(!s||!rr||!rr.ntc||rr.ntc[0]==null||!rr.ko||rr.ko[0]==null) return null;
+  const z=s.length>>1, gb=Math.abs(s[z])||1e-9, nm=rr.ntc[0], nmp=Math.abs(nm)||1e-9;
+  const genD=(s[s.length-1]-s[z])/gb*100, genNeg=(s[0]-s[z])/gb*100;   // +α change and −α change (own baseline)
+  const realD=(rr.ko[0]-nm)/nmp*100, koS=(rr.ko[1]||0)/nmp*100;        // real % change + real SEM (%)
+  if(!isFinite(genD)||!isFinite(realD)||Math.abs(realD)>2000||Math.abs(genD)>2000) return null;   // drop near-zero-baseline degenerates (astronomical %)
+  if(realD===0||Math.sign(genD)!==Math.sign(realD)) return {score:0,genD,genNeg,realD};   // wrong +α direction / real didn't move → bottom
+  const capture=1-Math.min(1,Math.abs(genD-realD)/Math.abs(realD));               // 1 = matches, 0 = off by ≥100% of real
+  const conf=Math.abs(realD)/(Math.abs(realD)+koS+1e-9);                           // low real SEM → →1; noisy ref → →0
+  const bi=Math.sign(genNeg)===-Math.sign(genD)?Math.min(1,Math.abs(genNeg)/(Math.abs(genD)||1e-9)):0;   // −α opposite to +α
+  return {score:Math.abs(realD)*capture*conf*(0.5+0.5*bi), genD, genNeg, realD};   // 0.5×..1× bidirectional bonus
+}
+function buildFeatList(){
+  const cur=$("ffeat").value, dd=$("fdedup").checked;
+  const _dd=arr=>{if(!dd)return arr;const seen=new Set();return arr.filter(f=>{const k=dedupKey(f);if(seen.has(k))return false;seen.add(k);return true;});};   // keep first per family
+  if($("fmatch").checked){                            // flat list ranked by phenotype-match (ref'd features only)
+    let ranked=Object.keys(M.ff.agg).map(f=>({f,m:matchScore(f)})).filter(x=>x.m).sort((a,b)=>b.m.score-a.m.score);
+    if(dd){const seen=new Set();ranked=ranked.filter(x=>{const k=dedupKey(x.f);if(seen.has(k))return false;seen.add(k);return true;});}   // keep best-scoring per family
+    $("ffeat").innerHTML=ranked.map(({f,m})=>
+      `<option value="${f}">${FEAT_LABEL(f)} — gen ${m.genD>0?"+":""}${m.genD.toFixed(0)}% vs real ${m.realD>0?"+":""}${m.realD.toFixed(0)}%</option>`).join("");
+    $("ffeat").value=(ranked.some(x=>x.f===cur)?cur:(ranked[0]&&ranked[0].f))||"";
+  } else {                                            // grouped by category (★ = has real reference)
+    const order=["Network","Object morphology","Intensity","Texture","Cell"];
+    $("ffeat").innerHTML=order.filter(g=>M.ff.groups[g]).map(g=>{
+      const fs=_dd(M.ff.groups[g].slice().sort());
+      return `<optgroup label="${g} (${fs.length})">`+fs.map(f=>
+        `<option value="${f}">${FEAT_LABEL(f)}${M.ff.real_ref[f]?" ★":""}</option>`).join("")+`</optgroup>`;}).join("");
+    if(Object.values(M.ff.groups).some(g=>g.includes(cur))) $("ffeat").value=cur;
+    else{ let bf=null,bs=-1;                           // default = ref'd feature whose generated α-trajectory swings most
+      for(const f in M.ff.agg){const s=M.ff.agg[f];if(!s||!M.ff.real_ref[f])continue;const z=s.length>>1;
+        const sw=Math.abs((s[s.length-1]-s[z])/((Math.abs(s[z])||1e-9)));if(isFinite(sw)&&sw>bs){bs=sw;bf=f;}} if(bf)$("ffeat").value=bf; }
+  }
 }
 $("target").innerHTML=TARGETS.map((t,i)=>`<option value="${i}">${t[0]}</option>`).join("");
 ["target"].forEach(id=>$(id).onchange=()=>{climCache={};loadTarget(+$("target").value);});
 $("alpha").oninput=render;                                    // α scrub: generated grid + plot only (ref stays put)
 $("units").onchange=render;                                   // % change ↔ real units (plot only)
-["ffeat","opacity"].forEach(id=>$(id).oninput=()=>{climCache={};render();renderRef();});   // single Feature selector drives overlay + plot + ref
+function _ffpos(){const s=$("ffeat"),e=$("ffeat-pos");if(e)e.textContent=s.options.length?`${s.selectedIndex+1}/${s.options.length}`:"";}
+function stepFeat(d){const s=$("ffeat"),n=s.options.length;if(!n)return;s.selectedIndex=(s.selectedIndex+d+n)%n;climCache={};render();renderRef();_ffpos();}   // prev/next feature
+["ffeat","opacity"].forEach(id=>$(id).oninput=()=>{climCache={};render();renderRef();_ffpos();});   // single Feature selector drives overlay + plot + ref
+["fmatch","fdedup"].forEach(id=>$(id).onchange=()=>{buildFeatList();climCache={};render();renderRef();_ffpos();});   // grouped↔match ranking · feature dedup
+$("ffeat-prev").onclick=()=>stepFeat(-1); $("ffeat-next").onclick=()=>stepFeat(1);
+window.addEventListener("keydown",e=>{if(/INPUT|SELECT|TEXTAREA/.test((e.target||{}).tagName||""))return; if(e.key==="ArrowLeft"){e.preventDefault();stepFeat(-1);} else if(e.key==="ArrowRight"){e.preventDefault();stepFeat(1);}});
 loadTarget(0);
 </script>
 </body>

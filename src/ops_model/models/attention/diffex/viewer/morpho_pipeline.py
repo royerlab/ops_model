@@ -19,6 +19,130 @@ CACHE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets"
 SYNTH_BASE = "/hpc/projects/icd.fast.ops/models/diffex/morpho_synth"
 PAD = 24
 CROP = 256
+GEN_CROP = 160   # DiffEx cfg.crop_size: the generated crops are 160 px (native) upsized to 256 — real ref crops must match this window
+
+
+def _json_safe(o):   # non-finite floats (NaN/±Inf) → None so the browser's strict JSON.parse accepts the file
+    import math
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    return o
+
+
+def _clip_border(lab, m=5):
+    """Zero the m-px border band: segmentations touching the crop edge are shrunk to end ~m px inside it, and
+    we measure on the clipped objects. Simpler than per-object edge/reach filtering — no whole-object drops."""
+    if m <= 0:
+        return lab
+    out = lab.copy()
+    out[:m, :] = 0; out[-m:, :] = 0; out[:, :m] = 0; out[:, -m:] = 0
+    return out
+
+
+# Masked-Object (MO) nucleoli seg — copied from coding_exps/nucleoli_roundness (_segment_threshold),
+# reusing the real apply_intensity_threshold. NPM3 nucleoli are round blobs → frangi vesselness under-
+# detects them; MO (intensity threshold + per-object local adjust) is the right detector. No nucleus
+# tile_mask here (the generated crop is already a single cell).
+MO_PARAMS = {"threshold_method": "masked_object", "threshold_factor": 1.0,
+             "mo_global_method": "triangle", "mo_local_adjust": 1.3,
+             "mo_object_min_area_px": 15, "min_object_size": 15}
+
+
+def _nucleus_mask(img):
+    """Central-cell nucleus mask for NPM3 crops (no separate nucleus channel): blurred Otsu, flood-guarded
+    (if it covers >45% of the crop, fall back to the 88th percentile), keep only the central component —
+    kills off-nucleus background specks that plain MO would otherwise label on noisy high-α frames."""
+    from skimage.filters import threshold_otsu, gaussian
+    from skimage.morphology import binary_closing, disk
+    from scipy import ndimage as ndi
+    g = gaussian(img, 2)
+    v = g[g > 0]
+    if v.size == 0:
+        return np.zeros(img.shape, bool)
+    nuc = ndi.binary_fill_holes(binary_closing(g > threshold_otsu(v), disk(3)))
+    if nuc.mean() > 0.45:
+        nuc = ndi.binary_fill_holes(binary_closing(g > np.percentile(g, 88), disk(3)))
+    lab, n = ndi.label(nuc)
+    if n == 0:
+        return nuc
+    cy, cx = np.array(img.shape) // 2
+    cen = lab[cy, cx] or (1 + int(np.argmax(np.bincount(lab.ravel())[1:])))
+    return lab == cen
+
+
+def _seg_masked_object(img, tp=MO_PARAMS, nucleus=False):
+    """MO intensity seg on one 2D crop → int32 labels (fill_holes → CC label → min-size).
+    nucleus=True → constrain to the central nucleus (NPM3 nucleoli within the nucleus)."""
+    from scipy import ndimage as ndi
+    from skimage.morphology import binary_erosion, disk
+    from organelle_profiler.organelle_seg.thresholding import apply_intensity_threshold
+    binary = apply_intensity_threshold(
+        img, method=tp["threshold_method"], threshold_factor=tp.get("threshold_factor", 1.0),
+        mo_global_method=tp.get("mo_global_method", "triangle"),
+        mo_local_adjust=tp.get("mo_local_adjust", 0.98),
+        mo_object_min_area_px=tp.get("mo_object_min_area_px", 100))
+    if nucleus:
+        nuc = _nucleus_mask(img)
+        if not nuc.any():
+            return np.zeros(img.shape, np.int32)
+        binary = binary & binary_erosion(nuc, disk(2))
+    binary = ndi.binary_fill_holes(binary)
+    fp = ndi.generate_binary_structure(binary.ndim, 1)
+    objs, _ = ndi.label(binary, structure=fp)
+    ms = tp.get("min_object_size", 0)
+    if ms > 0 and objs.max() > 0:
+        ids, cnt = np.unique(objs, return_counts=True)
+        small = ids[(ids > 0) & (cnt < ms)]
+        if small.size:
+            objs[np.isin(objs, small)] = 0
+            objs, _ = ndi.label(objs > 0, structure=fp)
+    return objs.astype(np.int32)
+
+
+def _seg_strip_mo(img, n_cells, nucleus=False):
+    """Run MO per generated crop within the α strip (percentile-normalized per crop, like the standalone
+    _prep_npm3), assembling a strip-wide int32 label array with globally-unique ids."""
+    Y, W = img.shape
+    strip = np.zeros((Y, W), np.int32)
+    for c in range(n_cells):
+        x0 = c * (CROP + PAD)
+        crop = img[:, x0:x0 + CROP]
+        if crop.max() <= 0:
+            continue
+        lo, hi = np.percentile(crop, [1, 99.5])
+        cn = np.clip((crop - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
+        objs = _seg_masked_object(cn, nucleus=nucleus)
+        m = objs > 0
+        if m.any():
+            objs[m] += int(strip.max())
+            strip[:, x0:x0 + CROP][m] = objs[m]
+    return strip
+
+
+def _run_seg_masked_object(zpath, n_alpha, label_name, nucleus=False):
+    """MO seg branch of run_seg: read each α strip (marker=last channel), segment per crop, and write the
+    labels into the mini-zarr via the production label writer so readback/full_features read them unchanged."""
+    import zarr
+    from ops_utils.io.zarr_labels import _init_organelle_label_array, _update_labels_metadata
+    root = zarr.open(zpath, mode="r")
+    W = int(np.asarray(root["A/0/0/0"]).shape[-1])
+    n_cells = round((W + PAD) / (CROP + PAD))
+    out = []
+    for ai in range(n_alpha):
+        img = np.asarray(root[f"A/{ai}/0/0"][0, -1, 0]).astype(np.float32)   # marker channel = last
+        lab = _seg_strip_mo(img, n_cells, nucleus=nucleus)
+        Y, Wx = lab.shape
+        _init_organelle_label_array(zpath, f"A/{ai}/0", label_name, shape=(1, 1, 1, Y, Wx))
+        store = zarr.open(zpath, mode="r+")
+        store[f"A/{ai}/0/labels/{label_name}/0"][0, 0, 0] = lab
+        _update_labels_metadata(zpath, f"A/{ai}/0", label_name)
+        out.append((ai, True, int(lab.max()), label_name, None))
+        print(f"  α_idx {ai}: MO n_obj={int(lab.max())} label={label_name}")
+    return out
 
 
 def build_mini_zarr(marker_dir, target, grain, real_exp, channel_names, n_cells=6, base_dir=SYNTH_BASE):
@@ -54,17 +178,22 @@ def build_mini_zarr(marker_dir, target, grain, real_exp, channel_names, n_cells=
     return zpath, na
 
 
-def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None):
+def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None, method=None, label_name=None, mo_nucleus=False):
     """Run the REAL production org-seg on each α position of the mini-zarr (config resolved from the
     real experiment's channel map). `frangi_params` overrides the resolved frangi config (e.g. to switch
-    to the ADAPTIVE dynamic threshold on the generated images). Writes labels; returns per-α results."""
+    to the ADAPTIVE dynamic threshold on the generated images). Writes labels; returns per-α results.
+    method="masked_object" → the MO intensity-threshold path (not wired through segment_single_position_channel);
+    writes labels under `label_name` directly. mo_nucleus=True → nucleus-constrained MO (NPM3 nucleoli)."""
     os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
+    if method == "masked_object":
+        return _run_seg_masked_object(f"{base_dir}/{real_exp}/3-assembly/phenotyping_v3.zarr",
+                                      n_alpha, label_name or "organelle_seg", nucleus=mo_nucleus)
     from organelle_profiler.organelle_seg.organelle_segmentation import segment_single_position_channel
     out = []
     for ai in range(n_alpha):
         r = segment_single_position_channel(experiment=real_exp, position=f"A/{ai}/0",
                                             channel_key=marker_channel, structure_type=structure_type,
-                                            use_clahe=True, frangi_params=frangi_params)
+                                            use_clahe=True, frangi_params=frangi_params, method=method)
         out.append((ai, r.get("success"), r.get("num_objects"), r.get("output_label"), r.get("error")))
         print(f"  α_idx {ai}: success={r.get('success')} n_obj={r.get('num_objects')} "
               f"label={r.get('output_label')} {r.get('error') or ''}")
@@ -125,12 +254,9 @@ def readback_cache(marker_dir, target, grain, real_exp, label_name, n_cells, bas
         per_cell = []
         for c in range(n_cells):
             x0 = c * (CROP + PAD)
-            lc = relabel(lab[:, x0:x0 + CROP] > 0)                           # relabel within crop
+            lc = relabel(_clip_border(lab[:, x0:x0 + CROP]) > 0)             # clip border band, then relabel within crop
             ic = img[:, x0:x0 + CROP]
-            EM = 6                                                            # drop border-touching objects
-            rp = [r for r in regionprops(lc, intensity_image=ic)
-                  if r.area >= 3 and r.bbox[0] >= EM and r.bbox[1] >= EM
-                  and r.bbox[2] <= CROP - EM and r.bbox[3] <= CROP - EM]
+            rp = [r for r in regionprops(lc, intensity_image=ic) if r.area >= 3]   # border already clipped; just drop tiny
             rp = rp[:255]                                                     # 8-bit mask cap (index 1..255)
             remap = {r.label: i + 1 for i, r in enumerate(rp)}                # sequential 1..K for the 8-bit mask
             mask8 = np.zeros(lc.shape, np.uint8)
@@ -234,7 +360,7 @@ def reference_cells(marker_dir, target, real_exp, marker_channel, structure_type
 
 
 def reference_from_direction(marker_dir, target, real_exp, marker_channel, structure_type=None,
-                             network=False, n_cells=4, base_dir=SYNTH_BASE):
+                             network=False, n_cells=4, base_dir=SYNTH_BASE, adaptive=True, grain="geneKO"):
     """Real reference cells for targets with NO cached anchors (e.g. MICOS13): pull the direction-build's
     real crops (`directions/<marker_dir>/geneKO/<target>/cache/crops_<target>_*.npz` — labels 0=control,
     1=KD), seg them through the SAME pipeline, save crop webps + per-organelle feats. → <target>/_ref."""
@@ -246,8 +372,7 @@ def reference_from_direction(marker_dir, target, real_exp, marker_channel, struc
     from PIL import Image
     from skimage.measure import label as relabel, regionprops
     from skimage.transform import resize as skresize
-    npz = glob.glob(f"{OUT}/directions/{marker_dir}/geneKO/{target}/cache/crops_{target}_*.npz") if False else \
-        glob.glob(f"/hpc/projects/icd.fast.ops/models/diffex/directions/{marker_dir}/geneKO/{target}/cache/crops_{target}_*.npz")
+    npz = glob.glob(f"/hpc/projects/icd.fast.ops/models/diffex/directions/{marker_dir}/{grain}/{target}/cache/crops_{target}_*.npz")
     if not npz:
         print(f"[ref-dir] no crops npz for {marker_dir}/{target}"); return
     d = np.load(npz[0], allow_pickle=True)
@@ -264,20 +389,22 @@ def reference_from_direction(marker_dir, target, real_exp, marker_channel, struc
         shutil.rmtree(zpath)
     os.makedirs(os.path.dirname(zpath), exist_ok=True)
     glist = list(grp_cells)
-    with open_ome_zarr(zpath, layout="hcs", mode="w", channel_names=["Phase2D", marker_channel], version="0.5") as ds:
+    chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (crop IS phase; avoid empty-slot collision)
+    with open_ome_zarr(zpath, layout="hcs", mode="w", channel_names=chans0, version="0.5") as ds:
         for gi, g in enumerate(glist):
-            cr = grp_cells[g]; W = len(cr) * CROP + (len(cr) - 1) * PAD; strip = np.zeros((2, CROP, W), np.float32)
+            cr = grp_cells[g]; W = len(cr) * CROP + (len(cr) - 1) * PAD; strip = np.zeros((len(chans0), CROP, W), np.float32)
             for c, x in enumerate(cr):
                 strip[-1, :, c * (CROP + PAD):c * (CROP + PAD) + CROP] = x
             ds.create_position("A", str(gi), "0").create_image("0", strip[None, :, None])
     os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
     from organelle_profiler.organelle_seg.organelle_segmentation import segment_single_position_channel
     fp = None
-    if network:                                                  # match the generated: adaptive dynamic threshold
-        from skimage.morphology import skeletonize
-        _, dp = _resolve_seg(real_exp, marker_channel); fp = dict(dp)
-        fp["threshold"] = None; fp["threshold_mult"] = 0.1; fp["pixel_size_um"] = 0.065   # match generated seg
-    out = f"{CACHE}/_morphometrics/{marker_dir}/geneKO/{target}"; os.makedirs(out, exist_ok=True)
+    if network:
+        from skimage.morphology import skeletonize   # used below for per-object skel features
+        if adaptive:                                             # match the generated: adaptive dynamic threshold (adaptive=False → perfected config)
+            _, dp = _resolve_seg(real_exp, marker_channel); fp = dict(dp)
+            fp["threshold"] = None; fp["threshold_mult"] = 0.1; fp["pixel_size_um"] = 0.065   # match generated seg
+    out = f"{CACHE}/_morphometrics/{marker_dir}/{grain}/{target}"; os.makedirs(out, exist_ok=True)
     root, ref = None, {}
     for gi, g in enumerate(glist):
         r = segment_single_position_channel(experiment=real_exp, position=f"A/{gi}/0",
@@ -306,6 +433,86 @@ def reference_from_direction(marker_dir, target, real_exp, marker_channel, struc
         ref[g] = cells
     json.dump({"groups": glist, "n_cells": n_cells, "cells": ref, "img_dir": "_ref"}, open(f"{out}/_ref.json", "w"))
     print(f"[ref-dir] {marker_dir}/{target}: real cells {[(g, len(ref.get(g, []))) for g in glist]} + webps -> {out}/_ref")
+
+
+def reference_from_store(marker_dir, target, grain, image_channel, org_label, n_cells=4, network=True, cache=CACHE, store_exps=None):
+    """Cache real-cell reference thumbnails + PRODUCTION org-label overlays for the morpho demo. Each cell is
+    cropped ONCE (build-time) from its experiment's phenotyping_v3.zarr — marker image channel + the on-disk
+    production seg label — and written as static webp/png (the _v3 store is NOT on S3; the web reads the cache).
+    Cells = top-1k ACCURACY KO (member genes for a complex) + top-attention NTC, matching the plot's real_ref."""
+    import json
+    import re
+    import pandas as pd
+    import zarr
+    from PIL import Image
+    from skimage.measure import label as relabel, regionprops
+    from ..classifier.config import GRAINS
+    from skimage.morphology import skeletonize
+    GK = GRAINS["geneKO"]["parquet"]                                          # attention parquet (has NTC + coords)
+    ACC = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
+    COLS = ["gene", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank", "rank_type"]
+
+    def _cells(pq, genes, n):                                                 # top-n ranked 'top' cells for gene(s)
+        d = pd.read_parquet(pq, columns=COLS)
+        d = d[(d["gene"].astype(str).isin([str(x) for x in genes])) & (d["rank_type"] == "top")]
+        if store_exps:                                                        # only experiments where the marker channel IS this reporter (fluor markers are experiment-specific)
+            d = d[d["experiment"].astype(str).isin(set(store_exps))]
+        return d.sort_values("rank").head(n)
+    if grain == "complex":
+        import yaml
+        from ..classifier.config import slugify
+        y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
+        members = next((e["genes"] for e in y.values() if slugify(e["name"]) == target), [])
+        ko = _cells(ACC, members, n_cells)
+    else:
+        ko = _cells(ACC, [target], n_cells)
+    ntc = _cells(GK, ["NTC"], n_cells)
+    groups = {"NTC": ntc, target: ko}
+    half = CROP // 2
+    import shutil
+    out = f"{cache}/_morphometrics/{marker_dir}/{grain}/{target}"; os.makedirs(out, exist_ok=True)
+    shutil.rmtree(f"{out}/_ref", ignore_errors=True)                         # clear stale ref cells (e.g. a prior recompute build)
+    ref, glist = {}, []
+    for g, df in groups.items():
+        gd = f"{out}/_ref/{g}"; os.makedirs(gd, exist_ok=True); cells = []
+        for c, (_, row) in enumerate(df.iterrows()):
+            exp = str(row["experiment"]); w = str(row["well"]).strip()
+            m = re.match(r"^([A-Za-z]+)(\d+)$", w); pos = w if w.count("/") == 2 else (f"{m.group(1)}/{m.group(2)}/0" if m else w)
+            zp = f"/hpc/projects/icd.fast.ops/{exp}/3-assembly/phenotyping_v3.zarr"
+            if not os.path.exists(zp):
+                continue
+            try:
+                z = zarr.open(zp, mode="r"); P = z[pos]
+                chans = [ch.get("label") for ch in dict(P.attrs).get("ome", {}).get("omero", {}).get("channels", [])]
+                ci = chans.index(image_channel) if image_channel in chans else 0
+                from skimage.transform import resize as _rs
+                y, x = int(round(float(row["y_pheno"]))), int(round(float(row["x_pheno"])))
+                h = GEN_CROP // 2                                             # SAME fixed window as the generated crops (cfg.crop_size=160), then upsize to CROP — matches traversal framing exactly
+                imc = np.asarray(P["0"][0, ci, 0, max(0, y - h):y + h, max(0, x - h):x + h]).astype(np.float32)
+                lbc = np.asarray(P["labels"][org_label]["0"][0, 0, 0, max(0, y - h):y + h, max(0, x - h):x + h]).astype(np.int32)
+                im = _rs(imc, (CROP, CROP), preserve_range=True, anti_aliasing=True).astype(np.float32)
+                lb = _rs(lbc.astype(np.float32), (CROP, CROP), order=0, preserve_range=True, anti_aliasing=False).astype(np.int32)
+            except Exception as e:
+                print(f"[ref-store] {g} cell{c} {exp} {pos} crop failed: {repr(e)[:100]}"); continue
+            if im.shape != (CROP, CROP):                                      # pad edge crops to full tile
+                im = np.pad(im, [(0, CROP - im.shape[0]), (0, CROP - im.shape[1])]); lb = np.pad(lb, [(0, CROP - lb.shape[0]), (0, CROP - lb.shape[1])])
+            lo, hi = np.percentile(im, [1, 99]); imn = np.clip((im - lo) / (hi - lo + 1e-6), 0, 1)
+            Image.fromarray((imn * 255).astype(np.uint8)).save(f"{gd}/cell{c}.webp")
+            lc = relabel(_clip_border(lb) > 0)                               # clip border band, then measure clipped objects
+            keep = [r for r in regionprops(lc, intensity_image=im) if r.area >= 3][:255]
+            remap = {r.label: i + 1 for i, r in enumerate(keep)}; mask8 = np.zeros(lc.shape, np.uint8); feats = {}
+            for r in keep:
+                mask8[lc == r.label] = remap[r.label]
+                o = {"area": float(r.area), "mean_int": float(r.intensity_mean), "ecc": float(r.eccentricity)}
+                if network:
+                    o["skel"] = float(skeletonize(lc == r.label).sum())
+                feats[str(remap[r.label])] = o
+            Image.fromarray(mask8).save(f"{gd}/cell{c}_labels.png")
+            cells.append({"cell": c, "feats": feats})
+        if cells:
+            ref[g] = cells; glist.append(g)
+    json.dump({"groups": glist, "n_cells": n_cells, "cells": ref, "img_dir": "_ref"}, open(f"{out}/_ref.json", "w"))
+    print(f"[ref-store] {marker_dir}/{grain}/{target}: real cells {[(g, len(ref.get(g, []))) for g in glist]} (production {org_label}) -> {out}/_ref")
 
 
 def sweep_grid(marker_dir, target, real_exp, marker_channel, pix=(0.065, 0.13, 0.185, 0.37),
@@ -365,29 +572,32 @@ def _auto_ref_map(network, channel):
 
 
 def run_target(marker_dir, target, real_exp, marker_channel, store_marker, grain="geneKO", n_cells=6,
-               refs=True, adaptive_mult=0.1, fake_pixel_um=0.065):
+               refs=True, adaptive_mult=0.1, fake_pixel_um=0.065, adaptive=True, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False):
     """Fully config-driven: seg method + params AUTO from org_seg_params; network-vs-vesicular feature set
     + store ref-map AUTO from the resolved method. For frangi on the GENERATED (fake) images, switch to the
     ADAPTIVE dynamic threshold (compute_frangi_threshold) — the config's fixed threshold mis-fits the fake
     intensity/noise. mini-zarr → REAL seg → readback + real_ref (+ ref cells)."""
     method, dp = _resolve_seg(real_exp, marker_channel)
-    network = method == "frangi"                                  # frangi/tubular → network features (skel), else vesicular
+    network = (structure_type == "tubular") if structure_type else (method == "frangi")   # only tubular has a skeleton (vesicular = blob features)
     ref_map = _auto_ref_map(network, marker_channel)
     fp = None
-    if network:                                                   # adapt frangi to the fake resolution
+    if network and adaptive:                                      # adapt frangi to the fake resolution (adaptive=False → perfected config params)
         fp = dict(dp); fp["threshold"] = None; fp["threshold_mult"] = adaptive_mult
         fp["pixel_size_um"] = fake_pixel_um                       # smaller px → larger sigmas → coarse network, not noise
-    print(f"[run_target] {marker_dir}/{target}: method={method} network={network} px={fake_pixel_um if network else '-'}")
-    zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, ["Phase2D", marker_channel], n_cells)
-    res = run_seg(real_exp, marker_channel, na, structure_type=None, frangi_params=fp)   # config auto-resolves; fp=adaptive
+    if frangi_override:                                           # per-target tweaks on the resolved config (e.g. lower pixel_size for NPM3 nucleoli)
+        fp = dict(fp if fp else dp); fp.update(frangi_override)
+    print(f"[run_target] {marker_dir}/{target}: method={method} network={network} adaptive={adaptive} override={frangi_override}")
+    chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (avoid empty-slot collision)
+    zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, chans0, n_cells, base_dir=base_dir)
+    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus)   # config auto-resolves; fp=adaptive/override
     label_name = next((r[3] for r in res if r[1] and r[3]), None)
     if not label_name:
         print("[run_target] seg produced no label — abort"); return
-    readback_cache(marker_dir, target, grain, real_exp, label_name, n_cells,
+    readback_cache(marker_dir, target, grain, real_exp, label_name, n_cells, base_dir=base_dir,
                    store_marker=store_marker, network=network, ref_map=ref_map)
     if refs:
         reference_from_direction(marker_dir, target, real_exp, marker_channel, structure_type=None,
-                                 network=network, n_cells=min(4, n_cells))
+                                 network=network, n_cells=min(4, n_cells), adaptive=adaptive, grain=grain)
 
 
 def validate(marker_dir="lysosome_LAMP1", target="ABCE1", grain="geneKO",
@@ -401,7 +611,7 @@ def validate(marker_dir="lysosome_LAMP1", target="ABCE1", grain="geneKO",
 
 
 def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", n_cells=6,
-                  fake_pixel_um=0.05, adaptive_mult=0.1, out_root=None):
+                  fake_pixel_um=0.05, adaptive_mult=0.1, adaptive=True, out_root=None, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False):
     """REAL org-profiler feature extraction on the generated (cell, α) crops — NO skimage shortcut.
     Stage traversal (mini-zarr) → production org-seg → per crop run `process_single_cell`
     (extract_organelle_features + calculate_network_features), aggregate objects→cell with the pipeline's
@@ -412,28 +622,33 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
     from organelle_profiler.feature_extraction.fe_workers import process_single_cell
     from organelle_profiler.feature_extraction.fe_constants import AGGREGATION_FUNCTIONS
     method, dp = _resolve_seg(real_exp, marker_channel)
-    network = method == "frangi"
+    network = (structure_type == "tubular") if structure_type else (method == "frangi")   # only tubular has a skeleton (vesicular = blob features)
     fp = None
-    if network:                                                   # adaptive frangi on the fake images (as in run_target)
+    if network and adaptive:                                      # adaptive frangi override for fake images
         fp = dict(dp); fp["threshold"] = None; fp["threshold_mult"] = adaptive_mult; fp["pixel_size_um"] = fake_pixel_um
-    zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, ["Phase2D", marker_channel], n_cells)
-    res = run_seg(real_exp, marker_channel, na, structure_type=None, frangi_params=fp)
+    # adaptive=False → fp stays None → run_seg uses the perfected config params (e.g. Phase2D tubular) as-is
+    if frangi_override:                                           # per-target tweaks on the resolved config (e.g. real NPM3/NucleoLIVE settings)
+        fp = dict(fp if fp else dp); fp.update(frangi_override)
+    chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (generated frame IS phase; avoids the empty Phase2D-slot collision)
+    zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, chans0, n_cells, base_dir=base_dir)
+    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus)
     label_name = next((r[3] for r in res if r[1] and r[3]), None)
     if not label_name:
         print("[full] seg produced no label — abort"); return
-    organelle, chans, sp = label_name, ["Phase2D", marker_channel], (fake_pixel_um, fake_pixel_um)
+    px = (fp or dp).get("pixel_size_um", fake_pixel_um)                                    # match feature spacing to the seg's pixel size
+    organelle, chans, sp = label_name, chans0, (px, px)
     netorg = [organelle] if network else []
     orgmap = {organelle: marker_channel}
     root = zarr.open(zpath, mode="r")
-    rows = []
+    rows = []; n_empty = 0
     for ai in range(na):
         lab = np.asarray(root[f"A/{ai}/0/labels/{label_name}/0"][0, 0, 0]).astype(np.int32)   # (Y, W)
         img = np.asarray(root[f"A/{ai}/0/0"][0, :, 0])                                          # (C, Y, W)
         for c in range(n_cells):
             x0 = c * (CROP + PAD)
-            org_crop = lab[:, x0:x0 + CROP]
+            org_crop = _clip_border(lab[:, x0:x0 + CROP])                    # clip border band → measure clipped objects
             if org_crop.max() == 0:
-                continue
+                n_empty += 1; continue                                                          # empty seg → skip (logged below)
             inten = img[:, :, x0:x0 + CROP].astype(np.float32)                                  # (C, Y, CROP)
             cf, of, _nf = process_single_cell(
                 cell_info={"global_cell_id": f"{target}_a{ai:02d}_c{c}", "well": f"A/{ai}/0"},
@@ -455,12 +670,13 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
     os.makedirs(out, exist_ok=True)
     fp_out = f"{out}/full_features.parquet"
     df.to_parquet(fp_out)
-    print(f"[full] {marker_dir}/{grain}/{target}: {len(df)} (cell,α) rows × {df.shape[1]} cols -> {fp_out}")
+    print(f"[full] {marker_dir}/{grain}/{target}: {len(df)} (cell,α) rows × {df.shape[1]} cols "
+          f"({n_empty} empty-seg cell×α dropped) -> {fp_out}")
     print(f"  sample feature cols: {[c for c in df.columns if 'network' in c or c.startswith('obj_area')][:8]}")
     return fp_out
 
 
-def full_features_cache(marker_dir, target, grain, store_marker):
+def full_features_cache(marker_dir, target, grain, store_marker, store_channel=None):
     """Turn full_features.parquet into a demo-navigable JSON: per-α mean trajectory for EVERY feature +
     the real NTC→KO mean±SEM reference (from op_cp_features) for each feature that maps to a store column +
     grouped feature lists for the dropdown. → <base>/full_features.json (read by morpho_demo.html)."""
@@ -477,6 +693,8 @@ def full_features_cache(marker_dir, target, grain, store_marker):
     feats = [c for c in num.columns if c not in ("alpha_idx", "cell")]
     per = df.groupby("alpha_idx")
     agg = {f: [float(per[f].mean().get(ai, np.nan)) for ai in range(na)] for f in feats}
+    gsem = per[feats].std(ddof=1) / per[feats].count() ** 0.5   # per-α SEM over the generated cells (for demo/figure error bars)
+    agg_sem = {f: [float(gsem[f].get(ai, 0.0)) for ai in range(na)] for f in feats}
 
     import re
     CH = "mcherry"                                                 # infer the channel from the network_<ch>_seg_ columns
@@ -487,10 +705,16 @@ def full_features_cache(marker_dir, target, grain, store_marker):
 
     def store_col(f):                                              # generated feature name → op_cp store column (channel-aware)
         mm = re.match(r"network_(\w+?)_seg_(.+)", f)
+        if store_marker == "phase":                                # phase op_cp store uses the phase2d_tubular organelle naming
+            if mm:
+                return f"op_network_phase2d_tubular_{mm.group(2)}"
+            if f.startswith("obj_"):
+                return f"op_phase2d_tubular_{f[len('obj_'):]}"
+            return None
         if mm:
-            return f"op_network_{mm.group(1)}_{mm.group(2)}"
+            return f"op_network_{store_channel or mm.group(1)}_{mm.group(2)}"      # store_channel: seg organelle name ≠ store's physical channel (e.g. NPM3 nucleoli → 'gfp')
         if f.startswith("obj_"):
-            return f"op_{CH}_{f[len('obj_'):]}"
+            return f"op_{store_channel or CH}_{f[len('obj_'):]}"
         return None
 
     a = ad.read_h5ad(OPCP.format(store=store_marker), backed="r")
@@ -508,6 +732,27 @@ def full_features_cache(marker_dir, target, grain, store_marker):
         print(f"  [complex] {target}: {len(members)} member genes, {len(i_ko)} real cells")
     else:
         i_ko = np.where(gn == target)[0]
+    if store_marker == "phase" and grain == "geneKO":             # restrict real ref: top-1k ACCURACY KO + top-attention NTC (rankings cover all phase experiments)
+        import pandas as pd
+        obs = a.obs; ekey = obs["experiment"].astype(str).values; wkey = obs["well"].astype(str).values; skey = obs["segmentation"].astype(str).values
+        def _nw(w):
+            w = str(w).strip()
+            if w.count("/") == 2:
+                return w
+            m = re.match(r"^([A-Za-z]+)(\d+)$", w); return f"{m.group(1)}/{m.group(2)}/0" if m else w
+        def _restrict(idx, pq, val, nkeep):                       # keep store rows among the top-nkeep ranked cells of `val`
+            d = pd.read_parquet(pq, columns=["gene", "experiment", "well", "segmentation", "rank", "rank_type"])
+            d = d[(d["gene"].astype(str) == str(val)) & (d["rank_type"] == "top")].sort_values("rank").head(nkeep)
+            keys = set(zip(d["experiment"].astype(str), d["well"].map(_nw), d["segmentation"].astype(str)))
+            return np.array([i for i in idx if (ekey[i], _nw(wkey[i]), skey[i]) in keys], dtype=int)
+        from ..classifier.config import GRAINS
+        ACC = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
+        ko2, ntc2 = _restrict(i_ko, ACC, target, 1000), _restrict(i_ntc, GRAINS["geneKO"]["parquet"], "NTC", 1000)
+        print(f"  [phase top-acc] KO {len(i_ko)}->{len(ko2)}, NTC(top-attn) {len(i_ntc)}->{len(ntc2)}")
+        if len(ko2):
+            i_ko = ko2
+        if len(ntc2):
+            i_ntc = ntc2
     # 'centroid' = the real population mean over ALL cells (all genes) — the average-cell reference (sampled for speed)
     n_all = len(gn); i_cen = np.random.default_rng(0).choice(n_all, min(50000, n_all), replace=False)
     rows_idx = np.concatenate([i_ntc, i_ko, i_cen])
@@ -538,12 +783,99 @@ def full_features_cache(marker_dir, target, grain, store_marker):
     groups = {}
     for f in feats:
         groups.setdefault(grp(f), []).append(f)
-    json.dump({"alphas": alphas, "agg": agg, "real_ref": real_ref, "groups": groups, "target": target,
-               "marker_dir": marker_dir, "n_features": len(feats), "n_with_ref": len(real_ref)},
+    ncell = int(df["cell"].max()) + 1 if "cell" in df.columns and len(df) else 0
+    json.dump(_json_safe({"alphas": alphas, "agg": agg, "agg_sem": agg_sem, "real_ref": real_ref, "groups": groups, "target": target,
+               "marker_dir": marker_dir, "n_cells": ncell, "n_features": len(feats), "n_with_ref": len(real_ref)}),
               open(f"{base}/full_features.json", "w"))
     print(f"[full-cache] {marker_dir}/{grain}/{target}: {len(feats)} features ({len(real_ref)} with real NTC→KO ref) "
           f"-> {base}/full_features.json")
     return f"{base}/full_features.json"
+
+
+# morpho demo targets (SLURM-friendly, picklable). adaptive=False → the perfected org_seg config params.
+MORPHO_TARGETS = {
+    "MICOS13": dict(marker_dir="phase", target="MICOS13", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                    store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
+    "TOMM20": dict(marker_dir="phase", target="TOMM20", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
+    # CCT/NPM3: nucleoli are round blobs → frangi vesselness under-/over-detects them; use the MASKED-OBJECT
+    # intensity path (from coding_exps/nucleoli_roundness, tuned NPM3 MO_PARAMS). pixel_size only sets feature spacing.
+    "CCT": dict(marker_dir="nucleolus_GC_NPM3", target="Chaperonin_containing_T_complex", real_exp="ops0092_20251027",
+                marker_channel="nucleolus-GC_NPM3", store_marker="nucleolus-gc_npm3", grain="complex",
+                image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="vesicular",
+                seg_method="masked_object", mo_nucleus=True, frangi_override={"pixel_size_um": 0.825}),
+    # POLR1B geneKO, same NPM3 nucleoli marker + nucleus-constrained MO seg as CCT
+    "POLR1B": dict(marker_dir="nucleolus_GC_NPM3", target="POLR1B", real_exp="ops0092_20251027",
+                marker_channel="nucleolus-GC_NPM3", store_marker="nucleolus-gc_npm3", grain="geneKO",
+                image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="vesicular",
+                seg_method="masked_object", mo_nucleus=True, frangi_override={"pixel_size_um": 0.825}),
+    # GBF1 geneKO on ER/Golgi COP-II (SEC23A) puncta — MO intensity seg (punctate blobs, like nucleoli)
+    "GBF1": dict(marker_dir="ER_Golgi_COP_II_SEC23A", target="GBF1", real_exp="ops0081_20250924",
+                marker_channel="ER_Golgi_COP-II_SEC23A", store_marker="er_golgi_cop-ii_sec23a", grain="geneKO",
+                image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="vesicular",
+                seg_method="masked_object"),
+    # NucleoLIVE (org_seg_params NucleoLIVE variant): tubular on mCherry; lower pixel than real 0.185 to suppress generated background
+    "KIF23_NUCLEOLIVE": dict(marker_dir="nucleus_NucleoLIVE_Live_Cell_dye", target="KIF23", real_exp="ops0120_20260204",
+                marker_channel="nucleus_NucleoLIVE Live Cell dye", store_marker="nuclei_nucleolive_live_cell_dye", grain="geneKO",
+                image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular",
+                frangi_override={"pixel_size_um": 0.09, "min_object_size": 2}),
+    "TIM23_PHASE": dict(marker_dir="phase", target="TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant",
+                real_exp="ops0047_20250612", marker_channel="Phase2D", store_marker="phase", grain="complex",
+                image_channel="Phase2D", org_label="phase2d_tubular_seg", structure_type="tubular"),
+    "CHROMALIVE_TIM23": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation",
+                target="TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant", real_exp="ops0122_20260211",
+                marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
+                grain="complex", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
+    "CHROMALIVE_MICOS13": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation", target="MICOS13", real_exp="ops0122_20260211",
+                marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
+                grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
+    "CHROMALIVE_TOMM20": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation", target="TOMM20", real_exp="ops0122_20260211",
+                marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
+                grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
+    # FastAct actin filaments (mCherry, tubular → real config = frangi, like ChromaLIVE mito)
+    "ARP23_FASTACT": dict(marker_dir="actin_filament_FastAct_SPY555_Live_Cell_Dye",
+                target="Actin_related_protein_2_3_complex__ARPC1A_ACTR3B_ARPC5_variant", real_exp="ops0076_20250917",
+                marker_channel="actin filament_FastAct SPY555 Live Cell Dye", store_marker="actin_filament_fastact_spy555_live_cell_dye",
+                grain="complex", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular",
+                frangi_override={"pixel_size_um": 0.06}),   # lower px → coarser frangi → traces filaments, drops generated-image noise
+    "CAPZB_FASTACT": dict(marker_dir="actin_filament_FastAct_SPY555_Live_Cell_Dye", target="CAPZB", real_exp="ops0076_20250917",
+                marker_channel="actin filament_FastAct SPY555 Live Cell Dye", store_marker="actin_filament_fastact_spy555_live_cell_dye",
+                grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular",
+                frangi_override={"pixel_size_um": 0.06}),
+}
+
+
+def build_morpho(marker_dir, target, real_exp, marker_channel, store_marker, grain="geneKO", n_cells=12,
+                 image_channel=None, org_label=None, adaptive=False, store_channel=None, frangi_override=None, structure_type=None, seg_method=None, mo_nucleus=False):
+    """One morpho-demo target end to end (the wrapper that bundles EVERYTHING into one target dir, so nothing is
+    scattered): generated seg-mask overlays (a*_labels.png) + per-object feats (a*_feats.json) + full org-profiler
+    feature table (full_features.parquet) + demo JSON w/ per-α trajectory + top-accuracy store real-ref stats
+    (full_features.json) + CACHED production-label real-cell images & seg overlays (_ref/). adaptive=False = perfected config."""
+    from ..classifier.config import slugify
+    base_dir = f"{SYNTH_BASE}/job_{grain}_{slugify(target)}"   # per-target staging dir → jobs can run fully in parallel (no shared-zarr race)
+    os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
+    run_target(marker_dir, target, real_exp, marker_channel, store_marker=store_marker, grain=grain, n_cells=n_cells,
+               refs=False, adaptive=adaptive, frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus)   # generated seg-mask overlays + per-object feats
+    full_features(marker_dir, target, real_exp, marker_channel, grain=grain, n_cells=n_cells, adaptive=adaptive,
+                  frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus)
+    full_features_cache(marker_dir, target, grain, store_marker=store_marker, store_channel=store_channel)
+    if image_channel and org_label:                                          # cached real-cell images w/ PRODUCTION org labels (built-time crop from _v3)
+        exps = None
+        if store_marker != "phase":                                          # fluor markers: restrict real cells to experiments where this channel IS the reporter
+            import anndata as ad
+            exps = set(ad.read_h5ad(OPCP.format(store=store_marker), backed="r").obs["experiment"].astype(str).unique())
+        reference_from_store(marker_dir, target, grain, image_channel, org_label,
+                             n_cells=min(4, n_cells), network=("tubular" in org_label), store_exps=exps)
+    return f"{CACHE}/_morphometrics/{marker_dir}/{grain}/{target}"
+
+
+def build_morpho_target(key, n_cells=12):
+    return build_morpho(n_cells=n_cells, **MORPHO_TARGETS[key])
+
+
+def build_phase_morpho(target, real_exp="ops0047_20250612", n_cells=12, grain="geneKO"):   # back-compat wrapper
+    return build_morpho("phase", target, real_exp, "Phase2D", "phase", grain=grain, n_cells=n_cells,
+                        image_channel="Phase2D", org_label="phase2d_tubular_seg")
 
 
 if __name__ == "__main__":

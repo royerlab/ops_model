@@ -217,6 +217,21 @@ def cmd_fluor_complex(args):
                          log_dir="diffex_gifs", wait_for_completion=False)
 
 
+def cmd_phase_morpho(args):
+    """Morpho-demo targets end to end: generated overlay masks + full features + top-accuracy store real ref +
+    cached production-label real-cell images. Keys from MORPHO_TARGETS (e.g. MICOS13 TOMM20 CCT). One SLURM job
+    per target, run in PARALLEL (each target stages its own per-target zarr → no shared-zarr race). --parallel caps
+    concurrency (default = all targets at once)."""
+    from .morpho_pipeline import build_morpho_target, MORPHO_TARGETS
+    targets = args.targets or list(MORPHO_TARGETS)
+    jobs = [_job(f"pm_{slugify(t)}", build_morpho_target, dict(key=t, n_cells=args.n_cells), "phase_morpho") for t in targets]
+    print(f"phase-morpho: {len(jobs)} target(s) in parallel (cap {args.parallel or len(jobs)}) -> {targets}")
+    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 128, "timeout_min": 240,
+          "slurm_array_parallelism": args.parallel or len(jobs)}
+    submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_gifs", slurm_params=sp,
+                         log_dir="diffex_morpho", wait_for_completion=False)
+
+
 def cmd_phase_full(args):
     """Full phase NTC cache on v1: all ~1000 geneKOs + all EBI complexes, chunked across GPU jobs.
     No GPU-type constraint and no concurrency cap — batch is shrunk (default 24 → ~28GB peak) so it
@@ -243,6 +258,7 @@ def main():
     g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=list(range(20))); g.add_argument("--alphas", type=float, nargs="+", default=[1.0, 2.0, 3.0, 4.0, 5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.add_argument("--force", action="store_true", help="rebuild montages even if tiles already exist"); g.add_argument("--parallel", type=int, default=100, help="max concurrent SLURM tasks"); g.set_defaults(fn=cmd_montage)
     fc = sub.add_parser("fluor-complex"); fc.add_argument("--markers", nargs="*"); fc.add_argument("--batch", type=int, default=24); fc.set_defaults(fn=cmd_fluor_complex)
     pf = sub.add_parser("phase-full"); pf.add_argument("--chunk-size", type=int, default=50); pf.add_argument("--batch", type=int, default=24); pf.set_defaults(fn=cmd_phase_full)
+    pm = sub.add_parser("phase-morpho"); pm.add_argument("--targets", nargs="*"); pm.add_argument("--n-cells", dest="n_cells", type=int, default=12); pm.add_argument("--parallel", type=int, default=None, help="max concurrent targets (default = all)"); pm.set_defaults(fn=cmd_phase_morpho)
     sy = sub.add_parser("sync", help="refresh manifest + attention + montages from the current cache"); sy.add_argument("--after", nargs="+", help="SLURM job IDs to gate on (afterany); refreshes when they finish"); sy.set_defaults(fn=cmd_sync)
     args = ap.parse_args(); args.fn(args)
 
