@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — OPS interpretability viewer</title>
-<link rel="stylesheet" href="style.css?v=98"/>
+<link rel="stylesheet" href="style.css?v=110"/>
 </head>
 <body>
 <header>
@@ -69,16 +69,19 @@
         <select id="anchor"></select>
       </label>
       <div class="hint">Default <b>NTC</b>. Pick another geneKO/complex to make α=0 that class and traverse toward the selected perturbation — requires precomputed A→B assets for the pair.</div>
+      <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
         <label class="chk"><input type="checkbox" id="showscore" data-on="classifier scores"/> classifier score on images</label>
         <label class="chk"><input type="checkbox" id="showreal" data-on="show real cells"/> show real cell row (vs generated)</label>
         <label class="chk"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
+        <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       </div>
       <div class="grp">
         <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
         <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
         <ul id="panellist"></ul>
       </div>
+      <div class="row"><button id="exportgif" title="download the current traversal grid (all α) as an animated GIF">⬇ Export traversal GIF</button></div>
     </div>
 
     <div class="tabpane hidden" id="tab-attn">
@@ -128,6 +131,7 @@
       <div class="hint">Top real phenotype cells for the selected perturbation (phase), ranked by model <b>attention</b> or classifier <b>accuracy</b>. Follows the marker × perturbation selection; pin perturbations to compare (NTC pinned by default).</div>
       <div class="pc-mode"><button id="tc-attn" class="seg active" title="cells the model attends to most">Top Attention</button><button id="tc-acc" class="seg" title="cells classified most confidently">Top Accuracy</button></div>
       <div class="hint">Count set by <b>Cells per page</b> above (up to 20).</div>
+      <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       <div class="grp">
         <span class="lbl">Pin perturbations <span class="hint">(compare; current always shown)</span></span>
         <div class="row"><button id="tc-pin">+ pin current</button><button id="tc-pinclear">clear</button></div>
@@ -230,21 +234,29 @@
       <span id="alpha-read">α = 0.0</span>
     </div>
     <div class="playctl">
-      <select id="speed" data-seg title="playback speed">
+      <select id="speed" title="playback speed">
+        <option value="720">0.25×</option>
         <option value="360">0.5×</option>
+        <option value="240">0.75×</option>
         <option value="180" selected>1×</option>
+        <option value="120">1.5×</option>
         <option value="90">2×</option>
+        <option value="60">3×</option>
         <option value="45">4×</option>
       </select>
       <select id="alphalimit" title="limit autoplay to ±α (scrub slider stays full range)">
         <option value="5" selected>play ±5</option>
+        <option value="4.5">play ±4.5</option>
         <option value="4">play ±4</option>
+        <option value="3.5">play ±3.5</option>
         <option value="3">play ±3</option>
+        <option value="2.5">play ±2.5</option>
         <option value="2">play ±2</option>
+        <option value="1.5">play ±1.5</option>
         <option value="1">play ±1</option>
+        <option value="0.5">play ±0.5</option>
       </select>
     </div>
-    <div class="tickhint">tick marks = α samples; <b>click</b> to toggle an autoplay pause (● = pauses)</div>
     <div id="score-legend" style="display:none">classifier confidence (target class):&nbsp; 0%<span class="bar"></span>100%</div>
     <div id="grid"></div>
     <div id="meta"></div>
@@ -265,6 +277,7 @@
 <div id="ticktip"></div>
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
-<script src="app.js?v=98"></script>
+<script src="gif.js"></script>
+<script src="app.js?v=119"></script>
 </body>
 </html>

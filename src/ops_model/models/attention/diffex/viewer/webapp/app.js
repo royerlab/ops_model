@@ -37,6 +37,49 @@ const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, ancho
   asset_dir: t.asset_dir, alphas: t.alphas, n_cells: t.n_cells, has_real: t.has_real,
   real_dir: t.real_dir || t.asset_dir, key: markerName + "|" + t.slug });
 
+// ---- persist the browse selection + display prefs across page reloads (localStorage; works on static S3) ----
+const LS_KEY = "opsin.state.v1";
+function saveState() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      marker: markerLabel(state.markerIdx), grain: $("grain").value,
+      target: state.target ? state.target.target : null, anchor: state.anchor,
+      cellCount: state.cellCount, page: state.page, tilepx: $("tile-scale").value,
+      showScore: state.showScore, showReal: state.showReal, altAnchor: state.altAnchorsOnly,
+      cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, view: state.view,
+      pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
+    }));
+  } catch (e) { /* private mode / quota — non-fatal */ }
+}
+function restoreState() {   // returns true if a saved snapshot was applied (skips the default selection)
+  let s; try { s = JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch (e) { s = null; }
+  if (!s) return false;
+  // filters/prefs that affect the target list — set BEFORE marker/target resolution
+  if (s.grain) $("grain").value = s.grain;
+  if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
+  if (s.tcCols != null) { $("tc-cols").checked = s.tcCols; $("tc-view").classList.toggle("cols-layout", s.tcCols); }
+  if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
+  if (s.showScore != null) { $("showscore").checked = s.showScore; state.showScore = s.showScore; $("score-legend").style.display = s.showScore ? "flex" : "none"; }
+  if (s.showReal != null) { $("showreal").checked = s.showReal; state.showReal = s.showReal; }
+  if (s.cellCount) { state.cellCount = s.cellCount; $("cellcount").value = s.cellCount; }
+  if (s.tilepx) { $("tile-scale").value = s.tilepx; document.documentElement.style.setProperty("--tilepx", s.tilepx + "px"); }
+  if (s.speed) { $("speed").value = s.speed; state.frameMs = +s.speed; }
+  if (s.alphaLimit) { $("alphalimit").value = s.alphaLimit; state.alphaLimit = +s.alphaLimit; }
+  if (s.anchor) state.anchor = s.anchor;   // populateAnchors keeps it if valid for the target, else resets to NTC
+  let mi = state.manifest.markers.findIndex(m => (m.label || m.marker_channel || "Phase") === s.marker);
+  if (mi < 0) mi = 0;
+  selectMarker(mi); $("markerfilter").value = markerLabel(mi);   // refreshTargets → selects first target by default
+  if (s.target) { const t = state.targets.find(x => x.target === s.target); if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); } }
+  if (Array.isArray(s.pinned) && s.pinned.length) {   // re-pin same-marker comparisons
+    const mc = state.marker.marker_channel || "Phase";
+    state.pinned = s.pinned.map(pp => { const e = resolveEntry(pp.target, pp.anchor || "NTC"); return e ? pertOf(mc, e, e.control || "NTC") : null; }).filter(Boolean);
+    renderPinned(); rebuild();
+  }
+  if (s.page) { state.page = s.page; rebuild(); }   // restore the cell page (selectTarget reset it to 0)
+  if (s.view && s.view !== "traversal") { const b = document.querySelector(`.tab[data-tab="${s.view}"]`); if (b) b.click(); }
+  return true;
+}
+
 async function boot() {
   state.manifest = await (await fetch(MANIFEST_URL + NOCACHE)).json();
   state.geneDesc = await fetch(`${BASE}gene_desc.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
@@ -59,6 +102,9 @@ async function boot() {
   };
   $("clearpanels").onclick = () => { state.pinned = []; renderPinned(); rebuild(); };
   $("alpha").oninput = () => showIdx(+$("alpha").value);
+  $("tile-scale").oninput = () => document.documentElement.style.setProperty("--tilepx", $("tile-scale").value + "px");   // traversal image scale
+  $("colslayout").onchange = () => $("grid").classList.toggle("cols-layout", $("colslayout").checked);   // perturbations rows ↔ columns
+  $("exportgif").onclick = exportGif;
   $("play").onclick = togglePlay;
   $("showscore").onchange = () => {
     state.showScore = $("showscore").checked;
@@ -140,10 +186,16 @@ async function boot() {
   $("tc-pin").onclick = () => { const g = state.target && state.target.target;   // pin current gene in the current mode
     if (g && !tc.pinned.some(p => p.gene === g && p.mode === tc.mode)) tc.pinned.push({ gene: g, mode: tc.mode }); renderTopPins(); renderTop(); };
   $("tc-pinclear").onclick = () => { tc.pinned = []; renderTopPins(); renderTop(); };
+  $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
-  selectMarker(0); $("markerfilter").value = markerLabel(0);   // default = phase marker
-  const defT = state.targets.find(t => t.target === "HSPA5");  // default perturbation = HSPA5 when present
-  if (defT) { $("filter").value = targetLabel(defT); selectTarget(defT.slug); }
+  let _saveTimer;   // persist selection/prefs after any change settles (debounced; snapshot reads live state)
+  const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
+  document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
+  if (!restoreState()) {                                       // restore last session, else default = phase marker + HSPA5
+    selectMarker(0); $("markerfilter").value = markerLabel(0);
+    const defT = state.targets.find(t => t.target === "HSPA5");
+    if (defT) { $("filter").value = targetLabel(defT); selectTarget(defT.slug); }
+  }
   document.querySelectorAll("select[data-seg]").forEach(segmentize);   // small dropdowns → segmented pills
   document.querySelectorAll("label.chk").forEach(toggleize);           // checkboxes → off/on segmented switches
 }
@@ -640,20 +692,105 @@ function resolveEntry(name, anchor) {
 function activeSet() {
   const e = state.target ? (resolveEntry(state.target.target, state.anchor) || resolveEntry(state.target.target, "NTC")) : null;
   const cur = e ? pertOf(state.marker.marker_channel || "Phase", e, e.control || "NTC") : null;
-  const set = cur ? [cur] : [];
-  state.pinned.forEach(p => { if (!cur || p.key !== cur.key) set.push(p); });
+  const set = state.pinned.slice();
+  if (cur && !set.some(p => p.key === cur.key)) set.unshift(cur);   // prepend current ONLY if not already pinned → grid order == pin-list order
   return set;
 }
 
+async function exportGif() {   // client-side GIF of the current traversal grid across all α (works on static S3)
+  const grid = $("grid"); if (!state.panels.length || typeof GIF === "undefined") return;
+  const btn = $("exportgif"), old = btn.textContent; btn.disabled = true; btn.textContent = "rendering…";
+  const gr = grid.getBoundingClientRect();
+  const MARGIN = 18;                 // general padding around the whole gif
+  const TOP = 72;                    // heatbar band on its own line above the grid (extra gap below its end labels)
+  // walk each group (row/column) keeping its header label + colored tiles, in raw grid coords
+  const groups = [];
+  grid.querySelectorAll(".group").forEach(gEl => {
+    const hd = gEl.querySelector(".group-hd"); if (!hd) return;
+    const hr = hd.getBoundingClientRect(), tiles = [];
+    gEl.querySelectorAll(".panel img").forEach(im => {
+      const k = +im.id.replace("pimg", ""); const p = state.panels[k]; if (!p) return;
+      const r = im.getBoundingClientRect();
+      tiles.push({ x: r.left - gr.left + grid.scrollLeft, y: r.top - gr.top + grid.scrollTop, w: r.width, h: r.height, frames: p.frames });
+    });
+    if (tiles.length) groups.push({ text: hd.textContent, color: getComputedStyle(hd).color,   // skip the tile-less real-cells group
+      hx: hr.left - gr.left + grid.scrollLeft, hy: hr.top - gr.top + grid.scrollTop, tiles });
+  });
+  const allT = groups.flatMap(g => g.tiles);
+  if (!allT.length) { btn.disabled = false; btn.textContent = old; return; }
+  // size the canvas to the real tile bounding box (+margin) so empty auto-fill tracks aren't rendered
+  const minX = Math.min(...allT.map(t => t.x)), maxX = Math.max(...allT.map(t => t.x + t.w));
+  const minY = Math.min(...allT.map(t => t.y), ...groups.map(g => g.hy)), maxY = Math.max(...allT.map(t => t.y + t.h));
+  const W = Math.ceil(maxX - minX) + MARGIN * 2, H = Math.ceil(maxY - minY) + TOP + MARGIN * 2;
+  const offX = MARGIN - minX, offY = TOP + MARGIN - minY;   // shift content to the margin origin
+  groups.forEach(g => { g.hx += offX; g.hy += offY; g.tiles.forEach(t => { t.x += offX; t.y += offY; }); });
+  const cache = {};
+  const srcs = [...new Set(groups.flatMap(g => g.tiles.flatMap(t => t.frames)))];
+  await Promise.all(srcs.map(src => new Promise(res => {
+    const im = new Image(); im.onload = im.onerror = () => { cache[src] = im; res(); }; im.src = src; })));
+  // frame plan = viewer autoplay: ping-pong over the ±alphaLimit range, dwelling at the user's pause ticks (dwell → longer per-frame delay, not duplicate frames)
+  computeRange();
+  const lo = state.rangeLo, hi = state.rangeHi;
+  const base = Math.max(40, ((+$("speed").value) || state.frameMs || 120) * 0.38);   // faster baseline than the on-screen player
+  const hold = v => (v === lo || v === hi) ? 6 : (state.pausePoints.has(v) ? 3 : 1);   // always dwell at the sweep ends, slightly longer than interior pauses
+  const path = [];
+  for (let v = lo; v <= hi; v++) path.push(v);
+  for (let v = hi - 1; v > lo; v--) path.push(v);        // ping-pong back (drop final lo; GIF loops to it)
+  if (!path.length) path.push(Math.floor((lo + hi) / 2));
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H; const cx = cv.getContext("2d");
+  const gif = new GIF({ workers: 2, quality: 10, workerScript: "gif.worker.js", width: W, height: H, globalPalette: true });
+  const LH = 14;   // wrap each group label to its own tile-column width, centered above its images (matches on-screen)
+  const wrap = (txt, maxW) => { const words = String(txt).split(/\s+/), lines = []; let cur = "";
+    for (const w of words) { const t = cur ? cur + " " + w : w; if (cur && cx.measureText(t).width > maxW) { lines.push(cur); cur = w; } else cur = t; } if (cur) lines.push(cur); return lines; };
+  cx.font = "12px sans-serif";
+  groups.forEach(g => { const gx0 = Math.min(...g.tiles.map(t => t.x)), gx1 = Math.max(...g.tiles.map(t => t.x + t.w));
+    g.gcx = (gx0 + gx1) / 2; g.gtop = Math.min(...g.tiles.map(t => t.y)); g.lines = wrap(g.text, gx1 - gx0 - 4); });
+  const tgt = (state.target && state.target.target) || "target";
+  const anch = state.anchor || "NTC";
+  // heatbar geometry: its own centered line, matching the viewer's --neg/--mid/--pos scale
+  const barW = Math.min(W - MARGIN * 2, 520), bx0 = (W - barW) / 2, bx1 = bx0 + barW, cy = MARGIN + 15;
+  for (const a of path) {
+    cx.fillStyle = "#0d0f14"; cx.fillRect(0, 0, W, H);
+    const grd = cx.createLinearGradient(bx0, 0, bx1, 0);                          // orange (anti-phenotype) → blue (anchor) → red (phenotype)
+    grd.addColorStop(0, "#f0a020"); grd.addColorStop(0.5, "#26c6ff"); grd.addColorStop(1, "#ff5252");
+    cx.fillStyle = grd; cx.fillRect(bx0, cy - 4, barW, 8);
+    const frac = hi > lo ? (a - lo) / (hi - lo) : 0.5, mx = bx0 + frac * barW;    // moving marker (only thing that changes → no flicker)
+    cx.strokeStyle = "#fff"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(mx, cy - 10); cx.lineTo(mx, cy + 10); cx.stroke();
+    cx.fillStyle = "#fff"; cx.beginPath(); cx.moveTo(mx, cy - 10); cx.lineTo(mx - 4, cy - 15); cx.lineTo(mx + 4, cy - 15); cx.closePath(); cx.fill();
+    cx.font = "600 12px sans-serif"; cx.textBaseline = "top";                     // three static labels colored like the bar
+    cx.textAlign = "left";   cx.fillStyle = "#f0a020"; cx.fillText("anti-phenotype", bx0, cy + 10);
+    cx.textAlign = "center"; cx.fillStyle = "#26c6ff"; cx.fillText(anch, (bx0 + bx1) / 2, cy + 10);
+    cx.textAlign = "right";  cx.fillStyle = "#ff5252"; cx.fillText("phenotype", bx1, cy + 10);
+    cx.font = "12px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "bottom";
+    for (const g of groups) {                                                    // wrapped label centered above the group's images, then the tiles
+      cx.fillStyle = g.color;
+      g.lines.forEach((ln, li) => cx.fillText(ln, g.gcx, g.gtop - 5 - (g.lines.length - 1 - li) * LH));
+      for (const t of g.tiles) { const im = cache[t.frames[a]]; if (im && im.width) cx.drawImage(im, t.x, t.y, t.w, t.h); }
+    }
+    gif.addFrame(cx, { copy: true, delay: base * hold(a) });
+  }
+  gif.on("finished", blob => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `traversal_${tgt}.gif`; a.click();
+    URL.revokeObjectURL(a.href); btn.disabled = false; btn.textContent = old; });
+  gif.render();
+}
 function renderPinned() {
   const ul = $("panellist"); ul.innerHTML = "";
+  const aset = activeSet();
   state.pinned.forEach((p, i) => {
     const li = document.createElement("li");
-    li.style.color = PALETTE[(i + 1) % PALETTE.length];   // matches its grid-row color
+    const gi = aset.findIndex(q => q.key === p.key);
+    li.style.color = PALETTE[((gi < 0 ? i : gi)) % PALETTE.length];   // exact color of its grid row
+    li.draggable = true; li.style.cursor = "move";        // drag to reorder
     const a = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
-    li.innerHTML = `<span>${a}${p.target} · ${p.markerName}</span>`;
+    li.innerHTML = `<span>⠿ ${a}${p.target} · ${p.markerName}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => { state.pinned.splice(i, 1); renderPinned(); rebuild(); };
+    li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
+    li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
+    li.ondragleave = () => { li.style.opacity = ""; };
+    li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
+      if (from !== i) { const [m] = state.pinned.splice(from, 1); state.pinned.splice(i, 0, m); renderPinned(); rebuild(); } };
     li.appendChild(b); ul.appendChild(li);
   });
 }
@@ -664,12 +801,27 @@ function rebuild() {
   const N = state.cellCount, start = state.page * N;
   const g = $("grid"); g.innerHTML = "";
   state.panels = []; let k = 0;
+  if (state.showReal) {                             // real cells shown ONCE as their own group (shared starting cells → identical across NTC-anchored perturbations)
+    const rp0 = set.find(p => p.has_real);
+    if (rp0) {
+      const rgroup = document.createElement("div"); rgroup.className = "group";
+      const rhd = document.createElement("div"); rhd.className = "group-hd"; rhd.style.color = "#9aa0a6";
+      rhd.textContent = "real cells"; rhd.title = rhd.textContent;
+      const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
+      for (let c = start; c < Math.min(start + N, rp0.n_cells); c++) {
+        const rp = document.createElement("div"); rp.className = "panel";
+        const rimg = document.createElement("img"); rimg.src = `${BASE}${rp0.real_dir}/cell${c}/real.webp`;
+        rp.appendChild(rimg); rr.appendChild(rp);
+      }
+      rgroup.appendChild(rhd); rgroup.appendChild(rr); g.appendChild(rgroup);
+    }
+  }
   set.forEach((p, gi) => {                          // one group (row) per perturbation
     const color = PALETTE[gi % PALETTE.length];
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     const group = document.createElement("div"); group.className = "group";
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
-    hd.textContent = `${apfx}${p.target} · ${p.markerName}`;   // single header, no cell count
+    hd.textContent = `${apfx}${p.target} · ${p.markerName}`; hd.title = hd.textContent;   // single header (title = full text on hover when truncated)
     const cells = document.createElement("div"); cells.className = "group-cells";
     cells.style.setProperty("--cols", Math.min(N, 5));   // max 5 per row; wrap instead of stretching
     for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
@@ -684,17 +836,6 @@ function rebuild() {
       k++;
     }
     group.appendChild(hd);
-    if (state.showReal && p.has_real) {          // option (a): real-cell row above the traversal
-      const rl = document.createElement("div"); rl.className = "rowlbl"; rl.textContent = "real cell ↓";
-      const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
-      for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
-        const rp = document.createElement("div"); rp.className = "panel";
-        const rimg = document.createElement("img"); rimg.src = `${BASE}${p.real_dir}/cell${c}/real.webp`;
-        rp.appendChild(rimg); rr.appendChild(rp);
-      }
-      const gl = document.createElement("div"); gl.className = "rowlbl"; gl.textContent = "generated α-traversal ↓";
-      group.appendChild(rl); group.appendChild(rr); group.appendChild(gl);
-    }
     group.appendChild(cells); g.appendChild(group);
   });
   state.alphas = state.panels.length ? state.panels[0].alphas : state.manifest.alphas;
@@ -711,7 +852,8 @@ function rebuild() {
   else hr.style.display = "none";
   computeRange();
   const mid = Math.floor(n / 2);
-  $("alpha").value = mid; buildPlaySeq(state.alphas); showIdx(mid);
+  const keep = (state.idx != null && state.idx >= 0 && state.idx < n) ? state.idx : mid;   // hold α across perturbation/cell-page changes; reset only on load / α-count change
+  $("alpha").value = keep; buildPlaySeq(state.alphas); showIdx(keep);
 
   const t = state.target;
   const scoreLbl = t && t.grain === "minibinder" ? `${t.phenotype || "39S"} cell-score` : t && t.grain === "complex" ? "EBI mAP" : "dist mAP";
@@ -1205,10 +1347,11 @@ function tcData(name) {   // resolve a perturbation name → its ranking entry (
   if (cx) { if (cx[name]) return cx[name]; const base = name.split(",")[0].trim(); for (const k in cx) if (k === base || name.startsWith(k)) return cx[k]; }
   return null;
 }
-function tcEntries() {   // current perturbation (in the toggle's mode) first, then pinned rows (each in its own mode)
+function tcEntries() {   // pinned rows in their order; current prepended ONLY if not already pinned → pin-list order == grid order
   const cur = state.target ? state.target.target : null, out = [];
-  if (cur) out.push({ gene: cur, mode: tc.mode, current: true });
-  for (const p of tc.pinned) if (!(p.gene === cur && p.mode === tc.mode)) out.push({ gene: p.gene, mode: p.mode });
+  const curPinned = cur && tc.pinned.some(p => p.gene === cur && p.mode === tc.mode);
+  if (cur && !curPinned) out.push({ gene: cur, mode: tc.mode, current: true });
+  for (const p of tc.pinned) out.push({ gene: p.gene, mode: p.mode, current: cur === p.gene && tc.mode === p.mode });
   return out;
 }
 function renderTop() {
@@ -1236,9 +1379,15 @@ function renderTop() {
 function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
   tc.pinned.forEach((p, i) => {
-    const li = document.createElement("li"); li.innerHTML = `${p.gene} <span class="hint">· ${p.mode}</span>`;
+    const li = document.createElement("li"); li.innerHTML = `<span>⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
+    li.draggable = true; li.style.cursor = "move";        // drag to reorder (like the traversal pins)
     const b = document.createElement("button"); b.textContent = "×";
     b.onclick = () => { tc.pinned.splice(i, 1); renderTopPins(); renderTop(); };
+    li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
+    li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
+    li.ondragleave = () => { li.style.opacity = ""; };
+    li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
+      if (from !== i) { const [m] = tc.pinned.splice(from, 1); tc.pinned.splice(i, 0, m); renderTopPins(); renderTop(); } };
     li.appendChild(b); ul.appendChild(li);
   });
 }
