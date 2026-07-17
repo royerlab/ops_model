@@ -72,10 +72,11 @@ def build_layout(h5ad, out_dir, embeddings=("umap", "phate")):
 
 
 def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grain="geneKO",
-                       tile=256, px_per_umap=5600, embedding="umap"):
+                       tile=256, px_per_umap=5600, embedding="umap", border_field=None, border_width=None):
     """Build the montage from the traversal cache: each gene tile = its cell-`cell`, α=`alpha` frame,
     placed at the gene's position in `embedding` (obsm X_<embedding>, e.g. umap or phate).
-    Crops kept GRAYSCALE (white category tint). crop_size=256 sharp; px_per_umap≈22×crop fills canvas."""
+    Crops kept GRAYSCALE (white category tint). crop_size=256 sharp; px_per_umap≈22×crop fills canvas.
+    `border_field` (an obs column, e.g. 'leiden_r4') draws a per-cell colored border keyed on that group."""
     al = list(VIEWER_ALPHAS)
     ai = int(np.argmin([abs(a - alpha) for a in al]))     # frame index for the requested α
     a0 = int(np.argmin([abs(a) for a in al]))             # α=0 frame index (shared anchor recon)
@@ -102,9 +103,20 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
         slug, c, fi = srcs[i]
         return np.asarray(Image.open(f"{va}/{slug}/cell{c}/frame_{fi:02d}.webp").convert("L"))
 
+    border_colors = border_groups = None
+    if border_field:                                      # per-cell colored border keyed on an obs group
+        import matplotlib.pyplot as _plt
+        gv = {str(g): str(v) for g, v in zip(ann.obs["perturbation"], ann.obs[border_field])}
+        border_groups = np.array([gv.get(g, "") for g in genes])
+        uniq = sorted({v for v in border_groups if v not in ("", "nan", "None")}, key=lambda s: (len(s), s))
+        cmap = _plt.get_cmap("hsv")
+        border_colors = {v: tuple(cmap(i / max(1, len(uniq) - 1))[:3]) for i, v in enumerate(uniq)}
+
+    cfg = MontageConfig(crop_size=tile, px_per_umap=px_per_umap,
+                        border_width=border_width or max(4, tile // 40))
     build_montage(umap_coords=coords, crops=crops, categories=np.array(["geneKO"] * len(genes)),
                   category_colors={"geneKO": (1.0, 1.0, 1.0)}, output_path=out_zarr,   # white = no tint → grayscale
-                  labels=np.array(genes), config=MontageConfig(crop_size=tile, px_per_umap=px_per_umap))
+                  labels=np.array(genes), config=cfg, border_colors=border_colors, border_groups=border_groups)
     print(f"[montage] wrote {out_zarr}: {len(genes)} genes")
     return out_zarr, genes
 

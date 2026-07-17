@@ -1,0 +1,28 @@
+Generative single-cell counterfactual traversals and the embedding montage
+
+Generative model
+
+A diffusion autoencoder was trained on single-cell images (label-free phase, or a fluorescence marker). Each cell is represented by two disentangled latents: a 1,024-dimensional semantic embedding obtained from Cell-DINO, and a stochastic (noise) latent that captures the residual identity of the individual cell — its size, texture, and local context. The decoder is a conditional diffusion model that reconstructs the cell image from the semantic embedding using classifier-free guidance (guidance scale w = 2.0, with a learned null embedding). Because phenotype and identity are encoded separately, a given cell can be re-synthesized while its phenotype is smoothly and independently varied.
+
+This generative approach adapts DiffEx (arXiv:2502.09663), a diffusion-autoencoder method for counterfactual explanations of image classifiers, with two main modifications. First, DiffEx uses unsupervised directions discovered from classifier gradients; we instead use a supervised direction — the NTC→knockout axis, fit as a linear classifier in the 1,024-dimensional Cell-DINO embedding space (below) — and translate the cell's semantic latent along it. Second, the base cells and the cells that define each direction are selected by the set classifier's per-cell accuracy ranking rather than sampled at random.
+
+Selecting representative cells
+
+For each perturbation, single cells were ranked by their contribution to the set classifier's predictive accuracy. Each cell was scored by its marginal effect on classification accuracy when included in randomly sampled sets of n = 50 cells of the same perturbation; cells that most improve the set-level prediction rank highest. The top-ranked non-targeting control (NTC) cells (20 per condition) were used as the shared base cells for all traversals, so that every perturbation of a given imaging channel is shown as a morph of the same reference control cells.
+
+Perturbation direction and counterfactual traversal
+
+For each gene knockout we take the top ~1,000 knockout cells and the top ~1,000 control (NTC) cells — by the per-cell accuracy ranking above — in the 1,024-dimensional Cell-DINO space. Two quantities are then derived separately:
+
+- Direction (which way to move): a logistic classifier is fit to separate the two populations, and its decision-boundary normal (a unit vector), oriented from control toward knockout, is the traversal axis.
+- Step size (how far): the gap between the class means — the distance from the control-cell mean to the knockout-cell mean — so that α = 1 advances a control embedding by one full control→knockout mean-shift (landing it on the knockout mean).
+
+A counterfactual traversal was then generated for each base cell by displacing its semantic embedding along this direction, z(α) = z₀ + α · gap · d, while holding its stochastic latent fixed, and decoding each α with the diffusion model. Seventeen steps were sampled across α ∈ [−5, +5]: α = 0 reconstructs the control cell, positive α interpolates toward the knockout phenotype and reaches the knockout mean at α = 1, and |α| > 1 extrapolates beyond the class means, exaggerating the phenotypic difference in either direction. Because the stochastic latent is held fixed across the series, cell identity is anchored and only the phenotype changes, yielding a smooth traversal. To quantify each traversal, the generated images at every α were embedded with Cell-DINO and passed as a set (bag) through the set classifier to obtain full class-prediction scores for the synthesized cells as a function of α, measuring how strongly the generated phenotype is recognized as the target perturbation along the traversal. In parallel, classical CellProfiler / OrganelleProfiler morphometric features were measured on both the real and the generated images to confirm that the traversal produces the expected phenotypic effect in interpretable feature space (e.g. object area, circularity, or marker intensity changing monotonically with α).
+
+The same framework was used to morph between two perturbation classes — for example, the 40S and 60S cytosolic ribosomal-subunit complexes. In this case the direction is the difference between the two class means (A → B), and the base cells of class A are morphed toward the mean of class B, again with α extrapolating beyond either mean to exaggerate the transition.
+
+Gene embedding and montage
+
+A gene-level phenotypic embedding was constructed by aggregating the single-cell Cell-DINO features of each perturbation, and a two-dimensional layout was computed with PHATE. To build the montage, each gene's generated cell (at a chosen α) was placed at that gene's coordinate in this embedding. Because many genes occupy dense regions, the embedding plane was tiled with a regular grid and a single representative gene was retained per grid cell — chosen by local density — so that adjacent cells do not overlap; coarser grids show fewer, larger cells and finer grids fill in more. Each tile was outlined by the color of its gene's Leiden cluster to convey the local phenotypic neighborhood, with individual complex members highlighted (e.g. ribo40S, ribo60S). The result is a single view in which each region of the phenotypic embedding is illustrated by a representative generated cell.
+
+The montage was assembled with the open-source latent-lens package (https://github.com/czi-ai/latent-lens; multiscale montages of image crops laid out by an embedding), which performs the grid-based, density-prioritized decimation and the multiscale tiling.
