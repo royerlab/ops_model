@@ -859,6 +859,7 @@ def run_combined_titration(
     schedule_start_override: Optional[int] = None,
     median_start_policy: str = "pool",
     n_workers: int = 1,
+    plot: bool = True,
 ) -> str:
     """Run the combined-titration loop for one group and write CSV + plots.
 
@@ -1087,8 +1088,11 @@ def run_combined_titration(
         f"{len(rows)} new + {len(cached_rows)} cached)"
     )
 
-    # Per-metric plot
-    _plot_group_curves(df, group_label, out_dir, sampling_mode)
+    # Per-metric plot. Skipped for per-target shards (schedule of one point):
+    # each shard would emit a useless single-point plot; the real per-group
+    # plot is produced from the merged CSV after all shards complete.
+    if plot:
+        _plot_group_curves(df, group_label, out_dir, sampling_mode)
     return f"SUCCESS: {csv_path}"
 
 
@@ -2101,6 +2105,9 @@ def main():
                         "median_start_policy": args.median_start_policy,
                         "second_pca_threshold": thr,
                         "n_workers": int(n_workers),
+                        # single-point shard — skip the per-shard plot; the
+                        # real per-group plot comes from the merged CSV.
+                        "plot": False,
                     },
                     "metadata": {"group": g, "target": int(target),
                                   "shard_csv": str(out_csv)},
@@ -2158,6 +2165,9 @@ def main():
             merged.to_csv(canonical, index=False)
             csvs_by_group[g] = canonical
             print(f"[merge] {g}: {len(merged)} rows → {canonical}")
+            # Per-shard plotting is disabled (single-point plots); produce the
+            # real per-group curve here from the full merged schedule.
+            _plot_group_curves(merged, g, group_outdirs[g], sampling_mode)
     elif args.slurm:
         from ops_utils.hpc.slurm_batch_utils import (
             submit_parallel_jobs,
