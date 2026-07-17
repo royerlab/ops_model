@@ -105,9 +105,14 @@ def _uncovered_gene_cells(obs: pd.DataFrame, rank_col: str,
 
 
 def _select_top_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
-                          group_col: str = "perturbation") -> np.ndarray:
-    """Top-K cells per gene for head-covered genes; ALL cells for genes the
-    head doesn't cover (saturation parity with all-cells baseline).
+                          group_col: str = "perturbation",
+                          include_uncovered: bool = True) -> np.ndarray:
+    """Top-K cells per gene for head-covered genes.
+
+    When ``include_uncovered`` is True (default for ebi/chad/geneko heads),
+    ALL cells of genes outside the head's panel are also included so the
+    curve saturates to the all-cells baseline at high K. For set_accuracy
+    heads, we set it False so K=10 really means "10 cells per gene, period."
     """
     obs = obs.reset_index(drop=True)
     mask = obs[rank_col].notna() & (obs[f"{rank_col}_type"] == "top")
@@ -116,17 +121,17 @@ def _select_top_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
         top_idx = sub.groupby(group_col).head(K).index.to_numpy(dtype=np.int64)
     else:
         top_idx = np.array([], dtype=np.int64)
-    uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
-    return np.unique(np.concatenate([top_idx, uncovered_idx]))
+    if include_uncovered:
+        uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
+        return np.unique(np.concatenate([top_idx, uncovered_idx]))
+    return np.unique(top_idx)
 
 
 def _select_bottom_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
-                             group_col: str = "perturbation") -> np.ndarray:
-    """Bottom-K per gene (largest rank values) for head-covered genes; ALL
-    cells for genes outside the head's panel.
-
-    Sorts by rank descending and takes top-K per covered gene — works for
-    CHAD/geneko (no 'bottom' rank_type label) as well as EBI.
+                             group_col: str = "perturbation",
+                             include_uncovered: bool = True) -> np.ndarray:
+    """Bottom-K per gene (largest rank values). See ``_select_top_per_gene``
+    for ``include_uncovered`` semantics.
     """
     obs = obs.reset_index(drop=True)
     mask = obs[rank_col].notna()
@@ -135,8 +140,10 @@ def _select_bottom_per_gene(obs: pd.DataFrame, rank_col: str, K: int,
         bot_idx = sub.groupby(group_col).head(K).index.to_numpy(dtype=np.int64)
     else:
         bot_idx = np.array([], dtype=np.int64)
-    uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
-    return np.unique(np.concatenate([bot_idx, uncovered_idx]))
+    if include_uncovered:
+        uncovered_idx = _uncovered_gene_cells(obs, rank_col, group_col=group_col)
+        return np.unique(np.concatenate([bot_idx, uncovered_idx]))
+    return np.unique(bot_idx)
 
 
 def _select_random_per_gene(obs: pd.DataFrame, K: int, seed: int = 0) -> np.ndarray:
@@ -253,18 +260,31 @@ def _select_for_bin(obs: pd.DataFrame, bin_id: str, seed: int = 0) -> np.ndarray
         # (attached alongside the rank), not the h5ad's perturbation. Alex's
         # sgRNA→gene lookup differs from the h5ad's for some cells (NTC
         # reassignments, barcode-mapping drift).
+        #
+        # include_uncovered semantics per head:
+        # - set_accuracy (geneKO): Alex covers ~all 1000 real genes → uncovered
+        #   pool is only ~1M unranked cells that would dilute low-K. Off.
+        # - set_accuracy_ebi: Alex covers 311 genes (EBI panel). To keep the
+        #   Distinctiveness mAP measured over all 1001 genes (comparable to
+        #   the geneKO row), include the 690 non-EBI genes' full cells so
+        #   their guide means populate at baseline. On.
         if meta["head"] == "set_accuracy_ebi":
             group_col = "set_accuracy_ebi_gene"
+            include_uncovered = True
         elif meta["head"] == "set_accuracy":
             group_col = "set_accuracy_gene"
+            include_uncovered = False
         else:
             group_col = "perturbation"
+            include_uncovered = True
         if meta["direction"] == "top":
             sel = _select_top_per_gene(obs, rank_col, meta["K"],
-                                        group_col=group_col)
+                                        group_col=group_col,
+                                        include_uncovered=include_uncovered)
         else:
             sel = _select_bottom_per_gene(obs, rank_col, meta["K"],
-                                           group_col=group_col)
+                                           group_col=group_col,
+                                           include_uncovered=include_uncovered)
     elif meta["direction"] == "intersection_removed":
         sel = _select_intersection_removed(obs, P=meta["percentile"],
                                              K=meta["K"], seed=seed)
