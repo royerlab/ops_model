@@ -99,7 +99,7 @@ def process_group(group_dir: Path,
     from ops_model.post_process.combination.pca_optimization.aggregation import (
         _annotate_genes_from_panel,
     )
-    from ops_model.post_process.combination.embedding_overlays import (
+    from ops_model.post_process.combination.analysis.embedding_overlays import (
         load_overlay_maps, save_interactive_html,
     )
 

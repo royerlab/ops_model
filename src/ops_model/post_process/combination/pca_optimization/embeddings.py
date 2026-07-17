@@ -30,7 +30,7 @@ from ops_utils.data.positive_controls import plot_positive_controls_grid
 from ops_model.post_process.combination.pca_optimization.aggregation import (
     _annotate_genes_from_panel,
 )
-from ops_model.post_process.combination.pca_optimization.chromosome import (
+from ops_model.post_process.combination.pipeline_add_ons.chromosome import (
     _load_chromosome_map,
     _plot_chromosome_overlay,
     _plot_chromosome_overlay_html,
@@ -349,6 +349,68 @@ def _score_distinctiveness(
         return None, 0.0
 
 
+def _score_ebi_plus(
+    adata_guide,
+    activity_map,
+    r,
+    total_feats,
+    plots_dir,
+    metrics_dir,
+    plt,
+    _logger,
+    distance="cosine",
+    suffix="",
+):
+    """Run EBI+ scoring (guide-level, complex-grouped), save CSV and plot.
+
+    EBI+ is a guide-level metric like distinctiveness: every guide's positive
+    group is its gene's EBI complex (else the gene itself), so complex members
+    collapse into one group and non-complex genes reduce to distinctiveness.
+    Returns ``(ebi_plus_map, ebi_plus_ratio)`` or ``(None, 0.0)`` on failure.
+    Computed across all geneKOs (``suffix`` only affects output filenames).
+    """
+    label = "all geneKOs"
+    if activity_map is None:
+        return None, 0.0
+    try:
+        from ops_utils.analysis.map_scores import phenotypic_ebi_plus
+
+        _logger.info(f"Running EBI+ ({label})...")
+        ebi_plus_map, ebi_plus_ratio = phenotypic_ebi_plus(
+            adata_guide,
+            plot_results=False,
+            null_size=100_000,
+            distance=distance,
+        )
+        ebi_plus_map.to_csv(
+            metrics_dir / f"phenotypic_ebi_plus{suffix}.csv", index=False
+        )
+        _logger.info(f"  EBI+ ({label}): {ebi_plus_ratio:.1%}")
+
+        try:
+            fig, ax = plt.subplots(figsize=(8, 7))
+            plot_map_scatter(
+                ax, ebi_plus_map, f"EBI+ ({label})", ebi_plus_ratio, show_ntc=False
+            )
+            fig.suptitle(
+                f"EBI+ ({label}) — {total_feats} features",
+                fontsize=13, fontweight="bold",
+            )
+            fig.tight_layout()
+            fig.savefig(
+                plots_dir / f"map_ebi_plus{suffix}.png", dpi=150, bbox_inches="tight"
+            )
+            plt.close(fig)
+            _logger.info(f"  Saved plots/map_ebi_plus{suffix}.png")
+        except Exception as exc:
+            _logger.warning(f"  EBI+ plot failed: {exc}")
+
+        return ebi_plus_map, ebi_plus_ratio
+    except Exception as exc:
+        _logger.error(f"  EBI+ ({label}) failed: {exc}")
+        return None, 0.0
+
+
 def _score_consistency(
     adata_gene,
     activity_map,
@@ -364,8 +426,9 @@ def _score_consistency(
 
     Returns ``(corum_map, corum_ratio, chad_map, chad_ratio,
     ebi_map, ebi_ratio)`` — six values now that EBI is a permanent third
-    consistency metric. Failure mode is six zeros so callers can keep
-    unpacking with one shape.
+    consistency metric. Each metric is scored independently: a failure in one
+    (e.g. an annotation that won't parse) yields ``(None, 0.0)`` for that metric
+    alone and never suppresses the others.
 
     NOTE: ``phenotypic_consistency_*`` is called WITHOUT ``activity_map``, so
     consistency is computed over all genes regardless of the ``suffix``
@@ -379,67 +442,70 @@ def _score_consistency(
     label = "all geneKOs"
     if activity_map is None:
         return None, 0.0, None, 0.0, None, 0.0
-    try:
-        from ops_utils.analysis.map_scores import (
-            phenotypic_consistency_corum,
-            phenotypic_consistency_ebi,
-            phenotypic_consistency_manual_annotation,
-        )
+    from ops_utils.analysis.map_scores import (
+        phenotypic_consistency_corum,
+        phenotypic_consistency_ebi,
+        phenotypic_consistency_manual_annotation,
+    )
 
-        _logger.info(f"Running CORUM consistency ({label})...")
-        consistency_corum_map, consistency_corum_ratio = phenotypic_consistency_corum(
+    def _score(name, csv_stem, fn):
+        """Run one consistency metric independently; (None, 0.0) on failure."""
+        _logger.info(f"Running {name} consistency ({label})...")
+        try:
+            cmap, ratio = fn()
+            cmap.to_csv(metrics_dir / f"{csv_stem}{suffix}.csv", index=False)
+            _logger.info(f"  {name} ({label}): {ratio:.1%}")
+            return cmap, ratio
+        except Exception as exc:
+            _logger.error(f"  {name} consistency ({label}) failed: {exc}")
+            return None, 0.0
+
+    corum_map, corum_ratio = _score(
+        "CORUM",
+        "phenotypic_consistency_corum",
+        lambda: phenotypic_consistency_corum(
             adata_gene,
             plot_results=False,
             null_size=100_000,
             cache_similarity=True,
             distance=distance,
-        )
-        consistency_corum_map.to_csv(
-            metrics_dir / f"phenotypic_consistency_corum{suffix}.csv", index=False
-        )
-        _logger.info(f"  CORUM ({label}): {consistency_corum_ratio:.1%}")
-
-        _logger.info(f"Running CHAD consistency ({label})...")
-        consistency_manual_map, consistency_manual_ratio = (
-            phenotypic_consistency_manual_annotation(
-                adata_gene,
-                plot_results=False,
-                null_size=100_000,
-                cache_similarity=True,
-                distance=distance,
-                annotation_path=CHAD_ANNOTATION_PATH,
-            )
-        )
-        consistency_manual_map.to_csv(
-            metrics_dir / f"phenotypic_consistency_manual{suffix}.csv", index=False
-        )
-        _logger.info(f"  Manual CHAD ({label}): {consistency_manual_ratio:.1%}")
-
-        _logger.info(f"Running EBI consistency ({label})...")
-        consistency_ebi_map, consistency_ebi_ratio = phenotypic_consistency_ebi(
+        ),
+    )
+    chad_map, chad_ratio = _score(
+        "CHAD",
+        "phenotypic_consistency_manual",
+        lambda: phenotypic_consistency_manual_annotation(
+            adata_gene,
+            plot_results=False,
+            null_size=100_000,
+            cache_similarity=True,
+            distance=distance,
+            annotation_path=CHAD_ANNOTATION_PATH,
+        ),
+    )
+    ebi_map, ebi_ratio = _score(
+        "EBI",
+        "phenotypic_consistency_ebi",
+        lambda: phenotypic_consistency_ebi(
             adata_gene,
             plot_results=False,
             null_size=100_000,
             cache_similarity=True,
             distance=distance,
             annotation_path=EBI_ANNOTATION_PATH,
-        )
-        consistency_ebi_map.to_csv(
-            metrics_dir / f"phenotypic_consistency_ebi{suffix}.csv", index=False
-        )
-        _logger.info(f"  EBI ({label}): {consistency_ebi_ratio:.1%}")
+        ),
+    )
 
-        # 1×3 panel: CORUM + CHAD + EBI scatter (existing style)
+    # Plots are best-effort and must not drop already-computed metrics.
+    # plot_map_scatter renders a "No data" placeholder for any None/empty map.
+    try:
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(22, 7))
-        plot_map_scatter(ax1, consistency_corum_map,
-                         f"Consistency CORUM ({label})",
-                         consistency_corum_ratio, show_ntc=False)
-        plot_map_scatter(ax2, consistency_manual_map,
-                         f"Consistency CHAD ({label})",
-                         consistency_manual_ratio, show_ntc=False)
-        plot_map_scatter(ax3, consistency_ebi_map,
-                         f"Consistency EBI ({label})",
-                         consistency_ebi_ratio, show_ntc=False)
+        plot_map_scatter(ax1, corum_map, f"Consistency CORUM ({label})",
+                         corum_ratio, show_ntc=False)
+        plot_map_scatter(ax2, chad_map, f"Consistency CHAD ({label})",
+                         chad_ratio, show_ntc=False)
+        plot_map_scatter(ax3, ebi_map, f"Consistency EBI ({label})",
+                         ebi_ratio, show_ntc=False)
         fig.suptitle(
             f"Consistency Metrics ({label}) — {total_feats} features",
             fontsize=13, fontweight="bold",
@@ -450,15 +516,18 @@ def _score_consistency(
         )
         plt.close(fig)
         _logger.info(f"  Saved plots/map_consistency{suffix}.png")
+    except Exception as exc:
+        _logger.warning(f"  Consistency panel plot failed: {exc}")
 
-        # Standalone EBI panel using the canonical map-scatter helper —
-        # same style as the activity / distinctiveness mAP scatters.
+    # Standalone EBI panel using the canonical map-scatter helper —
+    # same style as the activity / distinctiveness mAP scatters.
+    if ebi_map is not None:
         try:
             fig, ax = plt.subplots(figsize=(8, 7))
             plot_map_scatter(
-                ax, consistency_ebi_map,
+                ax, ebi_map,
                 f"Consistency EBI ({label})",
-                consistency_ebi_ratio, show_ntc=False,
+                ebi_ratio, show_ntc=False,
             )
             fig.tight_layout()
             fig.savefig(plots_dir / f"map_ebi_volcano{suffix}.png",
@@ -468,11 +537,4 @@ def _score_consistency(
         except Exception as exc:
             _logger.warning(f"  EBI volcano plot failed: {exc}")
 
-        return (
-            consistency_corum_map, consistency_corum_ratio,
-            consistency_manual_map, consistency_manual_ratio,
-            consistency_ebi_map, consistency_ebi_ratio,
-        )
-    except Exception as exc:
-        _logger.error(f"  Consistency metrics ({label}) failed: {exc}")
-        return None, 0.0, None, 0.0, None, 0.0
+    return corum_map, corum_ratio, chad_map, chad_ratio, ebi_map, ebi_ratio

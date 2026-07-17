@@ -26,6 +26,28 @@ def _build_parser():
         description="Per-signal pooled PCA optimization for organelle attribution"
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a YAML config whose keys are the CLI argument names as "
+        "snake_case dest names (e.g. cell_dino, phase_only, output_dir, "
+        "experiments, fixed_threshold, slurm). Config values populate the "
+        "defaults; any flag passed explicitly on the command line overrides the "
+        "config. See pca_optimization/example_config.yml.",
+    )
+    parser.add_argument(
+        "--signal-paths",
+        dest="signal_paths",
+        default=None,
+        help="(Config-only) Combine embeddings that live OUTSIDE the standard "
+        "experiment layout. Set in the --config YAML under `signal_paths:` as a "
+        "mapping of signal-group name -> h5ad path (or list of paths to pool). "
+        "Each h5ad must have the same schema as the discovery "
+        "features_processed_*.h5ad (obs: sgRNA / perturbation / experiment; "
+        "X = embedding). When set, experiment discovery is skipped. Output → "
+        "<output-dir>/external/.",
+    )
+    parser.add_argument(
         "-o",
         "--output-dir",
         type=str,

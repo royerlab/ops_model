@@ -180,9 +180,11 @@ def _score_single_reporter_metrics(
             "distinctiveness",
             "corum",
             "chad",
+            "ebi_plus",
             "distinctiveness_all",
             "corum_all",
             "chad_all",
+            "ebi_plus_all",
         )
     }
     # Per-gene / per-complex DataFrames (raw mAP scores per entity for
@@ -194,12 +196,14 @@ def _score_single_reporter_metrics(
     result["distinctiveness_df"] = None
     result["corum_df"] = None
     result["chad_df"] = None
+    result["ebi_plus_df"] = None
     try:
         from ops_utils.analysis.map_scores import (
             phenotypic_activity_assesment,
             phenotypic_distinctivness,
             phenotypic_consistency_corum,
             phenotypic_consistency_manual_annotation,
+            phenotypic_ebi_plus,
         )
 
         g_norm = normalize_guide_adata(g_raw.copy(), norm_method)
@@ -224,6 +228,16 @@ def _score_single_reporter_metrics(
         result["distinctiveness"] = float(dist_ratio)
         result["distinctiveness_all"] = result["distinctiveness"]
         result["distinctiveness_df"] = dist_df
+
+        ebi_plus_df, ebi_plus_ratio = phenotypic_ebi_plus(
+            g_norm,
+            plot_results=False,
+            null_size=null_size,
+            distance=distance,
+        )
+        result["ebi_plus"] = float(ebi_plus_ratio)
+        result["ebi_plus_all"] = result["ebi_plus"]
+        result["ebi_plus_df"] = ebi_plus_df
 
         e_norm = aggregate_to_level(
             g_norm, "gene", preserve_batch_info=False, subsample_controls=False
@@ -329,6 +343,7 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
             "corum": reporter_metrics.get("corum_df"),
             "chad": reporter_metrics.get("chad_df"),
             "ebi": reporter_metrics.get("ebi_df"),
+            "ebi_plus": reporter_metrics.get("ebi_plus_df"),
         }
 
         report_rows.append(
@@ -346,14 +361,17 @@ def _load_per_unit_blocks(per_unit_dir, norm_method, _logger, distance="cosine")
                 "distinctiveness": reporter_metrics["distinctiveness"],
                 "corum": reporter_metrics["corum"],
                 "chad": reporter_metrics["chad"],
+                "ebi_plus": reporter_metrics["ebi_plus"],
                 "distinctiveness_all": reporter_metrics["distinctiveness_all"],
                 "corum_all": reporter_metrics["corum_all"],
                 "chad_all": reporter_metrics["chad_all"],
+                "ebi_plus_all": reporter_metrics["ebi_plus_all"],
             }
         )
         _logger.info(
             f"  {sig}: {g.n_obs} guides x {g.n_vars} PCs @ {g.uns.get('pca_threshold', '?')} | "
             f"act={reporter_metrics['activity']:.1%} dist={reporter_metrics['distinctiveness']:.1%} "
+            f"ebi+={reporter_metrics['ebi_plus']:.1%} "
             f"corum={reporter_metrics['corum']:.1%} chad={reporter_metrics['chad']:.1%} | "
             f"all: dist={reporter_metrics['distinctiveness_all']:.1%} "
             f"corum={reporter_metrics['corum_all']:.1%} chad={reporter_metrics['chad_all']:.1%}"
@@ -490,6 +508,10 @@ def _save_per_reporter_metric_matrices(
     _pivot(
         "distinctiveness", "perturbation", "mean_average_precision",
         overlay_dir / "gene_reporter_distinctiveness_raw.csv",
+    )
+    _pivot(
+        "ebi_plus", "ebi_group", "mean_average_precision",
+        overlay_dir / "group_reporter_ebi_plus_raw.csv",
     )
     _pivot(
         "corum", "complex_num", "mean_average_precision",

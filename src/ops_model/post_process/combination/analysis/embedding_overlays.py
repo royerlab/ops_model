@@ -45,8 +45,13 @@ DEFAULT_ENRICHR_LIBRARIES = (
     "Pfam_Domains_2019",
     "COMPARTMENTS_Curated_2025",
 )
-DEFAULT_SUPERCATEGORY_CONFIG = Path(
-    "/home/gav.sturm/linked_folders/mydata/ops_mono/organelle_profiler/configs/gene_supercategory_mapping.yaml"
+# In-repo default (was a hardcoded personal home-dir path). Resolved relative to
+# the repo root so it works for any checkout; callers may override.
+DEFAULT_SUPERCATEGORY_CONFIG = (
+    Path(__file__).resolve().parents[6]
+    / "organelle_profiler"
+    / "configs"
+    / "gene_supercategory_mapping.yaml"
 )
 
 
@@ -171,7 +176,7 @@ def _build_corum_map() -> Dict[str, str]:
     import ast
 
     panel_path = Path(
-        "/hpc/projects/intracellular_dashboard/ops/configs/annotated_gene_panel_July2025.csv"
+        "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
     )
     if not panel_path.exists():
         return {}
@@ -377,7 +382,7 @@ def _annotate_chrom_arm(adata, _logger=logger) -> None:
     if "chrom_arm" in adata.obs.columns:
         return
     try:
-        from ops_model.post_process.combination.guide_chrom_arm_correction import (
+        from ops_model.post_process.combination.pipeline_add_ons.guide_chrom_arm_correction import (
             SHARED_MAP_CSV_PATH,
             _load_symbol_to_arm_from_csv,
         )
