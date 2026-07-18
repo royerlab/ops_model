@@ -415,6 +415,9 @@ def make_patched_phase1_worker(
                 f"attn-covered (any head)={n_any:,} ({n_any/adata.n_obs:.0%}), "
                 f"w_norm in [{w_norm.min():.3g}, {w_norm.max():.3g}]"
             )
+            # Runtime tripwire: track that weighting really got applied so
+            # _verify_weighting_applied can fail loudly if 0 invocations.
+            _apply_counter["n"] += 1
             return adata
 
         def _lookup_attns(sidecar_slice, well_arr, seg_arr):
@@ -422,6 +425,12 @@ def make_patched_phase1_worker(
             idx = pd.MultiIndex.from_arrays([well_arr, seg_arr])
             reindexed = sidecar_slice.reindex(idx)
             return {c: reindexed[c].to_numpy(dtype=np.float32) for c in needed_cols}
+
+        # Counter incremented every time _apply_weights runs. If it stays 0
+        # after phase1 completes, our monkey-patches were bypassed and the
+        # metrics will match the unweighted baseline — fail loudly instead.
+        # (Boxed in a dict so the inner closures can mutate the value.)
+        _apply_counter = {"n": 0}
 
         def _patched_load(experiment, channel, *a, **kw):
             channel_str = str(channel)
@@ -510,22 +519,32 @@ def make_patched_phase1_worker(
         # load_cell_h5ad when --apply-iss-sidecar is set (the default). For
         # v4 fluor h5ads (multi-channel), we must slice by channel here too,
         # else v3 sees rows from ALL channels mixed together.
-        if v4_fluor_dir_p is not None:
-            from ops_model.features import anndata_utils as au
+        #
+        # We ALWAYS install this patch (not just when v4_fluor is on) because
+        # phase-only runs also bypass _patched_load for cell-DINO reads via
+        # load_features_corrected; without the patch, NaN-sgRNA rows leak
+        # through and crash aggregate_to_level("|".join(guides)).
+        from ops_model.features import anndata_utils as au
 
-            _orig_lfc = au.load_features_corrected
+        _orig_lfc = au.load_features_corrected
 
-            def _patched_load_features_corrected(cell_path, *a, **kw):
-                p = Path(cell_path) if cell_path else None
-                # Detect v4 fluor h5ad by parent dir match.
-                is_v4_fluor = (
-                    p is not None
-                    and p.parent == v4_fluor_dir_p
-                    and p.exists()
-                )
-                if not is_v4_fluor:
-                    return _orig_lfc(cell_path, *a, **kw)
+        def _patched_load_features_corrected(cell_path, *a, **kw):
+            p = Path(cell_path) if cell_path else None
+            # Detect v4 fluor h5ad by parent dir match.
+            is_v4_fluor = (
+                v4_fluor_dir_p is not None
+                and p is not None
+                and p.parent == v4_fluor_dir_p
+                and p.exists()
+            )
+            # Detect v5 h5ad by parent dir match (phase-only paper_v2 mode).
+            is_v5_phase = (
+                p is not None
+                and p.parent == v4_dir_p
+                and p.exists()
+            )
 
+            if is_v4_fluor:
                 # Load the full multi-channel h5ad then slice by the channel
                 # that the immediately-preceding _patched_find captured.
                 channel = getattr(_fluor_ctx, "last_channel", None)
@@ -541,29 +560,87 @@ def make_patched_phase1_worker(
                           f"in {p.name} — falling back to v3")
                     return _orig_lfc(cell_path, *a, **kw)
                 adata = adata[m].copy()
-                # Drop NaN-sgRNA + duplicate (well, seg) rows (mirror phase).
-                n0 = adata.n_obs
-                keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
-                    subset=["well", "segmentation_id"], keep="first"
-                ).values
-                if not keep.all():
-                    adata = adata[keep].copy()
-                print(f"  [{getattr(_fluor_ctx,'last_experiment','?')}/"
-                      f"{channel}] v4 fluor sliced to {adata.n_obs:,} "
-                      f"rows (from {n0:,})")
+                exp_for_ctx = getattr(_fluor_ctx, "last_experiment", None) or p.stem
+                ch_for_ctx = channel_norm
+            elif is_v5_phase:
+                # v5 phase-only: load the per-experiment h5ad directly (paper_v2
+                # bypasses load_cell_h5ad, so we need to intercept here too).
+                adata = ad.read_h5ad(p)
+                exp_for_ctx = p.stem
+                ch_for_ctx = "Phase"
+            else:
+                # Not a redirect target — call original then drop bad rows.
+                adata = _orig_lfc(cell_path, *a, **kw)
+                if adata is not None and "sgRNA" in adata.obs.columns:
+                    n0 = adata.n_obs
+                    keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
+                        subset=["well", "segmentation_id"], keep="first"
+                    ).values
+                    if not keep.all():
+                        adata = adata[keep].copy()
+                        print(f"  [load_features_corrected {p.name if p else '?'}] "
+                              f"dropped {n0 - adata.n_obs:,} NaN-sgRNA/dup rows → "
+                              f"{adata.n_obs:,}")
                 return adata
 
-            au.load_features_corrected = _patched_load_features_corrected
-            try:
-                from ops_model.post_process.combination.pca_optimization \
-                    import phase1 as _p1
-                # phase1 imports via `from ... import` inside the function,
-                # so the name resolves at call time from au — no extra patch
-                # needed. But if phase1 had a top-level import, patch it too.
-            except Exception:
-                pass
+            # Redirect branches (v4_fluor / v5_phase): drop bad rows + apply
+            # per-cell weighting from the sidecar.
+            n0 = adata.n_obs
+            keep = adata.obs["sgRNA"].notna().values & ~adata.obs.duplicated(
+                subset=["well", "segmentation_id"], keep="first"
+            ).values
+            if not keep.all():
+                adata = adata[keep].copy()
+            print(f"  [{exp_for_ctx}/{ch_for_ctx}] load_features_corrected → "
+                  f"{adata.n_obs:,} rows (from {n0:,})")
+
+            # Apply per-cell weights from the phase sidecar.
+            if exp_for_ctx in sidecar_by_exp:
+                well = adata.obs["well"].astype(str).values
+                seg = adata.obs["segmentation_id"].values
+                attns = _lookup_attns(sidecar_by_exp[exp_for_ctx], well, seg)
+                return _apply_weights(adata, attns, exp_for_ctx, ch_for_ctx)
+            print(f"  [{exp_for_ctx}] WARN no sidecar entries — uniform weights")
+            return adata
+
+        au.load_features_corrected = _patched_load_features_corrected
+        try:
+            from ops_model.post_process.combination.pca_optimization \
+                import phase1 as _p1
+            # phase1 imports via `from ... import` inside the function,
+            # so the name resolves at call time from au — no extra patch
+            # needed. But if phase1 had a top-level import, patch it too.
+        except Exception:
+            pass
 
         # 3) Run the original phase1 worker.
-        return orig_func(*args, **kwargs)
+        result = orig_func(*args, **kwargs)
+
+        # 4) Tripwire: verify our weighting patches actually fired. Zero
+        # invocations means pca_optimization silently bypassed our patch
+        # (e.g. --apply-iss-sidecar missing, or a phase1 refactor removed
+        # the load_features_corrected call again). Fail loudly instead of
+        # producing an unweighted baseline masquerading as a weighted run.
+        n_hits = _apply_counter["n"]
+        if n_hits == 0:
+            banner = "!" * 80
+            msg = (
+                f"\n{banner}\n"
+                f"FATAL: weighting monkey-patch was NEVER invoked "
+                f"(strategy={strategy_spec['op']}:{strategy_spec.get('col') or strategy_spec.get('cols')}).\n"
+                f"This means the metrics you're about to write are UNWEIGHTED "
+                f"and match the baseline. Common causes:\n"
+                f"  1. --apply-iss-sidecar missing from pca_argv in the runner.\n"
+                f"  2. pca_optimization/phase1.py refactored the call site for\n"
+                f"     load_features_corrected — patch needs to be updated.\n"
+                f"See run_v3_pipeline_on_v4_attn_weighted.py's 'LOAD-BEARING' "
+                f"comment on --apply-iss-sidecar.\n{banner}"
+            )
+            print(msg)
+            raise RuntimeError(
+                "weighting patches never fired — see LOAD-BEARING banner above"
+            )
+        print(f"[v4-attn worker] verified weighting applied: {n_hits} calls")
+        return result
 
     return _patched_worker

@@ -81,6 +81,28 @@ ATTN_SIDECAR_WITH_SET_ACC_EBI = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
     "per_experiment_v4_attn_with_set_accuracy_and_ebi.parquet"
 )
+
+# ---- v5 (paper_v2, Alex's new SetTransformer) ---------------------------
+V5_PER_EXP = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5"
+)
+V5_SIDECAR_GKO = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_gko.parquet"
+)
+V5_SIDECAR_EBIONLY = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_ebionly.parquet"
+)
+V5_SIDECAR_EBIFB = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_ebifb.parquet"
+)
+V5_STRATEGIES = {
+    "v5_gko", "v5_ebionly", "v5_ebifb",
+    "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
+}
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
     "per_experiment_v4_attn_fluor.parquet"
@@ -197,6 +219,21 @@ def _resolve_strategy(name: str) -> dict:
         # EBI panel get uniform weight). Sidecar column added to the extended
         # parquet (ATTN_SIDECAR_WITH_SET_ACC_EBI).
         return {"op": "column", "col": "set_accuracy_ebi"}
+    # ---- v5 heads: Alex's new SetTransformer rankings on paper_v2 -----
+    if name == "v5_gko":
+        return {"op": "column", "col": "v5_gko"}
+    if name == "v5_ebionly":
+        return {"op": "column", "col": "v5_ebionly"}
+    if name == "v5_ebifb":
+        return {"op": "column", "col": "v5_ebifb"}
+    # Cutoff variants: keep only top-20K cells per gene (below the sliding
+    # window's cliff at K=20000). Cells with rank > 20000 → w=0 (excluded).
+    if name == "v5_gko_cutoff_20k":
+        return {"op": "column", "col": "v5_gko_cutoff_20k"}
+    if name == "v5_ebionly_cutoff_20k":
+        return {"op": "column", "col": "v5_ebionly_cutoff_20k"}
+    if name == "v5_ebifb_cutoff_20k":
+        return {"op": "column", "col": "v5_ebifb_cutoff_20k"}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -335,6 +372,8 @@ STRATEGIES = [
     "ebi_then_geneko",
     "set_accuracy",
     "set_accuracy_ebi",
+    "v5_gko", "v5_ebionly", "v5_ebifb",
+    "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -392,12 +431,22 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
     # Route to the combined sidecar (with set_accuracy column) only when
     # the strategy actually needs it. Everything else keeps reading the
     # base sidecar so shared consumers stay untouched.
+    is_v5 = strategy_name in V5_STRATEGIES
     if strategy_name == "set_accuracy":
         phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC
     elif strategy_name == "set_accuracy_ebi":
         phase_sidecar = ATTN_SIDECAR_WITH_SET_ACC_EBI
+    elif strategy_name in ("v5_gko", "v5_gko_cutoff_20k"):
+        phase_sidecar = V5_SIDECAR_GKO
+    elif strategy_name in ("v5_ebionly", "v5_ebionly_cutoff_20k"):
+        phase_sidecar = V5_SIDECAR_EBIONLY
+    elif strategy_name in ("v5_ebifb", "v5_ebifb_cutoff_20k"):
+        phase_sidecar = V5_SIDECAR_EBIFB
     else:
         phase_sidecar = ATTN_SIDECAR
+
+    # v5 heads use Alex's paper_v2 per-experiment h5ads instead of v4.
+    feature_dir = V5_PER_EXP if is_v5 else V4_PER_EXP
 
     import ops_utils.hpc.slurm_batch_utils as sbu
     _orig_submit = sbu.submit_parallel_jobs
@@ -407,7 +456,7 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
             orig_func = job["func"]
             if getattr(orig_func, "__name__", "") == "pca_sweep_pooled_signal":
                 job["func"] = make_patched_phase1_worker(
-                    orig_func, str(phase_sidecar), spec, str(V4_PER_EXP),
+                    orig_func, str(phase_sidecar), spec, str(feature_dir),
                     fluor_sidecar_path=fluor_path,
                     v4_fluor_dir=fluor_dir,
                 )
@@ -421,7 +470,7 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
 
     def _patched_find(experiment, channel, *a, **kw):
         if "phase" in str(channel).lower():
-            p = V4_PER_EXP / f"{experiment}.h5ad"
+            p = feature_dir / f"{experiment}.h5ad"
             if p.exists():
                 return p
         return _orig_find(experiment, channel, *a, **kw)
@@ -497,18 +546,38 @@ def main() -> int:
     # 2nd-pass PCA consensus is ENABLED by default (no --no-second-pca flag) —
     # the canonical headline metric comes from the 2nd-pass output at
     # <run>/second_pca_consensus/.
+    # v5 strategies use Alex's paper_v2 features → --paper-v2 subdir.
+    paper_flag = "--paper-v2" if args.attn_strategy in V5_STRATEGIES else "--paper-v1"
     pca_argv = [
         "--output-dir", str(args.output_dir),
         "--cell-dino",
         "--zscore-per-experiment",
-        "--paper-v1",
+        paper_flag,
         "--run-tag", run_tag,
         "--chad-annotation", str(args.chad_annotation),
         "--fixed-threshold", str(args.fixed_threshold),
         "--slurm-partition", args.slurm_partition,
+        # ⚠️ LOAD-BEARING — DO NOT REMOVE ⚠️
+        # This runner's whole purpose is to inject weighting via a monkey-patch
+        # of ``ops_model.features.anndata_utils.load_features_corrected``.
+        # In pca_optimization/phase1.py, ``load_features_corrected`` is ONLY
+        # called on the ``if apply_iss_sidecar:`` branch (line ~243). The
+        # ``else:`` branch reads via ``ad.read_h5ad(_cp)`` directly, which
+        # bypasses every monkey-patch we install and produces silently-
+        # unweighted metrics identical to the unweighted baseline.
+        #
+        # History: commit e8d1026 (2026-06-10) removed the direct
+        # ``load_cell_h5ad(...)`` call that used to make the load_cell_h5ad
+        # monkey-patch work in either branch. Since that commit, this runner
+        # MUST pass --apply-iss-sidecar or weighting silently no-ops.
+        # See _v4_attn_worker._verify_weighting_applied for the runtime check
+        # that fails loudly if this flag ever gets removed.
+        "--apply-iss-sidecar",
     ]
     if signal_set == "phase_only":
         pca_argv.append("--phase-only")
+        # 2nd-pass PCA consensus is a no-op with only 1 channel; skip.
+        pca_argv.append("--no-second-pca")
     elif signal_set == "no_phase":
         pca_argv.append("--no-phase")
     # signal_set == "all_livecell": no flag — default to all channels
