@@ -41,7 +41,7 @@ from ops_utils.analysis.embedding_plots import clean_X_for_embedding
 # Defaults — wide search; CLI flags can shrink/extend any of these
 # ---------------------------------------------------------------------------
 
-DEFAULT_UMAP_N_NEIGHBORS = (2, 5, 10, 15, 25, 50, 100, 200, 500)
+DEFAULT_UMAP_N_NEIGHBORS = (2, 5, 8, 10, 15, 25, 50, 100, 200, 500)
 DEFAULT_UMAP_MIN_DIST = (0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.99)
 DEFAULT_UMAP_METRIC = ("euclidean", "cosine", "correlation", "manhattan", "chebyshev")
 DEFAULT_UMAP_SPREAD = (0.5, 1.0, 1.5, 2.0, 3.0)
@@ -51,8 +51,11 @@ DEFAULT_PHATE_DECAY = (2, 5, 10, 15, 20, 40, 80)
 DEFAULT_PHATE_T = ("auto", 5, 10, 20, 40, 80)
 DEFAULT_PHATE_GAMMA = (0.0, 0.5, 1.0)
 
-CANONICAL_UMAP = {"n_neighbors": 15, "min_dist": 0.1, "metric": "euclidean", "spread": 1.0}
-# Pipeline default (highlighted with red border in sweeps): knn=8, decay=15.
+# Pipeline defaults (highlighted with red border in sweeps).
+# UMAP: matches pca_optimization's "max" umap_type default —
+#   sc.pp.neighbors(n_neighbors=8, use_rep='X_pca') + sc.tl.umap(min_dist=0.25)
+# PHATE: knn=8, decay=15 (current production).
+CANONICAL_UMAP = {"n_neighbors": 8, "min_dist": 0.25, "metric": "euclidean", "spread": 1.0}
 CANONICAL_PHATE = {"knn": 8, "decay": 15, "t": "auto", "gamma": 1.0}
 
 DEFAULT_RUN_DIR = (
