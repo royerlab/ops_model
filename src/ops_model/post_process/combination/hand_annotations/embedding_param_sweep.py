@@ -46,13 +46,14 @@ DEFAULT_UMAP_MIN_DIST = (0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.99)
 DEFAULT_UMAP_METRIC = ("euclidean", "cosine", "correlation", "manhattan", "chebyshev")
 DEFAULT_UMAP_SPREAD = (0.5, 1.0, 1.5, 2.0, 3.0)
 
-DEFAULT_PHATE_KNN = (3, 5, 10, 15, 25, 50, 100)
-DEFAULT_PHATE_DECAY = (2, 5, 10, 20, 40, 80)
+DEFAULT_PHATE_KNN = (3, 5, 8, 10, 15, 25, 50, 100)
+DEFAULT_PHATE_DECAY = (2, 5, 10, 15, 20, 40, 80)
 DEFAULT_PHATE_T = ("auto", 5, 10, 20, 40, 80)
 DEFAULT_PHATE_GAMMA = (0.0, 0.5, 1.0)
 
 CANONICAL_UMAP = {"n_neighbors": 15, "min_dist": 0.1, "metric": "euclidean", "spread": 1.0}
-CANONICAL_PHATE = {"knn": 15, "decay": 15, "t": "auto", "gamma": 1.0}
+# Pipeline default (highlighted with red border in sweeps): knn=8, decay=15.
+CANONICAL_PHATE = {"knn": 8, "decay": 15, "t": "auto", "gamma": 1.0}
 
 DEFAULT_RUN_DIR = (
     "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/"
