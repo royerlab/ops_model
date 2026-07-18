@@ -16,7 +16,7 @@ features should reproduce the all-cells number if our v4 sweep is correct.
 Usage
 -----
     # Submit pca_optimization to SLURM with output under alex_lin_features/
-    uv run python run_v3_pipeline_on_v4_features.py \\
+    uv run python run_pca_on_precomputed_features.py \\
         --output-dir /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
 """
 

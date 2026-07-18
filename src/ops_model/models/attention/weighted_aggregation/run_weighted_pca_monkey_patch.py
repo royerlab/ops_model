@@ -39,7 +39,7 @@ attn_ebi_plus_sister). Results land under
 
 SLURM compatibility: monkey-patches in the submitter process do not propagate
 to submitit workers. We wrap each SLURM worker function with a picklable
-closure in ``_v4_attn_worker.make_patched_phase1_worker`` so the patches are
+closure in ``_weighted_pca_worker.make_patched_phase1_worker`` so the patches are
 re-applied on the worker side. cloudpickle's ``register_pickle_by_value``
 ensures the closure's bytecode is embedded in the pickle.
 """
@@ -54,11 +54,11 @@ _KO_SHAP_DIR = Path(__file__).resolve().parent
 if str(_KO_SHAP_DIR) not in sys.path:
     sys.path.insert(0, str(_KO_SHAP_DIR))
 
-import _v4_attn_worker  # noqa: E402
-from _v4_attn_worker import make_patched_phase1_worker  # noqa: E402
+import _weighted_pca_worker as _weighted_worker  # noqa: E402
+from _weighted_pca_worker import make_patched_phase1_worker  # noqa: E402
 
 import cloudpickle  # noqa: E402
-cloudpickle.register_pickle_by_value(_v4_attn_worker)
+cloudpickle.register_pickle_by_value(_weighted_worker)
 
 V4_PER_EXP = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
@@ -184,7 +184,7 @@ def _build_chad_gene_to_K() -> dict:
 
 
 def _resolve_strategy(name: str) -> dict:
-    """Map --attn-strategy name → strategy_spec dict consumed by _v4_attn_worker."""
+    """Map --attn-strategy name → strategy_spec dict consumed by _weighted_pca_worker."""
     if name == "ebi":
         return {"op": "column", "col": "attn_ebi"}
     if name == "geneko":
@@ -570,7 +570,7 @@ def main() -> int:
         # ``load_cell_h5ad(...)`` call that used to make the load_cell_h5ad
         # monkey-patch work in either branch. Since that commit, this runner
         # MUST pass --apply-iss-sidecar or weighting silently no-ops.
-        # See _v4_attn_worker._verify_weighting_applied for the runtime check
+        # See _weighted_pca_worker._verify_weighting_applied for the runtime check
         # that fails loudly if this flag ever gets removed.
         "--apply-iss-sidecar",
     ]

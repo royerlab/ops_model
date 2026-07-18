@@ -633,7 +633,7 @@ def make_patched_phase1_worker(
                 f"  1. --apply-iss-sidecar missing from pca_argv in the runner.\n"
                 f"  2. pca_optimization/phase1.py refactored the call site for\n"
                 f"     load_features_corrected — patch needs to be updated.\n"
-                f"See run_v3_pipeline_on_v4_attn_weighted.py's 'LOAD-BEARING' "
+                f"See run_weighted_pca_monkey_patch.py's 'LOAD-BEARING' "
                 f"comment on --apply-iss-sidecar.\n{banner}"
             )
             print(msg)

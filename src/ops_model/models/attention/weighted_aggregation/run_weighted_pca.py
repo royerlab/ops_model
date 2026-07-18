@@ -1,7 +1,7 @@
 """Thin runner: invoke pca_optimization with a per-cell weight parquet + column.
 
 Replaces the fragile monkey-patch flow in
-``run_v3_pipeline_on_v4_attn_weighted.py``. Uses the upstream
+``run_weighted_pca_monkey_patch.py``. Uses the upstream
 ``--weight-parquet`` + ``--weight-column`` flags added to pca_optimization
 (see phase1.py's per-cell weighting block). Weighting is applied inside
 phase1 itself; the tripwire in phase1 raises RuntimeError if the flag is set

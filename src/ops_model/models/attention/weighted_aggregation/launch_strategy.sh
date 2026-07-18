@@ -32,7 +32,7 @@ SIGNAL_SET="${1:-phase_only}"
 cd /hpc/mydata/gav.sturm/ops_mono
 source .venv/bin/activate 2>/dev/null || true
 
-exec python -u -m ops_model.models.attention.weighted_aggregation.run_v3_pipeline_on_v4_attn_weighted \
+exec python -u -m ops_model.models.attention.weighted_aggregation.run_weighted_pca_monkey_patch \
     --attn-strategy "$STRATEGY" \
     --signal-set "$SIGNAL_SET" \
     --slurm \
