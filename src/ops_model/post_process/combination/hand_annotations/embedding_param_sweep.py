@@ -56,18 +56,11 @@ DEFAULT_PHATE_GAMMA = (0.0, 0.5, 1.0)
 #   sc.pp.neighbors(n_neighbors=8, use_rep='X_pca') + sc.tl.umap(min_dist=0.25)
 CANONICAL_UMAP = {"n_neighbors": 8, "min_dist": 0.25, "metric": "euclidean", "spread": 1.0}
 
-# PHATE: knn is level-dependent (see pca_optimization/handlers.py:404):
-#   knn = min(15 if n_obs > 2000 else 10, n_obs - 1); decay = 15
-# so guide (~4200 obs) → knn=15, gene (~1001) → knn=10. The
-# CANONICAL_PHATE below stores decay/t/gamma; ``_canonical_phate_knn(n_obs)``
-# resolves the level-specific knn at plot time.
-CANONICAL_PHATE = {"knn": 15, "decay": 15, "t": "auto", "gamma": 1.0}
-
-
-def _canonical_phate_knn(n_obs: int) -> int:
-    """Match pca_optimization/handlers.py:404 — the value that gets highlighted
-    on the primary PHATE sweep depends on obs count at that level."""
-    return min(15 if n_obs > 2000 else 10, max(2, n_obs - 1))
+# PHATE: GRASSP-canonical from pca_optimization/embeddings.py:178 —
+#   knn = min(8, n_obs - 1); decay = 10; t = "auto"
+# Same for guide and gene (both have n_obs >> 8). Verified against stored
+# adata.uns["phate"]["params"] in production h5ads.
+CANONICAL_PHATE = {"knn": 8, "decay": 10, "t": "auto", "gamma": 1.0}
 
 DEFAULT_RUN_DIR = (
     "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/"
@@ -485,8 +478,6 @@ def _process_level(
             cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_umap_secondary_sweep.png", level)
-    # Resolve level-specific canonical PHATE knn (guide vs gene differ).
-    canonical_knn = _canonical_phate_knn(n_drawn)
     if "phate_primary" in canvases:
         _draw_grid(
             canvases["phate_primary"], cfg["phate_knn"], cfg["phate_decay"],
@@ -494,7 +485,7 @@ def _process_level(
             f"{level} PHATE primary sweep — {n_drawn} obs"
             f"\nheld: t={CANONICAL_PHATE['t']}, gamma={CANONICAL_PHATE['gamma']}",
             plots_dir / f"{level}_phate_primary_sweep.png", plt,
-            default_key=(canonical_knn, CANONICAL_PHATE["decay"]),
+            default_key=(CANONICAL_PHATE["knn"], CANONICAL_PHATE["decay"]),
             cluster_data=cluster_data,
         )
         _logger.info("  Saved %s_phate_primary_sweep.png", level)
@@ -503,7 +494,7 @@ def _process_level(
             canvases["phate_secondary"], cfg["phate_t_list"], cfg["phate_gamma_list"],
             "t", "gamma",
             f"{level} PHATE secondary sweep — {n_drawn} obs"
-            f"\nheld: knn={canonical_knn}, decay={CANONICAL_PHATE['decay']}",
+            f"\nheld: knn={CANONICAL_PHATE['knn']}, decay={CANONICAL_PHATE['decay']}",
             plots_dir / f"{level}_phate_secondary_sweep.png", plt,
             default_key=(CANONICAL_PHATE["t"], CANONICAL_PHATE["gamma"]),
             cluster_data=cluster_data,
