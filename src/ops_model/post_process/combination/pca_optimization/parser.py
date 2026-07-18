@@ -672,4 +672,24 @@ def _build_parser():
         "Recommended for new analyses; pair with a dedicated output_path "
         "(e.g. paper_v1/phase_only_corrected/) to keep stale baselines intact.",
     )
+    parser.add_argument(
+        "--weight-parquet",
+        default=None,
+        help="Path to a per-cell weight parquet with columns "
+        "(experiment, well, segmentation_id, <weight_column>). When set "
+        "together with --weight-column, phase1 pre-multiplies each cell's "
+        "feature vector by the (per-(sgRNA, experiment)-normalized) weight, "
+        "so downstream mean-aggregation produces a weighted mean. Cells "
+        "missing from the parquet get weight=1 (uniform fallback). "
+        "Fails loudly if the flag is set but no experiment matches. "
+        "See ops_model.models.attention.weighted_aggregation for the "
+        "original monkey-patch flow that this flag replaces.",
+    )
+    parser.add_argument(
+        "--weight-column",
+        default=None,
+        help="Column name in --weight-parquet to use as the per-cell weight "
+        "(e.g. 'v5_gko', 'v5_ebionly', 'set_accuracy'). Only meaningful when "
+        "--weight-parquet is also set.",
+    )
     return parser

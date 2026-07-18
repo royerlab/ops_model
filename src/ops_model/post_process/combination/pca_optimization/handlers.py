@@ -1982,6 +1982,9 @@ def _handle_downsampled(args, output_dir, cp_override):
             kwargs["agg_method"] = args.agg_method
         if getattr(args, "apply_iss_sidecar", False):
             kwargs["apply_iss_sidecar"] = True
+        if getattr(args, "weight_parquet", None):
+            kwargs["weight_parquet"] = args.weight_parquet
+            kwargs["weight_column"] = getattr(args, "weight_column", None)
         return kwargs
 
     if not args.slurm:
