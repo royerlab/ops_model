@@ -17,7 +17,12 @@ across frames — smooth to scrub. α=0 (center) is the true NTC; +α = toward t
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+# Assets subdir under out_root. Default = the live "viewer_assets"; the isolated v5 build sets
+# OPS_DIFFEX_ASSETS=viewer_assets_v5 so nothing is written into the live tree until the final swap.
+_ASSETS = os.environ.get("OPS_DIFFEX_ASSETS", "viewer_assets")
 
 import numpy as np
 import pandas as pd
@@ -109,7 +114,8 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                       fluor_csv=None, control="NTC", n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
                       load_workers=12, n_per_class=1000, fluor_rows_h5ad=None,
-                      accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False):
+                      accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
+                      v5_score=False, v5_bag=None):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -139,7 +145,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     modality = (slugify(marker_channel) if marker_channel else "phase") + (f"_{variant}" if variant else "")
     al = sorted(alphas); A = len(al); H = cfg.crop_size
     anchor = "NTC" if (not control or str(control).upper() == "NTC") else slugify(control)
-    realdir = Path(out_root) / "viewer_assets" / modality / "_anchors" / anchor
+    realdir = Path(out_root) / _ASSETS / modality / "_anchors" / anchor
 
     # --- shared control/anchor cells: gather ONCE, cache the 1000-cell embeddings so every
     #     rebuild (new α/cells/anchor/ckpt) skips the gather (CellDINO embeds are ckpt-independent) ---
@@ -166,14 +172,22 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     diffae = load_diffae(cfg, dev)
     null_base = diffae.null_emb.detach()[None].to(dev)
 
+    v5ctx = None                                             # inline v5 SetTransformer scoring (reuses gemb; no re-decode)
+    if v5_score:
+        from .set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
+        from .score_generated import score_embs_v5
+        _vrun = V5_RUNS[("phase", "geneKO" if grain == "geneKO" else "complex_ebionly")]
+        _vm, _vg2i, _vc2i = load_set_classifier(run=_vrun, device=dev, root=V5_CKPT_ROOT)
+        v5ctx = (_vm, _vg2i, _vc2i.get("Phase2D", 0), _vrun, score_embs_v5)
+
     done = 0
     for tgt in targets:
         slug = slugify(tgt) if anchor == "NTC" else f"{anchor}__to__{slugify(tgt)}"
-        adir = Path(out_root) / "viewer_assets" / modality / grain / slug
+        adir = Path(out_root) / _ASSETS / modality / grain / slug
         if not force and (adir / "meta.json").exists():   # resume: target already rendered (force = overwrite in place)
             print(f"[done] {modality}/{grain}/{slug}"); done += 1; continue
         # direction cache: (d_vec, gap) is CellDINO-derived + ckpt-independent → gather once, reuse
-        dcache = Path(out_root) / "viewer_assets" / "_directions" / modality / grain / f"{slug}.npz"
+        dcache = Path(out_root) / _ASSETS / "_directions" / modality / grain / f"{slug}.npz"
         if not force and dcache.exists():
             z = np.load(dcache); d_vec = z["d_vec"]; gap = float(z["gap"]); lr_w = z["lr_w"]; lr_b = float(z["lr_b"])
             print(f"[cache] direction <- {dcache}")
@@ -199,10 +213,21 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             outb = _sample_guided(diffae, xb, cb, null_base.expand(cb.shape[0], -1), w, cfg).cpu().numpy()[:, 0]
             for j, (c, ai) in enumerate(keys[i0:i0 + batch]):
                 gen[c, ai] = outb[j]
-        scores = None
-        if score:
+        scores, v5d, gemb = None, None, None
+        if score or v5ctx is not None:
             gemb = embed_crops(gen.reshape(-1, 1, H, H).astype(np.float32), cfg, cache_path=None)
+        if score:
             scores = (1.0 / (1.0 + np.exp(-(gemb @ lr_w + lr_b)))).reshape(ncell, A)
+        if v5ctx is not None:
+            try:
+                adir.mkdir(parents=True, exist_ok=True)   # scores_v5.json is written before the frame loop creates adir
+                _vm, _vg2i, _vci, _vrun, _score_embs = v5ctx
+                g = gemb.reshape(ncell, A, -1)
+                v5d = _score_embs([g[:, ai, :] for ai in range(A)], al, tgt, _vm, _vg2i, _vci, _vrun, dev, v5_bag)
+                if v5d is not None:
+                    (adir / "scores_v5.json").write_text(json.dumps(v5d))
+            except Exception as e:
+                print(f"[v5score ERR] {tgt}: {repr(e)[:120]}")
 
         fp = ThreadPoolExecutor(max_workers=n_workers)
         for c in range(ncell):
@@ -216,6 +241,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                 "control": None if anchor == "NTC" else control,
                 "marker_channel": marker_channel, "channel": channel, "slug": slug, "w": w,
                 "alphas": al, "gap": gap, "n_cells": ncell, "has_scores": scores is not None,
+                "has_scores_v5": v5d is not None,
                 "has_real": True, "real_dir": f"{modality}/_anchors/{anchor}",
                 "asset_dir": f"{modality}/{grain}/{slug}"}
         (adir / "meta.json").write_text(json.dumps(meta)); done += 1
@@ -264,7 +290,7 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
         xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
                           for c in range(ncell)])
         mu_a = a_embs.mean(0); anchor = slugify(a)
-        realdir = Path(out_root) / "viewer_assets" / modality / "_anchors" / anchor
+        realdir = Path(out_root) / _ASSETS / modality / "_anchors" / anchor
         if not (realdir / "cell0" / "real.webp").exists():
             real = normalize(a_imgs[:ncell]); rp = ThreadPoolExecutor(max_workers=n_workers)
             for c in range(ncell):
@@ -275,7 +301,7 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
             if b == a or b not in cache:
                 continue
             slug = f"{anchor}__to__{slugify(b)}"
-            adir = Path(out_root) / "viewer_assets" / modality / grain / slug
+            adir = Path(out_root) / _ASSETS / modality / grain / slug
             if (adir / "meta.json").exists():
                 done += 1; continue
             d = cache[b][1].mean(0) - mu_a; gap = float(np.linalg.norm(d))
@@ -328,7 +354,7 @@ def precompute_target(grain, target, ckpt, out_root, marker_channel=None, channe
     ncell = min(n_cells, len(ci))
     H, al, A = cfg.crop_size, sorted(alphas), len(sorted(alphas))
     modality = (slugify(marker_channel) if marker_channel else "phase") + (f"_{variant}" if variant else "")
-    adir = Path(out_root) / "viewer_assets" / modality / grain / slug
+    adir = Path(out_root) / _ASSETS / modality / grain / slug
 
     # per-cell fixed noise (identity anchor); assemble all (cell, α) latents for batched decode
     conds, xts, keys = [], [], []
@@ -383,7 +409,7 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
     """Aggregate every viewer_assets/*/*/*/meta.json into one manifest.json the frontend reads.
     dist_map: optional {(modality, grain, slug): mAP} to attach for sorting targets.
     desc_map: optional {target_name: description} (gene function / complex members)."""
-    root = Path(out_root) / "viewer_assets"
+    root = Path(out_root) / _ASSETS
     try:
         mb = json.loads((root / "_minibinder_meta.json").read_text())   # per-binder cell_score/binder_prob/gene_target
     except Exception:
@@ -406,6 +432,7 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
                               "has_real": m.get("has_real", False), "real_dir": m.get("real_dir"),
                               "n_cells": m["n_cells"], "asset_dir": adir, "alphas": m["alphas"],
                               "dist_map": (dist_map or {}).get(key),
+                              "explained_variance": m.get("explained_variance"),   # PC grain: % variance
                               "desc": (desc_map or {}).get(m["target"]),
                               **({"binder_prob": mb[m["slug"]]["binder_prob"], "gene_target": mb[m["slug"]]["gene_target"],
                                   "phenotype": mb[m["slug"]]["phenotype"], "cell_score": mb[m["slug"]]["cell_score"]}

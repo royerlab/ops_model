@@ -1,17 +1,25 @@
 // DiffEx traversal viewer — static, reads viewer_assets/manifest.json (or window.MANIFEST_URL).
 // α scrubs precomputed WebP frames. One grid: perturbation rows (current + pinned) × cells-per-page.
-const MANIFEST_URL = window.MANIFEST_URL || "manifest.json";
+const ASSET_VER = localStorage.getItem("diffex_asset_ver") || "v4";     // v4 = viewer_assets/ ; v5 = _v5/ (symlink → viewer_assets_v5/)
+const ASSET_PREFIX = ASSET_VER === "v5" ? "_v5/" : "";
+const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
+function setAssetVer(v) { if (v !== ASSET_VER) { localStorage.setItem("diffex_asset_ver", v); location.reload(); } }
+(function () {   // reflect the active cache version on the top-bar toggle once the DOM is ready
+  const mark = () => ["v4", "v5"].forEach(v => { const b = document.getElementById("ver-" + v); if (b) b.classList.toggle("active", v === ASSET_VER); });
+  if (document.readyState !== "loading") mark(); else document.addEventListener("DOMContentLoaded", mark);
+})();
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
                                       // so reloads always get the freshly-rebuilt data; images stay cached
 const PAD = (i) => String(i).padStart(2, "0");
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC",
+  manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", anchorSrc: "accuracy",
   cellCount: 8, page: 0, pinned: [], panels: [], alphas: [],
   idx: 0, playing: false, playSeq: [], playPos: 0, frameMs: 180,   // default 1× (180ms/frame)
-  showScore: false, showReal: false, scores: {},   // scores[asset_dir] = {alphas, scores[cell][ai]} | null
+  scoreMode: "ptarget", showReal: false, scores: {}, scoresV5: {}, groups: [], realAcc20: null,   // scoreMode: none|linear|ptarget|rank. scores[dir]=linear per-cell; scoresV5[dir]=v5 set (bag,per-α); realAcc20[dir]=real top1@bag20
+
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
   rangeLo: 0, rangeHi: 0, alphaLimit: 5,   // autoplay sweeps only within ±alphaLimit (scrub stays full)
   targetSort: "map",                       // perturbation list order: "map" (distinctiveness, default) | "alpha"
@@ -28,7 +36,22 @@ const state = {
 const INFERNO = Uint8ClampedArray.from([0,0,4,1,0,5,1,1,6,1,1,8,2,1,10,2,2,12,2,2,14,3,2,16,4,3,18,4,3,20,5,4,23,6,4,25,7,5,27,8,5,29,9,6,31,10,7,34,11,7,36,12,8,38,13,8,41,14,9,43,16,9,45,17,10,48,18,10,50,20,11,52,21,11,55,22,11,57,24,12,60,25,12,62,27,12,65,28,12,67,30,12,69,31,12,72,33,12,74,35,12,76,36,12,79,38,12,81,40,11,83,41,11,85,43,11,87,45,11,89,47,10,91,49,10,92,50,10,94,52,10,95,54,9,97,56,9,98,57,9,99,59,9,100,61,9,101,62,9,102,64,10,103,66,10,104,68,10,104,69,10,105,71,11,106,73,11,106,74,12,107,76,12,107,77,13,108,79,13,108,81,14,108,82,14,109,84,15,109,85,15,109,87,16,110,89,16,110,90,17,110,92,18,110,93,18,110,95,19,110,97,19,110,98,20,110,100,21,110,101,21,110,103,22,110,105,22,110,106,23,110,108,24,110,109,24,110,111,25,110,113,25,110,114,26,110,116,26,110,117,27,110,119,28,109,120,28,109,122,29,109,124,29,109,125,30,109,127,30,108,128,31,108,130,32,108,132,32,107,133,33,107,135,33,107,136,34,106,138,34,106,140,35,105,141,35,105,143,36,105,144,37,104,146,37,104,147,38,103,149,38,103,151,39,102,152,39,102,154,40,101,155,41,100,157,41,100,159,42,99,160,42,99,162,43,98,163,44,97,165,44,96,166,45,96,168,46,95,169,46,94,171,47,94,173,48,93,174,48,92,176,49,91,177,50,90,179,50,90,180,51,89,182,52,88,183,53,87,185,53,86,186,54,85,188,55,84,189,56,83,191,57,82,192,58,81,193,58,80,195,59,79,196,60,78,198,61,77,199,62,76,200,63,75,202,64,74,203,65,73,204,66,72,206,67,71,207,68,70,208,69,69,210,70,68,211,71,67,212,72,66,213,74,65,215,75,63,216,76,62,217,77,61,218,78,60,219,80,59,221,81,58,222,82,56,223,83,55,224,85,54,225,86,53,226,87,52,227,89,51,228,90,49,229,92,48,230,93,47,231,94,46,232,96,45,233,97,43,234,99,42,235,100,41,235,102,40,236,103,38,237,105,37,238,106,36,239,108,35,239,110,33,240,111,32,241,113,31,241,115,29,242,116,28,243,118,27,243,120,25,244,121,24,245,123,23,245,125,21,246,126,20,246,128,19,247,130,18,247,132,16,248,133,15,248,135,14,248,137,12,249,139,11,249,140,10,249,142,9,250,144,8,250,146,7,250,148,7,251,150,6,251,151,6,251,153,6,251,155,6,251,157,7,252,159,7,252,161,8,252,163,9,252,165,10,252,166,12,252,168,13,252,170,15,252,172,17,252,174,18,252,176,20,252,178,22,252,180,24,251,182,26,251,184,29,251,186,31,251,188,33,251,190,35,250,192,38,250,194,40,250,196,42,250,198,45,249,199,47,249,201,50,249,203,53,248,205,55,248,207,58,247,209,61,247,211,64,246,213,67,246,215,70,245,217,73,245,219,76,244,221,79,244,223,83,244,225,86,243,227,90,243,229,93,242,230,97,242,232,101,242,234,105,241,236,109,241,237,113,241,239,117,241,241,121,242,242,125,242,244,130,243,245,134,243,246,138,244,248,142,245,249,146,246,250,150,248,251,154,249,252,157,250,253,161,252,255,164]);
 
 const PALETTE = ["#26c6ff", "#ff5252", "#f0a020", "#7ee787", "#c586ff", "#ff9edb", "#5ad1c7", "#ffd166"];
-const frameURL = (dir, cell, i) => `${BASE}${dir}/cell${cell}/frame_${PAD(i)}.webp`;
+// traversal frames/scores/anchor can switch NTC anchor pool (v5 only): accuracy = 25 hand-picked (_v5acc/), attention = v5 build (BASE). __to__ alt-anchors have no accpool → stay on BASE.
+function travBase(dir) { return (ASSET_VER === "v5" && state.anchorSrc === "accuracy" && !String(dir).includes("__to__")) ? "_v5acc/" : BASE; }
+const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag) score modes → row-header chip
+function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode at α-index i, or null. Both modes use the one white→red heat.
+  if (!sv || !SET_MODES.includes(state.scoreMode)) return null;
+  if (state.scoreMode === "rank") {
+    const arr = sv.rank_target; if (!arr) return null;
+    const r = arr[Math.min(i, arr.length - 1)]; if (r == null) return null;
+    const v = Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, r)) / 2));   // rank1→1 (deep red), rank10→0.5, rank≥100→0 (white)
+    return { txt: `rank ${r}`, bg: heat(v), fg: v > 0.55 ? "#fff" : "#111", showReal: false };   // rank vs real-fraction differ in units → no real overlay
+  }
+  const arr = sv.p_target; if (!arr) return null;
+  const x = arr[Math.min(i, arr.length - 1)]; if (x == null) return null;
+  return { txt: `set-acc ${Math.round(x * 100)}%`, bg: heat(x), fg: x > 0.55 ? "#fff" : "#111", showReal: true };
+}
+const frameURL = (dir, cell, i) => `${travBase(dir)}${dir}/cell${cell}/frame_${PAD(i)}.webp`;
 const heat = (v) => {   // classifier confidence 0→1 as white → deep red (#99000d)
   const r = Math.round(255 + (153 - 255) * v), gg = Math.round(255 - 255 * v), b = Math.round(255 + (13 - 255) * v);
   return `rgb(${r},${gg},${b})`;
@@ -39,14 +62,17 @@ const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, ancho
 
 // ---- persist the browse selection + display prefs across page reloads (localStorage; works on static S3) ----
 const LS_KEY = "opsin.state.v1";
+let restoredAlpha = null;   // α VALUE restored from localStorage, applied on the first rebuild after a reload/version-switch
 function saveState() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
       marker: markerLabel(state.markerIdx), grain: $("grain").value,
       target: state.target ? state.target.target : null, anchor: state.anchor,
       cellCount: state.cellCount, page: state.page, tilepx: $("tile-scale").value,
-      showScore: state.showScore, showReal: state.showReal, altAnchor: state.altAnchorsOnly,
+      scoreMode: state.scoreMode, showReal: state.showReal, altAnchor: state.altAnchorsOnly,
       cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, view: state.view,
+      alpha: (state.alphas && state.idx != null && state.idx < state.alphas.length) ? state.alphas[state.idx] : null,   // hold α (by value) across reloads
+      anchorSrc: state.anchorSrc,
       pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
     }));
   } catch (e) { /* private mode / quota — non-fatal */ }
@@ -54,12 +80,14 @@ function saveState() {
 function restoreState() {   // returns true if a saved snapshot was applied (skips the default selection)
   let s; try { s = JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch (e) { s = null; }
   if (!s) return false;
+  if (s.alpha != null) restoredAlpha = s.alpha;   // consumed by the first rebuild → holds α across reload/version-switch
+  if (s.anchorSrc) { state.anchorSrc = s.anchorSrc; $("anchorsrc").value = s.anchorSrc; }
   // filters/prefs that affect the target list — set BEFORE marker/target resolution
   if (s.grain) $("grain").value = s.grain;
   if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
   if (s.tcCols != null) { $("tc-cols").checked = s.tcCols; $("tc-view").classList.toggle("cols-layout", s.tcCols); }
   if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
-  if (s.showScore != null) { $("showscore").checked = s.showScore; state.showScore = s.showScore; $("score-legend").style.display = s.showScore ? "flex" : "none"; }
+  if (s.scoreMode) { state.scoreMode = s.scoreMode; $("scoremode").value = s.scoreMode; $("score-legend").style.display = s.scoreMode !== "none" ? "flex" : "none"; }
   if (s.showReal != null) { $("showreal").checked = s.showReal; state.showReal = s.showReal; }
   if (s.cellCount) { state.cellCount = s.cellCount; $("cellcount").value = s.cellCount; }
   if (s.tilepx) { $("tile-scale").value = s.tilepx; document.documentElement.style.setProperty("--tilepx", s.tilepx + "px"); }
@@ -83,6 +111,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
 async function boot() {
   state.manifest = await (await fetch(MANIFEST_URL + NOCACHE)).json();
   state.geneDesc = await fetch(`${BASE}gene_desc.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
+  state.realAcc20 = await fetch(`${BASE}real_acc20.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // real-cell top1_acc@bag20 by asset_dir (feasibility ceiling)
   state.attnIndex = await fetch(`${BASE}attention_heads/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
@@ -94,6 +123,7 @@ async function boot() {
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cnext").onclick = () => { state.page++; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("anchor").onchange = () => { state.anchor = $("anchor").value; rebuild(); };
+  $("anchorsrc").onchange = () => { state.anchorSrc = $("anchorsrc").value; state.scores = {}; state.scoresV5 = {}; saveState(); rebuild(); };   // switch NTC anchor pool (v5): accuracy ↔ attention
   $("addpanel").onclick = () => {
     const set = activeSet(); if (!set.length) return;
     const p = set[0];   // the current resolved (marker, anchor→target)
@@ -102,14 +132,15 @@ async function boot() {
   };
   $("clearpanels").onclick = () => { state.pinned = []; renderPinned(); rebuild(); };
   $("alpha").oninput = () => showIdx(+$("alpha").value);
+  $("alpha").onchange = saveState;   // persist α on release so reloads / v4↔v5 hold the current traversal position
   $("tile-scale").oninput = () => document.documentElement.style.setProperty("--tilepx", $("tile-scale").value + "px");   // traversal image scale
   $("colslayout").onchange = () => $("grid").classList.toggle("cols-layout", $("colslayout").checked);   // perturbations rows ↔ columns
   $("exportgif").onclick = exportGif;
   $("play").onclick = togglePlay;
-  $("showscore").onchange = () => {
-    state.showScore = $("showscore").checked;
-    $("score-legend").style.display = state.showScore ? "flex" : "none";
-    showIdx(state.idx);
+  $("scoremode").onchange = () => {
+    state.scoreMode = $("scoremode").value;
+    $("score-legend").style.display = state.scoreMode !== "none" ? "flex" : "none";
+    saveState(); showIdx(state.idx);
   };
   $("speed").onchange = () => { state.frameMs = +$("speed").value; };
   $("showreal").onchange = () => { state.showReal = $("showreal").checked; rebuild(); };
@@ -188,6 +219,26 @@ async function boot() {
   $("tc-pinclear").onclick = () => { tc.pinned = []; renderTopPins(); renderTop(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
+  const onSetacc = () => {   // off / geneKO / complex × P(target)|rank — per-tile v5 set-score at the montage α (v5 cache only)
+    mont.setaccMode = $("m-setacc").value;
+    mont.setaccMetric = $("m-setacc-metric").value;
+    const done = () => {
+      if (mont.setaccMode === "complex") {                // color by EBI-complex, chip on the nearest-member dot
+        if (mont.prevField == null) mont.prevField = mont.field;
+        computeCxAnchors(); mont.field = "ebi_complex"; $("m-color-search").value = colorLabel(); setField();
+      } else {                                            // geneKO / off — restore the prior coloring if we'd switched it
+        if (mont.prevField != null) { mont.field = mont.prevField; mont.prevField = null; $("m-color-search").value = colorLabel(); setField(); }
+        else drawOverlay();
+      }
+    };
+    const need = mont.setaccMode === "geneKO" && mont.setaccMetric === "ptarget" && !mont.setacc ? ["setacc.json", j => mont.setacc = j]
+      : mont.setaccMode === "geneKO" && mont.setaccMetric === "rank" && !mont.setaccRank ? ["setacc_rank.json", j => mont.setaccRank = j]
+      : mont.setaccMode === "complex" && mont.setaccMetric === "ptarget" && !mont.setaccCx ? ["setacc_complex.json", j => mont.setaccCx = j]
+      : mont.setaccMode === "complex" && mont.setaccMetric === "rank" && !mont.setaccCxRank ? ["setacc_complex_rank.json", j => mont.setaccCxRank = j] : null;
+    if (need) fetch(`${BASE}_montage/${need[0]}${NOCACHE}`).then(r => r.ok ? r.json() : null).then(j => { need[1](j); done(); }).catch(done);
+    else done();
+  };
+  $("m-setacc").onchange = onSetacc; $("m-setacc-metric").onchange = onSetacc;
   let _saveTimer;   // persist selection/prefs after any change settles (debounced; snapshot reads live state)
   const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
   document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
@@ -241,7 +292,10 @@ const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology
 };
 // display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
 const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
-const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
+const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
+// montage set-score value → {v:0..1 for heat, txt}: P(target) as %, or target rank on the same white→red heat (rank1→red, ≥100→white)
+function saVal(raw) { return mont.setaccMetric === "rank" ? { v: Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, raw)) / 2)), txt: `rank ${raw}` } : { v: raw, txt: `${Math.round(raw * 100)}%` }; }
+const saData = () => mont.setaccMode === "complex" ? (mont.setaccMetric === "rank" ? mont.setaccCxRank : mont.setaccCx) : (mont.setaccMetric === "rank" ? mont.setaccRank : mont.setacc);
 // continuous colormaps (10 anchors each, matplotlib) for OP/CP feature coloring
 const CMAPS = {
   viridis: ["#440154", "#482878", "#3e4a89", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"],
@@ -488,6 +542,18 @@ function buildCmap() {
 }
 const colorOf = (L) => mont.field === "none" ? "#26c6ff" : isFeatField() ? featColor(L.g) : (mont.cmap[L[mont.field]] || "#555");
 
+function computeCxAnchors() {   // per EBI-complex: the member geneKO dot nearest the members' centroid → where the complex chip sits
+  const grp = {};
+  for (const L of mont.labels) { const c = L.ebi_complex; if (c) (grp[c] = grp[c] || []).push(L); }
+  mont.cxAnchors = {};
+  for (const c in grp) {
+    const ms = grp[c], cx = ms.reduce((s, L) => s + L.nx, 0) / ms.length, cy = ms.reduce((s, L) => s + L.ny, 0) / ms.length;
+    let best = ms[0], bd = Infinity;
+    for (const L of ms) { const d = (L.nx - cx) ** 2 + (L.ny - cy) ** 2; if (d < bd) { bd = d; best = L; } }
+    mont.cxAnchors[c] = { nx: best.nx, ny: best.ny, gene: best.g };
+  }
+}
+
 function renderLegend() {
   const el = $("m-legend"); el.innerHTML = "";
   if (mont.field === "none") return;
@@ -536,6 +602,37 @@ function drawOverlay() {
       ctx.shadowBlur = 0;
       ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, 6.2832); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();   // white outline for contrast
       ctx.restore();
+    }
+  }
+  const aKey = String(+$("m-alpha").value);
+  if (mont.setaccMode === "geneKO" && saData()) {   // per-tile geneKO set-score (P(target) gen%/real% | rank) at the montage α
+    const data = saData();
+    ctx.globalAlpha = 1; ctx.font = "700 11px ui-monospace,monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    for (const L of mont.labels) {
+      const s = data[L.g], raw = s ? s[aKey] : null; if (raw == null) continue;
+      const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(L.nx * mont.W, L.ny * mont.W), true);
+      if (p.x < -30 || p.y < -30 || p.x > cv.width + 30 || p.y > cv.height + 30) continue;
+      const { v, txt: base } = saVal(raw);
+      const rl = mont.setaccMetric !== "rank" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + L.g] : null;
+      const txt = mont.setaccMetric === "rank" ? base : `${Math.round(raw * 100)}${rl != null ? "/" + Math.round(rl * 100) : ""}`;
+      const pad = 3, bw = ctx.measureText(txt).width + pad * 2;
+      ctx.fillStyle = heat(v);
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(p.x + 5, p.y - 7, bw, 14, 3); ctx.fill(); } else ctx.fillRect(p.x + 5, p.y - 7, bw, 14);
+      ctx.fillStyle = v > 0.55 ? "#fff" : "#111"; ctx.fillText(txt, p.x + 5 + pad, p.y - 5);
+    }
+  }
+  if (mont.setaccMode === "complex" && saData() && mont.cxAnchors) {   // one chip per complex on its nearest-member dot
+    const data = saData();
+    ctx.globalAlpha = 1; ctx.font = "800 13px ui-monospace,monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    for (const c in mont.cxAnchors) {
+      const s = data[c], raw = s ? s[aKey] : null; if (raw == null) continue;
+      const A = mont.cxAnchors[c];
+      const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(A.nx * mont.W, A.ny * mont.W), true);
+      if (p.x < -40 || p.y < -40 || p.x > cv.width + 40 || p.y > cv.height + 40) continue;
+      const { v, txt } = saVal(raw), pad = 4, bw = ctx.measureText(txt).width + pad * 2;
+      ctx.fillStyle = heat(v);
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(p.x + 5, p.y - 9, bw, 18, 4); ctx.fill(); } else ctx.fillRect(p.x + 5, p.y - 9, bw, 18);
+      ctx.fillStyle = v > 0.55 ? "#fff" : "#111"; ctx.fillText(txt, p.x + 5 + pad, p.y - 6);
     }
   }
   if (mont.showLabels && mont.field !== "none") {   // category name at each group centroid (outlined for legibility)
@@ -594,7 +691,16 @@ function wireHover() {
     const best = nearestLabel(mont.osd.viewport.viewportToImageCoordinates(mont.osd.viewport.pointFromPixel(new OpenSeadragon.Point(e.clientX - r.left, e.clientY - r.top))));
     if (best) {
       const extra = mont.field !== "none" && best[mont.field] ? ` · ${best[mont.field]}` : "";
-      tip.textContent = best.g + extra + (best.crop ? "" : " (no crop)");
+      const aK = String(+$("m-alpha").value); let scoreStr = ""; const data = saData();
+      if (mont.setaccMode === "geneKO" && data && data[best.g]) {
+        const raw = data[best.g][aK];
+        if (raw != null) { const rl = mont.setaccMetric !== "rank" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + best.g] : null;
+          scoreStr = mont.setaccMetric === "rank" ? ` | ${saVal(raw).txt}` : ` | set-acc ${Math.round(raw * 100)}%${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""}`; }
+      } else if (mont.setaccMode === "complex" && data && best.ebi_complex && data[best.ebi_complex]) {
+        const raw = data[best.ebi_complex][aK];
+        if (raw != null) scoreStr = mont.setaccMetric === "rank" ? ` | ${best.ebi_complex} ${saVal(raw).txt}` : ` | ${best.ebi_complex} set-acc ${Math.round(raw * 100)}%`;
+      }
+      tip.textContent = best.g + scoreStr + extra + (best.crop ? "" : " (no crop)");
       tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`;
     }
   });
@@ -635,7 +741,7 @@ function renderMarkerList() {
 }
 function pickMarker(i) { selectMarker(i); $("markerfilter").value = markerLabel(i); $("markerfilter").blur(); $("marker-list").classList.add("hidden"); }
 
-const targetLabel = (t) => `${t.target}${t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : ""}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
+const targetLabel = (t) => `${t.target}${t.grain === "pc" && t.explained_variance != null ? ` (${t.explained_variance.toFixed(1)}%)` : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : ""}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
 function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
   const g = $("grain").value;
   const altSet = new Set(state.marker.targets.filter(e => e.control).map(e => e.target));   // names with a non-NTC anchor
@@ -711,9 +817,9 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
     gEl.querySelectorAll(".panel img").forEach(im => {
       const k = +im.id.replace("pimg", ""); const p = state.panels[k]; if (!p) return;
       const r = im.getBoundingClientRect();
-      tiles.push({ x: r.left - gr.left + grid.scrollLeft, y: r.top - gr.top + grid.scrollTop, w: r.width, h: r.height, frames: p.frames });
+      tiles.push({ x: r.left - gr.left + grid.scrollLeft, y: r.top - gr.top + grid.scrollTop, w: r.width, h: r.height, frames: p.frames, dir: p.asset_dir, cell: p.cell });
     });
-    if (tiles.length) groups.push({ text: hd.textContent, color: getComputedStyle(hd).color,   // skip the tile-less real-cells group
+    if (tiles.length) groups.push({ text: hd.textContent, color: getComputedStyle(hd).color, dir: tiles[0].dir,   // skip the tile-less real-cells group
       hx: hr.left - gr.left + grid.scrollLeft, hy: hr.top - gr.top + grid.scrollTop, tiles });
   });
   const allT = groups.flatMap(g => g.tiles);
@@ -749,6 +855,13 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
   const anch = state.anchor || "NTC";
   // heatbar geometry: its own centered line, matching the viewer's --neg/--mid/--pos scale
   const barW = Math.min(W - MARGIN * 2, 520), bx0 = (W - barW) / 2, bx1 = bx0 + barW, cy = MARGIN + 15;
+  const chip = (txt, ax, ay, v, align, col) => {   // colored score chip; col={bg,fg} overrides the default heat(v) white→red
+    cx.font = "700 12px ui-monospace,monospace"; cx.textBaseline = "top"; cx.textAlign = "left";
+    const pad = 4, bw = cx.measureText(txt).width + pad * 2, bh = 17, bx = align === "right" ? ax - bw - 3 : ax + 3, by = ay + 3;
+    cx.fillStyle = col ? col.bg : heat(v);
+    if (cx.roundRect) { cx.beginPath(); cx.roundRect(bx, by, bw, bh, 4); cx.fill(); } else cx.fillRect(bx, by, bw, bh);
+    cx.fillStyle = col ? col.fg : (v > 0.55 ? "#fff" : "#111"); cx.fillText(txt, bx + pad, by + 3);
+  };
   for (const a of path) {
     cx.fillStyle = "#0d0f14"; cx.fillRect(0, 0, W, H);
     const grd = cx.createLinearGradient(bx0, 0, bx1, 0);                          // orange (anti-phenotype) → blue (anchor) → red (phenotype)
@@ -761,11 +874,20 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
     cx.textAlign = "left";   cx.fillStyle = "#f0a020"; cx.fillText("anti-phenotype", bx0, cy + 10);
     cx.textAlign = "center"; cx.fillStyle = "#26c6ff"; cx.fillText(anch, (bx0 + bx1) / 2, cy + 10);
     cx.textAlign = "right";  cx.fillStyle = "#ff5252"; cx.fillText("phenotype", bx1, cy + 10);
-    cx.font = "12px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "bottom";
     for (const g of groups) {                                                    // wrapped label centered above the group's images, then the tiles
-      cx.fillStyle = g.color;
+      cx.font = "12px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "bottom"; cx.fillStyle = g.color;
       g.lines.forEach((ln, li) => cx.fillText(ln, g.gcx, g.gtop - 5 - (g.lines.length - 1 - li) * LH));
-      for (const t of g.tiles) { const im = cache[t.frames[a]]; if (im && im.width) cx.drawImage(im, t.x, t.y, t.w, t.h); }
+      const lead = g.tiles.reduce((m, t) => t.x < m.x ? t : m, g.tiles[0]);
+      for (const t of g.tiles) {
+        const im = cache[t.frames[a]]; if (im && im.width) cx.drawImage(im, t.x, t.y, t.w, t.h);
+        if (state.scoreMode === "linear") {                                      // per-cell linear classifier score (top-right of tile)
+          const sc = state.scores[t.dir], v = sc && sc.scores[t.cell] ? sc.scores[t.cell][Math.min(a, sc.scores[t.cell].length - 1)] : null;
+          if (v != null) chip(`${Math.round(v * 100)}%`, t.x + t.w, t.y, v, "right");
+        }
+      }
+      { const sch = setChip(state.scoresV5[g.dir], a);                            // v5 set score (selected mode) on the row's leftmost tile
+        if (sch) { const rl = sch.showReal && state.realAcc20 ? state.realAcc20[g.dir] : null;
+          chip(`${sch.txt}${rl != null ? `/real ${Math.round(rl * 100)}%` : ""}`, lead.x, lead.y, 0, "left", sch); } }
     }
     gif.addFrame(cx, { copy: true, delay: base * hold(a) });
   }
@@ -800,7 +922,7 @@ function rebuild() {
   const set = activeSet();
   const N = state.cellCount, start = state.page * N;
   const g = $("grid"); g.innerHTML = "";
-  state.panels = []; let k = 0;
+  state.panels = []; state.groups = []; let k = 0;
   if (state.showReal) {                             // real cells shown ONCE as their own group (shared starting cells → identical across NTC-anchored perturbations)
     const rp0 = set.find(p => p.has_real);
     if (rp0) {
@@ -810,7 +932,7 @@ function rebuild() {
       const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
       for (let c = start; c < Math.min(start + N, rp0.n_cells); c++) {
         const rp = document.createElement("div"); rp.className = "panel";
-        const rimg = document.createElement("img"); rimg.src = `${BASE}${rp0.real_dir}/cell${c}/real.webp`;
+        const rimg = document.createElement("img"); rimg.src = `${travBase(rp0.real_dir)}${rp0.real_dir}/cell${c}/real.webp`;
         rp.appendChild(rimg); rr.appendChild(rp);
       }
       rgroup.appendChild(rhd); rgroup.appendChild(rr); g.appendChild(rgroup);
@@ -822,6 +944,8 @@ function rebuild() {
     const group = document.createElement("div"); group.className = "group";
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     hd.textContent = `${apfx}${p.target} · ${p.markerName}`; hd.title = hd.textContent;   // single header (title = full text on hover when truncated)
+    const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
+    state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
     cells.style.setProperty("--cols", Math.min(N, 5));   // max 5 per row; wrap instead of stretching
     for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
@@ -852,7 +976,8 @@ function rebuild() {
   else hr.style.display = "none";
   computeRange();
   const mid = Math.floor(n / 2);
-  const keep = (state.idx != null && state.idx >= 0 && state.idx < n) ? state.idx : mid;   // hold α across perturbation/cell-page changes; reset only on load / α-count change
+  let keep = (state.idx != null && state.idx >= 0 && state.idx < n) ? state.idx : mid;   // hold α across perturbation/cell-page changes; reset only on load / α-count change
+  if (restoredAlpha != null) { const j = state.alphas.indexOf(restoredAlpha); if (j >= 0) keep = j; restoredAlpha = null; }   // reload/version-switch: restore the saved α
   $("alpha").value = keep; buildPlaySeq(state.alphas); showIdx(keep);
 
   const t = state.target;
@@ -865,9 +990,11 @@ function rebuild() {
 
 function fetchScores(dir) {
   if (state.scores[dir] !== undefined) return;   // cached or pending
-  state.scores[dir] = null;
-  fetch(`${BASE}${dir}/scores.json${NOCACHE}`).then(r => r.ok ? r.json() : null)
+  state.scores[dir] = null; state.scoresV5[dir] = null;
+  fetch(`${travBase(dir)}${dir}/scores.json${NOCACHE}`).then(r => r.ok ? r.json() : null)
     .then(j => { state.scores[dir] = j; showIdx(state.idx); }).catch(() => {});
+  fetch(`${travBase(dir)}${dir}/scores_v5.json${NOCACHE}`).then(r => r.ok ? r.json() : null)   // v5 SetTransformer set-accuracy (bag)
+    .then(j => { state.scoresV5[dir] = j; showIdx(state.idx); }).catch(() => {});
 }
 
 function showIdx(i) {
@@ -876,13 +1003,22 @@ function showIdx(i) {
     const img = $(`pimg${k}`); if (img) img.src = p.frames[Math.min(i, p.frames.length - 1)];
     const bd = $(`pbadge${k}`); if (!bd) return;
     const sc = state.scores[p.asset_dir];
-    const v = state.showScore && sc && sc.scores[p.cell] ? sc.scores[p.cell][Math.min(i, sc.scores[p.cell].length - 1)] : null;
+    const v = state.scoreMode === "linear" && sc && sc.scores[p.cell] ? sc.scores[p.cell][Math.min(i, sc.scores[p.cell].length - 1)] : null;
     if (v != null) {
       bd.textContent = `${Math.round(v * 100)}%`;
       bd.style.background = heat(v);                 // white → deep red by confidence
       bd.style.color = v > 0.55 ? "#fff" : "#111";
       bd.style.display = "block";
     } else bd.style.display = "none";
+  });
+  state.groups.forEach(gp => {   // per-traversal v5 set score chip (selected mode: P(target) heat | rank RdYlGn)
+    const sch = setChip(state.scoresV5[gp.dir], i);
+    if (sch) {
+      const rl = sch.showReal && state.realAcc20 ? state.realAcc20[gp.dir] : null;   // real-cell ceiling (P(target) only)
+      gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""} · bag ${gp.nCells}`;
+      gp.sa.style.background = sch.bg; gp.sa.style.color = sch.fg;
+      gp.sa.style.display = "inline-block";
+    } else gp.sa.style.display = "none";
   });
   const n = state.alphas.length, a = state.alphas[i];
   $("alpha-read").textContent = `α = ${a.toFixed(1)}`;
@@ -1334,7 +1470,7 @@ function pcCloseOverlay() { const o = $("pc-overlay"); if (o) o.remove(); }
 
 // ---- Top Cells tab: per-gene top phenotype cells by attention or accuracy (phase), masked like the PC tab ----
 const TC_CROP_V = "?m=1";
-const tc = { data: null, mode: "attention", pinned: [{ gene: "NTC", mode: "attention" }] };   // pins carry their own mode
+const tc = { data: null, mode: "accuracy", pinned: [{ gene: "NTC", mode: "accuracy" }] };   // default: Top Accuracy, NTC pinned (v5 is accuracy-only); pins carry their own mode
 async function loadTop() {
   if (tc.data === null) tc.data = await fetch(`${BASE}top_cells/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
   if (!tc.data) { $("tc-view").innerHTML = '<div class="empty">Top-cell assets not built (run build_top_cells.py)</div>'; return; }

@@ -4,13 +4,20 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — OPS interpretability viewer</title>
-<link rel="stylesheet" href="style.css?v=110"/>
+<link rel="stylesheet" href="style.css?v=117"/>
 </head>
 <body>
 <header>
   <div><h1>OPSin<span style="color:var(--mut);font-weight:400"> · OPS interpretability viewer</span></h1>
   <span class="sub">counterfactual traversals · gene embedding · attention heads · PC viewer · CellDINO / SetTransformer phenotypes</span></div>
-  <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
+  <div class="hdr-right">
+    <div class="asset-ver" title="Cache version — v4: current live viewer · v5: paper-v2 SetTransformer (no-mask/160px). Switching reloads.">
+      <span class="av-label">cache</span>
+      <button id="ver-v4" class="verbtn" onclick="setAssetVer('v4')">v4</button>
+      <button id="ver-v5" class="verbtn" onclick="setAssetVer('v5')">v5</button>
+    </div>
+    <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
+  </div>
 </header>
 
 <!-- top crossbar: the core selection (drives every view). The left panel below is reserved for view tabs. -->
@@ -29,12 +36,13 @@
       <option value="geneKO">geneKO</option>
       <option value="complex">complex</option>
       <option value="minibinder">minibinder</option>
+      <option value="pc">PC</option>
     </select>
   </div>
   <div class="tb-field tb-grow">
     <label>Perturbation
       <select id="target-sort" data-seg class="mini" title="list order">
-        <option value="map" selected>by mAP</option>
+        <option value="map" selected>by RANK</option>
         <option value="alpha">A–Z</option>
       </select>
     </label>
@@ -68,10 +76,23 @@
       <label>Anchor <span class="hint">(the α=0 center)</span>
         <select id="anchor"></select>
       </label>
+      <label>NTC anchor cells <span class="hint">(v5 only)</span>
+        <select id="anchorsrc" data-seg>
+          <option value="accuracy" selected>top accuracy — 25 hand-picked (best)</option>
+          <option value="attention">top attention</option>
+        </select>
+      </label>
       <div class="hint">Default <b>NTC</b>. Pick another geneKO/complex to make α=0 that class and traverse toward the selected perturbation — requires precomputed A→B assets for the pair.</div>
       <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
-        <label class="chk"><input type="checkbox" id="showscore" data-on="classifier scores"/> classifier score on images</label>
+        <label>Classifier score overlay
+          <select id="scoremode" data-seg>
+            <option value="none">none</option>
+            <option value="linear">per-cell linear (NTC vs KO)</option>
+            <option value="ptarget" selected>P(target) — set (bag)</option>
+            <option value="rank">target rank — set (bag)</option>
+          </select>
+        </label>
         <label class="chk"><input type="checkbox" id="showreal" data-on="show real cells"/> show real cell row (vs generated)</label>
         <label class="chk"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
         <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
@@ -129,7 +150,7 @@
 
     <div class="tabpane hidden" id="tab-top">
       <div class="hint">Top real phenotype cells for the selected perturbation (phase), ranked by model <b>attention</b> or classifier <b>accuracy</b>. Follows the marker × perturbation selection; pin perturbations to compare (NTC pinned by default).</div>
-      <div class="pc-mode"><button id="tc-attn" class="seg active" title="cells the model attends to most">Top Attention</button><button id="tc-acc" class="seg" title="cells classified most confidently">Top Accuracy</button></div>
+      <div class="pc-mode"><button id="tc-attn" class="seg" title="cells the model attends to most">Top Attention</button><button id="tc-acc" class="seg active" title="cells classified most confidently">Top Accuracy</button></div>
       <div class="hint">Count set by <b>Cells per page</b> above (up to 20).</div>
       <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       <div class="grp">
@@ -212,6 +233,19 @@
         </select>
       </label>
       <label class="chk"><input type="checkbox" id="m-labels" data-on="label groups"/> label groups (text at group centroids)</label>
+      <label>set-score overlay <span class="hint">(per tile, at this α; v5 only)</span>
+        <select id="m-setacc" data-seg>
+          <option value="off" selected>off</option>
+          <option value="geneKO">geneKO (per tile)</option>
+          <option value="complex">complex (color by EBI, nearest member)</option>
+        </select>
+      </label>
+      <label>metric
+        <select id="m-setacc-metric" data-seg>
+          <option value="ptarget" selected>P(target) — gen%/real%</option>
+          <option value="rank">target rank</option>
+        </select>
+      </label>
       <div class="hint" id="m-embed"></div>
       <div class="hint" id="m-status"></div>
       <div id="m-legend"></div>
@@ -257,7 +291,7 @@
         <option value="0.5">play ±0.5</option>
       </select>
     </div>
-    <div id="score-legend" style="display:none">classifier confidence (target class):&nbsp; 0%<span class="bar"></span>100%</div>
+    <div id="score-legend" style="display:none">score overlay (white → red) — linear / P(target) = 0→100%, rank = rank ≥100 → rank 1 &nbsp; <span class="bar"></span></div>
     <div id="grid"></div>
     <div id="meta"></div>
     <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas><canvas id="m-live"></canvas></div>
@@ -278,6 +312,6 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=119"></script>
+<script src="app.js?v=136"></script>
 </body>
 </html>

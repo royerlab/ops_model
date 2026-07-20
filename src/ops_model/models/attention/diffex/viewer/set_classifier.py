@@ -19,6 +19,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 CKPT_ROOT = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/wandb/cellstate_set_classifier"
+# v5 (paper-v2) checkpoints: no-mask/160px, cosine head. Same SetClassifier arch (loads clean).
+V5_CKPT_ROOT = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/checkpoints"
+V5_RUNS = {("phase", "geneKO"): "six29oan", ("phase", "complex_ebionly"): "5dbnlgl5", ("phase", "complex_ebifb"): "tcmqqj8z",
+           ("fluor", "geneKO"): "fgaf9ni2", ("fluor", "complex_ebionly"): "avzy8p7x", ("fluor", "complex_ebifb"): "gexmq7ks"}
 
 
 class MAB(nn.Module):
@@ -100,16 +104,19 @@ class SetClassifier(nn.Module):
         return self.head(self.encoder(x))                            # (B, n_classes)
 
 
-def load_set_classifier(run="miwkg1cy", device="cpu"):
-    """Load a checkpoint → (model, gene_to_idx, channel_to_idx). Architecture read from the bundled config."""
-    ckpt = torch.load(glob.glob(f"{CKPT_ROOT}/{run}/*.pt")[0], map_location=device)
+def load_set_classifier(run="miwkg1cy", device="cpu", root=CKPT_ROOT):
+    """Load a checkpoint → (model, class_to_idx, channel_to_idx). Architecture read from the bundled config.
+    class_to_idx = label_to_idx when present (the EBI-only model classifies 99 COMPLEXES directly),
+    else gene_to_idx (the geneKO model classifies 1001 genes). root=V5_CKPT_ROOT for the v5 checkpoints."""
+    ckpt = torch.load(glob.glob(f"{root}/{run}/**/*.pt", recursive=True)[0], map_location=device, weights_only=False)
     mc = ckpt["config"]["model"] if "model" in ckpt.get("config", {}) else ckpt["config"]
+    cmap = ckpt.get("label_to_idx") or ckpt["gene_to_idx"]        # complex model → label_to_idx (99); geneKO → gene_to_idx
     m = SetClassifier(d=mc["d_model"], heads=mc["n_heads"], m=mc["n_inducing_cell"],
-                      n_layers=mc["n_layers_cell"], n_classes=len(ckpt["gene_to_idx"]),
+                      n_layers=mc["n_layers_cell"], n_classes=len(cmap),
                       n_channels=len(ckpt["channel_to_idx"]), d_ff=mc.get("d_ff") or 4 * mc["d_model"])
     m.load_state_dict(ckpt["model_state_dict"])
     m.eval().to(device)
-    return m, ckpt["gene_to_idx"], ckpt["channel_to_idx"]
+    return m, cmap, ckpt["channel_to_idx"]
 
 
 @torch.no_grad()

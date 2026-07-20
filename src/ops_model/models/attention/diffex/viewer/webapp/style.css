@@ -10,6 +10,13 @@ header .sub{color:var(--mut);font-size:12px}
 .toggle{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;
         padding:8px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
 .toggle:hover{border-color:var(--accent)}
+.hdr-right{display:flex;align-items:center;gap:14px}
+.asset-ver{display:inline-flex;align-items:center;gap:5px}
+.asset-ver .av-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+.verbtn{background:var(--panel);color:var(--mut);border:1px solid var(--line);border-radius:6px;
+        padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.verbtn:hover{border-color:var(--accent)}
+.verbtn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 #sidebar{width:340px;flex:none;border-left:1px solid var(--line);padding:18px;overflow:auto}
 #sidebar.hidden{display:none}
 .side-hd{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
@@ -27,8 +34,8 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar{display:flex;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);
         background:var(--panel);align-items:flex-start;flex-wrap:wrap;flex:none}
 .tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
-.tb-field:has(#grain){min-width:290px}          /* Type: all/geneKO/complex/minibinder segmented — needs room */
-.tb-field.tb-grow{flex:1;min-width:190px}
+.tb-field:has(#grain){min-width:380px}          /* Type: all/geneKO/complex/minibinder/PC segmented — needs room */
+.tb-field.tb-grow{flex:0.6;min-width:170px;max-width:340px}
 .tb-field>label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .tb-field .hint{text-transform:none;letter-spacing:0;font-size:11px;opacity:.7}
 #topbar select,#topbar input{width:100%}
@@ -48,12 +55,12 @@ header .sub{color:var(--mut);font-size:12px}
 .combo-item.sel{color:var(--accent)}
 .combo-empty{padding:8px 9px;color:var(--mut);font-style:italic;font-size:12px}
 #controls{width:290px;padding:16px;border-right:1px solid var(--line);
-          display:flex;flex-direction:column;gap:14px;overflow:auto}
-.tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+          display:flex;flex-direction:column;gap:14px;overflow:hidden}   /* pane scrolls, tabs stay put */
+.tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);flex:none}
 .tabs .tab{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;
            color:var(--mut);padding:6px 7px;font-size:12px;white-space:nowrap;cursor:pointer}
 .tabs .tab.active{color:var(--fg);border-bottom-color:var(--accent)}
-.tabpane{display:flex;flex-direction:column;gap:14px}
+.tabpane{display:flex;flex-direction:column;gap:14px;flex:1;min-height:0;overflow-y:auto;padding-right:4px}
 .tabpane.hidden{display:none}
 #controls label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut);
                 text-transform:uppercase;letter-spacing:.04em}
@@ -117,6 +124,7 @@ button:hover{border-color:var(--accent)}
 .panel{position:relative}
 .panel img{width:100%;aspect-ratio:1;background:#000;border:1px solid var(--line);border-radius:6px;display:block}
 .panel.lead img{border-left-width:4px}          /* colour bar only on the group's left-most image */
+.setacc{margin-left:10px;font:800 17px ui-monospace,monospace;padding:2px 8px;border-radius:6px;vertical-align:middle;box-shadow:0 0 3px rgba(0,0,0,.4)}
 .badge{position:absolute;top:6px;right:6px;font:700 13px ui-monospace,monospace;
        border-radius:5px;padding:2px 7px;box-shadow:0 0 3px rgba(0,0,0,.5)}
 .chk{flex-direction:row!important;align-items:center;gap:8px;text-transform:none!important;
