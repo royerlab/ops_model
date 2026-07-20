@@ -22,8 +22,11 @@ class DiffAE(nn.Module):
         down = tuple("AttnDownBlock2D" if i >= n_blocks - 2 else "DownBlock2D"
                      for i in range(n_blocks))
         up = tuple("AttnUpBlock2D" if i < 2 else "UpBlock2D" for i in range(n_blocks))
+        # spatial conditioning: concat the cond image into the input (noisy target + cond = 2 ch)
+        self.spatial_cond = getattr(cfg, "spatial_cond", False)
+        in_channels = 2 if self.spatial_cond else 1
         self.unet = UNet2DModel(
-            sample_size=cfg.crop_size, in_channels=1, out_channels=1,
+            sample_size=cfg.crop_size, in_channels=in_channels, out_channels=1,
             block_out_channels=cfg.block_out_channels,
             layers_per_block=cfg.layers_per_block,
             down_block_types=down, up_block_types=up,
@@ -46,8 +49,9 @@ class DiffAE(nn.Module):
     def null(self, n: int, device) -> torch.Tensor:
         return self.null_emb[None].expand(n, -1).to(device)
 
-    def denoise(self, noisy, t, c) -> torch.Tensor:
-        return self.unet(noisy, t, class_labels=c).sample
+    def denoise(self, noisy, t, c, cond_img=None) -> torch.Tensor:
+        x = torch.cat([noisy, cond_img], dim=1) if self.spatial_cond else noisy   # dense phase concat
+        return self.unet(x, t, class_labels=c).sample
 
-    def forward(self, noisy, t, emb):
-        return self.denoise(noisy, t, self.cond(emb))
+    def forward(self, noisy, t, emb, cond_img=None):
+        return self.denoise(noisy, t, self.cond(emb), cond_img)

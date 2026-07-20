@@ -61,15 +61,54 @@ def _dihedral(x: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def _pearson(a, b) -> float:
+    a, b = a.ravel(), b.ravel()
+    a, b = a - a.mean(), b - b.mean()
+    return float((a * b).sum() / (np.sqrt((a * a).sum() * (b * b).sum()) + 1e-12))
+
+
 @torch.no_grad()
-def _sample(model, xT, emb, cfg):
+def _sample(model, xT, emb, cfg, cond_img=None):
     fwd = DDIMScheduler(num_train_timesteps=cfg.train_timesteps)
     fwd.set_timesteps(cfg.ddim_steps)
     c = model.cond(emb)
     x = xT
     for t in fwd.timesteps:
-        x = fwd.step(model.denoise(x, t, c), t, x).prev_sample
+        x = fwd.step(model.denoise(x, t, c, cond_img), t, x).prev_sample
     return x
+
+
+@torch.no_grad()
+def recon_pearson_gate(model, probe_x, probe_emb, probe_cond, cfg, dev, out_png, tag="") -> float:
+    """Spatial-conditioning selector: generate the marker from (phase image + emb) and report
+    mean Pearson(pred, real) on held-out probe cells + a phase|pred|real montage."""
+    model.eval()
+    H = cfg.crop_size
+    k = min(8, len(probe_x))
+    corrs, preds = [], []
+    for i in range(k):
+        g = torch.Generator(device=dev).manual_seed(7 + i)
+        xT = torch.randn(1, 1, H, H, generator=g, device=dev)
+        e = torch.as_tensor(probe_emb[i:i + 1], dtype=torch.float32, device=dev)
+        ci = torch.as_tensor(probe_cond[i:i + 1], dtype=torch.float32, device=dev)
+        pred = _sample(model, xT, e, cfg, cond_img=ci).cpu().numpy()[0, 0]
+        preds.append(pred); corrs.append(_pearson(pred, probe_x[i, 0]))
+    mean_r = float(np.mean(corrs))
+    import matplotlib
+    matplotlib.use("Agg"); matplotlib.rcParams["pdf.fonttype"] = 42
+    import matplotlib.pyplot as plt
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(k, 3, figsize=(5.2, 1.7 * k), squeeze=False)
+    for i in range(k):
+        for c, (img, cm) in enumerate([(probe_cond[i, 0], "gray"), (preds[i], "magma"), (probe_x[i, 0], "magma")]):
+            ax[i, c].imshow(img, cmap=cm, vmin=-1, vmax=1); ax[i, c].axis("off")
+        ax[i, 0].set_ylabel(f"r={corrs[i]:.2f}", fontsize=8, rotation=0, labelpad=16)
+    for c, t in enumerate(["phase", "pred", "real"]):
+        ax[0, c].set_title(t, fontsize=9)
+    fig.suptitle(f"recon {tag}: Pearson {mean_r:.3f}", fontsize=10)
+    fig.tight_layout(); fig.savefig(out_png, dpi=130, bbox_inches="tight"); plt.close(fig)
+    print(f"[recon-gate] {tag} Pearson(pred,real)={mean_r:.3f}")
+    return mean_r
 
 
 @torch.no_grad()
@@ -115,8 +154,10 @@ def conditioning_gate(model, probe_embs, cfg, dev, out_png, tag="") -> float:
     return ratio
 
 
-def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir: Path) -> dict:
+def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir: Path,
+                 cond_images: np.ndarray | None = None) -> dict:
     dev = _device(cfg.device)
+    spatial = cond_images is not None      # image-to-image: phase concatenated into the UNet input
     model = model.to(dev)
     ema = copy.deepcopy(model).eval()
     for p in ema.parameters():
@@ -127,11 +168,20 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
 
     n_probe = min(8, len(images_norm) // 10 or 8)
     probe_emb = embs[-n_probe:]
+    probe_x = images_norm[-n_probe:]
+    probe_cond = cond_images[-n_probe:] if spatial else None
     train_x, train_e = images_norm[:-n_probe], embs[:-n_probe]
-    loader = DataLoader(
-        TensorDataset(torch.as_tensor(train_x), torch.as_tensor(train_e)),
-        batch_size=cfg.batch_size, shuffle=True, drop_last=True,
-    )
+    if spatial:
+        loader = DataLoader(
+            TensorDataset(torch.as_tensor(train_x), torch.as_tensor(train_e),
+                          torch.as_tensor(cond_images[:-n_probe])),
+            batch_size=cfg.batch_size, shuffle=True, drop_last=True,
+        )
+    else:
+        loader = DataLoader(
+            TensorDataset(torch.as_tensor(train_x), torch.as_tensor(train_e)),
+            batch_size=cfg.batch_size, shuffle=True, drop_last=True,
+        )
     use_amp = dev.type == "cuda"
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     out_dir = Path(out_dir)
@@ -161,13 +211,21 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
     for ep in range(start_epoch, cfg.epochs):
         model.train()
         ep_loss = 0.0
-        for x, e in loader:
-            x, e = x.to(dev), e.to(dev)
+        for batch in loader:
+            x, e = batch[0].to(dev), batch[1].to(dev)
+            ci = batch[2].to(dev) if spatial else None
+            # augment target only (autoencoding) or target+cond jointly (spatial → stay registered)
             if getattr(cfg, "augment_affine", False):       # continuous rotation+scale+flip
-                x = _augment(x, getattr(cfg, "affine_scale", 0.15))
+                if spatial:
+                    xc = _augment(torch.cat([x, ci], 1), getattr(cfg, "affine_scale", 0.15)); x, ci = xc[:, :1], xc[:, 1:]
+                else:
+                    x = _augment(x, getattr(cfg, "affine_scale", 0.15))
             elif getattr(cfg, "augment_dihedral", False):    # discrete 90°×flip
-                x = _dihedral(x)
-            if cfg.cond_dropout > 0:                       # conditioning dropout
+                if spatial:
+                    xc = _dihedral(torch.cat([x, ci], 1)); x, ci = xc[:, :1], xc[:, 1:]
+                else:
+                    x = _dihedral(x)
+            if cfg.cond_dropout > 0:                       # conditioning dropout (emb only)
                 drop = torch.rand(e.shape[0], device=dev) < cfg.cond_dropout
                 if drop.any():
                     e = torch.where(drop[:, None], model.null_emb[None].to(e.dtype), e)
@@ -176,7 +234,7 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
             noisy = sched.add_noise(x, noise, t)
             opt.zero_grad()
             with torch.autocast(device_type="cuda", enabled=use_amp):
-                loss = crit(train_model(noisy, t, e), noise)
+                loss = crit(train_model(noisy, t, e, ci), noise)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
             ema_update()
             ep_loss += float(loss) * x.shape[0]
@@ -185,11 +243,16 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
         rec = {"epoch": ep, "loss": ep_loss}
         if (ep + 1) % cfg.recon_every == 0 or ep == cfg.epochs - 1:
             try:
-                ratio = conditioning_gate(ema, probe_emb, cfg, dev,
-                                          out_dir / "gate" / f"gate_ep{ep:03d}.png", tag=f"ep{ep}")
-                rec["cond_ratio"] = ratio
-                if ratio > best_ratio:
-                    best_ratio = ratio
+                if spatial:      # select on Pearson(pred, real) — the metric that matters for a stain
+                    metric = recon_pearson_gate(ema, probe_x, probe_emb, probe_cond, cfg, dev,
+                                                out_dir / "gate" / f"recon_ep{ep:03d}.png", tag=f"ep{ep}")
+                    rec["recon_pearson"] = metric
+                else:            # emb-vs-noise conditioning strength
+                    metric = conditioning_gate(ema, probe_emb, cfg, dev,
+                                               out_dir / "gate" / f"gate_ep{ep:03d}.png", tag=f"ep{ep}")
+                    rec["cond_ratio"] = metric
+                if metric > best_ratio:
+                    best_ratio = metric
                     torch.save(ema.state_dict(), out_dir / "diffae_best.pt")  # EMA = model to use
             except Exception as exc:  # noqa: BLE001
                 print(f"[warn] gate at epoch {ep} failed (continuing): {exc}")
@@ -202,7 +265,8 @@ def train_diffae(model, images_norm: np.ndarray, embs: np.ndarray, cfg, out_dir:
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] state save at epoch {ep} failed: {exc}")
         print(f"epoch {ep:03d}: loss={ep_loss:.4f}"
-              + (f"  cond_ratio={rec['cond_ratio']:.3f}" if "cond_ratio" in rec else ""))
+              + (f"  cond_ratio={rec['cond_ratio']:.3f}" if "cond_ratio" in rec else "")
+              + (f"  recon_pearson={rec['recon_pearson']:.3f}" if "recon_pearson" in rec else ""))
 
     torch.save(ema.state_dict(), out_dir / "diffae_ema_last.pt")
     return {"best_ratio": best_ratio, "history": history}

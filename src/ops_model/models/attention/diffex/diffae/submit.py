@@ -69,6 +69,10 @@ def main():
                     help="no-PMA markers: comma-separated per-exp CellDINO anndata h5ad paths")
     ap.add_argument("--channel", default="Phase2D",
                     help="raw pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)")
+    ap.add_argument("--cond-channel", default=None,
+                    help="virtual staining: condition on this raw channel (e.g. Phase2D) while generating --channel")
+    ap.add_argument("--spatial-cond", action="store_true",
+                    help="concat the cond-channel IMAGE into the UNet (pixel-registered stain); requires --cond-channel")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -78,7 +82,8 @@ def main():
         n_crops=args.n_crops, crop_size=args.crop_size, epochs=args.epochs,
         batch_size=args.batch_size, device="cuda",
         augment_affine=affine, augment_dihedral=dihedral, init_ckpt=args.init_ckpt,
-        marker_channel=args.marker_channel, channel=args.channel,
+        marker_channel=args.marker_channel, channel=args.channel, cond_channel=args.cond_channel,
+        spatial_cond=args.spatial_cond,
         anndata_paths=tuple(args.anndata_paths.split(",")) if args.anndata_paths else (),
     )
     jobs = [{

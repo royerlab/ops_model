@@ -24,11 +24,21 @@ def run_diffae(cfg: DiffAEConfig, out_dir: str) -> dict:
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)
 
-    images, embs = load_diffae_crops(
+    cond_ch = getattr(cfg, "cond_channel", None)
+    spatial = getattr(cfg, "spatial_cond", False)
+    loaded = load_diffae_crops(
         cfg,
         crops_cache=str(cache / f"diffae_crops_{cfg.n_crops}_{cfg.crop_size}.npz"),
         emb_cache=str(cache / f"diffae_celldino_{cfg.n_crops}_{cfg.crop_size}.npz"),
+        cond_cache=(str(cache / f"diffae_cond_{cond_ch}_{cfg.n_crops}_{cfg.crop_size}.npz")
+                    if cond_ch else None),
+        return_cond_images=spatial,
     )
+    cond_imgs = None
+    if spatial:
+        images, embs, cond_imgs = loaded          # phase images concatenated into the UNet input
+    else:
+        images, embs = loaded
     model = DiffAE(cfg)
     if getattr(cfg, "init_ckpt", None):               # warm-start from an existing model
         import torch
@@ -38,7 +48,7 @@ def run_diffae(cfg: DiffAEConfig, out_dir: str) -> dict:
     print(f"DiffAE: {n_params:.1f}M params; cond_dim={embs.shape[1]}; "
           f"training on {len(images)} crops")
 
-    result = train_diffae(model, images, embs, cfg, out)
+    result = train_diffae(model, images, embs, cfg, out, cond_images=cond_imgs)
     metrics = {
         "n_crops": int(len(images)), "crop_size": cfg.crop_size,
         "cond_dim": int(embs.shape[1]), "epochs": cfg.epochs,

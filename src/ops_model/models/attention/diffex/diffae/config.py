@@ -22,6 +22,14 @@ class DiffAEConfig:
     # (e.g. "nucleolus-GC_NPM3"); build_broad_table then samples that marker's cells and the
     # generator trains on the raw `channel` above. None = phase mode (samples pma_parquet).
     marker_channel: str | None = None
+    # virtual staining: condition on a DIFFERENT channel than the generation target.
+    # cond_channel = raw channel CellDINO-embedded for conditioning (e.g. "Phase2D"); `channel`
+    # stays the generation target (e.g. "mCherry"). None = same-channel autoencoding (default).
+    cond_channel: str | None = None
+    # spatial (image-to-image) conditioning: concat the cond_channel IMAGE into the UNet input
+    # channels (in_channels 1->2) so the decoder sees dense per-pixel phase (SR3/Palette recipe) —
+    # pixel-registered virtual staining, vs the global-embedding-only default. Requires cond_channel.
+    spatial_cond: bool = False
     fluor_csv: str = f"{PMA_PHASE_GENEKO.rsplit('/', 1)[0]}/pma_fluorescent_cells_all.csv"
     # no-PMA markers: sample the cell table from per-experiment CellDINO anndata(s)
     # (obs: perturbation, well, x_position, y_position, experiment) instead of an attention CSV.

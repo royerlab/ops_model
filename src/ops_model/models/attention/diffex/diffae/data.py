@@ -79,16 +79,30 @@ def normalize(images: np.ndarray) -> np.ndarray:
     return np.clip((x - mu) / sd / 3.0, -1.0, 1.0)
 
 
-def load_diffae_crops(cfg, crops_cache, emb_cache):
-    """Returns (images_norm, celldino_embs).
+def load_diffae_crops(cfg, crops_cache, emb_cache, cond_cache=None, return_cond_images=False):
+    """Returns (images_norm, celldino_embs[, cond_images_norm]).
 
-    images_norm: (N,1,H,W) normalized for diffusion.
-    celldino_embs: (N, cond_dim) FROZEN CellDINO embeddings of the SAME crops —
-    the conditioning signal (Alex's design). Embeddings come from the raw crops
-    (CellDINO does its own resize + z-score internally), cached separately.
+    images_norm: (N,1,H,W) generation target, normalized for diffusion.
+    celldino_embs: (N, cond_dim) FROZEN CellDINO conditioning embeddings.
+
+    Same-channel (default): embeddings come from the SAME crops as the target (Alex's design).
+    Virtual staining (cfg.cond_channel set): the target is `cfg.channel` (e.g. mCherry) while the
+    conditioning is CellDINO of the co-registered `cfg.cond_channel` crop (e.g. Phase2D) at the SAME
+    cell locations — same labels_df → aligned index. return_cond_images also returns the normalized
+    conditioning (phase) crops for eval montages.
     """
+    import dataclasses
     df = build_broad_table(cfg)
     labels_df = make_labels_df(df, cfg)
-    images_raw, _, _ = materialize_crops(labels_df, cfg, cache_path=crops_cache)
-    embs = embed_crops(images_raw, cfg, cache_path=emb_cache)  # frozen CellDINO
+    images_raw, _, _ = materialize_crops(labels_df, cfg, cache_path=crops_cache)   # target (cfg.channel)
+    if getattr(cfg, "cond_channel", None):                          # virtual staining: embed a DIFFERENT channel
+        cond_cfg = dataclasses.replace(cfg, channel=cfg.cond_channel)
+        cond_raw, _, _ = materialize_crops(labels_df, cond_cfg, cache_path=cond_cache)
+        embs = embed_crops(cond_raw, cfg, cache_path=emb_cache)     # CellDINO of the conditioning channel
+        if return_cond_images:
+            return normalize(images_raw), embs, normalize(cond_raw)
+        return normalize(images_raw), embs
+    embs = embed_crops(images_raw, cfg, cache_path=emb_cache)       # frozen CellDINO (same-channel)
+    if return_cond_images:
+        return normalize(images_raw), embs, normalize(images_raw)
     return normalize(images_raw), embs
