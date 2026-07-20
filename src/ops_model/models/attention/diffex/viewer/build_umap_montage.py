@@ -21,6 +21,8 @@ from ..classifier.config import slugify
 from .precompute import VIEWER_ALPHAS
 
 OUT = "/hpc/projects/icd.fast.ops/models/diffex"
+import os
+_ASSETS = os.environ.get("OPS_DIFFEX_ASSETS", "viewer_assets")   # isolated v5 build → viewer_assets_v5
 ZARR_SCRATCH = f"{OUT}/_montage_zarr"   # transient montage zarrs live OUTSIDE viewer_assets so they never sync to the app
 
 
@@ -83,7 +85,7 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
     ann = ad.read_h5ad(h5ad)
     coords_all = _embed_coords(ann, embedding)
     gc = {str(g): coords_all[i] for i, g in enumerate(ann.obs["perturbation"])}
-    va = f"{OUT}/viewer_assets/{modality}/{grain}"
+    va = f"{OUT}/{_ASSETS}/{modality}/{grain}"
 
     genes, coords, srcs, ntc = [], [], [], []
     for g, xy in gc.items():
@@ -125,7 +127,7 @@ def build_montage_grid(h5ad, montage_dir, modality, embedding, cells, alphas, fo
     """One SLURM job: build every (cell, alpha) montage for one (marker, embedding). Content-aware skip:
     a montage is rebuilt only if the marker's geneKO cache changed after it was last built (or force),
     so re-runs after the cache grows only touch what's stale — nothing redundant."""
-    gk = f"{OUT}/viewer_assets/{modality}/geneKO"
+    gk = f"{OUT}/{_ASSETS}/{modality}/geneKO"
     cache_mtime = os.path.getmtime(gk) if os.path.isdir(gk) else 0   # bumps when a new gene traversal is added
     outs = skipped = 0
     for cell in cells:

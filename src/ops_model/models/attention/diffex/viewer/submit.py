@@ -9,6 +9,9 @@ one-off scratchpad drivers). All target selection comes from `catalog.py`.
 from __future__ import annotations
 
 import argparse
+import os
+
+_ASSETS = os.environ.get("OPS_DIFFEX_ASSETS", "viewer_assets")   # isolated v5 build → viewer_assets_v5
 
 from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
@@ -109,7 +112,7 @@ def cmd_manifest(args):
     """Rebuild manifest.json in place (dist mAP for sorting + gene/complex descriptions). Local, no SLURM.
     Also writes gene_desc.json (ALL genes) so the viewer shows info for genes not yet cached as targets."""
     import json
-    va = f"{C.OUT}/viewer_assets"
+    va = f"{C.OUT}/{_ASSETS}"
     dm = C.desc_map()
     build_manifest(C.OUT, dist_map=C.dist_map_for_assets(va), desc_map=dm)
     open(f"{va}/gene_desc.json", "w").write(json.dumps(dm))
@@ -126,7 +129,7 @@ def cmd_montage(args):
     import shutil
     import time
     from pathlib import Path
-    va = f"{C.OUT}/viewer_assets"
+    va = f"{C.OUT}/{_ASSETS}"
     # sweep orphan montage zarrs (transient intermediates now live in _montage_zarr, outside viewer_assets;
     # each job deletes its own, but killed jobs leave them). Also sweep the legacy viewer_assets/_montage
     # location for old stragglers. Skip any <10 min old so a concurrently-running build isn't disturbed.

@@ -21,7 +21,8 @@ from . import catalog as C
 from .build_pc_features import _base_name
 
 FM = "/hpc/projects/icd.fast.ops/analysis/pc_feature_correlation/phase_only/gene_feature_means.h5ad"
-OUT = f"{C.OUT}/viewer_assets/montage_features.json"
+_ASSETS = os.environ.get("OPS_DIFFEX_ASSETS", "viewer_assets")   # isolated v5 build → viewer_assets_v5
+OUT = f"{C.OUT}/{_ASSETS}/montage_features.json"
 
 
 def build(fm_path=FM, out=OUT):

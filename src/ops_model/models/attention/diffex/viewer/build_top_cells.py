@@ -221,16 +221,104 @@ def submit_complexes(out=OUT, top_n=TOP_N, n_shards=16):
     finalize_complex_index(out, top_n)
 
 
+# ---------------------------------------------------------------------------
+# v5 (paper-v2) Top-Accuracy cells.
+#
+# NOTE ON BAG SIZE (read before touching this): there is NO single bag size for the v5 top
+# cells. Alex's v5 set-accuracy ranking assigns ONE bag size PER CLASS — the bag at which that
+# class saturates. Strong classes (HSPA5/CAPZB and every complex) rank at bag=10; a weak single
+# gene KO like AACS only produces any signal at bag=500 (and even there rank-1 score ≈ 0.07).
+# So each perturbation's cells come from its own bag. We take them straight from the slim viewer
+# parquets (top-N by rank, already per-class-bag), which are the EXACT cells the traversal
+# centroids are built from — keeping the Top-Cells tab and the traversals consistent. v5 has an
+# accuracy ranking only (no attention head), so "attention" is left empty.
+# ---------------------------------------------------------------------------
+V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
+V5_PARQUET = {"geneKO": f"{V5_RANK}/pma_v5_phase_geneKO.parquet",
+              "complex": f"{V5_RANK}/pma_v5_phase_complex.parquet"}
+V5_CLASS_COL = {"geneKO": "gene", "complex": "predicted_class"}
+OUT_V5 = f"{C.OUT}/viewer_assets_v5/top_cells"
+V5_RECORDS = OUT_V5 + "/_v5_records_{grain}.json"
+
+
+def _v5_records(grain, top_n, names=None):
+    """{class: [top_n cell records]} straight from the slim v5 parquet (already per-class-bag ranked).
+    Complexes collapse to the base complex name (v4 convention) then dedup-by-position + cap to top_n."""
+    import pandas as pd
+    ccol = V5_CLASS_COL[grain]
+    df = pd.read_parquet(V5_PARQUET[grain],
+                         columns=[ccol, "experiment", "well", "x_pheno", "y_pheno", "segmentation", "pma_attention", "rank"])
+    df = df[df["rank"] <= top_n * 3 if grain == "complex" else df["rank"] <= top_n]   # complex: extra headroom for dedup
+    if grain == "complex":
+        df[ccol] = df[ccol].str.split(",").str[0].str.strip()
+    if names:
+        df = df[df[ccol].isin(set(names))]
+    recs = {}
+    for cls, g in df.groupby(ccol):
+        cells = [{"exp": r.experiment, "well": r.well, "x": float(r.x_pheno), "y": float(r.y_pheno),
+                  "seg": str(r.segmentation), "rank": int(r.rank), "score": round(float(r.pma_attention), 5)}
+                 for r in g.itertuples()]
+        recs[cls] = _cap(cells, top_n)      # dedup by position, keep top_n by score, re-rank 1..N
+    return recs
+
+
+def prepare_v5_records(grain, out=OUT_V5, top_n=TOP_N, names=None):
+    recs = _v5_records(grain, top_n, names)
+    os.makedirs(out, exist_ok=True)
+    with open(V5_RECORDS.format(grain=grain), "w") as f:
+        json.dump(recs, f)
+    print(f"[topcells-v5] {grain}: prepared {len(recs)} classes (top {top_n}) -> {V5_RECORDS.format(grain=grain)}")
+    return list(recs)
+
+
+def crop_v5_shard(grain, classes, out=OUT_V5):
+    """SLURM job: crop this shard's classes' cells into the shared crops/ dir (additive, unique per position)."""
+    recs = json.load(open(V5_RECORDS.format(grain=grain)))
+    acc = {c: recs[c] for c in classes if c in recs}
+    _crop_cells({}, acc, f"{out}/crops")
+    return {"grain": grain, "classes": len(acc), "cells": sum(len(v) for v in acc.values())}
+
+
+def finalize_v5_index(grain, out=OUT_V5, top_n=TOP_N):
+    """Build index[genes|complexes] from prepared records + whichever crops exist; accuracy-only, attention empty."""
+    recs = json.load(open(V5_RECORDS.format(grain=grain)))
+    valid = {f[:-4] for f in os.listdir(f"{out}/crops") if f.endswith(".png")}
+    acc = _recs(recs, "conf", valid)
+    entries = {g: {"attention": [], "accuracy": acc.get(g, [])} for g in sorted(acc)}
+    key = "genes" if grain == "geneKO" else "complexes"
+    return _merge_index(out, top_n, key, entries)
+
+
+def submit_v5(grain, out=OUT_V5, top_n=TOP_N, n_shards=24):
+    """Prepare records, fan out crop shards on SLURM, then finalize the index for this grain."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    names = prepare_v5_records(grain, out, top_n)
+    shards = [s for s in ([names[i::n_shards] for i in range(n_shards)]) if s]
+    jobs = [{"name": f"topcells_v5_{grain}_{i}", "func": crop_v5_shard, "kwargs": {"grain": grain, "classes": s, "out": out}}
+            for i, s in enumerate(shards)]
+    print(f"[topcells-v5] submitting {len(jobs)} shards for {len(names)} {grain} classes (top {top_n})")
+    submit_parallel_jobs(jobs, experiment=f"topcells_v5_{grain}",
+                         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 8, "mem_gb": 32, "timeout_min": 120},
+                         log_dir=f"topcells_v5_{grain}", wait_for_completion=True)
+    finalize_v5_index(grain, out, top_n)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--genes", nargs="*", default=None, help="only these genes (subset; omit for all)")
     ap.add_argument("--complexes", nargs="*", default=None, help="EBI complex label_name(s) → local build_complexes")
     ap.add_argument("--all-complexes", action="store_true", help="all EBI complexes via SLURM parallel shards")
     ap.add_argument("--finalize-complexes", action="store_true", help="rebuild complex index from existing crops")
+    ap.add_argument("--v5", choices=["geneKO", "complex"], help="v5 top-accuracy cells for this grain (SLURM shards)")
+    ap.add_argument("--v5-finalize", choices=["geneKO", "complex"], help="rebuild v5 index for this grain from existing crops")
     ap.add_argument("--top-n", type=int, default=TOP_N)
     ap.add_argument("--out", default=OUT)
     a = ap.parse_args()
-    if a.all_complexes:
+    if a.v5:
+        submit_v5(a.v5, OUT_V5 if a.out == OUT else a.out, a.top_n)
+    elif a.v5_finalize:
+        finalize_v5_index(a.v5_finalize, OUT_V5 if a.out == OUT else a.out, a.top_n)
+    elif a.all_complexes:
         submit_complexes(a.out, a.top_n)
     elif a.finalize_complexes:
         finalize_complex_index(a.out, a.top_n)
