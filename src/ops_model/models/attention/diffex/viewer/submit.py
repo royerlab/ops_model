@@ -53,7 +53,7 @@ def cmd_seed(args):
             jobs.append(_job(f"pm_{slugify(mc)[:20]}", precompute_marker,
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
-                                  score=not args.no_score), "seed"))
+                                  score=not args.no_score, force=getattr(args, "force", False)), "seed"))
     for d, mc, ch, rep in C.NO_PMA_MARKERS:                  # no-PMA markers: build from features_processed anndata
         r = C.rep_of(dist, mc)
         if not r or r not in dist.columns:
@@ -67,13 +67,13 @@ def cmd_seed(args):
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
                                   fluor_rows_h5ad=C.NO_PMA_H5AD.format(rep=rep),
-                                  score=not args.no_score), "seed"))
+                                  score=not args.no_score, force=getattr(args, "force", False)), "seed"))
     if args.map_thr is None:                                 # phase already fully built — only (re)seed with top-N mode
         jobs.append(_job("pm_phase_geneKO", precompute_marker,
                          dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),
-                              ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
+                              ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, force=getattr(args, "force", False)), "seed"))
         jobs.append(_job("pm_phase_complex", precompute_marker,
-                         dict(grain="complex", targets=PHASE_COMPLEXES, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12), "seed"))
+                         dict(grain="complex", targets=PHASE_COMPLEXES, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, force=getattr(args, "force", False)), "seed"))
     tgt = sum(len(j["kwargs"]["targets"]) for j in jobs)
     print(f"seed: {len(jobs)} per-marker jobs, {tgt} total targets"
           + (f" (mAP>={args.map_thr} filter)" if args.map_thr is not None else f" (top-{args.n})"))
@@ -212,7 +212,7 @@ def cmd_fluor_complex(args):
         markers = [m for m in markers if m[1] in args.markers or slugify(m[1]) in args.markers]
     jobs = [_job(f"fcx_{slugify(mc)[:18]}", precompute_marker,
                  dict(grain="complex", targets=cx, marker_channel=mc, channel=ch, fluor_csv=C.EBI_FLUOR_CSV,
-                      ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12, batch=args.batch), "fluor_complex")
+                      ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12, batch=args.batch, force=getattr(args, "force", False)), "fluor_complex")
             for d, mc, ch in markers]
     print(f"fluor-complex: {len(jobs)} markers × {len(cx)} complexes (batch={args.batch}, no constraint/cap)")
     sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 720}
@@ -241,10 +241,10 @@ def cmd_phase_full(args):
     fits any GPU (incl. the plentiful 40GB a100 / 48GB l40s|a40|a6000), maximizing availability."""
     genes, cx = C.all_genes(), C.ebi_complexes()
     jobs = [_job(f"phg_{i}", precompute_marker,
-                 dict(grain="geneKO", targets=ch, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, batch=args.batch), "phase_full")
+                 dict(grain="geneKO", targets=ch, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, batch=args.batch, force=getattr(args, "force", False)), "phase_full")
             for i, ch in enumerate(_chunks(genes, args.chunk_size))]
     jobs += [_job(f"phc_{i}", precompute_marker,
-                  dict(grain="complex", targets=ch, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, batch=args.batch), "phase_full")
+                  dict(grain="complex", targets=ch, ckpt=PHASE_CK, out_root=C.OUT, load_workers=12, batch=args.batch, force=getattr(args, "force", False)), "phase_full")
              for i, ch in enumerate(_chunks(cx, args.chunk_size))]
     print(f"phase-full: {len(genes)} geneKO + {len(cx)} complex → {len(jobs)} chunked jobs (batch={args.batch}, no constraint/cap)")
     sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 12, "mem_gb": 64, "timeout_min": 720}
@@ -255,12 +255,12 @@ def cmd_phase_full(args):
 def main():
     ap = argparse.ArgumentParser(description="Build the DiffEx viewer cache")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=0, help="min generator epoch to include; default 0 = no epoch gate (diffae_best.pt banks the peak regardless — epoch != quality)"); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=None, help="max concurrent SLURM tasks; default None = no cap"); s.add_argument("--timeout", type=int, default=180, help="per-marker SLURM timeout (min); bump for full ~1000-gene buildouts"); s.add_argument("--sync", action="store_true", help="on completion, auto-refresh manifest + attention + montages"); s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("seed"); s.add_argument("--n", type=int, default=8); s.add_argument("--map-thr", dest="map_thr", type=float, default=None); s.add_argument("--min-ep", dest="min_ep", type=int, default=0, help="min generator epoch to include; default 0 = no epoch gate (diffae_best.pt banks the peak regardless — epoch != quality)"); s.add_argument("--no-score", dest="no_score", action="store_true"); s.add_argument("--parallel", type=int, default=None, help="max concurrent SLURM tasks; default None = no cap"); s.add_argument("--timeout", type=int, default=180, help="per-marker SLURM timeout (min); bump for full ~1000-gene buildouts"); s.add_argument("--sync", action="store_true", help="on completion, auto-refresh manifest + attention + montages"); s.add_argument("--force", action="store_true", help="rebuild existing traversals in place"); s.set_defaults(fn=cmd_seed)
     a = sub.add_parser("anchors"); a.add_argument("--k", type=int, default=5); a.add_argument("--markers", nargs="*"); a.add_argument("--parallel", type=int, default=12); a.set_defaults(fn=cmd_anchors)
     m = sub.add_parser("manifest"); m.set_defaults(fn=cmd_manifest)
     g = sub.add_parser("montage"); g.add_argument("--cells", type=int, nargs="+", default=list(range(20))); g.add_argument("--alphas", type=float, nargs="+", default=[1.0, 2.0, 3.0, 4.0, 5.0]); g.add_argument("--embeddings", nargs="+", default=["umap", "phate"]); g.add_argument("--markers", nargs="+", help="restrict to these markers (raw or slug); default all with geneKO traversals"); g.add_argument("--force", action="store_true", help="rebuild montages even if tiles already exist"); g.add_argument("--parallel", type=int, default=100, help="max concurrent SLURM tasks"); g.set_defaults(fn=cmd_montage)
-    fc = sub.add_parser("fluor-complex"); fc.add_argument("--markers", nargs="*"); fc.add_argument("--batch", type=int, default=24); fc.set_defaults(fn=cmd_fluor_complex)
-    pf = sub.add_parser("phase-full"); pf.add_argument("--chunk-size", type=int, default=50); pf.add_argument("--batch", type=int, default=24); pf.set_defaults(fn=cmd_phase_full)
+    fc = sub.add_parser("fluor-complex"); fc.add_argument("--markers", nargs="*"); fc.add_argument("--batch", type=int, default=24); fc.add_argument("--force", action="store_true"); fc.set_defaults(fn=cmd_fluor_complex)
+    pf = sub.add_parser("phase-full"); pf.add_argument("--chunk-size", type=int, default=50); pf.add_argument("--batch", type=int, default=24); pf.add_argument("--force", action="store_true"); pf.set_defaults(fn=cmd_phase_full)
     pm = sub.add_parser("phase-morpho"); pm.add_argument("--targets", nargs="*"); pm.add_argument("--n-cells", dest="n_cells", type=int, default=12); pm.add_argument("--parallel", type=int, default=None, help="max concurrent targets (default = all)"); pm.set_defaults(fn=cmd_phase_morpho)
     sy = sub.add_parser("sync", help="refresh manifest + attention + montages from the current cache"); sy.add_argument("--after", nargs="+", help="SLURM job IDs to gate on (afterany); refreshes when they finish"); sy.set_defaults(fn=cmd_sync)
     args = ap.parse_args(); args.fn(args)

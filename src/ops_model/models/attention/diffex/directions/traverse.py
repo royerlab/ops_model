@@ -41,6 +41,24 @@ def _ddim(diffae, x, emb, cfg, inverse: bool):
 
 
 @torch.no_grad()
+def _ddim_guided(diffae, x, emb, emb_base, w, cfg, inverse: bool):
+    """DDIM (forward=inverse) with the SAME classifier-free guidance as _sample_guided:
+    ε̃ = ε(base) + w·(ε(emb) − ε(base)). Inverting at the same w the morph samples at keeps
+    the α=0 round-trip faithful. w=1 reduces to plain ε(emb)."""
+    sched = (DDIMInverseScheduler if inverse else DDIMScheduler)(num_train_timesteps=cfg.train_timesteps)
+    sched.set_timesteps(cfg.ddim_steps)
+    c, c0 = diffae.cond(emb), diffae.cond(emb_base)
+    for t in sched.timesteps:
+        if w == 1.0:
+            eps = diffae.denoise(x, t, c)
+        else:
+            ec, e0 = diffae.denoise(torch.cat([x, x], 0), t, torch.cat([c, c0], 0)).chunk(2, 0)
+            eps = e0 + w * (ec - e0)
+        x = sched.step(eps, t, x).prev_sample
+    return x
+
+
+@torch.no_grad()
 def _sample_guided(diffae, xT, emb, emb_base, w, cfg):
     """DDIM sample from xT. Edit-guidance: ε̃ = ε(base) + w·(ε(emb) − ε(base)).
     w=1 → plain ε(emb); w>1 amplifies the embedding edit's effect on the image.

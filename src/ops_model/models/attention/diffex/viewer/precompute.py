@@ -39,7 +39,7 @@ from ..directions.config import DirConfig
 from ..directions.data import _top_cells
 from ..directions.make_gifs import _pair_slug, _setup, _sample_guided
 from ..directions.rank import supervised_direction
-from ..directions.traverse import load_diffae
+from ..directions.traverse import _ddim_guided, load_diffae
 from ..directions.rank import supervised_direction
 
 # scrub axis; α in units of the control→KD gap (α=±1 ≈ full traversal). Dense in ±3 where the
@@ -111,11 +111,11 @@ def _gather_class(cfg, value, n, parquet=None):
 
 @torch.no_grad()
 def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, channel="Phase2D",
-                      fluor_csv=None, control="NTC", n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
+                      fluor_csv=None, control="NTC", n_cells=20, w=1.5, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
                       load_workers=12, n_per_class=1000, fluor_rows_h5ad=None,
                       accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
-                      v5_score=False, v5_bag=None):
+                      v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -129,7 +129,10 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     if fluor_csv: cfg.fluor_csv = fluor_csv
     if marker_channel:                                   # preload the marker's cell table ONCE (all targets share it)
         cc = GRAINS[grain]["class_col"]
-        if fluor_rows_h5ad:                              # no pma CSV (cisGolgi/VIM/LMNB1) → anndata + centroid rank
+        if fluor_rank_parquet:                           # v5 accuracy ranking, pre-built per-channel (cc + base cols + rank_type)
+            cfg._fluor_rows = pd.read_parquet(fluor_rank_parquet)
+            print(f"[fluor-v5] {len(cfg._fluor_rows)} accuracy rows for '{marker_channel}' ({cfg._fluor_rows[cc].nunique()} classes)")
+        elif fluor_rows_h5ad:                            # no pma CSV (cisGolgi/VIM/LMNB1) → anndata + centroid rank
             cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
             print(f"[fluor] {len(cfg._fluor_rows)} '{marker_channel}' rows from anndata (centroid-ranked)")
         elif accuracy_fluor_csv:                         # fluor ACCURACY ranking (ebi_class_channel): label_name→class, per-complex rank
@@ -152,33 +155,50 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     acache = realdir / "ctrl.npz"
     if acache.exists():
         z = np.load(acache); ctrl_embs = z["ctrl_embs"]; mu_ctrl = z["mu_ctrl"]
+        anchor_imgs = z["anchor_imgs"] if "anchor_imgs" in z.files else None
         print(f"[cache] control embs <- {acache}  {ctrl_embs.shape}")
     else:
         ctrl_imgs, ctrl_embs = _gather_class(cfg, control, n_per_class)
         mu_ctrl = ctrl_embs.mean(0)
         real = normalize(ctrl_imgs[:min(n_cells, len(ctrl_embs))])
+        anchor_imgs = real
         rp = ThreadPoolExecutor(max_workers=n_workers)
         for c in range(len(real)):
             (realdir / f"cell{c}").mkdir(parents=True, exist_ok=True)
             rp.submit(_save_webp, realdir / f"cell{c}" / "real.webp", real[c, 0], upsize)
         rp.shutdown(wait=True)
-        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl)
+        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=real)   # anchor imgs → DDIM inversion
         print(f"[cache] control embs -> {acache}  {ctrl_embs.shape}")
     ncell = min(n_cells, len(ctrl_embs))
     z0 = torch.as_tensor(ctrl_embs[:ncell], dtype=torch.float32, device=dev)
-    xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
-                      for c in range(ncell)])
 
     diffae = load_diffae(cfg, dev)
     null_base = diffae.null_emb.detach()[None].to(dev)
+    # anchor identity: DDIM-INVERT each control cell to its own xT so α=0 is the REAL cell (default).
+    # Guided inversion (same w the morph samples at). Falls back to a fixed random seed if anchor
+    # images aren't cached (old ctrl.npz) or invert_anchors=False.
+    if invert_anchors and anchor_imgs is None:              # old ctrl.npz w/o imgs → re-gather to enable inversion
+        ci_imgs, _ = _gather_class(cfg, control, ncell)
+        anchor_imgs = normalize(ci_imgs[:ncell])
+        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=anchor_imgs)   # upgrade cache in place
+        print(f"[invert] re-gathered {len(anchor_imgs)} anchor imgs into ctrl.npz")
+    if invert_anchors and anchor_imgs is not None:
+        x0a = torch.as_tensor(anchor_imgs[:ncell], dtype=torch.float32, device=dev)
+        xT = torch.cat([_ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
+                        for c in range(ncell)], 0)
+        print(f"[invert] anchored xT via guided DDIM inversion (w={w})")
+    else:
+        xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
+                          for c in range(ncell)])
 
     v5ctx = None                                             # inline v5 SetTransformer scoring (reuses gemb; no re-decode)
     if v5_score:
         from .set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
         from .score_generated import score_embs_v5
-        _vrun = V5_RUNS[("phase", "geneKO" if grain == "geneKO" else "complex_ebionly")]
+        _vmod = "fluor" if marker_channel else "phase"   # fluor markers score with the fluor SetTransformer + their channel idx
+        _vrun = V5_RUNS[(_vmod, "geneKO" if grain == "geneKO" else "complex_ebionly")]
         _vm, _vg2i, _vc2i = load_set_classifier(run=_vrun, device=dev, root=V5_CKPT_ROOT)
-        v5ctx = (_vm, _vg2i, _vc2i.get("Phase2D", 0), _vrun, score_embs_v5)
+        v5ctx = (_vm, _vg2i, _vc2i.get(marker_channel or "Phase2D", 0), _vrun, score_embs_v5)
 
     done = 0
     for tgt in targets:
@@ -254,7 +274,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
 def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=None, channel="Phase2D",
                               fluor_csv=None, n_cells=20, w=2.0, alphas=VIEWER_ALPHAS, device="cuda",
                               upsize=256, batch=48, n_workers=8, load_workers=12, n_per_class=1000,
-                              fluor_rows_h5ad=None):
+                              fluor_rows_h5ad=None, pairs=None, accuracy_parquet=None, force=False):
     """A→B anchors among `classes` for ONE marker: gather each class's cells ONCE (single CSV read),
     then generate every ordered pair a→b (anchor a's cells morphed toward b's centroid). The gather is
     amortized across all K·(K−1) pairs; the mean-diff direction is b_centroid − a_centroid."""
@@ -276,34 +296,40 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
             cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
     cache = {}                                           # gather each class ONCE (in-memory filter, no re-read)
     for cls in classes:
-        imgs, embs = _gather_class(cfg, cls, n_per_class)
+        imgs, embs = _gather_class(cfg, cls, n_per_class, parquet=accuracy_parquet)   # accuracy_parquet → top-n by v5 accuracy
         if len(embs):
             cache[cls] = (imgs, embs)
     al = sorted(alphas); A = len(al); H = cfg.crop_size
     diffae = load_diffae(cfg, dev); null_base = diffae.null_emb.detach()[None].to(dev)
     done = 0
-    for a in classes:
-        if a not in cache:
-            continue
+    ordered = list(pairs) if pairs is not None else [(a, b) for a in classes for b in classes if a != b]
+    setup = {}
+    def _anchor_setup(a):                                # per-anchor z0/xT/mu + real cells, built once (force → rebuild reals)
+        if a in setup:
+            return setup[a]
         a_imgs, a_embs = cache[a]; ncell = min(n_cells, len(a_embs))
         z0 = torch.as_tensor(a_embs[:ncell], dtype=torch.float32, device=dev)
         xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
                           for c in range(ncell)])
         mu_a = a_embs.mean(0); anchor = slugify(a)
         realdir = Path(out_root) / _ASSETS / modality / "_anchors" / anchor
-        if not (realdir / "cell0" / "real.webp").exists():
+        if force or not (realdir / "cell0" / "real.webp").exists():
             real = normalize(a_imgs[:ncell]); rp = ThreadPoolExecutor(max_workers=n_workers)
             for c in range(ncell):
                 (realdir / f"cell{c}").mkdir(parents=True, exist_ok=True)
                 rp.submit(_save_webp, realdir / f"cell{c}" / "real.webp", real[c, 0], upsize)
             rp.shutdown(wait=True)
-        for b in classes:
-            if b == a or b not in cache:
-                continue
-            slug = f"{anchor}__to__{slugify(b)}"
-            adir = Path(out_root) / _ASSETS / modality / grain / slug
-            if (adir / "meta.json").exists():
-                done += 1; continue
+        setup[a] = (z0, xT, mu_a, ncell, anchor)
+        return setup[a]
+    for a, b in ordered:
+        if a not in cache or b not in cache or a == b:
+            continue
+        z0, xT, mu_a, ncell, anchor = _anchor_setup(a)
+        slug = f"{anchor}__to__{slugify(b)}"
+        adir = Path(out_root) / _ASSETS / modality / grain / slug
+        if (adir / "meta.json").exists() and not force:
+            done += 1; continue
+        if True:
             d = cache[b][1].mean(0) - mu_a; gap = float(np.linalg.norm(d))
             fixed_dir = torch.as_tensor(d / (gap + 1e-9), dtype=torch.float32, device=dev)[None]
             conds, xts, keys = [], [], []
@@ -335,10 +361,10 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
 
 @torch.no_grad()
 def precompute_target(grain, target, ckpt, out_root, marker_channel=None, channel=None,
-                      fluor_csv=None, control=None, n_cells=20, w=2.0, alphas=VIEWER_ALPHAS,
+                      fluor_csv=None, control=None, n_cells=20, w=1.5, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
                       load_workers=10, keep_crops=False, accuracy_parquet=None, variant=None,
-                      accuracy_fluor_csv=None):
+                      accuracy_fluor_csv=None, invert_anchors=True):
     """Decode + save the α-frame sequence for the first n_cells control cells of one
     (marker, target). Batched GPU decode, batched re-encode → per-image classifier
     confidence (sigmoid of the control→KD LR logit), threaded WebP save. Writes frames +
@@ -356,11 +382,16 @@ def precompute_target(grain, target, ckpt, out_root, marker_channel=None, channe
     modality = (slugify(marker_channel) if marker_channel else "phase") + (f"_{variant}" if variant else "")
     adir = Path(out_root) / _ASSETS / modality / grain / slug
 
-    # per-cell fixed noise (identity anchor); assemble all (cell, α) latents for batched decode
+    # per-cell latent: DDIM-invert the source cell (α=0 = the real cell) or a fixed random seed
+    real_norm = normalize(real_imgs[ci[:ncell]])          # source-cell crops, [-1,1] — inversion + display
     conds, xts, keys = [], [], []
     for cell in range(ncell):
         z0 = torch.as_tensor(embs[ci[cell]:ci[cell] + 1], dtype=torch.float32, device=dev)
-        xT = torch.randn(1, 1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + cell), device=dev)
+        if invert_anchors:
+            x0c = torch.as_tensor(real_norm[cell:cell + 1], dtype=torch.float32, device=dev)
+            xT = _ddim_guided(diffae, x0c, z0, null_base, w, cfg, inverse=True)
+        else:
+            xT = torch.randn(1, 1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + cell), device=dev)
         for ai, a in enumerate(al):
             conds.append(z0 + (a * gap) * fixed_dir); xts.append(xT); keys.append((cell, ai))
 
@@ -380,7 +411,7 @@ def precompute_target(grain, target, ckpt, out_root, marker_channel=None, channe
         logits = gemb @ lr_w + lr_b
         scores = (1.0 / (1.0 + np.exp(-logits))).reshape(ncell, A)
 
-    real = normalize(real_imgs[ci[:ncell]])          # actual source-cell crops, [-1,1] for display
+    real = real_norm                                 # actual source-cell crops, [-1,1] for display
     pool = ThreadPoolExecutor(max_workers=n_workers)
     for cell in range(ncell):
         cdir = adir / f"cell{cell}"; cdir.mkdir(parents=True, exist_ok=True)
