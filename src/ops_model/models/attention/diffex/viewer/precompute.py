@@ -153,15 +153,21 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     # --- shared control/anchor cells: gather ONCE, cache the 1000-cell embeddings so every
     #     rebuild (new α/cells/anchor/ckpt) skips the gather (CellDINO embeds are ckpt-independent) ---
     acache = realdir / "ctrl.npz"
-    if acache.exists():
-        z = np.load(acache); ctrl_embs = z["ctrl_embs"]; mu_ctrl = z["mu_ctrl"]
-        anchor_imgs = z["anchor_imgs"] if "anchor_imgs" in z.files else None
+    _z = np.load(acache) if acache.exists() else None
+    # Only trust the cache if it has aligned anchor imgs (or we don't need them). An old ctrl.npz without
+    # anchor_imgs must be rebuilt FRESH — re-gathering images onto stale cached embeddings drifts (the
+    # re-gathered cells ≠ the cached embeddings' cells), which misaligns α=0 from the displayed real cell.
+    if _z is not None and (not invert_anchors or "anchor_imgs" in _z.files):
+        ctrl_embs = _z["ctrl_embs"]; mu_ctrl = _z["mu_ctrl"]
+        anchor_imgs = _z["anchor_imgs"] if "anchor_imgs" in _z.files else None
         print(f"[cache] control embs <- {acache}  {ctrl_embs.shape}")
     else:
+        if _z is not None:
+            print("[invert] old ctrl.npz lacks aligned anchor imgs → rebuilding control cache fresh")
         ctrl_imgs, ctrl_embs = _gather_class(cfg, control, n_per_class)
         mu_ctrl = ctrl_embs.mean(0)
         real = normalize(ctrl_imgs[:min(n_cells, len(ctrl_embs))])
-        anchor_imgs = real
+        anchor_imgs = real                                   # aligned by construction: real[c] ↔ ctrl_embs[c]
         rp = ThreadPoolExecutor(max_workers=n_workers)
         for c in range(len(real)):
             (realdir / f"cell{c}").mkdir(parents=True, exist_ok=True)
@@ -175,13 +181,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     diffae = load_diffae(cfg, dev)
     null_base = diffae.null_emb.detach()[None].to(dev)
     # anchor identity: DDIM-INVERT each control cell to its own xT so α=0 is the REAL cell (default).
-    # Guided inversion (same w the morph samples at). Falls back to a fixed random seed if anchor
-    # images aren't cached (old ctrl.npz) or invert_anchors=False.
-    if invert_anchors and anchor_imgs is None:              # old ctrl.npz w/o imgs → re-gather to enable inversion
-        ci_imgs, _ = _gather_class(cfg, control, ncell)
-        anchor_imgs = normalize(ci_imgs[:ncell])
-        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=anchor_imgs)   # upgrade cache in place
-        print(f"[invert] re-gathered {len(anchor_imgs)} anchor imgs into ctrl.npz")
+    # Guided inversion (same w the morph samples at); random seed if invert_anchors=False.
     if invert_anchors and anchor_imgs is not None:
         x0a = torch.as_tensor(anchor_imgs[:ncell], dtype=torch.float32, device=dev)
         xT = torch.cat([_ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
