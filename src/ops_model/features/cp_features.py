@@ -359,8 +359,12 @@ def cp_features_main(
     # Step 2: Submit as a single SLURM array job with submitit
     cpus = config.get("slurm_cpus_per_task", 32)
     mem = config.get("slurm_mem_gb", 64)
+    # Short experiment tag so jobs show as "<exp>_cp_*" in squeue instead of
+    # the generic "submitit" default.
+    exp_short = str(next(iter(config["data_manager"]["experiments"]))).split("_")[0]
     executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     executor.update_parameters(
+        name=f"{exp_short}_cp_extract",
         timeout_min=config.get("slurm_timeout_min", 120),
         slurm_partition=config.get("slurm_partition", "cpu"),
         slurm_array_parallelism=100,
@@ -410,6 +414,7 @@ def cp_features_main(
     # Step 3: Submit concatenation job with dependency on array job completion
     concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
+        name=f"{exp_short}_cp_concat",
         timeout_min=120,
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=1,
@@ -431,6 +436,7 @@ def cp_features_main(
     # Step 4: Submit AnnData conversion job with dependency on concatenation success
     anndata_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     anndata_executor.update_parameters(
+        name=f"{exp_short}_cp_anndata",
         timeout_min=120,  # 2 hours for processing
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=8,
