@@ -9,13 +9,23 @@ function setAssetVer(v) { if (v !== ASSET_VER) { localStorage.setItem("diffex_as
   const mark = () => ["v4", "v5"].forEach(v => { const b = document.getElementById("ver-" + v); if (b) b.classList.toggle("active", v === ASSET_VER); });
   if (document.readyState !== "loading") mark(); else document.addEventListener("DOMContentLoaded", mark);
 })();
+function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
+  if (!init && state.sidePanel === m) { $("sidebar").classList.toggle("hidden"); return; }
+  state.sidePanel = m;
+  $("side-info").classList.toggle("active", m === "info");
+  $("side-about").classList.toggle("active", m === "about");
+  $("side-info-view").style.display = m === "info" ? "" : "none";
+  $("side-about-view").style.display = m === "about" ? "" : "none";
+  $("sidebar").classList.remove("hidden");
+  if (!init && typeof saveState === "function") saveState();
+}
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
                                       // so reloads always get the freshly-rebuilt data; images stay cached
 const PAD = (i) => String(i).padStart(2, "0");
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", anchorSrc: "accuracy",
+  manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", sidePanel: "info",
   cellCount: 8, page: 0, pinned: [], panels: [], alphas: [],
   idx: 0, playing: false, playSeq: [], playPos: 0, frameMs: 180,   // default 1× (180ms/frame)
   scoreMode: "ptarget", showReal: false, scores: {}, scoresV5: {}, groups: [], realAcc20: null,   // scoreMode: none|linear|ptarget|rank. scores[dir]=linear per-cell; scoresV5[dir]=v5 set (bag,per-α); realAcc20[dir]=real top1@bag20
@@ -37,7 +47,7 @@ const INFERNO = Uint8ClampedArray.from([0,0,4,1,0,5,1,1,6,1,1,8,2,1,10,2,2,12,2,
 
 const PALETTE = ["#26c6ff", "#ff5252", "#f0a020", "#7ee787", "#c586ff", "#ff9edb", "#5ad1c7", "#ffd166"];
 // traversal frames/scores/anchor can switch NTC anchor pool (v5 only): accuracy = 25 hand-picked (_v5acc/), attention = v5 build (BASE). __to__ alt-anchors have no accpool → stay on BASE.
-function travBase(dir) { return (ASSET_VER === "v5" && state.anchorSrc === "accuracy" && !String(dir).includes("__to__")) ? "_v5acc/" : BASE; }
+function travBase(dir) { return BASE; }   // v5 attention+accuracy cells are consolidated into one dir under BASE
 const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag) score modes → row-header chip
 function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode at α-index i, or null. Both modes use the one white→red heat.
   if (!sv || !SET_MODES.includes(state.scoreMode)) return null;
@@ -69,10 +79,9 @@ function saveState() {
       marker: markerLabel(state.markerIdx), grain: $("grain").value,
       target: state.target ? state.target.target : null, anchor: state.anchor,
       cellCount: state.cellCount, page: state.page, tilepx: $("tile-scale").value,
-      scoreMode: state.scoreMode, showReal: state.showReal, altAnchor: state.altAnchorsOnly,
+      scoreMode: state.scoreMode, showReal: state.showReal, altAnchor: state.altAnchorsOnly, sidePanel: state.sidePanel,
       cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, view: state.view,
       alpha: (state.alphas && state.idx != null && state.idx < state.alphas.length) ? state.alphas[state.idx] : null,   // hold α (by value) across reloads
-      anchorSrc: state.anchorSrc,
       pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
     }));
   } catch (e) { /* private mode / quota — non-fatal */ }
@@ -81,7 +90,6 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   let s; try { s = JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch (e) { s = null; }
   if (!s) return false;
   if (s.alpha != null) restoredAlpha = s.alpha;   // consumed by the first rebuild → holds α across reload/version-switch
-  if (s.anchorSrc) { state.anchorSrc = s.anchorSrc; $("anchorsrc").value = s.anchorSrc; }
   // filters/prefs that affect the target list — set BEFORE marker/target resolution
   if (s.grain) $("grain").value = s.grain;
   if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
@@ -89,6 +97,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
   if (s.scoreMode) { state.scoreMode = s.scoreMode; $("scoremode").value = s.scoreMode; $("score-legend").style.display = s.scoreMode !== "none" ? "flex" : "none"; }
   if (s.showReal != null) { $("showreal").checked = s.showReal; state.showReal = s.showReal; }
+  if (s.sidePanel) setSidePanel(s.sidePanel, true);
   if (s.cellCount) { state.cellCount = s.cellCount; $("cellcount").value = s.cellCount; }
   if (s.tilepx) { $("tile-scale").value = s.tilepx; document.documentElement.style.setProperty("--tilepx", s.tilepx + "px"); }
   if (s.speed) { $("speed").value = s.speed; state.frameMs = +s.speed; }
@@ -123,7 +132,6 @@ async function boot() {
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cnext").onclick = () => { state.page++; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("anchor").onchange = () => { state.anchor = $("anchor").value; rebuild(); };
-  $("anchorsrc").onchange = () => { state.anchorSrc = $("anchorsrc").value; state.scores = {}; state.scoresV5 = {}; saveState(); rebuild(); };   // switch NTC anchor pool (v5): accuracy ↔ attention
   $("addpanel").onclick = () => {
     const set = activeSet(); if (!set.length) return;
     const p = set[0];   // the current resolved (marker, anchor→target)
@@ -145,7 +153,7 @@ async function boot() {
   $("speed").onchange = () => { state.frameMs = +$("speed").value; };
   $("showreal").onchange = () => { state.showReal = $("showreal").checked; rebuild(); };
   $("alphalimit").onchange = () => { state.alphaLimit = +$("alphalimit").value; computeRange(); buildPlaySeq(state.alphas); };
-  $("infotoggle").onclick = () => $("sidebar").classList.toggle("hidden");
+  setSidePanel(state.sidePanel, true);   // init the right-panel Info/About toggle
   $("a-head").onchange = () => { const v = $("a-head").value; state.attnHead = v === "all" ? "all" : +v; renderAttn(); };
   $("a-norm").onchange = () => { state.attnNorm = $("a-norm").value; renderAttn(); };
   $("a-climlo").oninput = () => {   // dual-handle clim; keep lo ≤ hi
@@ -212,12 +220,12 @@ async function boot() {
   $("pc-dedup").onchange = () => { pc.dedup = $("pc-dedup").checked; buildPCList(); if (pc.cur) showPC(pc.cur); };
   $("pc-norm").onchange = () => { pc.norm = $("pc-norm").checked; buildPCList(); if (pc.cur) showPC(pc.cur); };
   $("pc-sort").onchange = () => { pc.sort = $("pc-sort").value; buildPCList(); };
-  $("tc-attn").onclick = () => { tc.mode = "attention"; $("tc-attn").classList.add("active"); $("tc-acc").classList.remove("active"); renderTop(); };
-  $("tc-acc").onclick = () => { tc.mode = "accuracy"; $("tc-acc").classList.add("active"); $("tc-attn").classList.remove("active"); renderTop(); };
   $("tc-pin").onclick = () => { const g = state.target && state.target.target;   // pin current gene in the current mode
     if (g && !tc.pinned.some(p => p.gene === g && p.mode === tc.mode)) tc.pinned.push({ gene: g, mode: tc.mode }); renderTopPins(); renderTop(); };
   $("tc-pinclear").onclick = () => { tc.pinned = []; renderTopPins(); renderTop(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
+  $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
+  $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
   const onSetacc = () => {   // off / geneKO / complex × P(target)|rank — per-tile v5 set-score at the montage α (v5 cache only)
     mont.setaccMode = $("m-setacc").value;
@@ -775,7 +783,7 @@ function selectTarget(slug) {
   if (state.view === "attn") renderAttn();          // selection drives the attention-head view
   if (state.view === "montage") (mont.renderMode === "live" ? liveDraw() : focusMontageOnSelection());   // update embedding selection
   if (state.view === "pc" && pc.data && pc.data.geneData[state.target.target]) pcGeneOverlay(state.target.target);   // top search → gene's PCs
-  if (state.view === "top") renderTop();            // selection drives the top-cells view
+  if (state.view === "top") loadTop();              // selection drives the top-cells view (loadTop refetches if the marker changed)
 }
 
 // anchors = NTC + any class that has a precomputed A→this-target traversal in this marker.
@@ -1437,14 +1445,15 @@ function pcCell(i) {   // click a strip cell → glassy pop-out for close inspec
 }
 // glassy, draggable, stackable inset — you can still see the viewer through it
 const PO_W = 300, PO_GAIN = 1.7;   // pop-out base width; drag gain (>1 = tile moves faster than the cursor)
-function popOut(imgUrl, title, metaHtml) {
+function popOut(imgUrl, title, metaHtml, ovUrl) {
   const el = document.createElement("div"); el.className = "popout";
   const pops = document.querySelectorAll(".popout").length;   // stagger horizontally by a full tile width, wrap rows
   const perRow = Math.max(1, Math.floor((window.innerWidth - 180) / (PO_W + 12)));
   el.style.left = `${150 + (pops % perRow) * (PO_W + 12)}px`;
   el.style.top = `${100 + Math.floor(pops / perRow) * 320}px`;
+  const ov = (ovUrl && tc.mask) ? `<img class="po-ov" src="${ovUrl}">` : "";   // follow the live mask toggle at click time
   el.innerHTML = `<div class="po-bar"><span>${title}</span><button title="close">×</button></div>` +
-    `<img src="${imgUrl}"><div class="po-body">${metaHtml}</div>`;
+    `<div class="po-img"><img src="${imgUrl}">${ov}</div><div class="po-body">${metaHtml}</div>`;
   el.querySelector("button").onclick = () => el.remove();
   const bar = el.querySelector(".po-bar"); let s = null;
   bar.addEventListener("mousedown", (e) => { s = { x: e.clientX, y: e.clientY, l: el.offsetLeft, t: el.offsetTop }; e.preventDefault(); });
@@ -1469,11 +1478,19 @@ function pcGeneOverlay(name) {
 function pcCloseOverlay() { const o = $("pc-overlay"); if (o) o.remove(); }
 
 // ---- Top Cells tab: per-gene top phenotype cells by attention or accuracy (phase), masked like the PC tab ----
-const TC_CROP_V = "?m=1";
-const tc = { data: null, mode: "accuracy", pinned: [{ gene: "NTC", mode: "accuracy" }] };   // default: Top Accuracy, NTC pinned (v5 is accuracy-only); pins carry their own mode
+const TC_CROP_V = "?m=3";
+const tc = { data: null, marker: undefined, mode: "accuracy", mask: true, inorm: true, pinned: [{ gene: "NTC", mode: "accuracy" }] };   // inorm: marker-global intensity (fluor only); default on
+function tcBase() {   // per-marker top-cells for fluor (marker channel crops), shared phase otherwise
+  const m = state.marker && state.marker.marker_channel;
+  return (!m || /^phase/i.test(m)) ? "top_cells/" : `top_cells/markers/${jsSlug(m)}/`;
+}
 async function loadTop() {
-  if (tc.data === null) tc.data = await fetch(`${BASE}top_cells/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
-  if (!tc.data) { $("tc-view").innerHTML = '<div class="empty">Top-cell assets not built (run build_top_cells.py)</div>'; return; }
+  const slug = tcBase();
+  if (tc.data === null || tc.marker !== slug) {   // marker changed → load that marker's top-cells
+    tc.marker = slug;
+    tc.data = await fetch(`${BASE}${slug}index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  }
+  if (!tc.data) { $("tc-view").innerHTML = '<div class="empty">No top-cell assets for this marker yet.</div>'; return; }
   renderTopPins(); renderTop();
 }
 function tcData(name) {   // resolve a perturbation name → its ranking entry (genes, or complexes by base name)
@@ -1503,13 +1520,18 @@ function renderTop() {
     h += `<div class="tc-row"><div class="tc-hd">${e.gene} <span class="hint">${tag}</span><span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
-      const url = `${BASE}top_cells/crops/${c.img}${TC_CROP_V}`;
+      const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
+      const url = `${BASE}${tcBase()}${cropDir}/${c.img}${TC_CROP_V}`;
+      const ovUrl = c.ov ? `${BASE}${tcBase()}overlays/${c.ov}${TC_CROP_V}` : null;
+      const ov = ovUrl ? `<img class="tc-ov" src="${ovUrl}">` : "";
       const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>${e.mode} ${sk}=${c[sk]} · rank ${c.rank}</div>`;
-      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${c[sk]}" onclick='popOut(${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)})'><span class="tc-rank">${c.rank}</span></div>`;
+      const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)}${ovUrl ? "," + JSON.stringify(ovUrl) : ""}`;
+      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${c[sk]}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
     }
     h += "</div></div>";
   }
   v.innerHTML = h || '<div class="empty">select a perturbation</div>';
+  v.classList.toggle("masked", tc.mask !== false);   // show/hide the blue seg overlay layer
   $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcEntries().length} row(s)`;
 }
 function renderTopPins() {

@@ -101,6 +101,30 @@ def _render(phase, seg, half):
     return (rgb * 255).astype(np.uint8)
 
 
+def _render_gray(phase):
+    """Raw grayscale phase (1–99 pct) → uint8 RGB, no overlay (the toggle-off base image)."""
+    lo, hi = np.percentile(phase, (1, 99))
+    if hi - lo < 1e-6:
+        hi = lo + 1
+    g = np.clip((phase - lo) / (hi - lo), 0, 1)
+    return (np.stack([g, g, g], axis=-1) * 255).astype(np.uint8)
+
+
+def _overlay_rgba(seg, half):
+    """Transparent inside the (dilated) center cell, blue+alpha outside → RGBA uint8 (toggleable mask layer)."""
+    from scipy.ndimage import binary_dilation
+    center = seg[half, half]
+    if center == 0:
+        c = seg[half - 12:half + 12, half - 12:half + 12]; nz = c[c > 0]
+        center = np.bincount(nz).argmax() if nz.size else 0
+    rgba = np.zeros((*seg.shape, 4), np.uint8)
+    if center != 0:
+        inv = ~binary_dilation(seg == center, iterations=MASK_DILATION)
+        rgba[inv, 0], rgba[inv, 1], rgba[inv, 2] = [int(v * 255) for v in OVERLAY_RGB]
+        rgba[inv, 3] = int(OVERLAY_ALPHA * 255)
+    return rgba
+
+
 def build(sample=0, out=PCS_OUT):
     import zarr
     from PIL import Image

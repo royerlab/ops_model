@@ -21,7 +21,7 @@ import json
 import os
 
 from . import catalog as C
-from .build_pc_crops_masked import BASE, CROP_SIZE, PHASE_CHANNEL, _crop, _is_blank, _render, _zarr_patch
+from .build_pc_crops_masked import BASE, CROP_SIZE, PHASE_CHANNEL, _crop, _is_blank, _render, _render_gray, _overlay_rgba, _zarr_patch
 
 V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
 ATTN_CSV = f"{V4}/pma_phase_cells_all_v2.csv"
@@ -29,7 +29,7 @@ ACC_CSV = f"{V4}/accuracy_ranking/pergene_phase_cell_rankings.csv"
 ATTN_EBI = f"{V4}/pma_phase_cells_ebi_all.csv"                              # complex-level (EBI) attention
 ACC_EBI = f"{V4}/accuracy_ranking/ebi_pergene_phase_cell_rankings.csv"      # complex-level (EBI) accuracy
 OUT = f"{C.OUT}/viewer_assets/top_cells"
-TOP_N = 20
+TOP_N = 30
 
 
 def _pos_key(exp, well, x, y):
@@ -77,6 +77,7 @@ def _crop_cells(attn, acc, crops_dir):
                 uniq[_pos_key(c["exp"], c["well"], c["x"], c["y"])] = c
     print(f"[topcells] {len(uniq)} unique cells to crop")
     os.makedirs(crops_dir, exist_ok=True)
+    ov_dir = os.path.join(os.path.dirname(crops_dir), "overlays"); os.makedirs(ov_dir, exist_ok=True)
     half = CROP_SIZE // 2
     cache, ok, blank, fail, valid = {}, 0, 0, 0, set()
     for i, (pk, c) in enumerate(uniq.items()):
@@ -96,7 +97,8 @@ def _crop_cells(attn, acc, crops_dir):
             phase = _crop(img, PHASE_CHANNEL, x, y, half)
             if _is_blank(phase):
                 blank += 1; continue
-            Image.fromarray(_render(phase, _crop(seg, None, x, y, half), half)).save(f"{crops_dir}/{pk}.png")
+            Image.fromarray(_render_gray(phase)).save(f"{crops_dir}/{pk}.png")                     # raw grayscale (toggle-off)
+            Image.fromarray(_overlay_rgba(_crop(seg, None, x, y, half), half)).save(f"{ov_dir}/{pk}.png")   # blue-outside overlay
             ok += 1; valid.add(pk)
         except Exception as e:
             fail += 1
@@ -111,7 +113,8 @@ def _crop_cells(attn, acc, crops_dir):
 def _recs(d, extra, valid):   # attach crop filename; drop cells without a valid crop
     out_d = {}
     for g, cells in d.items():
-        lst = [{"img": f"{_pos_key(c['exp'], c['well'], c['x'], c['y'])}.png", "gene": g, "exp": c["exp"],
+        lst = [{"img": f"{_pos_key(c['exp'], c['well'], c['x'], c['y'])}.png", "ov": f"{_pos_key(c['exp'], c['well'], c['x'], c['y'])}.png",
+                "gene": g, "exp": c["exp"],
                 "well": c["well"], "x": round(c["x"], 1), "y": round(c["y"], 1), "rank": c["rank"], extra: c["score"]}
                for c in cells if _pos_key(c["exp"], c["well"], c["x"], c["y"]) in valid]
         if lst:

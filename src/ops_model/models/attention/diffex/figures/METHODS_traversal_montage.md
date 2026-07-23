@@ -43,18 +43,56 @@ the diffusion model. Seventeen steps were sampled across α ∈ [−5, +5]: α =
 positive α interpolates toward the knockout phenotype and reaches the knockout mean at α = 1, and |α| > 1
 extrapolates beyond the class means, exaggerating the phenotypic difference in either direction. Because the
 stochastic latent is held fixed across the series, cell identity is anchored and only the phenotype changes,
-yielding a smooth traversal. To quantify each traversal, the generated images at every α were embedded
-with Cell-DINO and passed as a set (bag) through the set classifier to obtain full class-prediction scores
-for the synthesized cells as a function of α, measuring how strongly the generated phenotype is recognized
-as the target perturbation along the traversal. In parallel, classical CellProfiler / OrganelleProfiler
-morphometric features were measured on both the real and the generated images to confirm that the
-traversal produces the expected phenotypic effect in interpretable feature space (e.g. object area,
-circularity, or marker intensity changing monotonically with α).
+yielding a smooth traversal. Each traversal was quantified by three complementary metrics computed as a
+function of α (described in *Quantifying the accuracy of generated phenotypes*, below). In parallel, classical
+CellProfiler / OrganelleProfiler morphometric features were measured on both the real and the generated
+images to confirm that the traversal produces the expected phenotypic effect in interpretable feature space
+(e.g. object area, circularity, or marker intensity changing monotonically with α).
 
 The same framework was used to morph between two perturbation classes — for example, the 40S and 60S
 cytosolic ribosomal-subunit complexes. In this case the direction is the difference between the two class
 means (A → B), and the base cells of class A are morphed toward the mean of class B, again with α
 extrapolating beyond either mean to exaggerate the transition.
+
+## Quantifying the accuracy of generated phenotypes
+
+To test whether the synthesized cells reproduce the intended perturbation phenotype — rather than merely a
+plausible-looking cell — each traversal was scored by three complementary metrics, all computed as a function
+of α and interpreted relative to the value attainable on real cells of the same class.
+
+**Set-classifier recognition (supervised).** The generated images at each α were embedded with Cell-DINO and
+passed as a set (a bag of n cells) through a SetTransformer classifier trained on real single cells to predict
+the perturbation class from a bag of same-class cells. Crucially, generated images sit at a systematic Cell-DINO
+domain offset from the real images the classifier was trained on, so raw features fail; because that offset is
+shared across a traversal, standardizing every α's embeddings against the α = 0 *generated* NTC control cancels it,
+leaving the classifier to read the phenotype rather than the real-vs-generated gap. Two readouts summarize the
+prediction:
+
+- *P(target)* — the softmax probability the classifier assigns to the true perturbation class: a continuous
+  measure of how confidently the generated bag is recognized as the target.
+- *Target rank* — the 1-indexed position of the true class in the classifier's ranking of all classes
+  (rank 1 = the top prediction), reported as top-1 and top-5 recovery (whether the target falls within the
+  classifier's top-1 / top-5 predictions). Rank is more forgiving than P(target) and localizes where the true
+  class sits among competing phenotypes.
+
+Both are compared to the same classifier's accuracy on real cells of the class (the real-cell ceiling): a
+phenotype is considered recovered when, near α ≈ 1, the generated bag reaches the recognition level the real
+cells achieve.
+
+**Retrieval mAP (unsupervised).** As an independent check that does not rely on the trained classifier, we
+measure whether generated cells fall in the correct region of the embedding relative to real cells. Real and
+generated single-cell Cell-DINO embeddings are pooled, and for each generated class-X cell we compute the
+average precision of retrieving real class-X cells (cross-domain, real ↔ generated) ahead of cells of every
+other class; averaging over cells gives a per-class mean average precision (mAP; computed with copairs, the
+same metric used for real-cell perturbation distinctiveness). The ceiling is obtained by splitting the real
+cells of each class into two halves and running the identical retrieval — the real self-consistency mAP — and
+the generated-to-real ratio reports how much of the real phenotypic distinctiveness the synthesized cells
+recover. Because it is purely a neighborhood-retrieval statistic in embedding space, this metric is orthogonal
+to the set classifier and guards against classifier-specific artifacts.
+
+Across all three metrics a legitimate phenotype rises from control levels as α increases, peaks near α ≈ 1 (the
+knockout / class mean), and approaches the corresponding real-cell reference; extrapolation to |α| > 1
+exaggerates the phenotype and, past the class mean, can overshoot and degrade recognition.
 
 ## Gene embedding and montage
 

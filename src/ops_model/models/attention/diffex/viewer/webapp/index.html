@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — OPS interpretability viewer</title>
-<link rel="stylesheet" href="style.css?v=117"/>
+<link rel="stylesheet" href="style.css?v=120"/>
 </head>
 <body>
 <header>
@@ -16,7 +16,10 @@
       <button id="ver-v4" class="verbtn" onclick="setAssetVer('v4')">v4</button>
       <button id="ver-v5" class="verbtn" onclick="setAssetVer('v5')">v5</button>
     </div>
-    <button id="infotoggle" class="toggle" title="toggle info panel">ⓘ Info</button>
+    <div class="asset-ver" title="Right panel — Info: selected perturbation · About: what this viewer is">
+      <button id="side-info" class="verbtn active" onclick="setSidePanel('info')">ⓘ Info</button>
+      <button id="side-about" class="verbtn" onclick="setSidePanel('about')">About</button>
+    </div>
   </div>
 </header>
 
@@ -69,20 +72,13 @@
       <button class="tab" data-tab="attn">Attn heads</button>
       <button class="tab" data-tab="pc">PCs</button>
       <button class="tab" data-tab="top">Top cells</button>
-      <button class="tab" data-tab="about">About</button>
     </div>
 
     <div class="tabpane" id="tab-traversal">
       <label>Anchor <span class="hint">(the α=0 center)</span>
         <select id="anchor"></select>
       </label>
-      <label>NTC anchor cells <span class="hint">(v5 only)</span>
-        <select id="anchorsrc" data-seg>
-          <option value="accuracy" selected>top accuracy — 25 hand-picked (best)</option>
-          <option value="attention">top attention</option>
-        </select>
-      </label>
-      <div class="hint">Default <b>NTC</b>. Pick another geneKO/complex to make α=0 that class and traverse toward the selected perturbation — requires precomputed A→B assets for the pair.</div>
+      <div class="hint">Default <b>NTC</b> (45 anchor cells: 20 top-attention + 25 top-accuracy, set-scores from the accuracy set). Pick another geneKO/complex to make α=0 that class and traverse toward the selected perturbation — requires precomputed A→B assets for the pair.</div>
       <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
         <label>Classifier score overlay
@@ -149,9 +145,10 @@
     </div>
 
     <div class="tabpane hidden" id="tab-top">
-      <div class="hint">Top real phenotype cells for the selected perturbation (phase), ranked by model <b>attention</b> or classifier <b>accuracy</b>. Follows the marker × perturbation selection; pin perturbations to compare (NTC pinned by default).</div>
-      <div class="pc-mode"><button id="tc-attn" class="seg" title="cells the model attends to most">Top Attention</button><button id="tc-acc" class="seg active" title="cells classified most confidently">Top Accuracy</button></div>
-      <div class="hint">Count set by <b>Cells per page</b> above (up to 20).</div>
+      <div class="hint">Top real phenotype cells for the selected perturbation, ranked by classifier <b>accuracy</b>. Follows the marker × perturbation selection; pin perturbations to compare (NTC pinned by default).</div>
+      <div class="hint">Count set by <b>Cells per page</b> above.</div>
+      <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="mask on"/> mask (blue tint outside the cell)</label>
+      <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> marker-normalized intensity (fluor; comparable across cells)</label>
       <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       <div class="grp">
         <span class="lbl">Pin perturbations <span class="hint">(compare; current always shown)</span></span>
@@ -159,27 +156,6 @@
         <ul id="tc-panellist"></ul>
       </div>
       <div class="hint" id="tc-status"></div>
-    </div>
-
-    <div class="tabpane hidden" id="tab-about">
-      <div class="grp">
-        <span class="lbl">OPSin — OPS interpretability viewer</span>
-        <div class="hint">OPSin is a <b>phenotype hunter</b> — it makes cell state visible to the human eye. In a pooled microscopy screen, switching off a gene reshapes cells in ways too subtle to see. A <b>generative diffusion model</b>, trained on millions of real cell images, renders a healthy cell to reveal each gene or complex's phenotype.</div>
-      </div>
-      <div class="grp">
-        <span class="lbl">The tabs</span>
-        <div class="hint"><b>Traversal</b> — a healthy cell rendered to show the selected phenotype; the <b>α</b> slider sets the strength (5 = exaggerated).</div>
-        <div class="hint"><b>Embedding</b> — every gene's model-rendered cell on a map, so similar effects sit together.</div>
-        <div class="hint"><b>Attn heads</b> — where the model looked on the real cells (brighter = more informative).</div>
-        <div class="hint"><b>PCs</b> — real cells sorted along the model's main axes of variation, with the biology each captures.</div>
-        <div class="hint"><b>Top cells</b> — the real cells that show each phenotype most clearly.</div>
-      </div>
-      <div class="grp">
-        <span class="lbl">Contributors</span>
-        <div class="hint">Alex Hillsley · Alex Lin · Chad Liu · Gav Sturm · Kyle Awayan · Kyle Harrington · Ritvik Vasan · Trang Le</div>
-        <div class="hint">Biohub SF | CellXState Team</div>
-        <div class="hint">Source: <a href="https://github.com/czbiohub-sf/diffex-viewer" target="_blank" rel="noopener" style="color:#26c6ff">github.com/czbiohub-sf/diffex-viewer</a></div>
-      </div>
     </div>
 
     <div class="tabpane hidden" id="tab-montage">
@@ -301,10 +277,33 @@
   </main>
 
   <aside id="sidebar">
-    <div class="side-hd">Perturbation info</div>
-    <div id="info-title"></div>
-    <div id="info-sub"></div>
-    <div id="info-body"></div>
+    <div id="side-info-view">
+      <div class="side-hd">Perturbation info</div>
+      <div id="info-title"></div>
+      <div id="info-sub"></div>
+      <div id="info-body"></div>
+    </div>
+    <div id="side-about-view" style="display:none">
+      <div class="side-hd">About OPSin</div>
+      <div class="grp">
+        <span class="lbl">OPSin — OPS interpretability viewer</span>
+        <div class="hint">OPSin is a <b>phenotype hunter</b> — it makes cell state visible to the human eye. In a pooled microscopy screen, switching off a gene reshapes cells in ways too subtle to see. A <b>generative diffusion model</b>, trained on millions of real cell images, renders a healthy cell to reveal each gene or complex's phenotype.</div>
+      </div>
+      <div class="grp">
+        <span class="lbl">The tabs</span>
+        <div class="hint"><b>Traversal</b> — a healthy cell rendered to show the selected phenotype; the <b>α</b> slider sets the strength (5 = exaggerated).</div>
+        <div class="hint"><b>Embedding</b> — every gene's model-rendered cell on a map, so similar effects sit together.</div>
+        <div class="hint"><b>Attn heads</b> — where the model looked on the real cells (brighter = more informative).</div>
+        <div class="hint"><b>PCs</b> — real cells sorted along the model's main axes of variation, with the biology each captures.</div>
+        <div class="hint"><b>Top cells</b> — the real cells that show each phenotype most clearly.</div>
+      </div>
+      <div class="grp">
+        <span class="lbl">Contributors</span>
+        <div class="hint">Alex Hillsley · Alex Lin · Chad Liu · Gav Sturm · Kyle Awayan · Kyle Harrington · Ritvik Vasan · Trang Le</div>
+        <div class="hint">Biohub SF | CellXState Team</div>
+        <div class="hint">Source: <a href="https://github.com/czbiohub-sf/diffex-viewer" target="_blank" rel="noopener" style="color:#26c6ff">github.com/czbiohub-sf/diffex-viewer</a></div>
+      </div>
+    </div>
   </aside>
 </div>
 
@@ -312,6 +311,6 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=136"></script>
+<script src="app.js?v=147"></script>
 </body>
 </html>

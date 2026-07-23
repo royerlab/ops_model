@@ -15,7 +15,7 @@ import os
 
 import numpy as np
 
-CACHE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets"
+CACHE = f"/hpc/projects/icd.fast.ops/models/diffex/{os.environ.get('OPS_DIFFEX_ASSETS', 'viewer_assets')}"
 SYNTH_BASE = "/hpc/projects/icd.fast.ops/models/diffex/morpho_synth"
 PAD = 24
 CROP = 256

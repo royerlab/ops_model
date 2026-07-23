@@ -228,6 +228,8 @@ button:hover{border-color:var(--accent)}
 #tc-view.cols-layout .tc-hd{white-space:normal;text-align:center;justify-content:center;word-break:break-word}
 .tc-cell{position:relative;flex:none}
 .tc-rank{position:absolute;top:3px;left:3px;font:700 11px ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;padding:0 5px}
+.tc-ov{position:absolute;top:0;left:0;width:150px;height:150px;border-radius:3px;pointer-events:none;display:none}
+#tc-view.masked .tc-ov{display:block}
 .pc-head{display:flex;align-items:center;gap:14px;margin-bottom:12px}
 .pc-head h2{margin:0;font:650 20px ui-monospace,monospace}
 .pc-head .row{margin-left:auto}
@@ -308,6 +310,8 @@ button:hover{border-color:var(--accent)}
    font:600 12px ui-monospace,monospace;background:rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.1)}
 .po-bar button{background:none;border:none;color:var(--fg);font-size:16px;cursor:pointer;line-height:1}
 .popout img{width:100%;display:block;background:#000}
+.po-img{position:relative;width:100%}
+.popout img.po-ov{position:absolute;top:0;left:0;width:100%;height:100%;background:transparent!important;pointer-events:none}
 .po-body{padding:8px 10px;font-size:12px;line-height:1.5;color:var(--fg)}
 .po-body .po-sub{color:var(--mut);font-family:ui-monospace,monospace}
 .po-body a{color:var(--accent);text-decoration:none}
