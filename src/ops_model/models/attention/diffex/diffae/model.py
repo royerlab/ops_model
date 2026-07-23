@@ -41,9 +41,16 @@ class DiffAE(nn.Module):
         )
         # learned null embedding for conditioning dropout / classifier-free guidance
         self.null_emb = nn.Parameter(torch.zeros(cfg.cond_dim))
+        # multi-marker: learned per-marker embedding added to the conditioning (which channel to render)
+        self.n_markers = getattr(cfg, "n_markers", 0)
+        if self.n_markers:
+            self.marker_emb = nn.Embedding(self.n_markers, cfg.cond_dim)
 
-    def cond(self, emb: torch.Tensor) -> torch.Tensor:
-        """Frozen CellDINO embedding (B, cond_dim) -> time-embedding conditioning."""
+    def cond(self, emb: torch.Tensor, marker_id=None) -> torch.Tensor:
+        """Frozen CellDINO embedding (B, cond_dim) -> time-embedding conditioning.
+        marker_id (B,) long: add the learned marker embedding (multi-marker virtual staining)."""
+        if self.n_markers and marker_id is not None:
+            emb = emb + self.marker_emb(marker_id)
         return self.cond_proj(emb)
 
     def null(self, n: int, device) -> torch.Tensor:
@@ -53,5 +60,5 @@ class DiffAE(nn.Module):
         x = torch.cat([noisy, cond_img], dim=1) if self.spatial_cond else noisy   # dense phase concat
         return self.unet(x, t, class_labels=c).sample
 
-    def forward(self, noisy, t, emb, cond_img=None):
-        return self.denoise(noisy, t, self.cond(emb), cond_img)
+    def forward(self, noisy, t, emb, cond_img=None, marker_id=None):
+        return self.denoise(noisy, t, self.cond(emb, marker_id), cond_img)

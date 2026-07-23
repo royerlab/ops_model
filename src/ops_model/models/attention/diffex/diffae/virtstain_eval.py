@@ -74,14 +74,21 @@ def evaluate(cfg: DiffAEConfig, out_dir: str, ckpt: str, n_eval: int, eval_seed:
     import matplotlib
     matplotlib.use("Agg"); matplotlib.rcParams["pdf.fonttype"] = 42
     import matplotlib.pyplot as plt
+    import matplotlib.patheffects as pe
     order = np.argsort(-corrs)[:12]
-    fig, ax = plt.subplots(len(order), 3, figsize=(5.2, 1.7 * len(order)), squeeze=False)
-    for r, i in enumerate(order):
-        for c, (img, cm) in enumerate([(phase[i, 0], "gray"), (preds[i], "magma"), (real[i, 0], "magma")]):
-            ax[r, c].imshow(img, cmap=cm, vmin=-1, vmax=1); ax[r, c].axis("off")
-        ax[r, 0].set_ylabel(f"r={corrs[i]:.2f}", fontsize=8, rotation=0, labelpad=18)
-    for c, t in enumerate(["phase (input)", "predicted marker", "real marker"]):
-        ax[0, c].set_title(t, fontsize=9)
+    rows = [("phase (input)", "gray", lambda i: phase[i, 0]),
+            ("predicted", "magma", lambda i: preds[i]),
+            ("real", "magma", lambda i: real[i, 0])]
+    fig, ax = plt.subplots(3, len(order), figsize=(1.4 * len(order), 4.6), squeeze=False)
+    for c, i in enumerate(order):
+        for r, (_, cm, get) in enumerate(rows):
+            ax[r, c].imshow(get(i), cmap=cm, vmin=-1, vmax=1)
+            ax[r, c].set_xticks([]); ax[r, c].set_yticks([])
+            ax[r, c].text(0.04, 0.96, f"r={corrs[i]:.2f}", transform=ax[r, c].transAxes,
+                          fontsize=6.5, color="white", va="top", ha="left",
+                          path_effects=[pe.withStroke(linewidth=1.5, foreground="black")])
+    for r, (label, _, _) in enumerate(rows):
+        ax[r, 0].set_ylabel(label, fontsize=10)
     fig.suptitle(f"virtual staining {cfg.marker_channel}  |  Pearson {corrs.mean():.3f}±{corrs.std():.3f} "
                  f"(phase-baseline {base.mean():.3f})", fontsize=9)
     fig.tight_layout(); fig.savefig(out / "eval" / "virtstain_montage.png", dpi=140, bbox_inches="tight")
