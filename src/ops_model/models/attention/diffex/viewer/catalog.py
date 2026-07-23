@@ -42,23 +42,18 @@ COMPLETE_LAUNCH = {
     "fluor_ER_golgi_bridge_VAPA", "fluor_F_actin_Phalloidin", "fluor_cell_proliferation_marker_MKI67",
     "fluor_Nucleus_Hoechst", "fluor_Nucleoli_NPM1", "fluor_Plasma_Membrane_Wheat_Germ_Agglutinin", "fluor_NFkB_NFkB__mouse_488",
 }
-# no-PMA markers: NOT in Alex's attention CSV (built after it) → traversals built from the per_signal
-# `features_processed` anndata, centroid-ranked (see precompute._rows_from_anndata).
-# (generator dir, marker_channel [→ dist reporter], raw channel, features_processed reporter for the h5ad).
-NO_PMA_H5AD = ("/hpc/projects/icd.fast.ops/ops0*/3-assembly/cell_dino_features_v2/"
-               "anndata_objects/features_processed_{rep}.h5ad")
-NO_PMA_MARKERS = [
-    ("fluor_cisGolgi_mStayGold", "cis-Golgi_mStayGold-CENPRaltORF", "GFP", "mStayGold-CENPRaltORF"),
-    ("fluor_VIM", "intermediate filaments_VIM", "GFP", "VIM"),
-    ("fluor_LMNB1", "laminin_LMNB1", "GFP", "LMNB1"),
-]
-# early (pre-launch) fluorescent markers: (generator dir, marker_channel, raw channel) recovered from training pickles
+# extra fluorescent markers not in launch.json (recovered from training pickles / built after the ranking CSV):
+# (generator dir, marker_channel, raw channel). complete_markers() gates each on a trained checkpoint. cisGolgi/
+# VIM/LMNB1 are first-class here (they have DiffAE checkpoints + v5 fluor rankings like every other marker).
 EARLY_MARKERS = [
     ("fluor_NucleoLive", "nucleus_NucleoLIVE Live Cell dye", "mCherry"),
     ("fluor_NPM3", "nucleolus-GC_NPM3", "GFP"),
     ("fluor_FastAct", "actin filament_FastAct_SPY555 Live Cell Dye", "mCherry"),
     ("fluor_LysoTracker", "lysosome_LysoTracker live-cell dye", "GFP"),
     ("fluor_ChromaLIVE_mito", "mitochondria_ChromaLIVE 561 excitation", "mCherry"),
+    ("fluor_cisGolgi_mStayGold", "cis-Golgi_mStayGold-CENPRaltORF", "GFP"),
+    ("fluor_VIM", "intermediate filaments_VIM", "GFP"),
+    ("fluor_LMNB1", "laminin_LMNB1", "GFP"),
 ]
 
 

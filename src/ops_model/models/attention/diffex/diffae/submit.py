@@ -65,8 +65,6 @@ def main():
                     help="warm-start: load these weights into the fresh model before training")
     ap.add_argument("--marker-channel", default=None,
                     help="fluor mode: fluor-CSV `channel` value (e.g. 'nucleolus-GC_NPM3')")
-    ap.add_argument("--anndata-paths", default=None,
-                    help="no-PMA markers: comma-separated per-exp CellDINO anndata h5ad paths")
     ap.add_argument("--channel", default="Phase2D",
                     help="raw pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)")
     ap.add_argument("--cond-channel", default=None,
@@ -84,7 +82,6 @@ def main():
         augment_affine=affine, augment_dihedral=dihedral, init_ckpt=args.init_ckpt,
         marker_channel=args.marker_channel, channel=args.channel, cond_channel=args.cond_channel,
         spatial_cond=args.spatial_cond,
-        anndata_paths=tuple(args.anndata_paths.split(",")) if args.anndata_paths else (),
     )
     jobs = [{
         "name": args.name,

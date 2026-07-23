@@ -122,9 +122,7 @@ def _marker_jobs(n_pcs, n_cells, force):
     from . import catalog as C
     from ..classifier.config import slugify
     jobs = []
-    entries = [(d, mc, ch) for d, mc, ch in C.complete_markers()] + \
-              [(d, mc, ch) for d, mc, ch, _ in C.NO_PMA_MARKERS]
-    for d, mc, ch in entries:
+    for d, mc, ch in C.complete_markers():
         jobs.append({"name": f"pcw_{slugify(mc)[:18]}", "func": pc_walks_marker,
                      "kwargs": dict(marker_channel=mc, channel=ch, ckpt=f"{C.DD}/{d}/diffae_best.pt",
                                     out_root=C.OUT, n_pcs=n_pcs, n_cells=n_cells, force=force)})
@@ -155,7 +153,6 @@ if __name__ == "__main__":
     elif a.markers:
         from . import catalog as C
         by_mc = {mc: (d, ch) for d, mc, ch in C.complete_markers()}
-        by_mc.update({mc: (d, ch) for d, mc, ch, _ in C.NO_PMA_MARKERS})
         for mc in a.markers:
             d, ch = by_mc[mc]
             pc_walks_marker(mc, ch, f"{C.DD}/{d}/diffae_best.pt", C.OUT,

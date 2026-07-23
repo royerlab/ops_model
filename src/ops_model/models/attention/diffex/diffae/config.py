@@ -30,10 +30,10 @@ class DiffAEConfig:
     # channels (in_channels 1->2) so the decoder sees dense per-pixel phase (SR3/Palette recipe) —
     # pixel-registered virtual staining, vs the global-embedding-only default. Requires cond_channel.
     spatial_cond: bool = False
+    # multi-marker virtual staining: one model predicts N markers, switched by a learned marker-id
+    # embedding added to the conditioning. 0 = single-channel (default, existing checkpoints unaffected).
+    n_markers: int = 0
     fluor_csv: str = f"{PMA_PHASE_GENEKO.rsplit('/', 1)[0]}/pma_fluorescent_cells_all.csv"
-    # no-PMA markers: sample the cell table from per-experiment CellDINO anndata(s)
-    # (obs: perturbation, well, x_position, y_position, experiment) instead of an attention CSV.
-    anndata_paths: tuple = ()
     mask_cell: bool = False
     seed: int = 0
 

@@ -54,20 +54,6 @@ def cmd_seed(args):
                              dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
                                   ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
                                   score=not args.no_score, force=getattr(args, "force", False)), "seed"))
-    for d, mc, ch, rep in C.NO_PMA_MARKERS:                  # no-PMA markers: build from features_processed anndata
-        r = C.rep_of(dist, mc)
-        if not r or r not in dist.columns:
-            continue
-        if args.map_thr is not None:
-            sc = dist[r]; tg = [g for g in sc.index[sc >= args.map_thr] if not str(g).startswith("NTC")]
-        else:
-            tg = C.top_genes(dist, r, args.n)
-        if tg:
-            jobs.append(_job(f"pm_nopma_{slugify(mc)[:16]}", precompute_marker,
-                             dict(grain="geneKO", targets=tg, marker_channel=mc, channel=ch,
-                                  ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT, load_workers=12,
-                                  fluor_rows_h5ad=C.NO_PMA_H5AD.format(rep=rep),
-                                  score=not args.no_score, force=getattr(args, "force", False)), "seed"))
     if args.map_thr is None:                                 # phase already fully built — only (re)seed with top-N mode
         jobs.append(_job("pm_phase_geneKO", precompute_marker,
                          dict(grain="geneKO", targets=C.top_genes(dist, "Phase", args.n + 4),

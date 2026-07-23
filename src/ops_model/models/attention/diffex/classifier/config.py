@@ -5,20 +5,29 @@ image->class-k signal. PoC = binary {gene}-vs-rest on phase crops.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 _V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
 
-# Phase per-cell attention exports (Alex v4). Same schema:
-#   gene, channel(=Phase2D), model_confidence, predicted_class, experiment,
-#   well, segmentation, x_pheno, y_pheno, pma_attention, rank, rank_type.
+# Phase per-cell ranking exports. v4 = pma_attention-ranked (masked SetTransformer). v5 (paper-v2) =
+# set-accuracy-`score`-ranked, no-mask/160px, and now includes an NTC group (so NTC anchors come from the
+# same ranking — no attention fallback). The slim v5 viewer-parquet (top-1000/class) is normalized to the
+# v4 schema (segmentation_id→segmentation, score→pma_attention, rank_type="top"). Toggle via OPS_DIFFEX_V5=1.
+# Built + served side-by-side under viewer_assets_v5 so the live v4 viewer is untouched until the final swap.
+_USE_V5 = os.environ.get("OPS_DIFFEX_V5", "0") == "1"
+_V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
 # geneKO: class is `gene`. complex (EBI): class is `predicted_class` (complex name).
-PMA_PHASE_GENEKO = f"{_V4}/pma_phase_cells_v2_all.parquet"
-PMA_PHASE_EBI = f"{_V4}/pma_phase_cells_ebi_all.parquet"
+if _USE_V5:
+    PMA_PHASE_GENEKO = f"{_V5_RANK}/pma_v5_phase_geneKO.parquet"
+    PMA_PHASE_EBI = f"{_V5_RANK}/pma_v5_phase_complex.parquet"   # built when the complex phase lands
+else:
+    PMA_PHASE_GENEKO = f"{_V4}/pma_phase_cells_v2_all.parquet"
+    PMA_PHASE_EBI = f"{_V4}/pma_phase_cells_ebi_all.parquet"
 
 GRAINS = {
     "geneKO": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},
-    "complex": {"parquet": PMA_PHASE_EBI, "class_col": "predicted_class"},
+    "complex": {"parquet": PMA_PHASE_EBI, "class_col": "predicted_class"},   # v5 complex parquet is complex-labeled (member cells pooled), like v4
     "minibinder": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},   # NTC anchor from phase geneKO; targets supplied via accuracy_parquet
 }
 
