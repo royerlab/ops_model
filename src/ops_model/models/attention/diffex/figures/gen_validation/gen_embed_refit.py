@@ -141,10 +141,6 @@ def plot_traj(n=10, rank_max=20):
     pcrank = np.array([int(np.where(np.argsort(cdist(PCg[k, ai3][None], Xr, "cosine")[0]) == tr[k])[0][0]) + 1
                        for k in range(len(genes))])
 
-    def draw(ax, R, G, cmap="viridis_r"):
-        gp._draw_bg(ax, a, "umap", 1, 1, ec, cxcmap) if False else None
-        return
-
     for layout in ("umap", "phate"):
         fx, fy, ntc = flips[layout]
         if layout == "umap":
