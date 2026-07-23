@@ -102,6 +102,7 @@ V5_SIDECAR_EBIFB = Path(
 V5_STRATEGIES = {
     "v5_gko", "v5_ebionly", "v5_ebifb",
     "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
+    "v5_ebifb_cutoff_15k",
 }
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
@@ -234,6 +235,8 @@ def _resolve_strategy(name: str) -> dict:
         return {"op": "column", "col": "v5_ebionly_cutoff_20k"}
     if name == "v5_ebifb_cutoff_20k":
         return {"op": "column", "col": "v5_ebifb_cutoff_20k"}
+    if name == "v5_ebifb_cutoff_15k":
+        return {"op": "column", "col": "v5_ebifb_cutoff_15k"}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -374,6 +377,7 @@ STRATEGIES = [
     "set_accuracy_ebi",
     "v5_gko", "v5_ebionly", "v5_ebifb",
     "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
+    "v5_ebifb_cutoff_15k",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -440,7 +444,7 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
         phase_sidecar = V5_SIDECAR_GKO
     elif strategy_name in ("v5_ebionly", "v5_ebionly_cutoff_20k"):
         phase_sidecar = V5_SIDECAR_EBIONLY
-    elif strategy_name in ("v5_ebifb", "v5_ebifb_cutoff_20k"):
+    elif strategy_name in ("v5_ebifb", "v5_ebifb_cutoff_20k", "v5_ebifb_cutoff_15k"):
         phase_sidecar = V5_SIDECAR_EBIFB
     else:
         phase_sidecar = ATTN_SIDECAR

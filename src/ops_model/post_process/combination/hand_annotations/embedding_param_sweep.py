@@ -205,6 +205,11 @@ def _fit_umap(
     X: np.ndarray, seed: int, *, n_neighbors: int, min_dist: float,
     metric: str = "euclidean", spread: float = 1.0,
 ) -> Optional[np.ndarray]:
+    """Fit UMAP for one sweep tile. NOTE: this does NOT need to reproduce the
+    production layout — the default tile is substituted from
+    ``adata.obsm['X_umap']`` in ``_process_level`` so it always shows what
+    phase2 actually wrote. The sweep neighbors just need to be *comparable* to
+    each other, so we use umap-learn directly (fast, deterministic per seed)."""
     from umap import UMAP
 
     nn = max(2, min(n_neighbors, X.shape[0] - 1))
@@ -452,6 +457,33 @@ def _process_level(
     canvases: Dict[str, Dict] = {}
     for spec, coords in zip(specs, results):
         canvases.setdefault(spec["canvas"], {})[spec["key"]] = coords
+
+    # The whole point of the "current setting" tile is to show the user what
+    # production actually produces. Re-fitting with the "same" recipe is not
+    # reliable — subtle differences in library version, intermediate refit
+    # paths, or stale uns["umap"]["params"] can make a bit-for-bit reproduction
+    # impossible from the h5ad alone. So instead: substitute the stored coords
+    # directly for the default-position tile. Sweep neighbors compare against
+    # what phase2 actually wrote.
+    if sub_idx is None:
+        stored_umap = adata.obsm.get("X_umap")
+        stored_phate = adata.obsm.get("X_phate")
+        if stored_umap is not None and "umap_primary" in canvases:
+            key = (CANONICAL_UMAP["n_neighbors"], CANONICAL_UMAP["min_dist"])
+            canvases["umap_primary"][key] = np.asarray(stored_umap)
+        if stored_umap is not None and "umap_secondary" in canvases:
+            key = (CANONICAL_UMAP["metric"], CANONICAL_UMAP["spread"])
+            canvases["umap_secondary"][key] = np.asarray(stored_umap)
+        if stored_phate is not None and "phate_primary" in canvases:
+            key = (CANONICAL_PHATE["knn"], CANONICAL_PHATE["decay"])
+            canvases["phate_primary"][key] = np.asarray(stored_phate)
+        if stored_phate is not None and "phate_secondary" in canvases:
+            key = (CANONICAL_PHATE["t"], CANONICAL_PHATE["gamma"])
+            canvases["phate_secondary"][key] = np.asarray(stored_phate)
+        _logger.info(
+            "  %s: substituted stored obsm[X_umap]/obsm[X_phate] for default tile "
+            "(guarantees visual match to production plots)", level,
+        )
 
     n_drawn = X.shape[0]
 

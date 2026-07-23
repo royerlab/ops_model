@@ -47,7 +47,7 @@ METRICS = [
     ("ebi_map_mean", "EBI"),
 ]
 X_COL = "cells_per_guide"
-V1_COLOR, V2_COLOR = "#7f7f7f", "#d62728"  # v1 gray, v2 red
+V1_COLOR, V2_COLOR = "#7f7f7f", "#d62728"  # a=gray (baseline/older), b=red (comparison)
 
 
 def _reporter_dirs(base: Path) -> dict:
@@ -67,9 +67,11 @@ def _load(csv: Optional[Path]) -> Optional[pd.DataFrame]:
     return df.sort_values(X_COL) if X_COL in df.columns else None
 
 
-def _draw_metric(ax, dfv1, dfv2, col, label):
+def _draw_metric(ax, dfv1, dfv2, col, label,
+                  label_a="v1", label_b="v2",
+                  color_a=V1_COLOR, color_b=V2_COLOR):
     plotted = False
-    for df, ver, color in ((dfv1, "v1", V1_COLOR), (dfv2, "v2", V2_COLOR)):
+    for df, ver, color in ((dfv1, label_a, color_a), (dfv2, label_b, color_b)):
         if df is None or col not in df.columns:
             continue
         d = df.dropna(subset=[col])
@@ -91,33 +93,39 @@ def _draw_metric(ax, dfv1, dfv2, col, label):
     return plotted
 
 
-def _plot_marker(marker, dfv1, dfv2, out_dir: Path):
+def _plot_marker(marker, dfv1, dfv2, out_dir: Path,
+                  label_a="v1", label_b="v2",
+                  color_a=V1_COLOR, color_b=V2_COLOR,
+                  file_tag="v1_v2"):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.6))
     any_plotted = False
     for ax, (col, label) in zip(axes, METRICS):
-        any_plotted |= _draw_metric(ax, dfv1, dfv2, col, label)
+        any_plotted |= _draw_metric(ax, dfv1, dfv2, col, label,
+                                     label_a=label_a, label_b=label_b,
+                                     color_a=color_a, color_b=color_b)
     if not any_plotted:
         plt.close(fig)
         return False
     handles, labels = axes[0].get_legend_handles_labels()
-    # de-dup while preserving order
     seen, h2, l2 = set(), [], []
     for h, l in zip(handles, labels):
         if l not in seen:
             seen.add(l); h2.append(h); l2.append(l)
     fig.legend(h2, l2, loc="lower center", ncol=2, fontsize=13,
                bbox_to_anchor=(0.5, -0.08))
-    tag = "v1 vs v2" if dfv1 is not None else "v2 only (new marker)"
+    tag = f"{label_a} vs {label_b}" if dfv1 is not None else f"{label_b} only (new marker)"
     fig.suptitle(f"Titration {tag} — {marker}", fontsize=16, fontweight="bold")
     fig.tight_layout(rect=[0, 0.10, 1, 0.95])
     for ext in ("png", "svg"):
-        fig.savefig(out_dir / f"{marker}_v1_v2.{ext}", dpi=150, bbox_inches="tight")
+        fig.savefig(out_dir / f"{marker}_{file_tag}.{ext}", dpi=150, bbox_inches="tight")
     plt.close(fig)
     return True
 
 
-def _plot_overview(markers, v1_map, v2_map, out_dir: Path, metric_col, metric_label):
-    """One grid figure: a small panel per marker for a single metric (v1 vs v2)."""
+def _plot_overview(markers, v1_map, v2_map, out_dir: Path, metric_col, metric_label,
+                    label_a="v1", label_b="v2",
+                    color_a=V1_COLOR, color_b=V2_COLOR):
+    """One grid figure: a small panel per marker for a single metric."""
     n = len(markers)
     ncols = 6
     nrows = math.ceil(n / ncols)
@@ -127,17 +135,19 @@ def _plot_overview(markers, v1_map, v2_map, out_dir: Path, metric_col, metric_la
         ax = axes[i // ncols][i % ncols]
         dfv1 = _load(v1_map.get(marker))
         dfv2 = _load(v2_map.get(marker))
-        _draw_metric(ax, dfv1, dfv2, metric_col, marker[:22])
+        _draw_metric(ax, dfv1, dfv2, metric_col, marker[:22],
+                     label_a=label_a, label_b=label_b,
+                     color_a=color_a, color_b=color_b)
         ax.set_xlabel(""); ax.set_ylabel("")
         ax.set_title(marker[:22], fontsize=7)
         ax.tick_params(labelsize=6)
     for j in range(n, nrows * ncols):
         axes[j // ncols][j % ncols].axis("off")
     from matplotlib.lines import Line2D
-    fig.legend(handles=[Line2D([0], [0], color=V1_COLOR, marker="o", label="v1"),
-                        Line2D([0], [0], color=V2_COLOR, marker="o", label="v2")],
+    fig.legend(handles=[Line2D([0], [0], color=color_a, marker="o", label=label_a),
+                        Line2D([0], [0], color=color_b, marker="o", label=label_b)],
                loc="lower center", ncol=2, fontsize=12, bbox_to_anchor=(0.5, -0.015))
-    fig.suptitle(f"v1 vs v2 titration — {metric_label} mean mAP (all markers)",
+    fig.suptitle(f"{label_a} vs {label_b} titration — {metric_label} mean mAP (all markers)",
                  fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.03, 1, 0.97])
     for ext in ("png", "svg"):
@@ -184,43 +194,67 @@ def _plot_highlight_new(markers, v2_map, out_dir: Path, metric_col, metric_label
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--v1-dir", default=DEFAULT_V1_DIR)
-    ap.add_argument("--v2-dir", default=DEFAULT_V2_DIR)
+    ap.add_argument("--v1-dir", "--dir-a", dest="v1_dir", default=DEFAULT_V1_DIR,
+                    help="Baseline / A titration_guide_median dir")
+    ap.add_argument("--v2-dir", "--dir-b", dest="v2_dir", default=DEFAULT_V2_DIR,
+                    help="Comparison / B titration_guide_median dir")
+    ap.add_argument("--label-a", default="v1",
+                    help="Legend label for A (default: v1)")
+    ap.add_argument("--label-b", default="v2",
+                    help="Legend label for B (default: v2)")
+    ap.add_argument("--color-a", default=V1_COLOR)
+    ap.add_argument("--color-b", default=V2_COLOR)
+    ap.add_argument("--file-tag", default=None,
+                    help="Filename tag for per-marker figures (default: <label_a>_<label_b>)")
     ap.add_argument("-o", "--output-dir", default=None,
-                    help="Default: <v2-dir>/v1_vs_v2_comparison/")
+                    help="Default: <dir-b>/<label_a>_vs_<label_b>_comparison/")
     args = ap.parse_args()
 
     v1_base, v2_base = Path(args.v1_dir), Path(args.v2_dir)
-    out_dir = Path(args.output_dir) if args.output_dir else v2_base / "v1_vs_v2_comparison"
+    label_a, label_b = args.label_a, args.label_b
+    slug = f"{label_a}_vs_{label_b}".replace(" ", "_")
+    file_tag = args.file_tag or f"{label_a}_{label_b}".replace(" ", "_")
+    out_dir = Path(args.output_dir) if args.output_dir else v2_base / f"{slug}_comparison"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     v1_map = _reporter_dirs(v1_base) if v1_base.is_dir() else {}
     v2_map = _reporter_dirs(v2_base) if v2_base.is_dir() else {}
-    markers = sorted(v2_map)  # every v2 marker; v1 overlaid where available
+    markers = sorted(v2_map)  # every B marker; A overlaid where available
     common = sorted(set(v1_map) & set(v2_map))
-    v2_only = sorted(set(v2_map) - set(v1_map))
-    logger.info(f"v1 markers: {len(v1_map)} | v2 markers: {len(v2_map)} | "
-                f"common: {len(common)} | v2-only: {len(v2_only)}")
-    if v2_only:
-        logger.info(f"  v2-only (drawn v2 alone): {v2_only}")
+    b_only = sorted(set(v2_map) - set(v1_map))
+    logger.info(f"{label_a}: {len(v1_map)} | {label_b}: {len(v2_map)} | "
+                f"common: {len(common)} | {label_b}-only: {len(b_only)}")
+    if b_only:
+        logger.info(f"  {label_b}-only (drawn alone): {b_only}")
 
     n_ok = 0
     for marker in markers:
-        if _plot_marker(marker, _load(v1_map.get(marker)), _load(v2_map.get(marker)), out_dir):
+        if _plot_marker(marker, _load(v1_map.get(marker)), _load(v2_map.get(marker)),
+                         out_dir, label_a=label_a, label_b=label_b,
+                         color_a=args.color_a, color_b=args.color_b,
+                         file_tag=file_tag):
             n_ok += 1
     logger.info(f"Wrote {n_ok} per-marker figures to {out_dir}")
 
-    for col, label in METRICS:
-        _plot_overview(markers, v1_map, v2_map, out_dir, col, label)
-    logger.info(f"Wrote 3 overview grids (activity/distinctiveness/EBI) to {out_dir}")
+    # Overview grid only makes sense with >1 marker (else it's 1 tile + 5 blanks)
+    if len(markers) > 1:
+        for col, label in METRICS:
+            _plot_overview(markers, v1_map, v2_map, out_dir, col, label,
+                            label_a=label_a, label_b=label_b,
+                            color_a=args.color_a, color_b=args.color_b)
+        logger.info(f"Wrote {len(METRICS)} overview grids to {out_dir}")
+    else:
+        logger.info(f"Skipping overview grids (only {len(markers)} marker)")
 
-    # All-markers v2 plots for distinctiveness + EBI with the new fluorescent
-    # markers (v2-only) highlighted against the rest in gray.
-    highlight = set(v2_only)
-    for col, label in (("distinctiveness_map_mean", "Distinctiveness"),
-                       ("ebi_map_mean", "EBI")):
-        _plot_highlight_new(markers, v2_map, out_dir, col, label, highlight)
-    logger.info(f"Wrote 2 all-marker highlight plots (distinct/EBI, new={sorted(highlight)})")
+    # Highlight plot only makes sense when B has markers A doesn't
+    highlight = set(b_only)
+    if highlight:
+        for col, label in (("distinctiveness_map_mean", "Distinctiveness"),
+                           ("ebi_map_mean", "EBI")):
+            _plot_highlight_new(markers, v2_map, out_dir, col, label, highlight)
+        logger.info(f"Wrote 2 highlight plots ({label_b}-only={sorted(highlight)})")
+    else:
+        logger.info(f"Skipping highlight plots (no {label_b}-only markers)")
 
 
 if __name__ == "__main__":
