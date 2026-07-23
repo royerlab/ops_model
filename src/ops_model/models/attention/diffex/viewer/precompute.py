@@ -55,37 +55,6 @@ def _save_webp(path, arr, upsize):
     im.save(path, quality=90, method=6)
 
 
-def _rows_from_anndata(h5ad_glob, marker_channel, cc, n_keep=1000):
-    """pma-CSV-equivalent cell table from per_signal features_processed anndata (for markers with NO
-    pma attention CSV, e.g. cisGolgi/VIM/LMNB1). No attention rank exists → rank cells by distance to
-    each perturbation's CellDINO CENTROID (closest = rank 1), keeping the n_keep most-representative."""
-    import glob
-
-    import anndata as ad
-    frames = []
-    for f in sorted(glob.glob(h5ad_glob)):
-        a = ad.read_h5ad(f)
-        X = np.asarray(a.X if a.X is not None else a.obsm["X_pca"], dtype=np.float32)
-        ob = a.obs
-        # obs['well'] is the mashed 'A/2/0_ops0139_20260325' → keep just the row/col/fov position path
-        well = ob["well"].astype(str).str.extract(r"^([A-Za-z]+/\d+/\d+)")[0]
-        df = pd.DataFrame({cc: ob["perturbation"].astype(str).values,
-                           "experiment": ob["experiment"].astype(str).values,
-                           "well": well.values,
-                           "segmentation": ob["label_int"].values,
-                           "x_pheno": ob["x_position"].values, "y_pheno": ob["y_position"].values})
-        rank = np.empty(len(df), int)
-        for _, idx in df.groupby(cc).groups.items():
-            ii = np.asarray(idx); e = X[ii]
-            d = np.linalg.norm(e - e.mean(0), axis=1)        # distance to perturbation centroid
-            rank[ii[np.argsort(d)]] = np.arange(1, len(ii) + 1)
-        df["rank"] = rank
-        frames.append(df[df["rank"] <= n_keep])
-    out = pd.concat(frames, ignore_index=True)
-    out["channel"] = marker_channel; out["rank_type"] = "top"; out["pma_attention"] = 1.0 / out["rank"]
-    return out
-
-
 def _gather_class(cfg, value, n, parquet=None):
     """Materialize + CellDINO-embed the top-n cells of ONE class → (images, embs). `parquet` overrides
     the grain's attention parquet (phase only) — e.g. an accuracy-ranked table for the top-accuracy variant."""
@@ -113,7 +82,7 @@ def _gather_class(cfg, value, n, parquet=None):
 def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, channel="Phase2D",
                       fluor_csv=None, control="NTC", n_cells=20, w=1.5, alphas=VIEWER_ALPHAS,
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
-                      load_workers=12, n_per_class=1000, fluor_rows_h5ad=None,
+                      load_workers=12, n_per_class=1000,
                       accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
                       v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
@@ -132,9 +101,6 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         if fluor_rank_parquet:                           # v5 accuracy ranking, pre-built per-channel (cc + base cols + rank_type)
             cfg._fluor_rows = pd.read_parquet(fluor_rank_parquet)
             print(f"[fluor-v5] {len(cfg._fluor_rows)} accuracy rows for '{marker_channel}' ({cfg._fluor_rows[cc].nunique()} classes)")
-        elif fluor_rows_h5ad:                            # no pma CSV (cisGolgi/VIM/LMNB1) → anndata + centroid rank
-            cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
-            print(f"[fluor] {len(cfg._fluor_rows)} '{marker_channel}' rows from anndata (centroid-ranked)")
         elif accuracy_fluor_csv:                         # fluor ACCURACY ranking (ebi_class_channel): label_name→class, per-complex rank
             _a = pd.read_csv(accuracy_fluor_csv, usecols=["label_name", "channel", "experiment", "well", "x_pheno", "y_pheno", "segmentation_id", "score", "rank"])
             _a = _a[_a["channel"] == marker_channel].rename(columns={"label_name": cc, "segmentation_id": "segmentation", "score": "pma_attention"})
@@ -153,36 +119,37 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     # --- shared control/anchor cells: gather ONCE, cache the 1000-cell embeddings so every
     #     rebuild (new α/cells/anchor/ckpt) skips the gather (CellDINO embeds are ckpt-independent) ---
     acache = realdir / "ctrl.npz"
-    _z = np.load(acache) if acache.exists() else None
-    # Only trust the cache if it has aligned anchor imgs (or we don't need them). An old ctrl.npz without
-    # anchor_imgs must be rebuilt FRESH — re-gathering images onto stale cached embeddings drifts (the
-    # re-gathered cells ≠ the cached embeddings' cells), which misaligns α=0 from the displayed real cell.
-    if _z is not None and (not invert_anchors or "anchor_imgs" in _z.files):
-        ctrl_embs = _z["ctrl_embs"]; mu_ctrl = _z["mu_ctrl"]
-        anchor_imgs = _z["anchor_imgs"] if "anchor_imgs" in _z.files else None
-        print(f"[cache] control embs <- {acache}  {ctrl_embs.shape}")
+    if acache.exists():
+        # PRE-SELECTED anchors (e.g. v5's accuracy cells): load embeddings; NEVER re-gather — the selected
+        # cells (and their count/order) must not change. Anchor images for inversion come from real.webp below.
+        z = np.load(acache); ctrl_embs = z["ctrl_embs"]; mu_ctrl = z["mu_ctrl"]
+        anchor_imgs = z["anchor_imgs"] if "anchor_imgs" in z.files else None
+        print(f"[cache] control embs <- {acache}  {ctrl_embs.shape} (anchors fixed)")
     else:
-        if _z is not None:
-            print("[invert] old ctrl.npz lacks aligned anchor imgs → rebuilding control cache fresh")
+        # no anchors selected yet (new marker) → gather + select fresh, save real.webp + embeddings
         ctrl_imgs, ctrl_embs = _gather_class(cfg, control, n_per_class)
         mu_ctrl = ctrl_embs.mean(0)
         real = normalize(ctrl_imgs[:min(n_cells, len(ctrl_embs))])
-        anchor_imgs = real                                   # aligned by construction: real[c] ↔ ctrl_embs[c]
+        anchor_imgs = real
         rp = ThreadPoolExecutor(max_workers=n_workers)
         for c in range(len(real)):
             (realdir / f"cell{c}").mkdir(parents=True, exist_ok=True)
             rp.submit(_save_webp, realdir / f"cell{c}" / "real.webp", real[c, 0], upsize)
         rp.shutdown(wait=True)
-        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=real)   # anchor imgs → DDIM inversion
+        np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=real)
         print(f"[cache] control embs -> {acache}  {ctrl_embs.shape}")
     ncell = min(n_cells, len(ctrl_embs))
     z0 = torch.as_tensor(ctrl_embs[:ncell], dtype=torch.float32, device=dev)
 
     diffae = load_diffae(cfg, dev)
     null_base = diffae.null_emb.detach()[None].to(dev)
-    # anchor identity: DDIM-INVERT each control cell to its own xT so α=0 is the REAL cell (default).
-    # Guided inversion (same w the morph samples at); random seed if invert_anchors=False.
-    if invert_anchors and anchor_imgs is not None:
+    # anchor identity: DDIM-INVERT each SELECTED anchor (LOSSLESS anchor_imgs) to its own xT so α=0 is the
+    # real cell. anchor_imgs come from the fresh gather (this run) or a pre-built ctrl.npz. We NEVER invert
+    # the lossy real.webp — if invert is on but no lossless anchor_imgs are present, fail loud.
+    if invert_anchors:
+        if anchor_imgs is None:
+            raise RuntimeError(f"invert_anchors=True but no lossless anchor_imgs in {acache}; pre-build the "
+                               f"anchor cache first (lossy real.webp inversion is disabled).")
         x0a = torch.as_tensor(anchor_imgs[:ncell], dtype=torch.float32, device=dev)
         xT = torch.cat([_ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
                         for c in range(ncell)], 0)
@@ -272,9 +239,10 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
 
 @torch.no_grad()
 def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=None, channel="Phase2D",
-                              fluor_csv=None, n_cells=20, w=2.0, alphas=VIEWER_ALPHAS, device="cuda",
+                              fluor_csv=None, n_cells=20, w=1.5, alphas=VIEWER_ALPHAS, device="cuda",
                               upsize=256, batch=48, n_workers=8, load_workers=12, n_per_class=1000,
-                              fluor_rows_h5ad=None, pairs=None, accuracy_parquet=None, force=False):
+                              pairs=None, accuracy_parquet=None, force=False,
+                              invert_anchors=True):
     """A→B anchors among `classes` for ONE marker: gather each class's cells ONCE (single CSV read),
     then generate every ordered pair a→b (anchor a's cells morphed toward b's centroid). The gather is
     amortized across all K·(K−1) pairs; the mean-diff direction is b_centroid − a_centroid."""
@@ -288,12 +256,9 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
     modality = slugify(marker_channel) if marker_channel else "phase"
     if marker_channel:                                   # preload the marker's cell table ONCE
         cc = GRAINS[grain]["class_col"]
-        if fluor_rows_h5ad:
-            cfg._fluor_rows = _rows_from_anndata(fluor_rows_h5ad, marker_channel, cc, n_per_class)
-        else:
-            _cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
-            _all = pd.read_csv(cfg.fluor_csv, usecols=_cols)
-            cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
+        _cols = list(dict.fromkeys([cc, *_BASE_COLS, "channel", "rank_type"]))
+        _all = pd.read_csv(cfg.fluor_csv, usecols=_cols)
+        cfg._fluor_rows = _all[(_all["channel"] == marker_channel) & (_all["rank_type"] == "top")]
     cache = {}                                           # gather each class ONCE (in-memory filter, no re-read)
     for cls in classes:
         imgs, embs = _gather_class(cfg, cls, n_per_class, parquet=accuracy_parquet)   # accuracy_parquet → top-n by v5 accuracy
@@ -309,8 +274,13 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
             return setup[a]
         a_imgs, a_embs = cache[a]; ncell = min(n_cells, len(a_embs))
         z0 = torch.as_tensor(a_embs[:ncell], dtype=torch.float32, device=dev)
-        xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
-                          for c in range(ncell)])
+        if invert_anchors:                               # DDIM-invert the LOSSLESS source cells → faithful α=0
+            x0a = torch.as_tensor(normalize(a_imgs[:ncell]), dtype=torch.float32, device=dev)
+            xT = torch.cat([_ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
+                            for c in range(ncell)], 0)
+        else:
+            xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
+                              for c in range(ncell)])
         mu_a = a_embs.mean(0); anchor = slugify(a)
         realdir = Path(out_root) / _ASSETS / modality / "_anchors" / anchor
         if force or not (realdir / "cell0" / "real.webp").exists():
