@@ -446,6 +446,11 @@ def extract_cp_features(
         cell_features["well"] = (
             batch["crop_info"]["well"] + "_" + batch["crop_info"]["store_key"]
         )
+        # Pheno-frame cell identity so the portal consolidator can do a
+        # deterministic (well, tile, seg) join instead of cross-frame spatial NN
+        # (x_position here is x_pheno; CP-experiment cells match on pheno seg).
+        cell_features["segmentation_id"] = batch["crop_info"].get("segmentation_id")
+        cell_features["tile_pheno"] = batch["crop_info"].get("tile_pheno")
         results_list.append(cell_features)
 
     return pd.DataFrame(results_list)
@@ -657,6 +662,11 @@ def _process_cell_range(indices: list[int]):
         cell_features["well"] = (
             batch["crop_info"]["well"] + "_" + batch["crop_info"]["store_key"]
         )
+        # Pheno-frame cell identity so the portal consolidator can do a
+        # deterministic (well, tile, seg) join instead of cross-frame spatial NN
+        # (x_position here is x_pheno; CP-experiment cells match on pheno seg).
+        cell_features["segmentation_id"] = batch["crop_info"].get("segmentation_id")
+        cell_features["tile_pheno"] = batch["crop_info"].get("tile_pheno")
         results_list.append(cell_features)
 
     # Collect GPU granularity results — poll result_store until all requests are fulfilled
@@ -958,6 +968,9 @@ def _process_single_cell_cached(idx):
     cell_features["x_position"] = crop_info["x_pheno"]
     cell_features["y_position"] = crop_info["y_pheno"]
     cell_features["well"] = crop_info["well"] + "_" + crop_info["store_key"]
+    # Pheno-frame cell identity for a deterministic portal-consolidator join.
+    cell_features["segmentation_id"] = crop_info.get("segmentation_id")
+    cell_features["tile_pheno"] = crop_info.get("tile_pheno")
     return cell_features
 
 
