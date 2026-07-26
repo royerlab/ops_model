@@ -415,7 +415,7 @@ def cp_features_main(
     concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
         name=f"{exp_short}_cp_concat",
-        timeout_min=120,
+        timeout_min=360,  # 1.3M-cell Cell-Painting CSVs concat >120min
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=1,
         mem_gb=128,
@@ -437,7 +437,7 @@ def cp_features_main(
     anndata_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     anndata_executor.update_parameters(
         name=f"{exp_short}_cp_anndata",
-        timeout_min=120,  # 2 hours for processing
+        timeout_min=240,  # 1.3M-cell CP conversion + per-reporter split
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=8,
         mem_gb=128,
