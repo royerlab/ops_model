@@ -440,7 +440,7 @@ def cp_features_main(
         timeout_min=240,  # 1.3M-cell CP conversion + per-reporter split
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=8,
-        mem_gb=128,
+        mem_gb=384,  # 1.3M cells x ~5000 feats + per-reporter split OOMs at 128
         slurm_additional_parameters={"dependency": f"afterok:{concat_job.job_id}"},
         slurm_setup=_build_slurm_setup(num_threads=8),
     )
