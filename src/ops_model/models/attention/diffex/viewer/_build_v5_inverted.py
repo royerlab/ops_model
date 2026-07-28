@@ -11,6 +11,7 @@ _fluor_v5_build.py) — NOT missing data (cells exist for all 1000×55). Lower-a
 
     python -m ops_model.models.attention.diffex.viewer._build_v5_inverted markers
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -64,10 +65,12 @@ SEL25 = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals/ntc_accanchor_se
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
 
 
-def resume_marker(d, marker_channel, channel):
-    """Finish a marker whose full build timed out: KEEP the fresh anchors (ctrl.npz) and regenerate ONLY the
-    genes still stale from the previous build — meta.json older than ctrl.npz (this run's anchor gather) or
-    missing. force=True on that subset overwrites the stale traversals; fresh (this-run) genes are skipped."""
+def resume_marker(d, marker_channel, channel, target_steps=100):
+    """Resume/upgrade a marker: KEEP the (step-independent) anchors and regenerate only the genes not already
+    built at `target_steps`. A gene is regenerated if its meta.json is missing, was built at a different
+    ddim_steps (e.g. old 50-step frames → the 100-step relaunch), or predates the anchor gather. Genes already
+    at target_steps are skipped, so this is idempotent across preemption/timeout rounds — and it correctly
+    distinguishes 50- vs 100-step frames via the stamped meta['ddim_steps'] (mtime alone cannot)."""
     frp = f"{FRP_DIR}/{slugify(marker_channel)}.parquet"
     if not os.path.exists(frp):
         return f"skip {marker_channel}: no fluor_rank_parquet"
@@ -80,14 +83,20 @@ def resume_marker(d, marker_channel, channel):
     for g in _genes_for(frp):
         m = base / "geneKO" / slugify(g) / "meta.json"
         if not m.exists() or m.stat().st_mtime < cutoff:
+            stale.append(g); continue
+        try:
+            steps = json.load(open(m)).get("ddim_steps")
+        except Exception:
+            steps = None
+        if steps != target_steps:                            # built at a different step count (50→100) or unstamped (old)
             stale.append(g)
     if not stale:
-        return {"marker": marker_channel, "stale": 0, "note": "already fully fresh"}
-    print(f"[resume] {marker_channel}: regenerating {len(stale)} stale/missing genes (keeping fresh anchors)")
+        return {"marker": marker_channel, "stale": 0, "note": f"already {target_steps}-step fresh"}
+    print(f"[resume] {marker_channel}: regenerating {len(stale)} genes → {target_steps} steps (keeping anchors)")
     return precompute_marker(grain="geneKO", targets=stale, marker_channel=marker_channel,
                              channel=channel, ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT,
                              control="NTC", fluor_rank_parquet=frp, n_cells=40, invert_anchors=True,
-                             w=1.5, force=True, v5_score=True)
+                             w=1.5, force=True, v5_score=True, ddim_steps=target_steps)
 
 
 def build_phase_anchor():

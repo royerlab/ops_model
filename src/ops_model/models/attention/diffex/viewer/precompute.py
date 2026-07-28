@@ -159,7 +159,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         xT = {c: _ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True) for c in cells}
         print(f"[invert] anchored xT via guided DDIM inversion (w={w}) for {len(cells)} cell(s)")
     else:
-        xT = {c: torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev) for c in cells}
+        xT = {c: torch.randn(1, 1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev) for c in cells}
 
     v5ctx = None                                             # inline v5 SetTransformer scoring (reuses gemb; no re-decode)
     if v5_score:
@@ -249,6 +249,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         meta = {"grain": grain, "target": tgt, "modality": modality,
                 "control": None if anchor == "NTC" else control,
                 "marker_channel": marker_channel, "channel": channel, "slug": slug, "w": w,
+                "ddim_steps": cfg.ddim_steps,   # stamp step count so resume can tell 50- vs 100-step frames apart
                 "alphas": al, "gap": gap, "n_cells": ncell, "has_scores": scores is not None,
                 "has_scores_v5": v5d is not None,
                 "has_real": True, "real_dir": f"{modality}/_anchors/{anchor}",
