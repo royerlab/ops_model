@@ -84,7 +84,8 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                       device="cuda", upsize=256, score=True, batch=48, n_workers=8,
                       load_workers=12, n_per_class=1000,
                       accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
-                      v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True):
+                      v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True,
+                      save_gemb=False, skip_webp=False, webp_compare=False, cell_range=None, ddim_steps=None):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -92,6 +93,8 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     dev = torch.device(device if torch.cuda.is_available() else "cpu")
     cfg = DirConfig(grain=grain, target=targets[0], control=control, device=device)
     cfg.num_workers = load_workers
+    if ddim_steps:
+        cfg.ddim_steps = ddim_steps                                      # override DDIM step count (inversion+sampling fidelity)
     if ckpt: cfg.diffae_ckpt = ckpt
     if marker_channel: cfg.marker_channel = marker_channel
     if channel: cfg.channel = channel
@@ -139,6 +142,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         np.savez(acache, ctrl_embs=ctrl_embs, mu_ctrl=mu_ctrl, anchor_imgs=real)
         print(f"[cache] control embs -> {acache}  {ctrl_embs.shape}")
     ncell = min(n_cells, len(ctrl_embs))
+    cells = list(range(ncell)) if cell_range is None else [c for c in range(cell_range[0], min(cell_range[1], ncell))]
     z0 = torch.as_tensor(ctrl_embs[:ncell], dtype=torch.float32, device=dev)
 
     diffae = load_diffae(cfg, dev)
@@ -151,12 +155,10 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             raise RuntimeError(f"invert_anchors=True but no lossless anchor_imgs in {acache}; pre-build the "
                                f"anchor cache first (lossy real.webp inversion is disabled).")
         x0a = torch.as_tensor(anchor_imgs[:ncell], dtype=torch.float32, device=dev)
-        xT = torch.cat([_ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
-                        for c in range(ncell)], 0)
-        print(f"[invert] anchored xT via guided DDIM inversion (w={w})")
+        xT = {c: _ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True) for c in cells}
+        print(f"[invert] anchored xT via guided DDIM inversion (w={w}) for {len(cells)} cell(s)")
     else:
-        xT = torch.stack([torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev)
-                          for c in range(ncell)])
+        xT = {c: torch.randn(1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev) for c in cells}
 
     v5ctx = None                                             # inline v5 SetTransformer scoring (reuses gemb; no re-decode)
     if v5_score:
@@ -175,7 +177,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             print(f"[done] {modality}/{grain}/{slug}"); done += 1; continue
         # direction cache: (d_vec, gap) is CellDINO-derived + ckpt-independent → gather once, reuse
         dcache = Path(out_root) / _ASSETS / "_directions" / modality / grain / f"{slug}.npz"
-        if not force and dcache.exists():
+        if dcache.exists() and (cell_range is not None or not force):   # direction is ckpt-independent → chunks always reuse
             z = np.load(dcache); d_vec = z["d_vec"]; gap = float(z["gap"]); lr_w = z["lr_w"]; lr_b = float(z["lr_b"])
             print(f"[cache] direction <- {dcache}")
         else:
@@ -191,9 +193,9 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
         fixed_dir = torch.as_tensor(d_vec, dtype=torch.float32, device=dev)[None]
 
         conds, xts, keys = [], [], []
-        for c in range(ncell):
+        for c in cells:
             for ai, a in enumerate(al):
-                conds.append(z0[c:c + 1] + (a * gap) * fixed_dir); xts.append(xT[c:c + 1]); keys.append((c, ai))
+                conds.append(z0[c:c + 1] + (a * gap) * fixed_dir); xts.append(xT[c]); keys.append((c, ai))
         gen = np.empty((ncell, A, H, H), np.float32)
         for i0 in range(0, len(conds), batch):
             cb = torch.cat(conds[i0:i0 + batch], 0); xb = torch.cat(xts[i0:i0 + batch], 0)
@@ -201,11 +203,11 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             for j, (c, ai) in enumerate(keys[i0:i0 + batch]):
                 gen[c, ai] = outb[j]
         scores, v5d, gemb = None, None, None
-        if score or v5ctx is not None:
+        if (score or v5ctx is not None or save_gemb) and cell_range is None:   # gemb/scores are whole-target → skip for cell chunks
             gemb = embed_crops(gen.reshape(-1, 1, H, H).astype(np.float32), cfg, cache_path=None)
-        if score:
+        if score and cell_range is None:
             scores = (1.0 / (1.0 + np.exp(-(gemb @ lr_w + lr_b)))).reshape(ncell, A)
-        if v5ctx is not None:
+        if v5ctx is not None and cell_range is None:
             try:
                 adir.mkdir(parents=True, exist_ok=True)   # scores_v5.json is written before the frame loop creates adir
                 _vm, _vg2i, _vci, _vrun, _score_embs = v5ctx
@@ -216,12 +218,31 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             except Exception as e:
                 print(f"[v5score ERR] {tgt}: {repr(e)[:120]}")
 
-        fp = ThreadPoolExecutor(max_workers=n_workers)
-        for c in range(ncell):
-            cdir = adir / f"cell{c}"; cdir.mkdir(parents=True, exist_ok=True)
-            for ai in range(A):
-                fp.submit(_save_webp, cdir / f"frame_{ai:02d}.webp", gen[c, ai], upsize)
-        fp.shutdown(wait=True)
+        if save_gemb and cell_range is None:             # persist the in-memory float CellDINO embeddings (no webp round-trip)
+            adir.mkdir(parents=True, exist_ok=True)
+            out = {"gemb": gemb.reshape(ncell, A, -1).astype(np.float32),
+                   "alphas": np.asarray(al, np.float32), "target": tgt, "ncell": ncell}
+            if webp_compare:                             # ALSO embed the SAME frames after an 8-bit webp round-trip
+                import io                                 # only the α we compare (0 and 3) → ~8× faster than all 17
+                cmp_ais = [ai for ai in (8, 14) if ai < A]
+                def _rt(arr):
+                    u8 = (np.clip((arr + 1) / 2, 0, 1) * 255).astype(np.uint8)
+                    b = io.BytesIO(); Image.fromarray(u8).resize((upsize, upsize), Image.BILINEAR).save(b, "webp", quality=90)
+                    b.seek(0); return np.asarray(Image.open(b).convert("L"), np.float32) / 255.0 * 2 - 1
+                gw = np.stack([_rt(gen[c, ai]) for c in range(ncell) for ai in cmp_ais])[:, None].astype(np.float32)
+                gwe = embed_crops(gw, cfg, cache_path=None).reshape(ncell, len(cmp_ais), -1)
+                full = np.zeros((ncell, A, gwe.shape[-1]), np.float32)
+                for j, ai in enumerate(cmp_ais):
+                    full[:, ai, :] = gwe[:, j, :]
+                out["gemb_webp"] = full.astype(np.float32); out["gemb_webp_ais"] = np.asarray(cmp_ais)
+            np.savez(adir / "gemb.npz", **out)
+        if not skip_webp:
+            fp = ThreadPoolExecutor(max_workers=n_workers)
+            for c in cells:
+                cdir = adir / f"cell{c}"; cdir.mkdir(parents=True, exist_ok=True)
+                for ai in range(A):
+                    fp.submit(_save_webp, cdir / f"frame_{ai:02d}.webp", gen[c, ai], upsize)
+            fp.shutdown(wait=True)
         if scores is not None:
             (adir / "scores.json").write_text(json.dumps({"alphas": al, "scores": np.round(scores, 3).tolist()}))
         meta = {"grain": grain, "target": tgt, "modality": modality,
