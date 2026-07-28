@@ -217,7 +217,7 @@ def render_ntc_pair(cell=1, ref_gene="FANCC", out_dir=None):
 
 
 def render_composed(alphas, cell=1, level=4, crop=256, ppu=5600, embedding="phate", out_dir=None,
-                    bg="white", stretch=True, marks=True):
+                    bg="white", stretch=True, marks=True, channel="phase", stained_dir=None, assets="viewer_assets"):
     """EXACTLY reproduce the viewer montage layout (same placed-gene set/order, same compute_priority +
     compute_canvas_size + assign_cells_to_grid grid-snapped placement, crop 256 / ppu 5600), then overlay
     the added features: per-cell leiden borders, crisp gene labels, and one correct 40S/60S member box.
@@ -234,7 +234,7 @@ def render_composed(alphas, cell=1, level=4, crop=256, ppu=5600, embedding="phat
     perts = ann.obs["perturbation"].astype(str).values
     leiden = (ann.obs[LEIDEN].astype(str).values if LEIDEN in ann.obs else np.array([""] * len(perts)))
     ebi = (ann.obs["ebi_complex"].astype(str).values if "ebi_complex" in ann.obs else np.array([""] * len(perts)))
-    va = f"{MOUT}/viewer_assets/phase/geneKO"
+    va = f"{MOUT}/{assets}/phase/geneKO"       # phase-frame source (also defines the placed-gene layout for all channels)
     al = list(VIEWER_ALPHAS); a0 = int(np.argmin([abs(x) for x in al]))
 
     # placed-gene set/order EXACTLY as montage_from_cache: real genes with cache, then NTC nodes
@@ -267,22 +267,37 @@ def render_composed(alphas, cell=1, level=4, crop=256, ppu=5600, embedding="phat
     fill = 0 if bg == "black" else 255
     for a in alphas:
         ai = int(np.argmin([abs(x - a) for x in al]))
-        canv = np.full((Hc, Wc), fill, np.uint8)
+        canv = (np.full((Hc, Wc), fill, np.uint8) if channel == "phase"
+                else np.full((Hc, Wc, 3), 0 if channel == "__allmarkers__" else 255, np.uint8))  # allmarkers: black RGB (fluor merge); single marker: white + magma
         info = []
         for sidx, (gr, gc) in zip(selected, positions):
             gi = order[sidx]; g = perts[gi]; is_ntc = g.startswith("NTC")
-            p = f"{va}/{ntc_ref if is_ntc else slugify(g)}/cell{cell}/frame_{(a0 if is_ntc else ai):02d}.webp"
+            if channel == "phase":
+                p = f"{va}/{ntc_ref if is_ntc else slugify(g)}/cell{cell}/frame_{(a0 if is_ntc else ai):02d}.webp"
+            elif channel == "__allmarkers__":                     # pre-composited RGB 42-marker merge (flat dir)
+                p = f"{stained_dir}/{'__NTC_c%d' % cell if is_ntc else slugify(g) + '_c%d_a%g' % (cell, a)}.webp"
+            else:                                                 # virtually-stained single marker: per-marker subdir
+                p = (f"{stained_dir}/{channel}/__NTC_c{cell}.webp" if is_ntc
+                     else f"{stained_dir}/{channel}/{slugify(g)}_c{cell}_a{a:g}.webp")
             if not os.path.exists(p):
                 continue
-            im = np.asarray(Image.open(p).convert("L"))[:crop, :crop]
-            if stretch:
-                im = _stretch(im)                                 # match the built montage's punchy contrast
             yy, xx = int((gr - r0) * crop), int((gc - c0) * crop)
-            canv[yy:yy + crop, xx:xx + crop] = im
+            if channel == "__allmarkers__":                       # already RGB (unique hue per marker) → place directly
+                canv[yy:yy + crop, xx:xx + crop] = np.asarray(Image.open(p).convert("RGB"))[:crop, :crop]
+            else:
+                im = np.asarray(Image.open(p).convert("L"))[:crop, :crop]
+                if stretch:
+                    im = _stretch(im)                             # match the built montage's punchy contrast
+                if channel == "phase":
+                    canv[yy:yy + crop, xx:xx + crop] = im
+                else:                                             # magma-map the fluor tile, composite onto white
+                    canv[yy:yy + crop, xx:xx + crop] = (plt.get_cmap("magma")(im / 255.0)[..., :3] * 255).astype(np.uint8)
             info.append((xx, yy, "NTC" if is_ntc else g, leiden[gi], ebi[gi], is_ntc, gi))
 
         fig = plt.figure(figsize=(Wc / dpi, Hc / dpi), dpi=dpi, facecolor=bg)
-        ax = fig.add_axes([0, 0, 1, 1]); ax.imshow(canv, cmap="gray", vmin=0, vmax=255, aspect="auto"); ax.axis("off")
+        ax = fig.add_axes([0, 0, 1, 1])
+        (ax.imshow(canv, cmap="gray", vmin=0, vmax=255, aspect="auto") if channel == "phase"
+         else ax.imshow(canv, aspect="auto")); ax.axis("off")
         fs = crop * 0.135 / dpi * 72
         for xx, yy, gname, lv, _e, is_ntc, _gi in info:           # thin per-cell leiden border + matching label
             col = "#111" if is_ntc else lut.get(lv, (0.7, 0.7, 0.7, 1))
