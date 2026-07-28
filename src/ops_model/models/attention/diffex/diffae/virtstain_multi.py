@@ -132,7 +132,7 @@ def train_multi(X, E, P, M, cfg, out_dir, epochs, batch, device):
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); ema_up()
             tot += float(loss) * x.shape[0]
         tot /= len(loader.dataset)
-        torch.save({"model": model.state_dict(), "ema": ema.state_dict(), "opt": opt.state_dict(), "epoch": ep}, state)
+        torch.save({"model": model.state_dict(), "ema": ema.state_dict(), "opt": opt.state_dict(), "epoch": ep, "loss": tot}, state)
         if (ep + 1) % 10 == 0 or ep == epochs - 1:
             torch.save(ema.state_dict(), out / "diffae_best.pt")
         print(f"epoch {ep:03d}: loss={tot:.4f}", flush=True)
@@ -141,16 +141,17 @@ def train_multi(X, E, P, M, cfg, out_dir, epochs, batch, device):
 
 
 @torch.no_grad()
-def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, per_marker=1):
-    """Per-marker held-out-ish montage: for each kept marker, sample the marker from phase + marker-id,
-    Pearson(pred, real). Rows = markers, cols = phase | pred | real."""
-    out = Path(out_dir); (out / "eval").mkdir(parents=True, exist_ok=True)
+def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, n_train=None, per_marker=1, eval_name="eval"):
+    """Per-marker montage: for each kept marker, sample the marker from phase + marker-id, Pearson(pred, real).
+    HORIZONTAL multi-section layout — markers packed across (PER per section), wrapping into stacked sections
+    so the figure stays compact instead of one very tall/wide strip; each marker = a phase/pred/real column.
+    Title carries epoch, train loss, #cells trained on, and overall mean Pearson."""
+    out = Path(out_dir); (out / eval_name).mkdir(parents=True, exist_ok=True)
     H = cfg.crop_size
     import matplotlib
     matplotlib.use("Agg"); matplotlib.rcParams["pdf.fonttype"] = 42
     import matplotlib.pyplot as plt
-    import matplotlib.patheffects as pe
-    rowspecs, metrics = [], {}
+    rowspecs = []
     for mid, (_, mc, _) in enumerate(kept):
         idx = np.where(M == mid)[0][-per_marker:]                 # tail cells (least likely in early SGD)
         for i in idx:
@@ -160,26 +161,39 @@ def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, per_marker=1):
             ci = torch.as_tensor(P[i:i + 1], dtype=torch.float32, device=dev)
             mk = torch.as_tensor([mid], dtype=torch.long, device=dev)
             pred = _sample_marker(ema, xT, e, ci, mk, cfg, dev).cpu().numpy()[0, 0]
-            r = _pearson(pred, X[i, 0])
-            rowspecs.append((mc.split("_")[0][:14], P[i, 0], pred, X[i, 0], r))
-        metrics.setdefault(mc, []).append(None)
-    r_by = {}
-    fig, ax = plt.subplots(len(rowspecs), 3, figsize=(4.6, 1.5 * len(rowspecs)), squeeze=False)
-    for row, (name, ph, pr, re, r) in enumerate(rowspecs):
-        for c, (img, cm) in enumerate([(ph, "gray"), (pr, "magma"), (re, "magma")]):
-            ax[row, c].imshow(img, cmap=cm, vmin=-1, vmax=1); ax[row, c].set_xticks([]); ax[row, c].set_yticks([])
-        ax[row, 0].set_ylabel(name, fontsize=7)
-        ax[row, 1].text(0.04, 0.96, f"r={r:.2f}", transform=ax[row, 1].transAxes, fontsize=7, color="white",
-                        va="top", path_effects=[pe.withStroke(linewidth=1.5, foreground="black")])
-        r_by[name] = r
-    for c, t in enumerate(["phase", "predicted", "real"]):
-        ax[0, c].set_title(t, fontsize=9)
-    fig.suptitle(f"multi-marker virtual staining — {len(kept)} markers, one model", fontsize=10)
-    fig.tight_layout(); fig.savefig(out / "eval" / "multi_montage.png", dpi=140, bbox_inches="tight"); plt.close(fig)
-    (out / "eval" / "multi_metrics.json").write_text(json.dumps(
-        {"n_markers": len(kept), "mean_pearson": round(float(np.mean(list(r_by.values()))), 3),
-         "per_marker_pearson": {k: round(v, 3) for k, v in r_by.items()}}, indent=2))
-    print(f"[eval] {len(kept)} markers, mean Pearson {np.mean(list(r_by.values())):.3f} -> {out/'eval'/'multi_montage.png'}")
+            rowspecs.append((mc.split("_")[0][:14], P[i, 0], pred, X[i, 0], _pearson(pred, X[i, 0])))
+    r_by = {name: r for name, _, _, _, r in rowspecs}
+    mean_r = float(np.mean(list(r_by.values()))) if r_by else 0.0
+
+    n = len(rowspecs)
+    NSEC = 3 if n > 16 else 1                                     # ~3 long horizontal sections for the full panel
+    PER = max(1, -(-n // NSEC))                                   # markers/section (ceil) → long rows
+    nb = -(-n // PER)
+    fig, ax = plt.subplots(nb * 3, PER, figsize=(PER * 1.05, nb * 3 * 1.12), squeeze=False)
+    for r_ in range(nb * 3):                                      # hide all, then fill the used cells
+        for c_ in range(PER):
+            ax[r_][c_].set_xticks([]); ax[r_][c_].set_yticks([]); ax[r_][c_].set_visible(False)
+    for k, (name, ph, pr, re, rr) in enumerate(rowspecs):
+        band, col = divmod(k, PER); r0 = band * 3
+        for j, (img, cm) in enumerate([(ph, "gray"), (pr, "magma"), (re, "magma")]):
+            a = ax[r0 + j][col]; a.set_visible(True)
+            a.imshow(img, cmap=cm, vmin=-1, vmax=1, aspect="auto"); a.set_xticks([]); a.set_yticks([])
+        ax[r0][col].set_title(f"{name}  r={rr:.2f}", fontsize=6, pad=1)
+    for band in range(nb):                                        # phase/pred/real labels on the left of each section
+        for j, lbl in enumerate(["phase", "pred", "real"]):
+            a = ax[band * 3 + j][0]; a.set_visible(True); a.set_ylabel(lbl, fontsize=7, rotation=90, labelpad=1)
+    ncell = int(n_train) if n_train is not None else int(len(X))
+    ep = f"{epoch}" if epoch is not None else "?"
+    ls = f"{loss:.4f}" if loss is not None else "—"
+    fig.suptitle(f"Multi-marker virtual staining (phase → fluorescent marker) — {len(kept)} live markers, one model\n"
+                 f"epoch {ep}  ·  train loss {ls}  ·  {ncell:,} cells trained  ·  overall Pearson r = {mean_r:.3f}",
+                 fontsize=11)
+    fig.subplots_adjust(wspace=0.02, hspace=0.16, top=0.94)
+    fig.savefig(out / eval_name / "multi_montage.png", dpi=150, bbox_inches="tight"); plt.close(fig)
+    (out / eval_name / "multi_metrics.json").write_text(json.dumps(
+        {"n_markers": len(kept), "epoch": epoch, "loss": loss, "n_train": ncell,
+         "mean_pearson": round(mean_r, 3), "per_marker_pearson": {k: round(v, 3) for k, v in r_by.items()}}, indent=2))
+    print(f"[eval] {len(kept)} markers, epoch {ep}, mean Pearson {mean_r:.3f} -> {out/eval_name/'multi_montage.png'}")
 
 
 def run(cap=2500, epochs=120, batch=48, device="cuda"):
@@ -189,12 +203,13 @@ def run(cap=2500, epochs=120, batch=48, device="cuda"):
     cfg = DiffAEConfig(spatial_cond=True, n_markers=len(kept), device=device, epochs=epochs, batch_size=batch)
     dev = torch.device(device if torch.cuda.is_available() else "cpu")
     ema = train_multi(X, E, P, M, cfg, OUT, epochs, batch, device)
+    st = torch.load(Path(OUT) / "train_state.pt", map_location="cpu")
     (Path(OUT) / "markers.json").write_text(json.dumps([mc for _, mc, _ in kept], indent=2))
-    eval_multi(ema, X, E, P, M, kept, cfg, OUT, dev)
+    eval_multi(ema, X, E, P, M, kept, cfg, OUT, dev, epoch=st.get("epoch"), loss=st.get("loss"), n_train=int(len(X)))
     return {"n_markers": len(kept), "n_crops": int(len(X))}
 
 
-def eval_only(cap=2500, batch=48, device="cuda"):
+def eval_only(cap=2500, batch=48, device="cuda", subdir="eval"):
     """Produce the eval montage/metrics from the CURRENT checkpoint (train_state.pt EMA, newest epoch) without
     finishing training — caches make the load fast. Numbers are a floor (model still undertrained)."""
     X, E, P, M, kept = load_multi(markers_list(), cap, f"{OUT}/cache")
@@ -203,8 +218,14 @@ def eval_only(cap=2500, batch=48, device="cuda"):
     ema = DiffAE(cfg).to(dev).eval()
     st = torch.load(Path(OUT) / "train_state.pt", map_location=dev)
     ema.load_state_dict(st["ema"]); print(f"[eval-only] loaded EMA @ epoch {st['epoch']}")
+    loss = st.get("loss")
+    if loss is None or (isinstance(loss, float) and loss != loss):   # missing/NaN → read latest from the train log
+        import glob, os, re
+        for f in sorted(glob.glob("/hpc/mydata/gav.sturm/ops_mono/slurm_logs/diffae/*/*.out"), key=os.path.getmtime)[::-1][:8]:
+            m = re.findall(r"epoch \d+: loss=([\d.]+)", open(f).read())
+            if m: loss = float(m[-1]); break
     (Path(OUT) / "markers.json").write_text(json.dumps([mc for _, mc, _ in kept], indent=2))
-    eval_multi(ema, X, E, P, M, kept, cfg, OUT, dev)
+    eval_multi(ema, X, E, P, M, kept, cfg, OUT, dev, epoch=st["epoch"], loss=loss, n_train=int(len(X)), eval_name=subdir)
     return {"epoch": st["epoch"], "n_markers": len(kept)}
 
 
