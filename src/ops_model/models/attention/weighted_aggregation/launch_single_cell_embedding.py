@@ -40,6 +40,9 @@ def main() -> None:
     shard_dir = out / "shards"
     shard_dir.mkdir(parents=True, exist_ok=True)
 
+    # Derive a per-run slug for SLURM job names (from out-dir basename).
+    slug = out.name.replace("single_cell_embedding_ebifb_", "sc_")
+
     # -------- Phase 1: parallel gather ------------------------------------
     if not args.skip_gather:
         h5ads = sorted(V5_PER_EXP.glob("*.h5ad"))
@@ -54,15 +57,15 @@ def main() -> None:
 
         res = submit_parallel_jobs(
             jobs_to_submit=jobs,
-            experiment="sc_embed_ebifb_gather",
+            experiment=f"{slug}_gather",
             slurm_params={
                 "timeout_min": 60,
                 "cpus_per_task": 4,
                 "mem_gb": 48,
                 "slurm_partition": "cpu",
             },
-            log_dir="single_cell_embed_gather",
-            manifest_prefix="gather",
+            log_dir=f"{slug}_gather",
+            manifest_prefix=f"{slug}_gather",
             wait_for_completion=True,
         )
         if not res.get("all_completed", False):
@@ -92,7 +95,7 @@ def main() -> None:
         slurm_params["slurm_gres"] = "gpu:1"
     submit_parallel_jobs(
         jobs_to_submit=[{
-            "name": "embed",
+            "name": f"{slug}_embed",
             "func": embed,
             "kwargs": {
                 "out_dir": out,
@@ -107,10 +110,10 @@ def main() -> None:
                 "ntc_normalize": args.ntc_normalize,
             },
         }],
-        experiment="sc_embed_ebifb_embed",
+        experiment=f"{slug}_embed",
         slurm_params=slurm_params,
-        log_dir="single_cell_embed_embed",
-        manifest_prefix="embed",
+        log_dir=f"{slug}_embed",
+        manifest_prefix=f"{slug}_embed",
         wait_for_completion=False,
     )
 
