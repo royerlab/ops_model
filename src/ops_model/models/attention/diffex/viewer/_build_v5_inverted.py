@@ -19,12 +19,13 @@ from . import catalog as C
 from ..classifier.config import slugify
 from .precompute import precompute_marker
 
-FRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor/geneKO"   # rankings stay in v5 (read-only source)
+FRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor_shap/geneKO"   # NEW shap_screen rankings (robust bin-size top-acc); old at _rankings/fluor/geneKO_OLD_qualifying backup
 # OUTPUT tree: a FRESH dir so force=False gives skip-done resume (timeouts harmless) without clobbering the old
 # non-inverted v5 traversals. _directions + each <mod>/_anchors are SYMLINKED back to v5 (setup_v5inv below), so
 # the 11,219 ckpt/w-independent directions + prebuilt lossless anchors are reused with no re-gather. Merge into
 # viewer_assets_v5 when complete.
 _V5 = "viewer_assets_v5_inv"
+_V5EMB = "viewer_assets_v5_inv_emb"    # embeddings-only tree: CellDINO of float frames, no webp (parallel to _V5)
 
 
 def _use_v5():
@@ -61,6 +62,32 @@ def build_marker(d, marker_channel, channel):
 CFRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor/complex"
 SEL25 = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals/ntc_accanchor_selected25.csv"
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
+
+
+def resume_marker(d, marker_channel, channel):
+    """Finish a marker whose full build timed out: KEEP the fresh anchors (ctrl.npz) and regenerate ONLY the
+    genes still stale from the previous build — meta.json older than ctrl.npz (this run's anchor gather) or
+    missing. force=True on that subset overwrites the stale traversals; fresh (this-run) genes are skipped."""
+    frp = f"{FRP_DIR}/{slugify(marker_channel)}.parquet"
+    if not os.path.exists(frp):
+        return f"skip {marker_channel}: no fluor_rank_parquet"
+    base = Path(C.OUT) / _V5 / slugify(marker_channel)
+    ctrl = base / "_anchors" / "NTC" / "ctrl.npz"
+    if not ctrl.exists():
+        return build_marker(d, marker_channel, channel)     # no anchors yet → full build
+    cutoff = ctrl.stat().st_mtime
+    stale = []
+    for g in _genes_for(frp):
+        m = base / "geneKO" / slugify(g) / "meta.json"
+        if not m.exists() or m.stat().st_mtime < cutoff:
+            stale.append(g)
+    if not stale:
+        return {"marker": marker_channel, "stale": 0, "note": "already fully fresh"}
+    print(f"[resume] {marker_channel}: regenerating {len(stale)} stale/missing genes (keeping fresh anchors)")
+    return precompute_marker(grain="geneKO", targets=stale, marker_channel=marker_channel,
+                             channel=channel, ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=C.OUT,
+                             control="NTC", fluor_rank_parquet=frp, n_cells=40, invert_anchors=True,
+                             w=1.5, force=True, v5_score=True)
 
 
 def build_phase_anchor():
@@ -100,6 +127,57 @@ def build_phase(grain, targets):
     _use_v5()
     return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
                              control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=False, v5_score=True)
+
+
+def _use_v5emb():
+    os.environ["OPS_DIFFEX_ASSETS"] = _V5EMB
+    from . import precompute as P
+    P._ASSETS = _V5EMB
+    return _V5EMB
+
+
+def setup_v5inv_emb():
+    """Embeddings-only tree: symlink _directions + phase/_anchors from viewer_assets_v5 so directions and the
+    45-cell lossless phase anchor are reused (no re-gather). Traversal dirs written fresh; we save gemb.npz only."""
+    v5 = Path(C.OUT) / "viewer_assets_v5"
+    emb = Path(C.OUT) / _V5EMB
+    emb.mkdir(parents=True, exist_ok=True)
+    if not (emb / "_directions").exists():
+        (emb / "_directions").symlink_to(v5 / "_directions")
+    (emb / "phase").mkdir(parents=True, exist_ok=True)
+    if not (emb / "phase" / "_anchors").exists():
+        (emb / "phase" / "_anchors").symlink_to(v5 / "phase" / "_anchors")
+    print(f"[v5inv-emb] setup {emb}: _directions + phase/_anchors symlinked from v5")
+
+
+def build_phase_embed(grain, targets):
+    """Re-decode the inverted phase traversals and save the in-memory float CellDINO embeddings (gemb.npz),
+    NO webp — the webp viewer assets come from the parallel _V5 run. Reuses cached directions + anchors."""
+    _use_v5emb()
+    return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
+                             control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=False,
+                             score=False, v5_score=False, save_gemb=True, skip_webp=True)
+
+
+_V5EMBC = "viewer_assets_v5_inv_emb_cmp"    # test tree: gemb.npz with BOTH float + webp-roundtrip embeddings
+
+
+def build_phase_embed_cmp(grain, targets):
+    """Same as build_phase_embed but also stores the webp-round-tripped embedding (webp_compare=True) so we can
+    compare float-vs-webp mapping on the IDENTICAL inverted frames. Separate tree; force=True (small subset)."""
+    os.environ["OPS_DIFFEX_ASSETS"] = _V5EMBC
+    from . import precompute as P
+    P._ASSETS = _V5EMBC
+    v5 = Path(C.OUT) / "viewer_assets_v5"; emb = Path(C.OUT) / _V5EMBC
+    emb.mkdir(parents=True, exist_ok=True)
+    if not (emb / "_directions").exists():
+        (emb / "_directions").symlink_to(v5 / "_directions")
+    (emb / "phase").mkdir(parents=True, exist_ok=True)
+    if not (emb / "phase" / "_anchors").exists():
+        (emb / "phase" / "_anchors").symlink_to(v5 / "phase" / "_anchors")
+    return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
+                             control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=True,
+                             score=False, v5_score=False, save_gemb=True, skip_webp=True, webp_compare=True)
 
 
 def phase_test(grain, targets):
