@@ -47,6 +47,7 @@
       <select id="target-sort" data-seg class="mini" title="list order">
         <option value="map" selected>by RANK</option>
         <option value="alpha">A–Z</option>
+        <option value="setacc" title="Selected marker's SetTransformer set-accuracy (top1 @ 100 cells; phase for Phase) — higher = more distinctive">by SET ACC</option>
       </select>
     </label>
     <div class="combo">
@@ -166,6 +167,15 @@
           <option value="live" title="cache frames, no build">Live</option>
         </select>
       </label>
+      <button id="m-vs" class="verbtn" title="Virtually stain the phase-traversal cells into the selected marker (VS model, cell 1 · α scrubbable). Pick markers in the top tab to switch channel.">Virtual staining</button>
+      <label>Overlay
+        <div class="combo">
+          <input id="m-ovsel" type="text" placeholder="off" autocomplete="off" title="Overlay a virtually-stained marker (or all 42 merged) on top of phase. Type to search markers."/>
+          <div class="combo-list hidden" id="m-ovsel-list"></div>
+        </div>
+      </label>
+      <button id="m-phaseoff" class="verbtn" title="Hide the phase base layer — show only the stained overlay">Hide phase</button>
+      <label>Overlay opacity <input id="m-ovlalpha" type="range" min="0" max="1" step="0.05" value="0.55" title="Opacity of the stained overlay over phase (low = phase shows through)"/></label>
       <label>Embedding
         <select id="m-emb" data-seg>
           <option value="umap" selected>UMAP</option>
@@ -311,6 +321,6 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=147"></script>
+<script src="app.js?v=152"></script>
 </body>
 </html>

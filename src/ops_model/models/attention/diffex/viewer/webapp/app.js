@@ -125,7 +125,9 @@ async function boot() {
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
   wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
-  $("target-sort").onchange = () => { state.targetSort = $("target-sort").value; renderTargetList(); $("target-list").classList.remove("hidden"); };
+  $("target-sort").onchange = () => { state.targetSort = $("target-sort").value;
+    const show = () => { renderTargetList(); $("target-list").classList.remove("hidden"); };
+    state.targetSort === "setacc" ? ensureSetacc(show) : show(); };
   $("altanchor").onchange = () => { state.altAnchorsOnly = $("altanchor").checked; refreshTargets(); };
   $("grain").onchange = refreshTargets;
   $("cellcount").onchange = () => { state.cellCount = Math.max(1, +$("cellcount").value | 0); state.page = 0; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
@@ -191,7 +193,8 @@ async function boot() {
     if (view === "pc") loadPC();
     if (view === "top") loadTop();
   });
-  for (let c = 0; c < 20; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; $("m-cell").appendChild(o); }
+  fillCellDropdown();      // per-modality cell count (phase 45, markers 20); refilled on marker change
+  fillOverlayMarkers();    // load the 42 VS marker names into the Overlay dropdown
   $("m-cell").value = 1;   // default NTC cell = 1
   $("m-alpha").value = "5";   // force default α=5 (exaggerated); overrides any browser-restored form value
   const LIVE = () => mont.renderMode === "live";
@@ -203,8 +206,18 @@ async function boot() {
   $("m-alpha").oninput = updateAlphaRead;   // live label while dragging (montage only reloads on release via onchange)
   updateAlphaRead();
   $("m-cell").onchange = () => LIVE() ? liveRefresh() : loadMontage();
+  $("m-vs").onclick = () => {                                // Virtual staining toggle: lock cell 1, tiles renderer (α stays scrubbable)
+    $("m-vs").classList.toggle("active");
+    const vs = vsMode(); $("m-cell").disabled = vs;
+    if (vs) { $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
+    else { ovlSel = "off"; $("m-ovsel").value = "off"; $("m-phaseoff").classList.remove("active"); }   // leaving VS clears overlay
+    loadMontage();
+  };
+  wireCombo("m-ovsel", "m-ovsel-list", renderOverlayList, overlayLabel);   // searchable Overlay picker
+  $("m-phaseoff").onclick = () => { $("m-phaseoff").classList.toggle("active"); loadMontage(); };   // hide/show phase base
   $("m-mode").onchange = () => { setMode($("m-mode").value); if (LIVE()) liveDraw(); };
   $("m-imgalpha").oninput = () => { mont.imgAlpha = +$("m-imgalpha").value; LIVE() ? liveDraw() : applyLayers(); };
+  $("m-ovlalpha").oninput = () => { mont.ovlAlpha = +$("m-ovlalpha").value; applyLayers(); };   // stained-overlay opacity over phase
   $("m-ptalpha").oninput = () => { mont.ptAlpha = +$("m-ptalpha").value; LIVE() ? liveDraw() : drawOverlay(); };
   $("m-tilesize").oninput = () => { mont.tileSize = +$("m-tilesize").value; liveDraw(); };
   $("m-detail").oninput = () => {
@@ -300,7 +313,7 @@ const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology
 };
 // display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
 const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
-const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
+const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ovlAlpha: 0.55, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
 // montage set-score value → {v:0..1 for heat, txt}: P(target) as %, or target rank on the same white→red heat (rank1→red, ≥100→white)
 function saVal(raw) { return mont.setaccMetric === "rank" ? { v: Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, raw)) / 2)), txt: `rank ${raw}` } : { v: raw, txt: `${Math.round(raw * 100)}%` }; }
 const saData = () => mont.setaccMode === "complex" ? (mont.setaccMetric === "rank" ? mont.setaccCxRank : mont.setaccCx) : (mont.setaccMetric === "rank" ? mont.setaccRank : mont.setacc);
@@ -334,35 +347,92 @@ function featColor(gene) {   // gene → its feature value → colormap; missing
 
 function ensureMontage() { if (!mont.osd) loadMontage(); else drawOverlay(); }
 // montage is per-marker: phase (default) or the selected fluor marker's own gene embedding
-function montageBase() { return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`; }
+// montage cell count = how many cells were built per modality: v5 phase = 45 (20 attn + 25 acc), else 20
+function montageCells() { return (ASSET_VER === "v5" && attnModality() === "phase") ? 45 : 20; }
+function fillCellDropdown() {
+  const sel = $("m-cell"), prev = +sel.value || 0, n = montageCells();
+  sel.innerHTML = "";
+  for (let c = 0; c < n; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; sel.appendChild(o); }
+  sel.value = Math.min(prev, n - 1);
+}
+let ovlItems = [{ value: "off", label: "off" }, { value: "__allmarkers__", label: "All markers" }];   // Overlay combo entries
+let ovlSel = "off";                                                                                    // current overlay selection
+function fillOverlayMarkers() {   // load the 42 VS marker names into the Overlay combo (after off / All markers)
+  fetch(`${BASE}_montage_vs/vs_markers.json${NOCACHE}`).then(r => r.ok ? r.json() : []).then(ms => {
+    ovlItems = ovlItems.slice(0, 2).concat(ms.map(m => ({ value: m.slug, label: m.label })));
+  }).catch(() => {});
+}
+const overlayLabel = () => (ovlItems.find(o => o.value === ovlSel) || ovlItems[0]).label;
+function renderOverlayList() {
+  const q = $("m-ovsel").value.trim().toLowerCase(), list = $("m-ovsel-list"); list.innerHTML = "";
+  ovlItems.filter(o => !q || o.label.toLowerCase().includes(q)).slice(0, 60).forEach(o => {
+    const d = document.createElement("div"); d.className = "combo-item" + (o.value === ovlSel ? " sel" : "");
+    d.textContent = o.label; d.onmousedown = (e) => { e.preventDefault(); pickOverlay(o.value); }; list.appendChild(d);
+  });
+}
+function pickOverlay(value) {
+  ovlSel = value;
+  if (value !== "off" && !vsMode()) enterVsMode();                 // choosing an overlay implies VS mode
+  $("m-ovsel").value = overlayLabel(); $("m-ovsel").blur(); $("m-ovsel-list").classList.add("hidden");
+  loadMontage();
+}
+function enterVsMode() { $("m-vs").classList.add("active"); $("m-cell").disabled = true; $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
+function vsMode() { return !!($("m-vs") && $("m-vs").classList.contains("active")); }
+function overlaySel() { return ovlSel; }       // "off" | "__allmarkers__" | marker slug
+function phaseHidden() { return !!($("m-phaseoff") && $("m-phaseoff").classList.contains("active")); }
+function overlayActive() { return vsMode() && overlaySel() !== "off"; }
+function phaseMontageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`; }
+function overlayBase() {   // the stained layer selected in the Overlay dropdown (all-markers merge or a single marker)
+  return `${BASE}_montage_vs/${overlaySel()}_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`;
+}
+function montageBase() {
+  if (overlayActive()) return overlayBase();   // top stained layer (phase base added separately in loadMontage)
+  if (vsMode()) {   // cell 1, α scrubbable. Phase = the input traversal montage; markers → stained tiles at this α
+    if (attnModality() === "phase")
+      return phaseMontageBase();
+    return `${BASE}_montage_vs/${attnModality()}_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`;
+  }
+  return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`;
+}
 
-async function loadMontage() {
-  const base = montageBase();
-  const tj = await fetch(`${base}/tiles.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
-  if (!tj) { $("m-status").textContent = `no embedding montage built for ${state.marker.marker_channel || "Phase"} · ${$("m-emb").value} · cell ${$("m-cell").value} · α${$("m-alpha").value}`; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
-  $("m-status").textContent = `${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
-  $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
-  mont.W = tj.width;
+const osdSrc = (base, tj) => {   // OSD tileSource from a montage base URL + its tiles.json
   const maxLevel = Math.ceil(Math.log2(Math.max(tj.width, tj.height)));
-  const src = { width: tj.width, height: tj.height, tileSize: tj.tileSize, tileOverlap: 0,
+  return { width: tj.width, height: tj.height, tileSize: tj.tileSize, tileOverlap: 0,
     minLevel: maxLevel - (tj.levels.length - 1), maxLevel,
     getTileUrl: (l, x, y) => `${base}/L${maxLevel - l}/${x}_${y}.png` };
+};
+async function loadMontage() {
+  const base = montageBase();                                 // top layer (stained overlay, or the single montage)
+  const tj = await fetch(`${base}/tiles.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!tj) { $("m-status").textContent = `no embedding montage built for ${state.marker.marker_channel || "Phase"} · ${$("m-emb").value} · cell ${$("m-cell").value} · α${$("m-alpha").value}`; if (mont.osd) mont.osd.close(); mont.labels = []; drawOverlay(); return; }
+  // Layers (bottom→top). Overlay mode = phase base (unless hidden) + stained top at the image-opacity slider.
+  // OSD honors per-specifier `opacity` in a tileSources array, so no manual setOpacity/add-item timing needed.
+  const layers = [];
+  if (overlayActive() && !phaseHidden()) {
+    const pj = await fetch(`${phaseMontageBase()}/tiles.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (pj) layers.push({ tileSource: osdSrc(phaseMontageBase(), pj), opacity: 1 });
+  }
+  layers.push({ tileSource: osdSrc(base, tj), opacity: overlayActive() ? mont.ovlAlpha : mont.imgAlpha });   // top = stained overlay (low α so phase shows) / single montage
+  $("m-status").textContent = `${overlayActive() ? (phaseHidden() ? "" : "phase + ") + overlaySel().replace("__allmarkers__", "all markers") + " · " : ""}${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
+  $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
+  mont.W = tj.width;
   const dimKey = `${tj.width}x${tj.height}`;
   if (mont.osd && mont.dimKey && mont.dimKey !== dimKey) { mont.osd.destroy(); mont.osd = null; }  // aspect change (umap↔phate) → full reset, no residue
   mont.dimKey = dimKey;
   const keep = (mont.osd && mont.osd.world.getItemCount()) ? mont.osd.viewport.getBounds() : null;  // preserve viewpoint
   if (!mont.osd) {
-    mont.osd = OpenSeadragon({ id: "osd", tileSources: src, showNavigationControl: false,
+    mont.osd = OpenSeadragon({ id: "osd", tileSources: layers, showNavigationControl: false,
       crossOriginPolicy: false, gestureSettingsMouse: { clickToZoom: false, scrollToZoom: true },
       zoomPerScroll: 1.7, animationTime: 0.25, springStiffness: 9,
       minPixelRatio: mont.detail,                           // level-of-detail (live via Zoom detail slider)
       minZoomImageRatio: 0.4, maxZoomPixelRatio: 8, background: "#000" });
     ["update-viewport", "animation", "animation-finish", "resize"].forEach(ev => mont.osd.addHandler(ev, drawOverlay));
     wireHover();
-  } else { mont.osd.world.removeAll(); mont.osd.open(src); }   // clear old embedding's tiles before loading new
+  } else { mont.osd.close(); mont.osd.open(layers); }        // replace all layers
   mont.osd.addOnceHandler("open", () => {
-    if (keep) mont.osd.viewport.fitBounds(keep, true);         // α/cell switch keeps current pan/zoom
-    mont.osd.world.getItemAt(0).setOpacity(mont.imgAlpha);
+    if (keep) mont.osd.viewport.fitBounds(keep, true);        // α/cell switch keeps current pan/zoom
+    layers.forEach((l, i) => { const it = mont.osd.world.getItemAt(i); if (it) it.setOpacity(l.opacity); });
+    drawOverlay();
   });
   populateColorFields(tj.color_fields || []);
   fetch(`${base}/labels.json${NOCACHE}`).then(r => r.ok ? r.json() : []).then(l => { mont.labels = l; setField(); if (state.view === "montage") focusMontageOnSelection(); }).catch(() => { mont.labels = []; });
@@ -661,7 +731,9 @@ function drawOverlay() {
 }
 
 function applyLayers() {
-  if (mont.osd && mont.osd.world.getItemCount()) mont.osd.world.getItemAt(0).setOpacity(mont.imgAlpha);
+  if (mont.osd && mont.osd.world.getItemCount()) {           // top layer = overlay-opacity (overlay mode) or image-opacity (single); phase base stays opaque
+    mont.osd.world.getItemAt(mont.osd.world.getItemCount() - 1).setOpacity(overlayActive() ? mont.ovlAlpha : mont.imgAlpha);
+  }
   drawOverlay();
 }
 function setMode(m) {                              // preset → set both sliders, then apply
@@ -734,6 +806,7 @@ const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || 
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   refreshTargets();
+  fillCellDropdown();   // phase → 45 cells, markers → 20 (reflect what was built)
   if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage());   // switch to this marker (keeps chosen renderer)
   if (state.view === "pc") loadPC();
 }
@@ -762,14 +835,27 @@ function refreshTargets() {   // marker or grain changed → recompute candidate
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
   else { state.target = null; $("filter").value = ""; rebuild(); }
 }
+let accByMarker = null;   // {markerSlug|"phase": {perturbation: top1_acc@100}} — SetTransformer real-cell set-accuracy per marker
+function ensureSetacc(cb) {
+  if (accByMarker) return cb();
+  fetch(`${BASE}_montage/setacc_bymarker.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).then(j => { accByMarker = j; cb(); }).catch(() => { accByMarker = {}; cb(); });
+}
+function targetAcc(t) {   // selected marker's set-accuracy for this perturbation (higher = more distinctive); -1 if unknown
+  const m = accByMarker && accByMarker[attnModality()];
+  return m && m[t.target] != null ? m[t.target] : -1;
+}
 function renderTargetList() {
   const q = $("filter").value.trim().toLowerCase(), list = $("target-list"); list.innerHTML = ""; let n = 0;
   const arr = state.targetSort === "alpha"          // manifest order is mAP-desc; alpha re-sorts by name
-    ? [...state.targets].sort((a, b) => a.target.localeCompare(b.target)) : state.targets;
+    ? [...state.targets].sort((a, b) => a.target.localeCompare(b.target))
+    : state.targetSort === "setacc"                 // selected marker's set-accuracy (higher first)
+    ? [...state.targets].sort((a, b) => targetAcc(b) - targetAcc(a)) : state.targets;
   arr.forEach(t => {
     if (q && !t.target.toLowerCase().includes(q)) return;
     const d = document.createElement("div"); d.className = "combo-item" + (state.target && t.slug === state.target.slug ? " sel" : "");
-    d.textContent = targetLabel(t); d.onmousedown = (e) => { e.preventDefault(); pickTarget(t.slug); }; list.appendChild(d); n++;
+    d.textContent = targetLabel(t);
+    if (state.targetSort === "setacc") { const a = targetAcc(t); const s = document.createElement("span"); s.className = "ci-sub"; s.textContent = a < 0 ? " —" : ` acc ${a.toFixed(2)}`; d.appendChild(s); }
+    d.onmousedown = (e) => { e.preventDefault(); pickTarget(t.slug); }; list.appendChild(d); n++;
   });
   if (!n) list.innerHTML = '<div class="combo-empty">no matches</div>';
 }
