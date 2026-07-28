@@ -56,10 +56,14 @@ def _real_map(sub):
     return {slugify(l): float(np.mean(v)) for l, v in by.items()}
 
 
-def _collect(sub, allow=None):
+VALID200 = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_valid200/phase"   # 200-cell bag (geneKO only)
+
+
+def _collect(sub, allow=None, base=None):
     """Stack p_target across NTC-anchored traversals in a subdir → (alphas, matrix, names). allow: dir-name set."""
+    base = base or V5
     rows, names, alphas = [], [], None
-    for f in sorted(glob.glob(f"{V5}/{sub}/*/scores_v5.json")):
+    for f in sorted(glob.glob(f"{base}/{sub}/*/scores_v5.json")):
         if "__to__" in f:                       # NTC-anchored only (skip alt-anchor A→B)
             continue
         name = os.path.basename(os.path.dirname(f))
@@ -71,7 +75,7 @@ def _collect(sub, allow=None):
     return np.array(alphas, float), np.array(rows, float), names
 
 
-def _render(series, out_stem, title):
+def _render(series, out_stem, title, overlays=None):
     fig, ax = plt.subplots(figsize=(7.5, 5))
     for sub, allow, label, col in series:
         al, M, names = _collect(sub, allow)
@@ -87,6 +91,14 @@ def _render(series, out_stem, title):
             ax.axhline(rmean, color=col, ls=":", lw=1.8, alpha=0.95, zorder=6, label=f"{label} real @bag20 ({rmean:.2f})")
             ax.axhspan(rmean - rsem, rmean + rsem, color=col, alpha=0.1, lw=0)      # real mean ± SEM band
         print(f"[{out_stem}] {sub}: n={M.shape[0]} peak mean={np.nanmax(mean):.3f} @α={al[np.nanargmax(mean)]:+g} real mean@bag20={reals.mean():.3f}")
+    for sub, allow, label, col, base in (overlays or []):                          # dashed = 200-cell bag (same real ceiling)
+        al, M, names = _collect(sub, allow, base)
+        if not len(M):
+            print(f"no overlay scores for {sub}"); continue
+        mean = np.nanmean(M, 0); sem = np.nanstd(M, 0, ddof=1) / np.sqrt(np.maximum(np.sum(np.isfinite(M), 0), 1))
+        ax.plot(al, mean, "--", color=col, lw=2.5, label=f"{label} (n={M.shape[0]})", zorder=5)
+        ax.fill_between(al, mean - sem, mean + sem, color=col, alpha=0.15, lw=0)
+        print(f"[{out_stem}] OVERLAY {sub}: n={M.shape[0]} peak mean={np.nanmax(mean):.3f} @α={al[np.nanargmax(mean)]:+g}")
     ax.axvline(0, color="0.6", lw=0.8, ls=":")
     ax.set_xlabel("α  (traversal strength; ±1 ≈ control→KD gap)")
     ax.set_ylabel("P(target class)  —  v5 SetTransformer")
@@ -107,7 +119,9 @@ def main():
     # full: all geneKO + all complexes
     _render([("geneKO", None, "geneKO (1K)", "#1f77b4"), ("complex", None, "EBI complexes", "#d62728")],
             "v5_accuracy_vs_alpha_summary" + suf,
-            "Generated-traversal accuracy vs α\n(generated mean ± SEM; dotted = real-cell mean top1_acc @bag20)")
+            "Generated-traversal accuracy vs α\n(generated mean ± SEM; dotted = real-cell mean top1_acc @bag20)",
+            overlays=[("geneKO", None, "geneKO 200-cell bag", "#1f77b4", VALID200),
+                      ("complex", None, "complex 200-cell bag", "#d62728", VALID200)])
     # filtered: high real-accuracy classes (real acc>thr @bag20). Dotted line = real-cell ceiling for that set.
     for thr, stem in [(0.8, "v5_accuracy_vs_alpha_realacc80" + suf), (0.9, "v5_accuracy_vs_alpha_realacc90" + suf)]:
         gk, cx = _geneKO_allow(thr), _complex_allow(thr)
@@ -115,7 +129,9 @@ def main():
         _render([("geneKO", gk, f"geneKO (real acc>{thr} @bag20)", "#1f77b4"),
                  ("complex", cx, f"EBI complex (mean member real acc>{thr})", "#d62728")],
                 stem,
-                f"Generated accuracy vs α — high real-accuracy classes only\n(geneKO real acc>{thr}; complex mean-member real acc>{thr}; @bag20)")
+                f"Generated accuracy vs α — high real-accuracy classes only\n(geneKO real acc>{thr}; complex mean-member real acc>{thr}; @bag20)",
+                overlays=[("geneKO", gk, f"geneKO 200-cell bag (real acc>{thr})", "#1f77b4", VALID200),
+                          ("complex", cx, f"complex 200-cell bag (real acc>{thr})", "#d62728", VALID200)])
 
 
 if __name__ == "__main__":

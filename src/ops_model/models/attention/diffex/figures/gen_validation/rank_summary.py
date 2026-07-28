@@ -26,6 +26,7 @@ BASE = "/hpc/projects/icd.fast.ops/models/diffex"
 OUTDIR = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals/rank_summary"
 os.makedirs(OUTDIR, exist_ok=True)
 ASSETS = "viewer_assets_v5_accpool"   # top-accuracy hand-picked NTC anchors (deployed default)
+OVERLAY = "viewer_assets_valid200"    # 200-cell bag (geneKO only) → dashed overlay line
 GRAINS = {"geneKO": ("geneKO", 1000), "complex": ("complex", 99)}
 RED = "#c0392b"
 REAL = json.load(open(f"{BASE}/viewer_assets_v5/real_acc20.json"))   # real top1_acc@bag20 by asset_dir
@@ -80,6 +81,10 @@ def make_fig(title, fname, errstyle):
                 lab = f"{ftag} — median (IQR)"
             ax.plot(al, c, "-", color=color, lw=3.4, label=lab)
             ax.fill_between(al, lo, hi, color=color, alpha=0.22, lw=0)
+            alo, Mo = collect(OVERLAY, sub, keep)                          # dashed = 200-cell bag (geneKO only)
+            if Mo.size:
+                co = np.nanmean(Mo, 0) if errstyle == "mean_sem" else np.nanmedian(Mo, 0)
+                ax.plot(alo, co, "--", color=color, lw=2.8, label=f"{ftag} — 200-cell bag")
         ax.axvline(0, color="#bbb", lw=1, zorder=0)
         ax.axhline(1, color="#27ae60", lw=1, ls=":", zorder=0)
         ax.set_yscale("log")
@@ -116,6 +121,10 @@ def make_top5_fig(fname):
             ax.plot(al, f1, ":", color=color, lw=3.4, label=f"{ftag} — top-1")
             b5, b1 = int(np.argmax(f5)), int(np.argmax(f1))
             print(f"  {gname:8s} | {ftag:16s} | peak top-5 = {f5[b5]:.0f}% @α={al[b5]:+.1f} | peak top-1 = {f1[b1]:.0f}% @α={al[b1]:+.1f}")
+            alo, Mo = collect(OVERLAY, sub, keep)                          # dashed = 200-cell bag top-5 (geneKO only)
+            if Mo.size:
+                vo = np.isfinite(Mo); f5o = 100 * (vo & (Mo <= 5)).sum(0) / vo.sum(0)
+                ax.plot(alo, f5o, "--", color=color, lw=2.8, label=f"{ftag} — 200-cell bag top-5")
         ax.axvline(0, color="#bbb", lw=1, zorder=0)
         ax.set_ylim(0, 100)
         ax.set_xlabel("traversal α")

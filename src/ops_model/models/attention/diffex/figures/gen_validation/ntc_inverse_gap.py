@@ -114,9 +114,47 @@ def _project(R, G):
     print(f" inverse-α=0 centroid lands : {pg.round(2)}  dist to NTC {norm(pg - ntc2d):.2f}  (old random-xT was 8.43)")
 
 
-def submit():
+CTRL = f"{INV}/phase/_anchors/NTC/ctrl.npz".replace("viewer_assets_v5_inv", "viewer_assets_v5")
+
+
+def webp_ab():
+    """8-bit-webp vs proper-float A/B: embed the SAME 45 real NTC crops (float, from ctrl.npz) two ways —
+    (A) float straight into CellDINO, (B) round-tripped through the traversal's 8-bit _save_webp path —
+    and compare CellDINO cosine. Answers: does saving as a proper (float/zarr) image bring generated closer to real?"""
+    import torch, tempfile  # noqa
+    from ops_model.models.attention.diffex.classifier.celldino_features import embed_crops
+    from ops_model.models.attention.diffex.directions.config import DirConfig
+    from ops_model.models.attention.diffex.viewer.precompute import _save_webp
+    os.makedirs(OUT, exist_ok=True)
+    d = np.load(CTRL, allow_pickle=True)
+    imgs = d["anchor_imgs"].astype(np.float32)                          # (45,1,160,160) float [-1,1]
+    ctrl = d["ctrl_embs"].astype(np.float64)                            # pipeline float-path embeddings
+    cfg = DirConfig(grain="geneKO", target="NTC", device="cuda")
+    A = np.asarray(embed_crops(imgs, cfg, cache_path=None), np.float64)               # (A) float path
+    tmp = tempfile.mkdtemp(); B = []
+    for i in range(len(imgs)):
+        p = f"{tmp}/c{i}.webp"; _save_webp(p, imgs[i, 0], 256)                         # exact traversal 8-bit path
+        B.append(np.asarray(Image.open(p).convert("L"), np.float32) / 255.0 * 2 - 1)
+    B = np.asarray(embed_crops(np.stack(B)[:, None].astype(np.float32), cfg, cache_path=None), np.float64)
+    np.savez(f"{OUT}/webp_ab.npz", A=A, B=B, ctrl=ctrl)
+    _report_ab()
+
+
+def _report_ab():
+    from numpy.linalg import norm
+    d = np.load(f"{OUT}/webp_ab.npz"); A, B, ctrl = d["A"], d["B"], d["ctrl"]
+    cs = lambda U, V: np.array([float(U[i] @ V[i] / (norm(U[i]) * norm(V[i]))) for i in range(len(U))])
+    fw = cs(A, B)
+    print("\n=== 8-bit webp vs proper float (same 45 real NTC cells, CellDINO) ===")
+    print(f" float-path  vs  8bit-webp-path : cosine mean {fw.mean():.4f}  min {fw.min():.4f}  max {fw.max():.4f}")
+    print(f" (sanity) float-path vs pipeline ctrl_embs : mean {cs(A, ctrl).mean():.4f}")
+    print(" → cosine≈1 ⇒ webp is NOT the gap (proper/zarr image won't help; residual is generative/OOD)")
+    print("   cosine notably <1 ⇒ 8-bit webp shifts the embedding; saving as float/zarr would help")
+
+
+def submit(func=run, name="ntc_inverse_gap"):
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-    submit_parallel_jobs([{"name": "ntc_inverse_gap", "func": run, "kwargs": {}}],
+    submit_parallel_jobs([{"name": name, "func": func, "kwargs": {}}],
                          experiment="ntc_inverse_gap",
                          slurm_params={"slurm_partition": "gpu", "slurm_gres": "gpu:1", "cpus_per_task": 8,
                                        "mem_gb": 48, "timeout_min": 60}, log_dir="ntc_inverse_gap",
@@ -127,6 +165,10 @@ if __name__ == "__main__":
     import sys
     if "--analyze" in sys.argv:
         analyze()
+    elif "--report-ab" in sys.argv:
+        _report_ab()
+    elif "--webp" in sys.argv:
+        submit(func=webp_ab, name="ntc_webp_ab")
     elif "--local" in sys.argv:
         run()
     else:
