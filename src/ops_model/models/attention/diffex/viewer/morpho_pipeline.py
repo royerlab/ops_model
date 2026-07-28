@@ -74,11 +74,87 @@ def _nucleus_mask(img):
     return lab == cen
 
 
-def _seg_masked_object(img, tp=MO_PARAMS, nucleus=False):
+def _fit_ellipse_mask(nuc, scale=1.0):
+    """Ovular mask fit to the nucleus's 2nd moments (right centroid/orientation/aspect, NOT a perfect circle),
+    scaled by `scale` (1.0 ≈ nucleus extent; <1 shrinks it). Replaces ragged erosion so perinuclear protrusions
+    of the raw mask are cut off — objects are kept only inside the clean shrunk ellipse."""
+    ys, xs = np.nonzero(nuc)
+    if len(ys) < 10:
+        return nuc
+    cy, cx = ys.mean(), xs.mean()
+    cov = np.cov(np.vstack([ys - cy, xs - cx]))
+    inv = np.linalg.pinv(cov)
+    Y, X = np.mgrid[0:nuc.shape[0], 0:nuc.shape[1]]
+    dy = Y - cy; dx = X - cx
+    md2 = inv[0, 0] * dy * dy + 2 * inv[0, 1] * dy * dx + inv[1, 1] * dx * dx
+    return md2 <= (2.0 * scale) ** 2                        # md2<=4 (scale=1) reproduces the uniform ellipse
+
+
+def _vs_h2b_nucleus_npz(marker_dir, target, grain, out_npz, n_cells, force=False):
+    """VS-predict H2B (nuclear) from each generated phase frame with the all-channel DiffAE, Cellpose-SAM the
+    virtual nucleus, keep the largest (central) object → cache (n_cells, n_alpha, CROP, CROP) uint8 nucleus masks.
+    Cached (masks depend only on the traversal frames). Replaces the Otsu/ellipse nucleus mask with a real one."""
+    import json
+    import numpy as np
+    import torch
+    from PIL import Image
+    if os.path.exists(out_npz) and not force:
+        print(f"[vs-nuc] cache {out_npz}"); return out_npz
+    from ..diffae.config import DiffAEConfig
+    from ..diffae.model import DiffAE
+    from ..classifier.celldino_features import embed_crops
+    from diffusers import DDIMScheduler
+    from cellpose import models as cpm
+    from skimage.transform import resize
+    VOUT = "/hpc/projects/icd.fast.ops/analysis/virtual_staining/multi_marker"
+    dev = torch.device("cuda")
+    markers = json.load(open(f"{VOUT}/markers.json")); h2b = markers.index("chromatin_H2BC21")
+    cfg = DiffAEConfig(spatial_cond=True, n_markers=len(markers), device="cuda"); Hg = cfg.crop_size
+    model = DiffAE(cfg).to(dev).eval(); model.load_state_dict(torch.load(f"{VOUT}/diffae_best.pt", map_location=dev))
+    cp = cpm.CellposeModel(gpu=True)
+    src = f"{CACHE}/{marker_dir}/{grain}/{target}"
+    mp = f"{src}/cell0/meta.json" if os.path.exists(f"{src}/cell0/meta.json") else f"{src}/meta.json"
+    na = len(json.load(open(mp))["alphas"])
+    out = np.zeros((n_cells, na, CROP, CROP), np.uint8)
+
+    @torch.no_grad()
+    def _vs_batch(P, E):                                            # batched DDIM sample of H2B for a whole α strip
+        fwd = DDIMScheduler(num_train_timesteps=cfg.train_timesteps); fwd.set_timesteps(cfg.ddim_steps)
+        emb = torch.as_tensor(E, device=dev); ci = torch.as_tensor(P, device=dev)
+        mk = torch.full((P.shape[0],), h2b, dtype=torch.long, device=dev)
+        c = model.cond(emb, mk); x = torch.randn(P.shape[0], 1, Hg, Hg, device=dev)
+        for t in fwd.timesteps:
+            x = fwd.step(model.denoise(x, t, c, ci), t, x).prev_sample
+        return x.cpu().numpy()[:, 0]
+
+    for ai in range(na):
+        idx, Ps = [], []
+        for c in range(n_cells):
+            f = f"{src}/cell{c}/frame_{ai:02d}.webp"
+            if not os.path.exists(f):
+                continue
+            im = np.asarray(Image.open(f).convert("L").resize((Hg, Hg)), np.float32) / 255.0
+            idx.append(c); Ps.append(im * 2 - 1)
+        if not idx:
+            continue
+        P = np.stack(Ps)[:, None].astype(np.float32)
+        pred = _vs_batch(P, embed_crops(P, cfg))
+        for j, c in enumerate(idx):
+            m = cp.eval(np.clip((pred[j] + 1) / 2, 0, 1), diameter=None, flow_threshold=0.4, cellprob_threshold=0.0)[0]
+            if m.max() > 0:
+                ids, cnt = np.unique(m, return_counts=True); ids, cnt = ids[1:], cnt[1:]
+                m = (m == ids[cnt.argmax()])                        # largest = the central nucleus
+            out[c, ai] = resize(np.asarray(m, float), (CROP, CROP), order=0).astype(np.uint8)
+        print(f"[vs-nuc] {target} α{ai}: {len(idx)} cells", flush=True)
+    np.savez_compressed(out_npz, masks=out)
+    print(f"[vs-nuc] saved {out_npz} {out.shape}"); return out_npz
+
+
+def _seg_masked_object(img, tp=MO_PARAMS, nucleus=False, nucleus_scale=1.0, nucleus_override=None, override_erode=0):
     """MO intensity seg on one 2D crop → int32 labels (fill_holes → CC label → min-size).
-    nucleus=True → constrain to the central nucleus (NPM3 nucleoli within the nucleus)."""
+    nucleus=True → constrain to the nucleus. nucleus_override (a precomputed binary, e.g. VS→Cellpose) is used
+    directly if given (shrunk by override_erode px); else fall back to the Otsu mask fit to an ellipse (nucleus_scale)."""
     from scipy import ndimage as ndi
-    from skimage.morphology import binary_erosion, disk
     from organelle_profiler.organelle_seg.thresholding import apply_intensity_threshold
     binary = apply_intensity_threshold(
         img, method=tp["threshold_method"], threshold_factor=tp.get("threshold_factor", 1.0),
@@ -86,10 +162,17 @@ def _seg_masked_object(img, tp=MO_PARAMS, nucleus=False):
         mo_local_adjust=tp.get("mo_local_adjust", 0.98),
         mo_object_min_area_px=tp.get("mo_object_min_area_px", 100))
     if nucleus:
-        nuc = _nucleus_mask(img)
+        if nucleus_override is not None:
+            nuc = nucleus_override.astype(bool)
+            if override_erode > 0 and nuc.any():
+                from skimage.morphology import binary_erosion, disk
+                nuc = binary_erosion(nuc, disk(override_erode))
+        else:
+            nm = _nucleus_mask(img)
+            nuc = _fit_ellipse_mask(nm, nucleus_scale) if nm.any() else nm
         if not nuc.any():
             return np.zeros(img.shape, np.int32)
-        binary = binary & binary_erosion(nuc, disk(2))
+        binary = binary & nuc
     binary = ndi.binary_fill_holes(binary)
     fp = ndi.generate_binary_structure(binary.ndim, 1)
     objs, _ = ndi.label(binary, structure=fp)
@@ -103,9 +186,10 @@ def _seg_masked_object(img, tp=MO_PARAMS, nucleus=False):
     return objs.astype(np.int32)
 
 
-def _seg_strip_mo(img, n_cells, nucleus=False):
+def _seg_strip_mo(img, n_cells, nucleus=False, nucleus_scale=1.0, nuc_masks=None, vs_erode=0):
     """Run MO per generated crop within the α strip (percentile-normalized per crop, like the standalone
-    _prep_npm3), assembling a strip-wide int32 label array with globally-unique ids."""
+    _prep_npm3), assembling a strip-wide int32 label array with globally-unique ids. nuc_masks (n_cells,CROP,CROP)
+    = precomputed per-crop nucleus overrides (VS→Cellpose) for this α, else the internal Otsu/ellipse mask."""
     Y, W = img.shape
     strip = np.zeros((Y, W), np.int32)
     for c in range(n_cells):
@@ -115,7 +199,8 @@ def _seg_strip_mo(img, n_cells, nucleus=False):
             continue
         lo, hi = np.percentile(crop, [1, 99.5])
         cn = np.clip((crop - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
-        objs = _seg_masked_object(cn, nucleus=nucleus)
+        ov = nuc_masks[c] if nuc_masks is not None else None
+        objs = _seg_masked_object(cn, nucleus=nucleus, nucleus_scale=nucleus_scale, nucleus_override=ov, override_erode=vs_erode)
         m = objs > 0
         if m.any():
             objs[m] += int(strip.max())
@@ -123,18 +208,21 @@ def _seg_strip_mo(img, n_cells, nucleus=False):
     return strip
 
 
-def _run_seg_masked_object(zpath, n_alpha, label_name, nucleus=False):
+def _run_seg_masked_object(zpath, n_alpha, label_name, nucleus=False, nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0):
     """MO seg branch of run_seg: read each α strip (marker=last channel), segment per crop, and write the
-    labels into the mini-zarr via the production label writer so readback/full_features read them unchanged."""
+    labels into the mini-zarr via the production label writer so readback/full_features read them unchanged.
+    vs_nucleus_npz → precomputed VS→Cellpose nucleus masks (n_cells,n_alpha,CROP,CROP) used as per-crop overrides."""
     import zarr
     from ops_utils.io.zarr_labels import _init_organelle_label_array, _update_labels_metadata
     root = zarr.open(zpath, mode="r")
     W = int(np.asarray(root["A/0/0/0"]).shape[-1])
     n_cells = round((W + PAD) / (CROP + PAD))
+    vs_masks = np.load(vs_nucleus_npz)["masks"] if vs_nucleus_npz else None
     out = []
     for ai in range(n_alpha):
         img = np.asarray(root[f"A/{ai}/0/0"][0, -1, 0]).astype(np.float32)   # marker channel = last
-        lab = _seg_strip_mo(img, n_cells, nucleus=nucleus)
+        nm = vs_masks[:, ai] if vs_masks is not None else None
+        lab = _seg_strip_mo(img, n_cells, nucleus=nucleus, nucleus_scale=nucleus_scale, nuc_masks=nm, vs_erode=vs_erode)
         Y, Wx = lab.shape
         _init_organelle_label_array(zpath, f"A/{ai}/0", label_name, shape=(1, 1, 1, Y, Wx))
         store = zarr.open(zpath, mode="r+")
@@ -178,7 +266,61 @@ def build_mini_zarr(marker_dir, target, grain, real_exp, channel_names, n_cells=
     return zpath, na
 
 
-def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None, method=None, label_name=None, mo_nucleus=False):
+def _nucleus_binary(img):
+    """Nucleus binary (blurred Otsu + close + fill), NO central-only restriction — the generated crop is a
+    single masked cell, so ALL components are that cell's nuclei (captures KIF23 multinucleation)."""
+    from skimage.filters import threshold_otsu, gaussian
+    from skimage.morphology import binary_closing, disk
+    from scipy import ndimage as ndi
+    g = gaussian(img, 2); v = g[g > 0]
+    if v.size == 0:
+        return np.zeros(img.shape, bool)
+    nuc = ndi.binary_fill_holes(binary_closing(g > threshold_otsu(v), disk(3)))
+    if nuc.mean() > 0.45:
+        nuc = ndi.binary_fill_holes(binary_closing(g > np.percentile(g, 88), disk(3)))
+    return nuc
+
+
+def _run_seg_nucleus(zpath, n_alpha, label_name, min_area=50):
+    """Nucleus-mask seg branch of run_seg: per α strip, per crop → nucleus binary → CC label (min-size),
+    write labels into the mini-zarr (same writer as the MO branch)."""
+    import zarr
+    from scipy import ndimage as ndi
+    from ops_utils.io.zarr_labels import _init_organelle_label_array, _update_labels_metadata
+    root = zarr.open(zpath, mode="r")
+    W = int(np.asarray(root["A/0/0/0"]).shape[-1])
+    n_cells = round((W + PAD) / (CROP + PAD))
+    out = []
+    for ai in range(n_alpha):
+        img = np.asarray(root[f"A/{ai}/0/0"][0, -1, 0]).astype(np.float32)
+        Y, Wx = img.shape
+        strip = np.zeros((Y, Wx), np.int32)
+        for c in range(n_cells):
+            x0 = c * (CROP + PAD); crop = img[:, x0:x0 + CROP]
+            if crop.max() <= 0:
+                continue
+            lo, hi = np.percentile(crop, [1, 99.5])
+            cn = np.clip((crop - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
+            objs, _ = ndi.label(_nucleus_binary(cn))
+            if objs.max():                                    # drop specks below min_area
+                ids, cnt = np.unique(objs, return_counts=True)
+                small = ids[(ids > 0) & (cnt < min_area)]
+                if small.size:
+                    objs[np.isin(objs, small)] = 0
+                    objs, _ = ndi.label(objs > 0)
+            m = objs > 0
+            if m.any():
+                objs[m] += int(strip.max()); strip[:, x0:x0 + CROP][m] = objs[m]
+        _init_organelle_label_array(zpath, f"A/{ai}/0", label_name, shape=(1, 1, 1, Y, Wx))
+        store = zarr.open(zpath, mode="r+")
+        store[f"A/{ai}/0/labels/{label_name}/0"][0, 0, 0] = strip
+        _update_labels_metadata(zpath, f"A/{ai}/0", label_name)
+        out.append((ai, True, int(strip.max()), label_name, None))
+        print(f"  α_idx {ai}: nucleus n_obj={int(strip.max())} label={label_name}")
+    return out
+
+
+def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None, method=None, label_name=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0):
     """Run the REAL production org-seg on each α position of the mini-zarr (config resolved from the
     real experiment's channel map). `frangi_params` overrides the resolved frangi config (e.g. to switch
     to the ADAPTIVE dynamic threshold on the generated images). Writes labels; returns per-α results.
@@ -187,7 +329,10 @@ def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYN
     os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
     if method == "masked_object":
         return _run_seg_masked_object(f"{base_dir}/{real_exp}/3-assembly/phenotyping_v3.zarr",
-                                      n_alpha, label_name or "organelle_seg", nucleus=mo_nucleus)
+                                      n_alpha, label_name or "organelle_seg", nucleus=mo_nucleus, nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_nucleus_npz, vs_erode=vs_erode)
+    if method == "nucleus":
+        return _run_seg_nucleus(f"{base_dir}/{real_exp}/3-assembly/phenotyping_v3.zarr",
+                                n_alpha, label_name or "nucleus_seg")
     from organelle_profiler.organelle_seg.organelle_segmentation import segment_single_position_channel
     out = []
     for ai in range(n_alpha):
@@ -257,18 +402,21 @@ def readback_cache(marker_dir, target, grain, real_exp, label_name, n_cells, bas
             lc = relabel(_clip_border(lab[:, x0:x0 + CROP]) > 0)             # clip border band, then relabel within crop
             ic = img[:, x0:x0 + CROP]
             rp = [r for r in regionprops(lc, intensity_image=ic) if r.area >= 3]   # border already clipped; just drop tiny
-            rp = rp[:255]                                                     # 8-bit mask cap (index 1..255)
-            remap = {r.label: i + 1 for i, r in enumerate(rp)}                # sequential 1..K for the 8-bit mask
-            mask8 = np.zeros(lc.shape, np.uint8)
+            remap = {r.label: i + 1 for i, r in enumerate(rp)}                # sequential 1..K for the 16-bit mask
+            mask = np.zeros(lc.shape, np.uint16)                              # 16-bit: no 255-object cap (was clipping bottom of dense segs)
             feats = {}
             for r in rp:
-                nl = remap[r.label]; mask8[lc == r.label] = nl
-                d = {"area": float(r.area), "mean_int": float(r.intensity_mean), "ecc": float(r.eccentricity)}
+                nl = remap[r.label]; mask[lc == r.label] = nl
+                per = float(r.perimeter) if r.perimeter else 0.0
+                d = {"area": float(r.area), "area_filled": float(r.area_filled), "mean_int": float(r.intensity_mean),
+                     "ecc": float(r.eccentricity), "extent": float(r.extent), "solidity": float(r.solidity),
+                     "axis_major_length": float(r.axis_major_length), "axis_minor_length": float(r.axis_minor_length),
+                     "circularity": float(4 * np.pi * r.area / (per * per)) if per > 0 else 0.0}   # per-object props for feature-matched overlay
                 if network:
                     d["skel"] = float(skeletonize(lc == r.label).sum())     # per-component branch-length proxy
                 feats[str(nl)] = d                                          # keyed by the mask's pixel value
             cdir = f"{out}/cell{c}"; os.makedirs(cdir, exist_ok=True)
-            Image.fromarray(mask8).save(f"{cdir}/a{ai:02d}_labels.png")     # 8-bit component-index mask (real shape)
+            Image.fromarray(mask).save(f"{cdir}/a{ai:02d}_labels.png")      # 16-bit component-index mask (real shape)
             json.dump(feats, open(f"{cdir}/a{ai:02d}_feats.json", "w"))
             A = [f["area"] for f in feats.values()]; I = [f["mean_int"] for f in feats.values()]
             pc = {"count": len(feats), "total_area": float(np.sum(A) if A else 0),
@@ -572,7 +720,7 @@ def _auto_ref_map(network, channel):
 
 
 def run_target(marker_dir, target, real_exp, marker_channel, store_marker, grain="geneKO", n_cells=6,
-               refs=True, adaptive_mult=0.1, fake_pixel_um=0.065, adaptive=True, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False):
+               refs=True, adaptive_mult=0.1, fake_pixel_um=0.065, adaptive=True, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0):
     """Fully config-driven: seg method + params AUTO from org_seg_params; network-vs-vesicular feature set
     + store ref-map AUTO from the resolved method. For frangi on the GENERATED (fake) images, switch to the
     ADAPTIVE dynamic threshold (compute_frangi_threshold) — the config's fixed threshold mis-fits the fake
@@ -589,7 +737,7 @@ def run_target(marker_dir, target, real_exp, marker_channel, store_marker, grain
     print(f"[run_target] {marker_dir}/{target}: method={method} network={network} adaptive={adaptive} override={frangi_override}")
     chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (avoid empty-slot collision)
     zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, chans0, n_cells, base_dir=base_dir)
-    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus)   # config auto-resolves; fp=adaptive/override
+    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_nucleus_npz, vs_erode=vs_erode)   # config auto-resolves; fp=adaptive/override
     label_name = next((r[3] for r in res if r[1] and r[3]), None)
     if not label_name:
         print("[run_target] seg produced no label — abort"); return
@@ -611,7 +759,7 @@ def validate(marker_dir="lysosome_LAMP1", target="ABCE1", grain="geneKO",
 
 
 def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", n_cells=6,
-                  fake_pixel_um=0.05, adaptive_mult=0.1, adaptive=True, out_root=None, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False):
+                  fake_pixel_um=0.05, adaptive_mult=0.1, adaptive=True, out_root=None, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0):
     """REAL org-profiler feature extraction on the generated (cell, α) crops — NO skimage shortcut.
     Stage traversal (mini-zarr) → production org-seg → per crop run `process_single_cell`
     (extract_organelle_features + calculate_network_features), aggregate objects→cell with the pipeline's
@@ -631,7 +779,7 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
         fp = dict(fp if fp else dp); fp.update(frangi_override)
     chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (generated frame IS phase; avoids the empty Phase2D-slot collision)
     zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, chans0, n_cells, base_dir=base_dir)
-    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus)
+    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_nucleus_npz, vs_erode=vs_erode)
     label_name = next((r[3] for r in res if r[1] and r[3]), None)
     if not label_name:
         print("[full] seg produced no label — abort"); return
@@ -676,6 +824,114 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
     return fp_out
 
 
+def real_percell(marker_dir, target, grain, store_marker, features, store_channel=None, n_top=1000):
+    """Per-cell real NTC & KO values for the given generated `features`, from the op_cp_features store,
+    restricted to the **top-`n_top` set-accuracy cells** (KO + NTC) — the strongest-phenotype real cells
+    (capped at whatever the ranking/store provide). phase → accuracy/attention parquets; fluor → the
+    per-marker set-accuracy rank parquet (geneKO/complex). → {feature: {ntc:arr, ko:arr}}. For the violin."""
+    import re
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    from ..classifier.config import GRAINS, slugify
+    feats = list(features)
+    CH = "mcherry"
+    for f in feats:
+        mm = re.match(r"network_(\w+?)_seg_", f)
+        if mm:
+            CH = mm.group(1); break
+
+    def store_col(f):
+        mm = re.match(r"network_(\w+?)_seg_(.+)", f)
+        if store_marker == "phase":
+            org = store_channel or "phase2d_tubular"       # store_channel routes the seg organelle (e.g. 'nuclei' for nucleus seg)
+            if mm:
+                return f"op_network_{org}_{mm.group(2)}"
+            if f.startswith("obj_"):
+                return f"op_{org}_count" if f.endswith("_count") else f"op_{org}_{f[len('obj_'):]}"   # object count → store's bare count
+            return None
+        if mm:
+            return f"op_network_{store_channel or mm.group(1)}_{mm.group(2)}"
+        if f.startswith("obj_"):
+            org = store_channel or CH
+            return f"op_{org}_count" if f.endswith("_count") else f"op_{org}_{f[len('obj_'):]}"
+        return None
+
+    a = ad.read_h5ad(OPCP.format(store=store_marker), backed="r")
+    var = set(map(str, a.var_names))
+    mapped = {f: store_col(f) for f in feats}
+    scols = sorted({v for v in mapped.values() if v in var})
+    if not scols:
+        return {}
+    gn = a.obs["gene_name"].astype(str).values
+    obs = a.obs
+    ekey = obs["experiment"].astype(str).values; wkey = obs["well"].astype(str).values; skey = obs["segmentation"].astype(str).values
+
+    def _nw(w):
+        w = str(w).strip()
+        if w.count("/") == 2:
+            return w
+        m = re.match(r"^([A-Za-z]+)(\d+)$", w); return f"{m.group(1)}/{m.group(2)}/0" if m else w
+
+    def _topn(idx, pq, val, n):
+        """Walk class `val`'s cells in set-accuracy rank order and collect store-matched cells (by exp/well/seg)
+        until n are found — headroom past the top-n covers ranked cells absent from the store."""
+        try:
+            d = pd.read_parquet(pq)
+        except Exception as e:
+            print(f"  [topn] {val}: {e}"); return np.array([], int)
+        gcol = "gene" if "gene" in d.columns else "predicted_class"
+        if "rank_type" in d.columns:
+            d = d[d["rank_type"] == "top"]
+        d = d[d[gcol].astype(str) == str(val)].sort_values("rank").drop_duplicates(["experiment", "well", "segmentation"])
+        k2i = {}
+        for i in idx:
+            k2i.setdefault((ekey[i], _nw(wkey[i]), skey[i]), i)
+        matched = []
+        for e, w, s in zip(d["experiment"].astype(str), d["well"].map(_nw), d["segmentation"].astype(str)):
+            i = k2i.get((e, w, s))
+            if i is not None:
+                matched.append(i)
+                if len(matched) >= n:
+                    break
+        return np.array(matched, int)
+
+    i_ntc = np.where(gn == "")[0]
+    ko_val = target
+    if grain == "complex":
+        import yaml
+        y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
+        ent = next((e for e in y.values() if slugify(e["name"]) == target), None)
+        members = ent["genes"] if ent else []
+        ko_val = ent["name"] if ent else target                      # complex rank parquet keys by full complex name
+        i_ko = np.where(np.isin(gn, members))[0]
+    else:
+        i_ko = np.where(gn == target)[0]
+
+    if store_marker == "phase":                                       # phase: accuracy (KO) + top-attention (NTC)
+        ko_pq = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
+        ntc_pq = GRAINS["geneKO"]["parquet"]; ko_val = target
+    else:                                                             # fluor: the marker's set-accuracy rank parquet
+        ko_pq = ntc_pq = f"{CACHE}/_rankings/fluor/{'complex' if grain == 'complex' else 'geneKO'}/{marker_dir}.parquet"
+    ko2, ntc2 = _topn(i_ko, ko_pq, ko_val, n_top), _topn(i_ntc, ntc_pq, "NTC", n_top)
+    i_ko = ko2 if len(ko2) else i_ko[:n_top]
+    i_ntc = ntc2 if len(ntc2) else i_ntc[:n_top]
+    if not len(ko2):
+        print(f"  [real] {target}: KO not accuracy-ranked in {ko_pq} — first {len(i_ko)} store cells")
+    if not len(ntc2):
+        print(f"  [real] NTC not accuracy-ranked — first {len(i_ntc)} store cells")
+
+    rows_idx = np.concatenate([i_ntc, i_ko])
+    sub = a[rows_idx, scols].to_memory().to_df()
+    lab = np.array([""] * len(i_ntc) + [target] * len(i_ko))
+    out = {}
+    for f, sc in mapped.items():
+        if sc in scols:
+            out[f] = {"ntc": sub.loc[lab == "", sc].values.astype(float),
+                      "ko": sub.loc[lab == target, sc].values.astype(float)}
+    return out
+
+
 def full_features_cache(marker_dir, target, grain, store_marker, store_channel=None):
     """Turn full_features.parquet into a demo-navigable JSON: per-α mean trajectory for EVERY feature +
     the real NTC→KO mean±SEM reference (from op_cp_features) for each feature that maps to a store column +
@@ -705,70 +961,55 @@ def full_features_cache(marker_dir, target, grain, store_marker, store_channel=N
 
     def store_col(f):                                              # generated feature name → op_cp store column (channel-aware)
         mm = re.match(r"network_(\w+?)_seg_(.+)", f)
-        if store_marker == "phase":                                # phase op_cp store uses the phase2d_tubular organelle naming
+        if store_marker == "phase":                                # phase op_cp store: seg organelle via store_channel (tubular default, 'nuclei' for nucleus seg)
+            org = store_channel or "phase2d_tubular"
             if mm:
-                return f"op_network_phase2d_tubular_{mm.group(2)}"
+                return f"op_network_{org}_{mm.group(2)}"
             if f.startswith("obj_"):
-                return f"op_phase2d_tubular_{f[len('obj_'):]}"
+                return f"op_{org}_count" if f.endswith("_count") else f"op_{org}_{f[len('obj_'):]}"   # object count → store's bare count
             return None
         if mm:
             return f"op_network_{store_channel or mm.group(1)}_{mm.group(2)}"      # store_channel: seg organelle name ≠ store's physical channel (e.g. NPM3 nucleoli → 'gfp')
         if f.startswith("obj_"):
-            return f"op_{store_channel or CH}_{f[len('obj_'):]}"
+            org = store_channel or CH
+            return f"op_{org}_count" if f.endswith("_count") else f"op_{org}_{f[len('obj_'):]}"
         return None
 
+    from ..classifier.config import slugify
+    def msem(v):
+        v = np.asarray(v, float); v = v[~np.isnan(v)]
+        return [float(v.mean()), float(v.std() / max(1, len(v)) ** 0.5)] if len(v) else None
+    # TOP-1k set-accuracy NTC/KO (same cells the violin uses) — via real_percell
+    rp = real_percell(marker_dir, target, grain, store_marker, feats, store_channel=store_channel, n_top=1000)
+    # ALL-cells NTC/KO (sampled) + population centroid — the second reference alongside top-1k
     a = ad.read_h5ad(OPCP.format(store=store_marker), backed="r")
     var = set(map(str, a.var_names))
-    mapped = {f: store_col(f) for f in feats}
-    scols = sorted({v for v in mapped.values() if v in var})
+    scols = sorted({store_col(f) for f in feats if store_col(f) in var})
     gn = a.obs["gene_name"].astype(str).values
-    i_ntc = np.where(gn == "")[0]
-    if grain == "complex":                                        # complex KO ref = its member genes' real cells (op_cp is gene-keyed)
+    rng = np.random.default_rng(0)
+    if grain == "complex":
         import yaml
-        from ..classifier.config import slugify
         y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
         members = next((e["genes"] for e in y.values() if slugify(e["name"]) == target), [])
-        i_ko = np.where(np.isin(gn, members))[0]
-        print(f"  [complex] {target}: {len(members)} member genes, {len(i_ko)} real cells")
+        i_ko_all = np.where(np.isin(gn, members))[0]
     else:
-        i_ko = np.where(gn == target)[0]
-    if store_marker == "phase" and grain == "geneKO":             # restrict real ref: top-1k ACCURACY KO + top-attention NTC (rankings cover all phase experiments)
-        import pandas as pd
-        obs = a.obs; ekey = obs["experiment"].astype(str).values; wkey = obs["well"].astype(str).values; skey = obs["segmentation"].astype(str).values
-        def _nw(w):
-            w = str(w).strip()
-            if w.count("/") == 2:
-                return w
-            m = re.match(r"^([A-Za-z]+)(\d+)$", w); return f"{m.group(1)}/{m.group(2)}/0" if m else w
-        def _restrict(idx, pq, val, nkeep):                       # keep store rows among the top-nkeep ranked cells of `val`
-            d = pd.read_parquet(pq, columns=["gene", "experiment", "well", "segmentation", "rank", "rank_type"])
-            d = d[(d["gene"].astype(str) == str(val)) & (d["rank_type"] == "top")].sort_values("rank").head(nkeep)
-            keys = set(zip(d["experiment"].astype(str), d["well"].map(_nw), d["segmentation"].astype(str)))
-            return np.array([i for i in idx if (ekey[i], _nw(wkey[i]), skey[i]) in keys], dtype=int)
-        from ..classifier.config import GRAINS
-        ACC = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
-        ko2, ntc2 = _restrict(i_ko, ACC, target, 1000), _restrict(i_ntc, GRAINS["geneKO"]["parquet"], "NTC", 1000)
-        print(f"  [phase top-acc] KO {len(i_ko)}->{len(ko2)}, NTC(top-attn) {len(i_ntc)}->{len(ntc2)}")
-        if len(ko2):
-            i_ko = ko2
-        if len(ntc2):
-            i_ntc = ntc2
-    # 'centroid' = the real population mean over ALL cells (all genes) — the average-cell reference (sampled for speed)
-    n_all = len(gn); i_cen = np.random.default_rng(0).choice(n_all, min(50000, n_all), replace=False)
-    rows_idx = np.concatenate([i_ntc, i_ko, i_cen])
-    sub = a[rows_idx, scols].to_memory().to_df()
-    lab = np.array([""] * len(i_ntc) + [target] * len(i_ko) + ["_CEN"] * len(i_cen))
-
-    def msem(v):
-        v = v[~np.isnan(v)]
-        return [float(v.mean()), float(v.std() / max(1, len(v)) ** 0.5)] if len(v) else None
+        i_ko_all = np.where(gn == target)[0]
+    def _samp(idx, n): return rng.choice(idx, n, replace=False) if len(idx) > n else idx
+    i_ntc_all = _samp(np.where(gn == "")[0], 20000); i_ko_all = _samp(i_ko_all, 20000); i_cen = _samp(np.arange(a.n_obs), 50000)
+    allm = {"ntc": {}, "ko": {}, "cen": {}}
+    if scols:
+        s = a[np.concatenate([i_ntc_all, i_ko_all, i_cen]), scols].to_memory().to_df()
+        lab = np.array(["ntc"] * len(i_ntc_all) + ["ko"] * len(i_ko_all) + ["cen"] * len(i_cen))
+        for g_ in allm:
+            allm[g_] = {f: msem(s.loc[lab == g_, store_col(f)].values) for f in feats if store_col(f) in scols}
     real_ref = {}
-    for f, sc in mapped.items():
-        if sc in scols:
-            n, k = msem(sub.loc[lab == "", sc].values), msem(sub.loc[lab == target, sc].values)
-            cen = msem(sub.loc[lab == "_CEN", sc].values)
+    for f in feats:
+        r = rp.get(f)
+        if r is not None and len(r["ntc"]) and len(r["ko"]):
+            n, k = msem(r["ntc"]), msem(r["ko"])
             if n and k:
-                real_ref[f] = {"ntc": n, "ko": k, "cen": cen}
+                real_ref[f] = {"ntc": n, "ko": k, "ntc_all": allm["ntc"].get(f),
+                               "ko_all": allm["ko"].get(f), "cen": allm["cen"].get(f)}
 
     def grp(f):
         if f.startswith("network_"):
@@ -798,6 +1039,94 @@ MORPHO_TARGETS = {
                     store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
     "TOMM20": dict(marker_dir="phase", target="TOMM20", real_exp="ops0047_20250612", marker_channel="Phase2D",
                    store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
+    "SAMM50": dict(marker_dir="phase", target="SAMM50", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
+    "KIF23_PHASE": dict(marker_dir="phase", target="KIF23", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # nuclear-mask seg → real ref from op_nuclei_* store features
+    "MTOR_PHASE": dict(marker_dir="phase", target="MTOR", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),
+    "INTRON_SPLICEOSOME_PHASE": dict(marker_dir="phase", target="Intron_Lariat_Spliceosome__type_1_complex",
+                   real_exp="ops0047_20250612", marker_channel="Phase2D", store_marker="phase", grain="complex",
+                   image_channel="Phase2D", structure_type="tubular", org_label="phase2d_tubular_seg"),
+    "SNRNP200_PHASE": dict(marker_dir="phase", target="SNRNP200", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="vesicular_dark", seg_method="blob",
+                   org_label="phase2d_vesicular_dark_seg", store_channel="phase2d_vesicular_dark",
+                   frangi_override={"min_radius_um": 0.25, "max_radius_um": 0.5}),   # drop too-small, max just above original (0.4)
+    "LAMTOR2_LYSO": dict(marker_dir="lysosome_LysoTracker_live_cell_dye", target="LAMTOR2", real_exp="ops0047_20250612",
+                   marker_channel="lysosome_LysoTracker live-cell dye", store_marker="lysosome_lysotracker_live-cell_dye",
+                   grain="geneKO", image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg",
+                   store_channel="gfp"),   # lysosomes (LysoTracker) — bright vesicular blob
+    "RAB7A_BODIPY": dict(marker_dir="lipid_droplet_BODIPY_live_cell_dye", target="RAB7A", real_exp="ops0047_20250612",
+                   marker_channel="lipid droplet_BODIPY live cell dye", store_marker="lipid_droplet_bodipy_live_cell_dye",
+                   grain="geneKO", image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg",
+                   store_channel="gfp"),   # lipid droplets (BODIPY) — bright vesicular blob
+    # --- batch: 10 distinct-phenotype phase geneKO + 3 phase complex + 1 fluor (phenotype-matched seg) ---
+    "KIF11_PHASE": dict(marker_dir="phase", target="KIF11", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # mitotic arrest / rounding
+    "ATP6V1B2_PHASE": dict(marker_dir="phase", target="ATP6V1B2", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="vesicular_dark", seg_method="blob",
+                   org_label="phase2d_vesicular_dark_seg", store_channel="phase2d_vesicular_dark"),   # V-ATPase → vacuoles
+    "HGS_PHASE": dict(marker_dir="phase", target="HGS", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="vesicular", seg_method="blob",
+                   org_label="phase2d_vesicular_seg", store_channel="phase2d_vesicular"),   # ESCRT → enlarged endosomes
+    "RRM1_PHASE": dict(marker_dir="phase", target="RRM1", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # replication stress → nuclei
+    "RRN3_PHASE": dict(marker_dir="phase", target="RRN3", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),   # Pol I / nucleolar
+    "SEC61A1_PHASE": dict(marker_dir="phase", target="SEC61A1", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # object area from nucleus seg (like SON)
+    "SON_PHASE": dict(marker_dir="phase", target="SON", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # nuclear speckles
+    "AP2M1_PHASE": dict(marker_dir="phase", target="AP2M1", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="tubular",
+                   org_label="phase2d_tubular_seg"),   # clathrin/endocytosis → frangi tubular (fused elongated tubules)
+    "GOLGA2_PHASE": dict(marker_dir="phase", target="GOLGA2", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_tubular_seg"),   # Golgi fragmentation
+    "SMC2_PHASE": dict(marker_dir="phase", target="SMC2", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # condensin → chromosome
+    "NPC_PHASE": dict(marker_dir="phase", target="Nuclear_pore_complex", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="complex", image_channel="Phase2D", seg_method="nucleus",
+                   org_label="phase2d_nucleus_seg", store_channel="nuclei"),   # nuclear pore complex
+    "PROTEASOME_PHASE": dict(marker_dir="phase", target="19S_proteasome_regulatory_complex", real_exp="ops0047_20250612",
+                   marker_channel="Phase2D", store_marker="phase", grain="complex", image_channel="Phase2D",
+                   structure_type="vesicular_dark", seg_method="blob", org_label="phase2d_vesicular_dark_seg",
+                   store_channel="phase2d_vesicular_dark"),   # proteasome → aggregates
+    "HAUS_PHASE": dict(marker_dir="phase", target="HAUS_complex", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="complex", image_channel="Phase2D", org_label="phase2d_tubular_seg"),   # HAUS → spindle/MT
+    "AP2M1_CLTA": dict(marker_dir="clathrin_vesicles_CLTA", target="AP2M1", real_exp="ops0047_20250612",
+                   marker_channel="clathrin vesicles_CLTA", store_marker="clathrin_vesicles_clta", grain="geneKO",
+                   image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg", store_channel="gfp"),   # clathrin puncta
+    "EIF2S2_SG": dict(marker_dir="stress_granule_G3BP1", target="EIF2S2", real_exp="ops0047_20250612",
+                   marker_channel="stress granule_G3BP1", store_marker="stress_granule_g3bp1", grain="geneKO",
+                   image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg", store_channel="gfp"),   # stress granules
+    "AURKB_CHROMATIN": dict(marker_dir="chromatin_H2BC21", target="AURKB", real_exp="ops0047_20250612",
+                   marker_channel="chromatin_H2BC21", store_marker="chromatin_h2bc21", grain="geneKO",
+                   image_channel="mCherry", structure_type="tubular", seg_method="frangi", org_label="mcherry_seg", store_channel="mcherry",
+                   frangi_override={"pixel_size_um": 0.185}),   # chromatin (H2BC21) — frangi tubular per org_seg config
+    "NOP56_FBL": dict(marker_dir="nucleolus_DFC_FBL", target="NOP56", real_exp="ops0047_20250612",
+                   marker_channel="nucleolus-DFC_FBL", store_marker="nucleolus-dfc_fbl", grain="geneKO",
+                   image_channel="GFP", structure_type="vesicular", seg_method="frangi", org_label="gfp_seg", store_channel="gfp",
+                   frangi_override={"pixel_size_um": 0.85, "beta": 0.1, "min_radius_um": 0.5, "max_radius_um": 5.0, "min_object_size": 8}),   # nucleolus-DFC (FBL) — frangi vesicular per org_seg config
+    "ATG9A_AUTOPHAGO": dict(marker_dir="autophagosome_MAP1LC3B", target="ATG9A", real_exp="ops0047_20250612",
+                   marker_channel="autophagosome_MAP1LC3B", store_marker="autophagosome_map1lc3b", grain="geneKO",
+                   image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg", store_channel="gfp",
+                   frangi_override={"threshold": 0.10, "min_radius_um": 0.10, "max_radius_um": 1.0}),   # autophagosomes (LC3 puncta) — blob per MAP1LC3B config (ops0090)
+    "ATP6V1B2_LAMP1": dict(marker_dir="lysosome_LAMP1", target="ATP6V1B2", real_exp="ops0047_20250612",
+                   marker_channel="lysosome_LAMP1", store_marker="lysosome_lamp1", grain="geneKO",
+                   image_channel="GFP", structure_type="vesicular", seg_method="blob", org_label="gfp_seg", store_channel="gfp"),   # lysosomes (LAMP1)
+    "RAB7A_PHASE": dict(marker_dir="phase", target="RAB7A", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="vesicular", seg_method="blob",
+                   org_label="phase2d_vesicular_seg", store_channel="phase2d_vesicular",
+                   frangi_override={"threshold": 0.03, "min_radius_um": 0.1}),   # lower blob thr/min-radius so it fires on the α=0 frame
+    "HSPA5_PHASE": dict(marker_dir="phase", target="HSPA5", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                   store_marker="phase", grain="geneKO", image_channel="Phase2D", structure_type="vesicular_dark", seg_method="blob",
+                   org_label="phase2d_vesicular_dark_seg", store_channel="phase2d_vesicular_dark"),   # dark vacuoles (ER stress) — blob, not frangi
     # CCT/NPM3: nucleoli are round blobs → frangi vesselness under-/over-detects them; use the MASKED-OBJECT
     # intensity path (from coding_exps/nucleoli_roundness, tuned NPM3 MO_PARAMS). pixel_size only sets feature spacing.
     "CCT": dict(marker_dir="nucleolus_GC_NPM3", target="Chaperonin_containing_T_complex", real_exp="ops0092_20251027",
@@ -838,26 +1167,52 @@ MORPHO_TARGETS = {
                 marker_channel="actin filament_FastAct SPY555 Live Cell Dye", store_marker="actin_filament_fastact_spy555_live_cell_dye",
                 grain="complex", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular",
                 frangi_override={"pixel_size_um": 0.06}),   # lower px → coarser frangi → traces filaments, drops generated-image noise
+    "CAPZB_PHALLOIDIN": dict(marker_dir="F_actin_Phalloidin", target="CAPZB", real_exp="ops0094_20251217",
+                marker_channel="CP1_f_actin_Phalloidin", store_marker="f-actin_phalloidin", grain="geneKO",
+                image_channel="CP1_f_actin_Phalloidin", org_label="cp1_f_actin_phalloidin_seg",
+                store_channel="cp1_f_actin_phalloidin", structure_type="tubular",
+                frangi_override={"pixel_size_um": 0.06}),   # F-actin filaments (tubular), like FastAct
     "CAPZB_FASTACT": dict(marker_dir="actin_filament_FastAct_SPY555_Live_Cell_Dye", target="CAPZB", real_exp="ops0076_20250917",
                 marker_channel="actin filament_FastAct SPY555 Live Cell Dye", store_marker="actin_filament_fastact_spy555_live_cell_dye",
                 grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular",
                 frangi_override={"pixel_size_um": 0.06}),
+    # PSMB6 geneKO on proteasome PSMB7 marker — frangi (per PSMB7 org_seg config); phenotype = nucleus→cytoplasm reorg
+    "PSMB6_PROTEASOME": dict(marker_dir="proteasome_PSMB7", target="PSMB6", real_exp="ops0047_20250612",
+                marker_channel="proteasome_PSMB7", store_marker="proteasome_psmb7", grain="geneKO",
+                image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="tubular", seg_method="frangi",
+                frangi_override={"pixel_size_um": 0.175, "min_object_size": 30}),
+    # --- phase NUCLEOLI (nucleus-masked MO intensity → dense intranuclear bodies); real ref = op_nucleoli_phase2d_* ---
+    "POLR1B_NUCLEOLI_PHASE": dict(marker_dir="phase", target="POLR1B", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_nucleoli_seg",
+                store_channel="nucleoli_phase2d", structure_type="vesicular", seg_method="masked_object", mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4),
+    "ZNRD1_NUCLEOLI_PHASE": dict(marker_dir="phase", target="ZNRD1", real_exp="ops0047_20250612", marker_channel="Phase2D",
+                store_marker="phase", grain="geneKO", image_channel="Phase2D", org_label="phase2d_nucleoli_seg",
+                store_channel="nucleoli_phase2d", structure_type="vesicular", seg_method="masked_object", mo_nucleus=True, mo_nucleus_scale=0.6),  # POLR1H = ZNRD1
+    "PROTEASOME_NUCLEOLI_PHASE": dict(marker_dir="phase", target="19S_proteasome_regulatory_complex", real_exp="ops0047_20250612",
+                marker_channel="Phase2D", store_marker="phase", grain="complex", image_channel="Phase2D", org_label="phase2d_nucleoli_seg",
+                store_channel="nucleoli_phase2d", structure_type="vesicular", seg_method="masked_object", mo_nucleus=True, mo_nucleus_scale=0.6),
 }
 
 
 def build_morpho(marker_dir, target, real_exp, marker_channel, store_marker, grain="geneKO", n_cells=12,
-                 image_channel=None, org_label=None, adaptive=False, store_channel=None, frangi_override=None, structure_type=None, seg_method=None, mo_nucleus=False):
+                 image_channel=None, org_label=None, adaptive=False, store_channel=None, frangi_override=None, structure_type=None, seg_method=None, mo_nucleus=False, mo_nucleus_scale=1.0, mo_vs_nucleus=False, mo_vs_erode=0):
     """One morpho-demo target end to end (the wrapper that bundles EVERYTHING into one target dir, so nothing is
     scattered): generated seg-mask overlays (a*_labels.png) + per-object feats (a*_feats.json) + full org-profiler
     feature table (full_features.parquet) + demo JSON w/ per-α trajectory + top-accuracy store real-ref stats
-    (full_features.json) + CACHED production-label real-cell images & seg overlays (_ref/). adaptive=False = perfected config."""
+    (full_features.json) + CACHED production-label real-cell images & seg overlays (_ref/). adaptive=False = perfected config.
+    mo_vs_nucleus=True → nucleus mask from VS-H2B → Cellpose (cached npz), not the Otsu/ellipse mask."""
     from ..classifier.config import slugify
-    base_dir = f"{SYNTH_BASE}/job_{grain}_{slugify(target)}"   # per-target staging dir → jobs can run fully in parallel (no shared-zarr race)
+    base_dir = f"{SYNTH_BASE}/job_{slugify(marker_dir)}_{grain}_{slugify(target)}"   # per-(marker,grain,target) staging → same gene on 2 markers won't race the shared zarr
+    vs_npz = None
+    if mo_vs_nucleus:                                                    # BEFORE the OPS_OUTPUT_BASE_DIR override — CellDino/VS ckpt paths key off it
+        vs_npz = f"{CACHE}/_morphometrics/{marker_dir}/{grain}/{target}/vs_nucleus.npz"
+        os.makedirs(os.path.dirname(vs_npz), exist_ok=True)
+        _vs_h2b_nucleus_npz(marker_dir, target, grain, vs_npz, n_cells)
     os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
     run_target(marker_dir, target, real_exp, marker_channel, store_marker=store_marker, grain=grain, n_cells=n_cells,
-               refs=False, adaptive=adaptive, frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus)   # generated seg-mask overlays + per-object feats
+               refs=False, adaptive=adaptive, frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_npz, vs_erode=mo_vs_erode)   # generated seg-mask overlays + per-object feats
     full_features(marker_dir, target, real_exp, marker_channel, grain=grain, n_cells=n_cells, adaptive=adaptive,
-                  frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus)
+                  frangi_override=frangi_override, structure_type=structure_type, seg_method=seg_method, base_dir=base_dir, org_label=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_npz, vs_erode=mo_vs_erode)
     full_features_cache(marker_dir, target, grain, store_marker=store_marker, store_channel=store_channel)
     if image_channel and org_label:                                          # cached real-cell images w/ PRODUCTION org labels (built-time crop from _v3)
         exps = None

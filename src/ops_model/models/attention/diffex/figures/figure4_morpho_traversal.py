@@ -11,7 +11,6 @@ morpho_demo.html viewer uses). Three stacked rows:
 
 Usage: python figure4_morpho_traversal.py   (edit the __main__ block for a different target).
 """
-import glob
 import json
 import os
 
@@ -24,8 +23,10 @@ import numpy as np
 from matplotlib.colors import Normalize
 from PIL import Image
 
-KEYLABEL = {"area": "object area (px²)", "mean_int": "object intensity",
-            "ecc": "eccentricity", "skel": "skeleton length"}
+KEYLABEL = {"area": "object area (px²)", "area_filled": "filled area (px²)", "mean_int": "object intensity",
+            "ecc": "eccentricity", "skel": "skeleton length", "circularity": "circularity",
+            "extent": "extent", "solidity": "solidity", "axis_minor_length": "minor axis (px)",
+            "axis_major_length": "major axis (px)"}
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
@@ -76,6 +77,79 @@ def _overlay_rgba(labels, feats, key, lo, hi, op=0.75):
     return rgba
 
 
+def image_panels(md, morpho_dir, traversal_dir, feature, cell, alphas_show):
+    """Traversal image panels (original NTC anchor + generated α frames): (title, grayscale, label mask,
+    per-object feats) + the per-object overlay key and its color limits. Shared by the line & violin
+    figures so their image panels are IDENTICAL."""
+    ff = json.load(open(f"{md}/full_features.json"))
+    alphas = ff["alphas"]; n = len(alphas); z = n >> 1
+    idxs = [min(range(n), key=lambda i: abs(alphas[i] - a)) for a in alphas_show]
+    f0 = json.load(open(f"{md}/cell{cell}/a{idxs[0]:02d}_feats.json"))
+    avail = set(next(iter(f0.values())).keys()) if f0 else set()
+    okey = _objkey(feature, avail)
+    if okey is None and "area" in avail:
+        okey = "area"
+    vals = []
+    if okey:
+        for i in range(n):
+            try:
+                fj = json.load(open(f"{md}/cell{cell}/a{i:02d}_feats.json"))
+                vals += [p[okey] for p in fj.values() if p.get(okey) is not None]
+            except FileNotFoundError:
+                pass
+    lo, hi = (tuple(np.percentile(vals, CLIP)) if vals else (0.0, 1.0))
+    panels = []
+    modality = traversal_dir.split("/")[0]
+    anchor_img = f"{VA}/{modality}/_anchors/NTC/cell{cell}/real.webp"
+    if os.path.exists(anchor_img):
+        albp = f"{md}/cell{cell}/a{z:02d}_labels.png"          # α=0 seg outlines the same reconstructed cell
+        lab = np.asarray(Image.open(albp)) if os.path.exists(albp) else None
+        panels.append(("original NTC", np.asarray(Image.open(anchor_img).convert("L")), lab, {}))
+    else:
+        print(f"  no anchor real.webp for {modality} cell{cell} — skipping original panel")
+    for i in idxs:
+        gray = np.asarray(Image.open(f"{VA}/{traversal_dir}/cell{cell}/frame_{i:02d}.webp").convert("L"))
+        lab = np.asarray(Image.open(f"{md}/cell{cell}/a{i:02d}_labels.png"))
+        fj = json.load(open(f"{md}/cell{cell}/a{i:02d}_feats.json"))
+        panels.append((f"α={alphas[i]:+.0f}", gray, lab, fj))
+    return panels, okey, lo, hi
+
+
+def render_images(fig, spec, panels, okey, lo, hi, op=0.75, title_fs=22, cbar=True, hspace=0.14):
+    """Render the 2-row image block (grayscale over feature-colored seg overlay + inferno colorbar) into
+    the gridspec `spec`. Returns the overlay axes."""
+    from matplotlib.gridspec import GridSpecFromSubplotSpec
+    nc = len(panels)
+    g = GridSpecFromSubplotSpec(2, nc, subplot_spec=spec, hspace=hspace, wspace=0.04)
+    oaxes = []
+    for j, (t, gray, lab, fj) in enumerate(panels):
+        axi = fig.add_subplot(g[0, j])
+        axi.imshow(gray, cmap="gray"); axi.set_xticks([]); axi.set_yticks([])
+        axi.set_title(t, fontsize=title_fs)
+        for s in axi.spines.values():
+            s.set_visible(False)
+        axo = fig.add_subplot(g[1, j])
+        axo.imshow(gray, cmap="gray")
+        if lab is None:
+            pass
+        elif t == "original NTC":
+            axo.imshow(_uniform_rgba(lab, NTC_RGB, op))
+        elif okey:
+            axo.imshow(_overlay_rgba(lab, fj, okey, lo, hi, op))
+        axo.set_xticks([]); axo.set_yticks([])
+        for s in axo.spines.values():
+            s.set_visible(False)
+        oaxes.append(axo)
+    if cbar and okey:
+        p = oaxes[-1].get_position()
+        cax = fig.add_axes([p.x1 + 0.012, p.y0, 0.013, p.height])
+        cb = fig.colorbar(cm.ScalarMappable(Normalize(lo, hi), cmap="inferno"), cax=cax)
+        cb.set_label(KEYLABEL.get(okey, okey), fontsize=18)
+        cb.set_ticks([lo, hi]); cb.ax.set_yticklabels([f"{lo:.0f}", f"{hi:.0f}"])
+        cb.ax.tick_params(labelsize=16); cb.outline.set_visible(False)
+    return oaxes
+
+
 def make_figure(morpho_dir, traversal_dir, feature, cell, alphas_show, label, simple, out_stem, op=0.75):
     md = f"{VA}/_morphometrics/{morpho_dir}"
     ff = json.load(open(f"{md}/full_features.json"))
@@ -88,97 +162,31 @@ def make_figure(morpho_dir, traversal_dir, feature, cell, alphas_show, label, si
     asem = (ff.get("agg_sem") or {}).get(feature) or [0.0] * n
     sem = [e / gb * 100 for e in asem]
 
-    rr = (ff.get("real_ref") or {}).get(feature)
-    koV = koS = None
-    if rr and rr.get("ntc") and rr["ntc"][0] is not None and rr.get("ko") and rr["ko"][0] is not None:
-        nm = rr["ntc"][0]
-        nmp = abs(nm) or 1e-9
-        koV = (rr["ko"][0] - nm) / nmp * 100  # real KO: % change vs real NTC
-        koS = (rr["ko"][1] or 0) / nmp * 100
+    rr = (ff.get("real_ref") or {}).get(feature) or {}
+    def _koref(kk, nn):                       # real KO % change vs its NTC baseline (top-1k or all-cells)
+        n, k = rr.get(nn), rr.get(kk)
+        if n and k and n[0] is not None and k[0] is not None:
+            nmp = abs(n[0]) or 1e-9
+            return (k[0] - n[0]) / nmp * 100, (k[1] or 0) / nmp * 100
+        return None, None
+    koV, koS = _koref("ko", "ntc")            # top-1k set-accuracy real KO
+    koVall, koSall = _koref("ko_all", "ntc_all")   # all-cells real KO
 
-    idxs = [min(range(n), key=lambda i: abs(alphas[i] - a)) for a in alphas_show]
-
-    # per-object overlay key + color limits over this cell's whole trajectory + NTC ref
-    f0 = json.load(open(f"{md}/cell{cell}/a{idxs[0]:02d}_feats.json"))
-    avail = set(next(iter(f0.values())).keys()) if f0 else set()
-    okey = _objkey(feature, avail)
-    if okey is None and "area" in avail:        # feature not stored per-object → color overlay by object area
-        okey = "area"
-
-    ref = json.load(open(f"{md}/_ref.json"))
-    ntc_cells = ref.get("cells", {}).get("NTC", [])
-    ntc_entry = next((c for c in ntc_cells if c.get("cell") == cell), ntc_cells[0] if ntc_cells else None)
-    ntc_feats = (ntc_entry or {}).get("feats", {})
-
-    vals = []
-    if okey:                                   # clim over generated frames only (NTC excluded — its
-        for i in range(n):                     # filled-object seg would otherwise dominate the scale)
-            try:
-                fj = json.load(open(f"{md}/cell{cell}/a{i:02d}_feats.json"))
-                vals += [p[okey] for p in fj.values() if p.get(okey) is not None]
-            except FileNotFoundError:
-                pass
-    # robust color scale: percentile-clip so a few large objects don't wash out the rest.
-    # CLIP=(0,100) = raw min/max.
-    lo, hi = (tuple(np.percentile(vals, CLIP)) if vals else (0.0, 1.0))
-
-    # panels: (title, grayscale, label mask, per-object feats)
-    panels = []
-    ntc_img = f"{md}/_ref/NTC/cell{cell}.webp"
-    if not os.path.exists(ntc_img):
-        alt = sorted(glob.glob(f"{md}/_ref/NTC/cell*.webp"))
-        ntc_img = alt[0] if alt else None
-    if ntc_img:
-        lbp = ntc_img.replace(".webp", "_labels.png")
-        lab = np.asarray(Image.open(lbp)) if os.path.exists(lbp) else None
-        panels.append(("original NTC", np.asarray(Image.open(ntc_img).convert("L")), lab, ntc_feats))
-    for i in idxs:
-        gray = np.asarray(Image.open(f"{VA}/{traversal_dir}/cell{cell}/frame_{i:02d}.webp").convert("L"))
-        lab = np.asarray(Image.open(f"{md}/cell{cell}/a{i:02d}_labels.png"))
-        fj = json.load(open(f"{md}/cell{cell}/a{i:02d}_feats.json"))
-        panels.append((f"α={alphas[i]:+.0f}", gray, lab, fj))
+    panels, okey, lo, hi = image_panels(md, morpho_dir, traversal_dir, feature, cell, alphas_show)
     nc = len(panels)
 
     fig = plt.figure(figsize=(nc * 2.3, 8.6), facecolor="white")
-    gs = fig.add_gridspec(3, nc, height_ratios=[1.0, 1.0, 1.55], hspace=0.14, wspace=0.04)
+    gs = fig.add_gridspec(2, 1, height_ratios=[2.0, 1.55], hspace=0.14)
+    render_images(fig, gs[0], panels, okey, lo, hi, op)
 
-    oaxes = []
-    for j, (t, gray, lab, fj) in enumerate(panels):
-        axi = fig.add_subplot(gs[0, j])              # row 1: image
-        axi.imshow(gray, cmap="gray")
-        axi.set_xticks([]); axi.set_yticks([])
-        axi.set_title(t, fontsize=22)
-        for s in axi.spines.values():
-            s.set_visible(False)
-        axo = fig.add_subplot(gs[1, j])              # row 2: seg overlay colored by feature
-        axo.imshow(gray, cmap="gray")
-        if lab is None:
-            pass
-        elif t == "original NTC":                              # NTC: flat single-color seg (not value-colored)
-            axo.imshow(_uniform_rgba(lab, NTC_RGB, op))
-        elif okey:                                             # generated: value heatmap
-            axo.imshow(_overlay_rgba(lab, fj, okey, lo, hi, op))
-        axo.set_xticks([]); axo.set_yticks([])
-        for s in axo.spines.values():
-            s.set_visible(False)
-        oaxes.append(axo)
-
-    if okey:                                         # inferno colorbar for the row-2 overlay
-        p = oaxes[-1].get_position()
-        cax = fig.add_axes([p.x1 + 0.012, p.y0, 0.013, p.height])
-        cb = fig.colorbar(cm.ScalarMappable(Normalize(lo, hi), cmap="inferno"), cax=cax)
-        cb.set_label(KEYLABEL.get(okey, okey), fontsize=18)
-        cb.set_ticks([lo, hi])
-        cb.ax.set_yticklabels([f"{lo:.0f}", f"{hi:.0f}"])
-        cb.ax.tick_params(labelsize=16)
-        cb.outline.set_visible(False)
-
-    ax = fig.add_subplot(gs[2, :])                   # row 3: %-change plot (α ≥ 0)
+    ax = fig.add_subplot(gs[1])                      # %-change plot (α ≥ 0)
     ax.set_facecolor("white")
     a0, g0, s0 = alphas[z:], gen[z:], sem[z:]
     if koV is not None:
         ax.axhspan(koV - koS, koV + koS, color="#5ad17a", alpha=0.18, lw=0)
-        ax.axhline(koV, color="#2e8b57", ls="--", lw=3, label=f"real KO ({koV:+.0f}%)")
+        ax.axhline(koV, color="#2e8b57", ls="--", lw=3, label=f"real KO top-1k ({koV:+.0f}%)")
+    if koVall is not None:
+        ax.axhline(koVall, color="#8a8a8a", ls=":", lw=2.5, label=f"real KO all ({koVall:+.0f}%)")
     ax.axhline(0, color="#999", lw=1.5)
     ax.errorbar(a0, g0, yerr=s0, fmt="-o", color="#1f77b4", lw=4, ms=9,
                 capsize=5, elinewidth=2, ecolor="#1f77b4", label="generated (mean ± SEM)")
@@ -208,22 +216,72 @@ FIGURES = [
     dict(group="TOMM20_phase", dir="phase/geneKO/TOMM20",
          feature="obj_area_max", cell=0, simple="Mitochondrial size",
          label="TOMM20 (phase) · object area max", out_stem="TOMM20_phase_obj_area_max"),
+    dict(group="KIF23_phase", dir="phase/geneKO/KIF23",
+         feature="obj_area_filled_sum", cell=0, simple="Nuclear size",
+         label="KIF23 (phase) · nuclear area (nucleus seg)", out_stem="KIF23_phase_nuclear_size"),
+    dict(group="HSPA5_phase", dir="phase/geneKO/HSPA5",
+         feature="obj_area_sum", cell=0, simple="Vacuole area",
+         label="HSPA5 (phase) · dark vacuole area", out_stem="HSPA5_phase_vacuole_area"),
+    dict(group="RAB7A_phase", dir="phase/geneKO/RAB7A",
+         feature="obj_area_sum", cell=0, simple="Vesicle area",
+         label="RAB7A (phase) · light vesicle area", out_stem="RAB7A_phase_vesicle_area"),
+    dict(group="SAMM50_phase_frag", dir="phase/geneKO/SAMM50",
+         feature="network_phase2d_seg_largest_connected_component_size", cell=0, simple="Mitochondrial fragmentation",
+         label="SAMM50 (phase) · largest connected component size", out_stem="SAMM50_phase_largest_cc"),
+    dict(group="SAMM50_phase_area", dir="phase/geneKO/SAMM50",
+         feature="obj_area_filled_sum", cell=0, simple="Mitochondria area",
+         label="SAMM50 (phase) · object area filled sum", out_stem="SAMM50_phase_area_filled"),
+    dict(group="RAB7A_bodipy", dir="lipid_droplet_BODIPY_live_cell_dye/geneKO/RAB7A",
+         feature="obj_area_sum", cell=0, simple="Lipid droplet area",
+         label="RAB7A (BODIPY lipid droplets) · object area sum", out_stem="RAB7A_bodipy_ld_area"),
+    dict(group="LAMTOR2_lyso", dir="lysosome_LysoTracker_live_cell_dye/geneKO/LAMTOR2",
+         feature="obj_area_filled_sum", cell=0, simple="Lysosome area",
+         label="LAMTOR2 (LysoTracker) · object area filled sum", out_stem="LAMTOR2_lyso_area"),
+    dict(group="LAMTOR2_lyso_count", dir="lysosome_LysoTracker_live_cell_dye/geneKO/LAMTOR2",
+         feature="obj_area_count", cell=0, simple="Lysosome count",
+         label="LAMTOR2 (LysoTracker) · object count", out_stem="LAMTOR2_lyso_count"),
+    dict(group="HSPA5_phase_count", dir="phase/geneKO/HSPA5",
+         feature="obj_area_count", cell=0, simple="Vacuole count",
+         label="HSPA5 (phase) · dark vacuole count", out_stem="HSPA5_phase_vacuole_count"),
+    dict(group="SNRNP200_phase", dir="phase/geneKO/SNRNP200",
+         feature="obj_area_min", cell=0, simple="Dark vesicle size",
+         label="SNRNP200 (phase) · dark vesicle min area", out_stem="SNRNP200_phase_ves_size"),
+    dict(group="SNRNP200_phase_count", dir="phase/geneKO/SNRNP200",
+         feature="obj_area_count", cell=0, simple="Dark vesicle count",
+         label="SNRNP200 (phase) · dark vesicle count", out_stem="SNRNP200_phase_ves_count"),
     dict(group="CCT_npm3", dir="nucleolus_GC_NPM3/complex/Chaperonin_containing_T_complex",
-         feature="obj_circularity_sum", cell=0, label="CCT complex (NPM3 nucleoli) · object circularity sum", out_stem="CCT_npm3_obj_circularity_sum"),
+         feature="obj_circularity_sum", cell=0, simple="Nucleolar circularity",
+         label="CCT complex (NPM3 nucleoli) · object circularity sum", out_stem="CCT_npm3_obj_circularity_sum"),
     dict(group="TOMM20_chromalive561", dir="mitochondria_ChromaLIVE_561_excitation/geneKO/TOMM20",
          feature="network_mitochondria_chromalive_561_excitation_tubular_seg_num_endpoints", cell=0,
+         simple="Network endpoints",
          label="TOMM20 (ChromaLIVE561) · network num endpoints", out_stem="TOMM20_chromalive561_num_endpoints"),
     dict(group="GBF1_sec23a", dir="ER_Golgi_COP_II_SEC23A/geneKO/GBF1",
-         feature="obj_area_sum", cell=0, label="GBF1 (ER/Golgi COP-II SEC23A) · object area sum", out_stem="GBF1_sec23a_obj_area_sum"),
+         feature="obj_area_sum", cell=0, simple="Golgi size",
+         label="GBF1 (ER/Golgi COP-II SEC23A) · object area sum", out_stem="GBF1_sec23a_obj_area_sum"),
     dict(group="POLR1B_npm3", dir="nucleolus_GC_NPM3/geneKO/POLR1B",
          feature="obj_extent_sum", cell=0, simple="Nucleolar extent",
          label="POLR1B (NPM3 nucleoli) · object extent sum", out_stem="POLR1B_npm3_obj_extent_sum"),
     dict(group="TIM23_chromalive561", dir="mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant",
-         feature="network_mitochondria_chromalive_561_excitation_tubular_seg_average_degree", cell=0,
-         label="TIM23 complex (ChromaLIVE561) · network average degree", out_stem="TIM23_chromalive561_network_average_degree"),
+         feature="network_mitochondria_chromalive_561_excitation_tubular_seg_num_branches", cell=0,
+         simple="Branch count",
+         label="TIM23 complex (ChromaLIVE561) · network num branches", out_stem="TIM23_chromalive561_num_branches"),
     dict(group="CAPZB_fastact", dir="actin_filament_FastAct_SPY555_Live_Cell_Dye/geneKO/CAPZB",
-         feature="obj_intensity_integrated_median", cell=0, simple="Intensity",
-         label="CAPZB (FastAct actin) · object intensity integrated median", out_stem="CAPZB_fastact_obj_intensity_integrated_median"),
+         feature="obj_axis_minor_length_mean", cell=0, simple="Filament width",
+         label="CAPZB (FastAct actin) · axis minor length mean", out_stem="CAPZB_fastact_axis_minor_length_mean"),
+    dict(group="CAPZB_phalloidin", dir="F_actin_Phalloidin/geneKO/CAPZB",
+         feature="obj_axis_minor_length_mean", cell=9, simple="Filament width",
+         label="CAPZB (Phalloidin F-actin) · axis minor length mean", out_stem="CAPZB_phalloidin_axis_minor_length_mean"),
+    dict(group="AP2M1_phase", dir="phase/geneKO/AP2M1",
+         feature="obj_circularity_mean", cell=9, simple="Roundness",
+         label="AP2M1 (phase) · object circularity mean", out_stem="AP2M1_phase_roundness"),
+    dict(group="TIM23_chromalive_degree", dir="mitochondria_ChromaLIVE_561_excitation/complex/TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant",
+         feature="network_mitochondria_chromalive_561_excitation_tubular_seg_average_degree", cell=9,
+         simple="Network degree",
+         label="TIM23 complex (ChromaLIVE561) · network average degree", out_stem="TIM23_chromalive561_network_degree"),
+    dict(group="PSMB6_proteasome", dir="proteasome_PSMB7/geneKO/PSMB6",
+         feature="obj_area_sum", cell=9, simple="Proteasome area",
+         label="PSMB6 (proteasome PSMB7) · total proteasome area", out_stem="PSMB6_proteasome_area"),
 ]
 
 CELLS = [0, 1, 2, 3, 4, 5]              # render a PNG per cell so the best one can be picked
