@@ -85,7 +85,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                       load_workers=12, n_per_class=1000,
                       accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
                       v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True,
-                      save_gemb=False, skip_webp=False, webp_compare=False, cell_range=None, ddim_steps=None):
+                      save_gemb=False, skip_webp=False, webp_compare=False, cell_range=None, ddim_steps=100):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -94,7 +94,8 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
     cfg = DirConfig(grain=grain, target=targets[0], control=control, device=device)
     cfg.num_workers = load_workers
     if ddim_steps:
-        cfg.ddim_steps = ddim_steps                                      # override DDIM step count (inversion+sampling fidelity)
+        cfg.ddim_steps = ddim_steps                                      # traversal default 100 (DiffAEConfig=50): inverted-anchor
+                                                                         # round-trip needs ~100 to resolve (saturates there); 50 under-resolves
     if ckpt: cfg.diffae_ckpt = ckpt
     if marker_channel: cfg.marker_channel = marker_channel
     if channel: cfg.channel = channel
