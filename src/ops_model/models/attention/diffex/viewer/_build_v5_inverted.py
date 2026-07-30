@@ -63,6 +63,43 @@ def build_marker(d, marker_channel, channel):
 CFRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor_shap/complex"   # NEW shap_screen EBI-pooled complex rankings
 SEL25 = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals/ntc_accanchor_selected25.csv"
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
+PMA_SHAP_G = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"     # NEW shap_screen phase rankings
+PMA_SHAP_C = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_complex.parquet"
+
+
+def build_phase_shap(grain, targets, tree="viewer_assets_v5", save_gemb=False, ddim_steps=100):
+    """PHASE traversals from the NEW shap_screen rankings: force=True recomputes each target's direction from
+    the new-shap cells (accuracy_parquet), keeping the cached NTC anchors. `tree` = output assets dir
+    (production viewer_assets_v5 for the real rebuild, or a scratch tree + save_gemb for the 15-gene test)."""
+    os.environ["OPS_DIFFEX_ASSETS"] = tree
+    from . import precompute as P
+    P._ASSETS = tree
+    acc = PMA_SHAP_G if grain == "geneKO" else PMA_SHAP_C
+    return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
+                             control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=True,
+                             v5_score=True, accuracy_parquet=acc, ddim_steps=ddim_steps,
+                             save_gemb=save_gemb, load_workers=12)
+
+
+def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
+    """Resume-aware phase-shap build for the preempted chain: regenerate only targets NOT already rebuilt this
+    run — meta.json missing, older than `cutoff` (this rebuild's launch time), or not at `ddim_steps`. Idempotent
+    across rounds, so a preempted round is picked up by the next without redoing finished targets."""
+    base = Path(C.OUT) / tree / "phase" / grain
+    todo = []
+    for t in targets:
+        m = base / slugify(t) / "meta.json"
+        if not m.exists() or m.stat().st_mtime < cutoff:
+            todo.append(t); continue
+        try:
+            if json.load(open(m)).get("ddim_steps") != ddim_steps:
+                todo.append(t)
+        except Exception:
+            todo.append(t)
+    if not todo:
+        return {"grain": grain, "done": 0, "note": "all fresh"}
+    print(f"[phase-shap resume] {grain}: {len(todo)}/{len(targets)} targets to (re)build → {ddim_steps} steps")
+    return build_phase_shap(grain, todo, tree=tree, ddim_steps=ddim_steps)
 
 
 def resume_marker(d, marker_channel, channel, target_steps=100):
