@@ -67,18 +67,20 @@ PMA_SHAP_G = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"
 PMA_SHAP_C = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_complex.parquet"
 
 
-def build_phase_shap(grain, targets, tree="viewer_assets_v5", save_gemb=False, ddim_steps=100):
+def build_phase_shap(grain, targets, tree="viewer_assets_v5", save_gemb=False, ddim_steps=100, alphas=None):
     """PHASE traversals from the NEW shap_screen rankings: force=True recomputes each target's direction from
     the new-shap cells (accuracy_parquet), keeping the cached NTC anchors. `tree` = output assets dir
-    (production viewer_assets_v5 for the real rebuild, or a scratch tree + save_gemb for the 15-gene test)."""
+    (production viewer_assets_v5 for the real rebuild, or a scratch tree + save_gemb for the 15-gene test).
+    `alphas` overrides the α grid (test uses the 7 forward α to match the step-ablation arms; None → full 17)."""
     os.environ["OPS_DIFFEX_ASSETS"] = tree
     from . import precompute as P
     P._ASSETS = tree
     acc = PMA_SHAP_G if grain == "geneKO" else PMA_SHAP_C
+    kw = {} if alphas is None else {"alphas": tuple(alphas)}
     return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
                              control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=True,
                              v5_score=True, accuracy_parquet=acc, ddim_steps=ddim_steps,
-                             save_gemb=save_gemb, load_workers=12)
+                             save_gemb=save_gemb, load_workers=12, **kw)
 
 
 def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
