@@ -1,14 +1,9 @@
 // DiffEx traversal viewer — static, reads viewer_assets/manifest.json (or window.MANIFEST_URL).
 // α scrubs precomputed WebP frames. One grid: perturbation rows (current + pinned) × cells-per-page.
-const ASSET_VER = localStorage.getItem("diffex_asset_ver") || "v4";     // v4 = viewer_assets/ ; v5 = _v5/ (symlink → viewer_assets_v5/)
-const ASSET_PREFIX = ASSET_VER === "v5" ? "_v5/" : "";
+const ASSET_VER = "v5";                 // v4/v5 toggle removed — the viewer always uses the v5 assets
+const ASSET_PREFIX = "_v5/";            // _v5/ is a symlink → viewer_assets_v5/
 const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
-function setAssetVer(v) { if (v !== ASSET_VER) { localStorage.setItem("diffex_asset_ver", v); location.reload(); } }
-(function () {   // reflect the active cache version on the top-bar toggle once the DOM is ready
-  const mark = () => ["v4", "v5"].forEach(v => { const b = document.getElementById("ver-" + v); if (b) b.classList.toggle("active", v === ASSET_VER); });
-  if (document.readyState !== "loading") mark(); else document.addEventListener("DOMContentLoaded", mark);
-})();
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
   if (!init && state.sidePanel === m) { $("sidebar").classList.toggle("hidden"); return; }
   state.sidePanel = m;
