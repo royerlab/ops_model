@@ -60,7 +60,7 @@ def build_marker(d, marker_channel, channel):
                              w=1.5, force=True, v5_score=True)
 
 
-CFRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor/complex"
+CFRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor_shap/complex"   # NEW shap_screen EBI-pooled complex rankings
 SEL25 = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals/ntc_accanchor_selected25.csv"
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
 
