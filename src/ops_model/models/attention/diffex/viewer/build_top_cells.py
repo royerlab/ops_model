@@ -29,7 +29,7 @@ ACC_CSV = f"{V4}/accuracy_ranking/pergene_phase_cell_rankings.csv"
 ATTN_EBI = f"{V4}/pma_phase_cells_ebi_all.csv"                              # complex-level (EBI) attention
 ACC_EBI = f"{V4}/accuracy_ranking/ebi_pergene_phase_cell_rankings.csv"      # complex-level (EBI) accuracy
 OUT = f"{C.OUT}/viewer_assets/top_cells"
-TOP_N = 30
+TOP_N = 40
 
 
 def _pos_key(exp, well, x, y):
@@ -237,8 +237,8 @@ def submit_complexes(out=OUT, top_n=TOP_N, n_shards=16):
 # accuracy ranking only (no attention head), so "attention" is left empty.
 # ---------------------------------------------------------------------------
 V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
-V5_PARQUET = {"geneKO": f"{V5_RANK}/pma_v5_phase_geneKO.parquet",
-              "complex": f"{V5_RANK}/pma_v5_phase_complex.parquet"}
+V5_PARQUET = {"geneKO": f"{V5_RANK}/pma_shap_phase_geneKO.parquet",     # NEW shap_screen phase rankings (same cells as traversals)
+              "complex": f"{V5_RANK}/pma_shap_phase_complex.parquet"}
 V5_CLASS_COL = {"geneKO": "gene", "complex": "predicted_class"}
 OUT_V5 = f"{C.OUT}/viewer_assets_v5/top_cells"
 V5_RECORDS = OUT_V5 + "/_v5_records_{grain}.json"

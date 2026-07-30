@@ -19,9 +19,9 @@ from .precompute import _save_webp
 from .build_pc_crops_masked import BASE, CROP_SIZE, MASK_DILATION, OVERLAY_RGB, OVERLAY_ALPHA, _crop, _zarr_patch
 
 ASSETS = "viewer_assets_v5"
-RANKDIR = f"{C.OUT}/{ASSETS}/_rankings/fluor/geneKO"          # per-channel parquets built by _fluor_v5_build
+RANKDIR = f"{C.OUT}/{ASSETS}/_rankings/fluor_shap/geneKO"     # NEW shap_screen per-channel rankings (same cells as traversals)
 OUT = f"{C.OUT}/{ASSETS}/top_cells/markers"
-TOP_N = 30
+TOP_N = 40
 
 
 def _overlay_rgba(seg, half):
