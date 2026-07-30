@@ -67,20 +67,65 @@ PMA_SHAP_G = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"
 PMA_SHAP_C = f"{C.OUT}/viewer_assets_v5/_rankings/pma_shap_phase_complex.parquet"
 
 
-def build_phase_shap(grain, targets, tree="viewer_assets_v5", save_gemb=False, ddim_steps=100, alphas=None):
+def build_phase_shap(grain, targets, tree="viewer_assets_v5", save_gemb=False, ddim_steps=100, alphas=None,
+                     n_cells=45, cell_range=None):
     """PHASE traversals from the NEW shap_screen rankings: force=True recomputes each target's direction from
     the new-shap cells (accuracy_parquet), keeping the cached NTC anchors. `tree` = output assets dir
     (production viewer_assets_v5 for the real rebuild, or a scratch tree + save_gemb for the 15-gene test).
-    `alphas` overrides the α grid (test uses the 7 forward α to match the step-ablation arms; None → full 17)."""
+    `alphas` overrides the α grid (test uses the 7 forward α to match the step-ablation arms; None → full 17).
+    `cell_range` (lo,hi) + force → REUSE cached directions and only sample that cell slice (the 200-cell top-up)."""
     os.environ["OPS_DIFFEX_ASSETS"] = tree
     from . import precompute as P
     P._ASSETS = tree
     acc = PMA_SHAP_G if grain == "geneKO" else PMA_SHAP_C
     kw = {} if alphas is None else {"alphas": tuple(alphas)}
+    if cell_range is not None:
+        kw["cell_range"] = tuple(cell_range)
     return precompute_marker(grain=grain, targets=list(targets), ckpt=PHASE_CK, out_root=C.OUT,
-                             control="NTC", n_cells=45, invert_anchors=True, w=1.5, force=True,
+                             control="NTC", n_cells=n_cells, invert_anchors=True, w=1.5, force=True,
                              v5_score=True, accuracy_parquet=acc, ddim_steps=ddim_steps,
                              save_gemb=save_gemb, load_workers=12, **kw)
+
+
+def build_phase_anchor_200():
+    """Extend the phase NTC anchor to 200 cells for the 200-cell top-up: cells 0..99 keep the existing 100
+    (attention+accuracy) anchors; cells 100..199 append the next top-accuracy NTC (aligned real imgs + embs)
+    so inversion stays faithful across all 200. Overwrites _anchors/NTC ctrl.npz + real.webp cell100..199."""
+    import numpy as np, pandas as pd
+    from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    from .precompute import _gather_class, _save_webp
+    from ..diffae.data import normalize
+    from ..directions.config import DirConfig
+    _use_v5()
+    rd = Path(C.OUT) / _V5 / "phase" / "_anchors" / "NTC"
+    z = dict(np.load(rd / "ctrl.npz"))
+    have = len(z["anchor_imgs"])
+    if have >= 200:
+        return {"note": f"anchor already {have} cells"}
+    cfg = DirConfig(grain="geneKO", target="NTC", control="NTC", device="cuda")
+    imgs, emb = _gather_class(cfg, "NTC", 200)                      # 200 top-accuracy NTC (aligned imgs↔embs)
+    real200 = normalize(imgs[:200]); emb200 = emb[:200]
+    real200[:have] = z["anchor_imgs"][:have]                        # keep the existing 0..have anchors identical
+    emb200[:have] = z["ctrl_embs"][:have]
+    tp = ThreadPoolExecutor(8)
+    for c in range(have, 200):
+        (rd / f"cell{c}").mkdir(parents=True, exist_ok=True); tp.submit(_save_webp, rd / f"cell{c}" / "real.webp", real200[c, 0], 256)
+    tp.shutdown(wait=True)
+    np.savez(rd / "ctrl.npz", ctrl_embs=emb200, mu_ctrl=emb200.mean(0), anchor_imgs=real200)
+    print(f"[phase-anchor] extended {have} → 200 anchors -> {rd/'ctrl.npz'}")
+    return {"from": have, "to": 200}
+
+
+def build_phase_topup(grain, targets, lo=45, hi=200):
+    """200-cell top-up: for targets missing the top cell (hi-1), sample cell_range=(lo,hi) reusing the cached
+    new-shap directions (cells 0..lo-1 kept). Idempotent for the preempted chain (skips genes already topped up)."""
+    base = Path(C.OUT) / _V5 / "phase" / grain
+    todo = [t for t in targets if not (base / slugify(t) / f"cell{hi - 1}" / "frame_00.webp").exists()]
+    if not todo:
+        return {"grain": grain, "done": 0, "note": "all topped up"}
+    print(f"[phase-topup] {grain}: {len(todo)}/{len(targets)} targets → cells {lo}..{hi - 1}")
+    return build_phase_shap(grain, todo, n_cells=hi, cell_range=(lo, hi))
 
 
 def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
