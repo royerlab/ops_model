@@ -161,7 +161,7 @@ def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, 
             ci = torch.as_tensor(P[i:i + 1], dtype=torch.float32, device=dev)
             mk = torch.as_tensor([mid], dtype=torch.long, device=dev)
             pred = _sample_marker(ema, xT, e, ci, mk, cfg, dev).cpu().numpy()[0, 0]
-            rowspecs.append((mc.split("_")[0][:14], P[i, 0], pred, X[i, 0], _pearson(pred, X[i, 0])))
+            rowspecs.append((mc, P[i, 0], pred, X[i, 0], _pearson(pred, X[i, 0])))   # FULL marker name (protein) — no collisions
     r_by = {name: r for name, _, _, _, r in rowspecs}
     mean_r = float(np.mean(list(r_by.values()))) if r_by else 0.0
 
@@ -169,26 +169,34 @@ def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, 
     NSEC = 3 if n > 16 else 1                                     # ~3 long horizontal sections for the full panel
     PER = max(1, -(-n // NSEC))                                   # markers/section (ceil) → long rows
     nb = -(-n // PER)
-    fig, ax = plt.subplots(nb * 3, PER, figsize=(PER * 1.05, nb * 3 * 1.12), squeeze=False)
-    for r_ in range(nb * 3):                                      # hide all, then fill the used cells
-        for c_ in range(PER):
-            ax[r_][c_].set_xticks([]); ax[r_][c_].set_yticks([]); ax[r_][c_].set_visible(False)
+    figH = nb * 3 * 1.28
+    fig = plt.figure(figsize=(PER * 1.05, figH))
+    top_frac = 1 - 0.85 / figH                                    # reserve a fixed band at the top for the 2-line suptitle
+    # Nested gridspec: big gap BETWEEN bands (room for the 3-line title), tight WITHIN each phase/pred/real triplet.
+    outer = fig.add_gridspec(nb, PER, hspace=0.5, wspace=0.04, top=top_frac, bottom=0.015)
+    axmap = {}
     for k, (name, ph, pr, re, rr) in enumerate(rowspecs):
-        band, col = divmod(k, PER); r0 = band * 3
+        band, col = divmod(k, PER)
+        inner = outer[band, col].subgridspec(3, 1, hspace=0.03)  # phase/pred/real stay tight together
         for j, (img, cm) in enumerate([(ph, "gray"), (pr, "magma"), (re, "magma")]):
-            a = ax[r0 + j][col]; a.set_visible(True)
+            a = fig.add_subplot(inner[j])
             a.imshow(img, cmap=cm, vmin=-1, vmax=1, aspect="auto"); a.set_xticks([]); a.set_yticks([])
-        ax[r0][col].set_title(f"{name}  r={rr:.2f}", fontsize=6, pad=1)
+            axmap[(band, col, j)] = a
+        org, _, prot = name.rpartition("_")                      # 3-line title: organelle / protein / Pearson
+        if not org:
+            org, prot = prot, ""
+        axmap[(band, col, 0)].set_title(f"{org}\n{prot}\nr={rr:.2f}", fontsize=5.5, pad=3, linespacing=1.25)
     for band in range(nb):                                        # phase/pred/real labels on the left of each section
         for j, lbl in enumerate(["phase", "pred", "real"]):
-            a = ax[band * 3 + j][0]; a.set_visible(True); a.set_ylabel(lbl, fontsize=7, rotation=90, labelpad=1)
+            a = axmap.get((band, 0, j))
+            if a is not None:
+                a.set_ylabel(lbl, fontsize=7, rotation=90, labelpad=1)
     ncell = int(n_train) if n_train is not None else int(len(X))
     ep = f"{epoch}" if epoch is not None else "?"
     ls = f"{loss:.4f}" if loss is not None else "—"
     fig.suptitle(f"Multi-marker virtual staining (phase → fluorescent marker) — {len(kept)} live markers, one model\n"
                  f"epoch {ep}  ·  train loss {ls}  ·  {ncell:,} cells trained  ·  overall Pearson r = {mean_r:.3f}",
-                 fontsize=11)
-    fig.subplots_adjust(wspace=0.02, hspace=0.16, top=0.94)
+                 fontsize=11, y=1 - 0.28 / figH)
     fig.savefig(out / eval_name / "multi_montage.png", dpi=150, bbox_inches="tight"); plt.close(fig)
     (out / eval_name / "multi_metrics.json").write_text(json.dumps(
         {"n_markers": len(kept), "epoch": epoch, "loss": loss, "n_train": ncell,
