@@ -5,7 +5,8 @@ Nothing is re-measured: the per-cell organelle features already exist in the op_
 (op_cp_features_<store>.h5ad, one row per real cell, op_<organelle>_<feature> columns), so this just
 gathers them for the panel's genes and plots the distributions:
 
-  A  EMC     · BODIPY lipid droplets   -> op_gfp_count / area          (droplet number, size)
+  A  EMC     · BODIPY lipid droplets   -> peripheral droplet count (outer 20%, per-object from
+                                          ebi_peripheral_droplets.py) + op_gfp_count / area
   B  EMC     · phase LIGHT vesicles    -> op_phase2d_vesicular_*       (count, area)
   C  Dynein-1· ER/Golgi COPE           -> op_gfp_normalized_radial_position_mean / distance_from_nucleus
                                           / area_sum                  (localization, then size)
@@ -19,6 +20,7 @@ matched. The cells displayed in the image panel are ranks 1-3, marked as dots.
 Run: python figure_ebi_morpho_violin.py            # extract (cached) + plot
      python figure_ebi_morpho_violin.py --refresh   # re-read the stores
 """
+import glob
 import os
 import re
 import sys
@@ -40,31 +42,41 @@ OPCP_DIRS = ["/hpc/projects/icd.fast.ops/analysis/op_cp_features_paper_v2",
 VOUT = f"{OUT}/morpho"
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]   # Arial first: no Illustrator substitution
 
 N_TOP = 1000         # cells per group = top-N SHAP-ranked cells matched into the store
 BGY_C = 0.2          # vertical gap between composite rows
-CAPTION_C = ("Images: top-SHAP cells (badge = rank). Violins: organelle morphometrics (op_cp_features store) of the "
-             "top-1000 SHAP-ranked real cells per class (n≈1000 each); bar = median, % = Δmedian vs NTC.")
+CAPTION_C = ("Images: top-SHAP cells (badge = rank). Violins: organelle morphometrics of the top-1000 SHAP-ranked real "
+             "cells per class (n≈1000 each) from the op_cp_features store — except A, where 'peripheral' = droplets in "
+             "the outer 20% of the nucleus→edge axis, measured per droplet; bar = median, % = Δmedian vs NTC.")
 VIEW_PCT = (2, 96)   # y-view clip — tails cropped from the VIEW only, medians/KDE stay on the full data
 C_NTC, C_KO = "#8a8a8a", "#c1272d"
+UNIT_LABEL = {"um^2": "µm²", "um": "µm", "1/um^2": "1/µm²", "um/um^2": "µm/µm²"}   # var.unit -> axis text
 
 # per panel-block (keyed on the grid module's stem): store, organelle prefix, candidate features
 SPECS = {
-    "fluor_EMC_BODIPY": dict(store="lipid_droplet_bodipy_live_cell_dye", org="gfp", primary="area_sum", feats=[
-        ("area_sum", "Total lipid droplet area (px²)"), ("count", "Lipid droplet count"),
-        ("area_mean", "Mean droplet area (px²)")]),
+    # primary is a PER-OBJECT measure (peripheral = outer 20% of the nucleus→edge axis), so it comes from
+    # ebi_peripheral_droplets.py's cache, not the store's per-cell aggregates — see _merge_peripheral.
+    "fluor_EMC_BODIPY": dict(store="lipid_droplet_bodipy_live_cell_dye", org="gfp", primary="peri_shell_0.8",
+                             peripheral=["peri_shell_0.8", "periarea_shell_0.8", "frac_shell_0.8"], feats=[
+        ("peri_shell_0.8", "Peripheral droplet count\n(outer 20%)"),
+        ("periarea_shell_0.8", "Peripheral droplet area\n(outer 20%)"),
+        ("frac_shell_0.8", "Peripheral droplet fraction\n(outer 20%)"),
+        ("count", "Lipid droplet count"), ("area_sum", "Total lipid droplet area"),
+        ("area_mean", "Mean droplet area")]),
     "phase_EMC": dict(store="phase", org="phase2d_vesicular", primary="count", feats=[
-        ("count", "Light vesicle count"), ("area_mean", "Mean vesicle area (px²)"),
-        ("area_sum", "Total vesicle area (px²)")]),
+        ("count", "Light vesicle count"), ("area_mean", "Mean vesicle area"),
+        ("area_sum", "Total vesicle area")]),
     # dynein KO expands + disperses the ER/Golgi: total COPE area is the strongest readout (+53-66%),
     # ~5x the two localization metrics (distance-from-nucleus / radial position), which are kept as variants
     "fluor_Dynein1_COPE": dict(store="er_golgi_cope", org="gfp", primary="area_sum", feats=[
-        ("area_sum", "Total ER/Golgi (COPE) area (px²)"),
-        ("distance_from_nucleus_mean", "COPE distance from nucleus (px)"),
+        ("area_sum", "Total COPE area"),
+        ("distance_from_nucleus_mean", "COPE distance from nucleus"),
         ("normalized_radial_position_mean", "COPE radial position\n(0 = nucleus, 1 = cell edge)")]),
     "phase_U7_snRNP": dict(store="phase", org="phase2d_vesicular_dark", primary="count", feats=[
-        ("count", "Dark vesicle count"), ("area_mean", "Mean dark vesicle area (px²)"),
-        ("area_sum", "Total dark vesicle area (px²)")]),
+        ("count", "Dark vesicle count"), ("area_mean", "Mean dark vesicle area"),
+        ("area_sum", "Total dark vesicle area")]),
 }
 
 
@@ -107,6 +119,27 @@ def _cat(h, key):
     return cats, o["codes"][:]
 
 
+def _var_units(h, var, cols):
+    """var.unit of each column ('um^2' / 'um' / 'count' / ...) — the store's own physical units, so axis
+    labels never hardcode one. Fails loud if a spatial feature was never unit-corrected."""
+    def col(key):
+        o = h[f"var/{key}"]
+        if isinstance(o, h5py.Group):
+            cats = np.array([c.decode() if isinstance(c, bytes) else str(c) for c in o["categories"][:]])
+            return cats[o["codes"][:]]
+        v = o[:]
+        return np.array([x.decode() if isinstance(x, bytes) else x for x in v]) if v.dtype.kind in "SO" else v
+    unit, fixed = col("unit"), col("op_units_corrected")
+    out = []
+    for c in cols:
+        i = var.index(c)
+        u = str(unit[i])
+        if u in UNIT_LABEL and not bool(fixed[i]):
+            raise ValueError(f"{c}: unit {u} but op_units_corrected=False (0.65 vs 0.325 µm/px bug)")
+        out.append(u)
+    return out
+
+
 def _numkey(seg, ecode, wcode):
     """(segmentation, experiment, well) packed into one int64 so cells can be matched vectorized."""
     return np.asarray(seg, np.int64) * 10_000 + np.asarray(ecode, np.int64) * 100 + np.asarray(wcode, np.int64)
@@ -132,12 +165,36 @@ def _match_ranked(store_keys, rows, screen_keys, n):
     return matched[:n], int(hit.sum())
 
 
+def _merge_peripheral(blk, tab):
+    """Splice in the per-object peripheral features measured by ebi_peripheral_droplets.py (the store only
+    holds per-cell aggregates, so 'droplets in the outer 20%' cannot come from it). Fails loud if that
+    isolated probe hasn't been run — never silently plots a store-only subset."""
+    want = SPECS[blk["b"]["stem"]].get("peripheral")
+    if not want:
+        return tab
+    cand = glob.glob(f"{CACHE}/peripheral_bodipy_{N_TOP}_f*.parquet")
+    if not cand:
+        raise FileNotFoundError(f"no peripheral cache in {CACHE} — run: python ebi_peripheral_droplets.py")
+    p = max(cand, key=lambda f: int(f.rsplit("_f", 1)[1].split(".")[0]))
+    d = pd.read_parquet(p)
+    d = d[d["feature"].isin(want)].copy()
+    missing = set(want) - set(d["feature"])
+    if missing:
+        raise KeyError(f"{p}: missing peripheral features {missing}")
+    d["shown"] = False
+    per = d.groupby(["gene", "feature"]).size()
+    print(f"  [{blk['b']['stem']}] + {len(want)} peripheral features from {os.path.basename(p)} "
+          f"({per.min()}-{per.max()} cells/class)", flush=True)
+    return pd.concat([tab, d[["gene", "feature", "value", "shown", "unit"]]], ignore_index=True)
+
+
 def extract(blk, n_top=N_TOP):
     """Tidy per-cell table (gene, feature, value, shown) for one block: the top-n_top SHAP-ranked cells of
     each gene KO + of NTC (NTC restricted to its KO cells' experiments), from the op_cp_features store."""
     b, genes = blk["b"], blk["genes"]
     spec = SPECS[b["stem"]]
-    cols = [f"op_{spec['org']}_{f}" for f, _ in spec["feats"]]
+    sfeats = [ft for ft in spec["feats"] if ft[0] not in set(spec.get("peripheral") or [])]  # store-backed only
+    cols = [f"op_{spec['org']}_{f}" for f, _ in sfeats]
     screen = ebi_rows(b["modality"])
     with h5py.File(store_path(spec["store"]), "r") as h:
         if isinstance(h["X"], h5py.Group):
@@ -147,6 +204,7 @@ def extract(blk, n_top=N_TOP):
         if missing:
             raise KeyError(f"{spec['store']}: missing feature columns {missing}")
         cidx = [var.index(c) for c in cols]
+        units = dict(zip([f for f, _ in sfeats], _var_units(h, var, cols)))
         gcats, gcodes = _cat(h, "gene_name")
         ecats, ecodes = _cat(h, "experiment")
         wcats, wcodes = _cat(h, "well")
@@ -186,10 +244,10 @@ def extract(blk, n_top=N_TOP):
         rows = np.unique(np.concatenate([pick[k] for k in ["NTC"] + genes]))   # h5py needs strictly increasing
         X = h["X"][rows, :][:, cidx].astype(float)
     r2p = {r: i for i, r in enumerate(rows)}
-    recs = [(grp, f, float(X[r2p[r]][j]), r in shown[grp])
-            for grp in ["NTC"] + genes for r in pick[grp] for j, (f, _) in enumerate(spec["feats"])]
-    print(f"  [{b['stem']}] {len(rows)} cells x {len(cols)} features", flush=True)
-    return pd.DataFrame(recs, columns=["gene", "feature", "value", "shown"])
+    recs = [(grp, f, float(X[r2p[r]][j]), r in shown[grp], units[f])
+            for grp in ["NTC"] + genes for r in pick[grp] for j, (f, _) in enumerate(sfeats)]
+    print(f"  [{b['stem']}] {len(rows)} cells x {len(cols)} features  units {units}", flush=True)
+    return pd.DataFrame(recs, columns=["gene", "feature", "value", "shown", "unit"])
 
 
 def table(blocks, refresh=False):
@@ -204,6 +262,12 @@ def table(blocks, refresh=False):
         df.to_parquet(p)
         out[blk["b"]["stem"]] = df
     return out
+
+
+def ylabel(tab, feat, text):
+    """'Mean vesicle area' + the store's unit for that feature → 'Mean vesicle area (µm²)'."""
+    u = str(tab.loc[tab["feature"] == feat, "unit"].iloc[0])
+    return f"{text} ({UNIT_LABEL[u]})" if u in UNIT_LABEL else text
 
 
 def draw_violin(ax, df, genes, feat, ylab, title=None, fs=15, show_n=True, xrot=0):
@@ -258,7 +322,7 @@ def save(fig, stem, outdir=VOUT):
 # composite geometry (inches): violin axes width, gap after the image block, y-label gutter, and the
 # x-label band — which is taken INSIDE the image block's height (violin is shorter, top-aligned) so the
 # rotated gene labels don't push the next panel row down.
-VW, VGAP, VLAB, VXLAB, VBOT = 2.45, 0.12, 1.18, 1.0, 0.12
+VW, VGAP, VLAB, VXLAB, VBOT = 2.45, 0.45, 1.18, 1.0, 0.12
 FS_V = 22
 
 
@@ -282,7 +346,8 @@ def composite(blocks, tabs, ncol=2, x0=0.45):
             draw_block(fig, blk, x, y, *win[b["ch_name"]], W, H, letter="ABCDEFGH"[r * ncol + c])
             th = len(genes) * T + (len(genes) - 1) * GAP - VXLAB          # room for the rotated x labels
             ax = fig.add_axes([(x + block_w(genes) + VGAP + VLAB) / W, 1 - (y + TITLE + th) / H, VW / W, th / H])
-            draw_violin(ax, tabs[b["stem"]], genes, spec["primary"], dict(spec["feats"])[spec["primary"]],
+            draw_violin(ax, tabs[b["stem"]], genes, spec["primary"],
+                        ylabel(tabs[b["stem"]], spec["primary"], dict(spec["feats"])[spec["primary"]]),
                         fs=FS_V, show_n=False, xrot=45)
         y += rowh[r] + BGY_C
     fig.text(0.5, 1 - 0.3 / H, "Top Predictive cells per protein complex", fontsize=26, fontweight="bold",
@@ -294,13 +359,14 @@ def composite(blocks, tabs, ncol=2, x0=0.45):
 def main(refresh=False):
     blocks = build_blocks()
     tabs = table(blocks, refresh)
+    tabs = {blk["b"]["stem"]: _merge_peripheral(blk, tabs[blk["b"]["stem"]]) for blk in blocks}
     by_stem = {blk["b"]["stem"]: blk for blk in blocks}
 
     for blk in blocks:                                          # every candidate feature, to pick from
         stem, spec = blk["b"]["stem"], SPECS[blk["b"]["stem"]]
         for feat, ylab in spec["feats"]:
             fig, ax = plt.subplots(figsize=(1.35 * (len(blk["genes"]) + 1) + 1.6, 4.6), facecolor="white")
-            draw_violin(ax, tabs[stem], blk["genes"], feat, ylab,
+            draw_violin(ax, tabs[stem], blk["genes"], feat, ylabel(tabs[stem], feat, ylab),
                         title=f"{blk['b']['label']} — {blk['b']['marker_label']}")
             save(fig, f"violin_{stem}_{feat}")
 
@@ -309,7 +375,7 @@ def main(refresh=False):
     for ax, blk, letter in zip(axes.flat, order, "ABCD"):
         stem = blk["b"]["stem"]
         spec = SPECS[stem]
-        ylab = dict(spec["feats"])[spec["primary"]]
+        ylab = ylabel(tabs[stem], spec["primary"], dict(spec["feats"])[spec["primary"]])
         draw_violin(ax, tabs[stem], blk["genes"], spec["primary"], ylab,
                     title=f"{blk['b']['label']} — {blk['b']['marker_label']}")
         ax.text(-0.16, 1.1, letter, transform=ax.transAxes, fontsize=24, fontweight="bold", va="top")
