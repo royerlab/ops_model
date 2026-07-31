@@ -31,6 +31,8 @@ OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_multirank_ebi"
 CACHE = f"{OUT}/_cache"
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]   # Arial first: no Illustrator substitution
 
 N_CELLS = 3          # cells per gene row
 N_GENES = 3          # gene rows per block (fewer if the complex has fewer members)
