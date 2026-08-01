@@ -23,10 +23,9 @@ from .precompute import precompute_marker
 FRP_DIR = f"{C.OUT}/viewer_assets_v5/_rankings/fluor_shap/geneKO"   # NEW shap_screen rankings (robust bin-size top-acc); old at _rankings/fluor/geneKO_OLD_qualifying backup
 # OUTPUT tree: a FRESH dir so force=False gives skip-done resume (timeouts harmless) without clobbering the old
 # non-inverted v5 traversals. _directions + each <mod>/_anchors are SYMLINKED back to v5 (setup_v5inv below), so
-# the 11,219 ckpt/w-independent directions + prebuilt lossless anchors are reused with no re-gather. Merge into
-# viewer_assets_v5 when complete.
-_V5 = "viewer_assets_v5_inv"
-_V5EMB = "viewer_assets_v5_inv_emb"    # embeddings-only tree: CellDINO of float frames, no webp (parallel to _V5)
+# the 11,219 ckpt/w-independent directions + prebuilt lossless anchors are reused with no re-gather.
+_V5 = "viewer_assets_v5"                # single production assets tree (was viewer_assets_v5_inv; merged + retired)
+_V5EMB = "viewer_assets_v5_emb"        # embeddings-only tree: CellDINO of float frames, no webp (parallel to _V5)
 
 
 def _use_v5():
@@ -117,15 +116,17 @@ def build_phase_anchor_200():
     return {"from": have, "to": 200}
 
 
-def build_phase_topup(grain, targets, lo=45, hi=200):
+def build_phase_topup(grain, targets, lo=45, hi=200, tree="viewer_assets_v5"):
     """200-cell top-up: for targets missing the top cell (hi-1), sample cell_range=(lo,hi) reusing the cached
-    new-shap directions (cells 0..lo-1 kept). Idempotent for the preempted chain (skips genes already topped up)."""
-    base = Path(C.OUT) / _V5 / "phase" / grain
+    new-shap directions (cells 0..lo-1 kept). Idempotent (skips genes already topped up). The filter must check
+    the SAME tree build_phase_shap writes to (tree, default viewer_assets_v5) — NOT _V5 (viewer_assets_v5_inv),
+    or every round re-inverts all genes."""
+    base = Path(C.OUT) / tree / "phase" / grain
     todo = [t for t in targets if not (base / slugify(t) / f"cell{hi - 1}" / "frame_00.webp").exists()]
     if not todo:
         return {"grain": grain, "done": 0, "note": "all topped up"}
     print(f"[phase-topup] {grain}: {len(todo)}/{len(targets)} targets → cells {lo}..{hi - 1}")
-    return build_phase_shap(grain, todo, n_cells=hi, cell_range=(lo, hi))
+    return build_phase_shap(grain, todo, tree=tree, n_cells=hi, cell_range=(lo, hi))
 
 
 def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
@@ -252,7 +253,7 @@ def build_phase_embed(grain, targets):
                              score=False, v5_score=False, save_gemb=True, skip_webp=True)
 
 
-_V5EMBC = "viewer_assets_v5_inv_emb_cmp"    # test tree: gemb.npz with BOTH float + webp-roundtrip embeddings
+_V5EMBC = "viewer_assets_v5_emb_cmp"    # test tree: gemb.npz with BOTH float + webp-roundtrip embeddings
 
 
 def build_phase_embed_cmp(grain, targets):
@@ -418,7 +419,7 @@ def _submit_prebuild():
 
 
 def setup_v5inv():
-    """Stand up the fresh viewer_assets_v5_inv output tree: symlink _directions + each modality's _anchors back
+    """Stand up the viewer_assets_v5 output tree: symlink _directions + each modality's _anchors back
     to viewer_assets_v5 so cached directions (ckpt/w-independent) and prebuilt lossless anchors are reused with
     no re-gather. Traversal dirs (geneKO/, complex/) are written fresh. Idempotent."""
     v5 = Path(C.OUT) / "viewer_assets_v5"
