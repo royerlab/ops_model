@@ -140,31 +140,15 @@ def train_multi(X, E, P, M, cfg, out_dir, epochs, batch, device):
     return ema
 
 
-@torch.no_grad()
-def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, n_train=None, per_marker=1, eval_name="eval"):
-    """Per-marker montage: for each kept marker, sample the marker from phase + marker-id, Pearson(pred, real).
-    HORIZONTAL multi-section layout — markers packed across (PER per section), wrapping into stacked sections
-    so the figure stays compact instead of one very tall/wide strip; each marker = a phase/pred/real column.
-    Title carries epoch, train loss, #cells trained on, and overall mean Pearson."""
-    out = Path(out_dir); (out / eval_name).mkdir(parents=True, exist_ok=True)
-    H = cfg.crop_size
+def _plot_montage(rowspecs, n_kept, epoch, loss, ncell, out, eval_name):
+    """Render the per-marker phase/pred/real montage from cached rowspecs (no GPU). Each marker is a
+    phase/pred/real column; markers pack across PER-per-section, wrapping into stacked sections. Nested
+    gridspec keeps phase/pred/real tight, with a big gap BETWEEN sections for the 3-line title."""
     import matplotlib
     matplotlib.use("Agg"); matplotlib.rcParams["pdf.fonttype"] = 42
     import matplotlib.pyplot as plt
-    rowspecs = []
-    for mid, (_, mc, _) in enumerate(kept):
-        idx = np.where(M == mid)[0][-per_marker:]                 # tail cells (least likely in early SGD)
-        for i in idx:
-            g = torch.Generator(device=dev).manual_seed(100 + int(i))
-            xT = torch.randn(1, 1, H, H, generator=g, device=dev)
-            e = torch.as_tensor(E[i:i + 1], dtype=torch.float32, device=dev)
-            ci = torch.as_tensor(P[i:i + 1], dtype=torch.float32, device=dev)
-            mk = torch.as_tensor([mid], dtype=torch.long, device=dev)
-            pred = _sample_marker(ema, xT, e, ci, mk, cfg, dev).cpu().numpy()[0, 0]
-            rowspecs.append((mc, P[i, 0], pred, X[i, 0], _pearson(pred, X[i, 0])))   # FULL marker name (protein) — no collisions
     r_by = {name: r for name, _, _, _, r in rowspecs}
     mean_r = float(np.mean(list(r_by.values()))) if r_by else 0.0
-
     n = len(rowspecs)
     NSEC = 3 if n > 16 else 1                                     # ~3 long horizontal sections for the full panel
     PER = max(1, -(-n // NSEC))                                   # markers/section (ceil) → long rows
@@ -172,8 +156,8 @@ def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, 
     figH = nb * 3 * 1.28
     fig = plt.figure(figsize=(PER * 1.05, figH))
     top_frac = 1 - 0.85 / figH                                    # reserve a fixed band at the top for the 2-line suptitle
-    # Nested gridspec: big gap BETWEEN bands (room for the 3-line title), tight WITHIN each phase/pred/real triplet.
-    outer = fig.add_gridspec(nb, PER, hspace=0.5, wspace=0.04, top=top_frac, bottom=0.015)
+    # Nested gridspec: big gap BETWEEN sections (room for the 3-line title), tight WITHIN each phase/pred/real triplet.
+    outer = fig.add_gridspec(nb, PER, hspace=0.12, wspace=0.04, top=top_frac, bottom=0.015)
     axmap = {}
     for k, (name, ph, pr, re, rr) in enumerate(rowspecs):
         band, col = divmod(k, PER)
@@ -191,17 +175,56 @@ def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, 
             a = axmap.get((band, 0, j))
             if a is not None:
                 a.set_ylabel(lbl, fontsize=7, rotation=90, labelpad=1)
-    ncell = int(n_train) if n_train is not None else int(len(X))
     ep = f"{epoch}" if epoch is not None else "?"
     ls = f"{loss:.4f}" if loss is not None else "—"
-    fig.suptitle(f"Multi-marker virtual staining (phase → fluorescent marker) — {len(kept)} live markers, one model\n"
+    fig.suptitle(f"Multi-marker virtual staining (phase → fluorescent marker) — {n_kept} live markers, one model\n"
                  f"epoch {ep}  ·  train loss {ls}  ·  {ncell:,} cells trained  ·  overall Pearson r = {mean_r:.3f}",
                  fontsize=11, y=1 - 0.28 / figH)
     fig.savefig(out / eval_name / "multi_montage.png", dpi=150, bbox_inches="tight"); plt.close(fig)
     (out / eval_name / "multi_metrics.json").write_text(json.dumps(
-        {"n_markers": len(kept), "epoch": epoch, "loss": loss, "n_train": ncell,
+        {"n_markers": n_kept, "epoch": epoch, "loss": loss, "n_train": ncell,
          "mean_pearson": round(mean_r, 3), "per_marker_pearson": {k: round(v, 3) for k, v in r_by.items()}}, indent=2))
-    print(f"[eval] {len(kept)} markers, epoch {ep}, mean Pearson {mean_r:.3f} -> {out/eval_name/'multi_montage.png'}")
+    print(f"[eval] {n_kept} markers, epoch {ep}, mean Pearson {mean_r:.3f} -> {out/eval_name/'multi_montage.png'}")
+
+
+def replot_eval(subdir="eval", out_dir=None):
+    """Re-render the montage from the cached arrays (montage_cache.npz) — NO GPU, NO model. Use this to
+    iterate on montage layout/spacing without re-running the eval sampling."""
+    out = Path(out_dir or OUT)
+    d = np.load(out / subdir / "montage_cache.npz", allow_pickle=True)
+    rowspecs = list(zip(d["names"].tolist(), d["phase"], d["pred"], d["real"], d["r"].tolist()))
+    loss = d["loss"].item()
+    if loss is not None and loss != loss:                        # nan → treat as missing
+        loss = None
+    _plot_montage(rowspecs, int(d["n_kept"]), d["epoch"].item(), loss, int(d["ncell"]), out, subdir)
+
+
+@torch.no_grad()
+def eval_multi(ema, X, E, P, M, kept, cfg, out_dir, dev, epoch=None, loss=None, n_train=None, per_marker=1, eval_name="eval"):
+    """Sample each kept marker from phase + marker-id, cache the (phase, pred, real, Pearson) arrays to
+    montage_cache.npz (so the montage can be re-rendered later with no GPU via replot_eval), then plot."""
+    out = Path(out_dir); (out / eval_name).mkdir(parents=True, exist_ok=True)
+    H = cfg.crop_size
+    rowspecs = []
+    for mid, (_, mc, _) in enumerate(kept):
+        idx = np.where(M == mid)[0][-per_marker:]                 # tail cells (least likely in early SGD)
+        for i in idx:
+            g = torch.Generator(device=dev).manual_seed(100 + int(i))
+            xT = torch.randn(1, 1, H, H, generator=g, device=dev)
+            e = torch.as_tensor(E[i:i + 1], dtype=torch.float32, device=dev)
+            ci = torch.as_tensor(P[i:i + 1], dtype=torch.float32, device=dev)
+            mk = torch.as_tensor([mid], dtype=torch.long, device=dev)
+            pred = _sample_marker(ema, xT, e, ci, mk, cfg, dev).cpu().numpy()[0, 0]
+            rowspecs.append((mc, P[i, 0], pred, X[i, 0], _pearson(pred, X[i, 0])))   # FULL marker name (protein) — no collisions
+    ncell = int(n_train) if n_train is not None else int(len(X))
+    np.savez_compressed(out / eval_name / "montage_cache.npz",   # everything the montage needs → replot with no GPU
+                        names=np.array([s[0] for s in rowspecs]),
+                        phase=np.stack([s[1] for s in rowspecs]).astype(np.float32),
+                        pred=np.stack([s[2] for s in rowspecs]).astype(np.float32),
+                        real=np.stack([s[3] for s in rowspecs]).astype(np.float32),
+                        r=np.array([s[4] for s in rowspecs], np.float32),
+                        n_kept=len(kept), epoch=epoch, loss=loss if loss is not None else np.nan, ncell=ncell)
+    _plot_montage(rowspecs, len(kept), epoch, loss, ncell, out, eval_name)
 
 
 def run(cap=2500, epochs=120, batch=48, device="cuda"):
@@ -270,7 +293,11 @@ def main():
     ap.add_argument("--submit", action="store_true")
     ap.add_argument("--eval", action="store_true", help="eval the current checkpoint only (no training)")
     ap.add_argument("--chain", type=int, default=0, help="submit N afterany-chained resume jobs to reach --epochs")
+    ap.add_argument("--replot", metavar="SUBDIR", help="re-render the montage from a cached eval (no GPU)")
     args = ap.parse_args()
+    if args.replot:
+        replot_eval(subdir=args.replot)
+        return
     if args.chain:
         submit_chain(n_links=args.chain, cap=args.cap, epochs=args.epochs, batch=args.batch)
         return
