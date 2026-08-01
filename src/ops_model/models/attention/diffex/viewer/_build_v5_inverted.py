@@ -465,16 +465,58 @@ def _submit_gen(after):
                          log_dir="diffex_v5gen", wait_for_completion=False)
 
 
+def _submit_fluor(partition="gpu"):
+    """FLUOR buildout only (no phase): ONE genshard per marker per grain (geneKO all genes + complex), no
+    chunking — matches the working 35083270/35083684 chains. genshard needs an 80GB+ GPU (weak a40/a6000/l40s
+    OOM at ~1min), so keep the strong constraint from _gpu_sp. MUST be launched from a shared-fs cwd (repo),
+    not /tmp, or compute nodes cannot write submitit logs and every task dies at ~1min."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    cx = C.ebi_complexes(); jobs = []
+    for d, mc, chan in C.complete_markers():
+        frp = f"{FRP_DIR}/{slugify(mc)}.parquet"
+        if not os.path.exists(frp):
+            continue
+        jobs.append({"name": f"g_{slugify(mc)[:12]}", "func": genshard,
+                     "kwargs": {"d": d, "marker_channel": mc, "channel": chan, "grain": "geneKO", "targets": _genes_for(frp)}})
+        if os.path.exists(f"{CFRP_DIR}/{slugify(mc)}.parquet"):
+            jobs.append({"name": f"c_{slugify(mc)[:12]}", "func": genshard,
+                         "kwargs": {"d": d, "marker_channel": mc, "channel": chan, "grain": "complex", "targets": cx}})
+    sp = dict(_gpu_sp(720)); sp["slurm_partition"] = partition
+    print(f"[fluor] {len(jobs)} per-marker gen-shards ({partition}, strong GPU) → viewer_assets_v5")
+    submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5gen", slurm_params=sp,
+                         log_dir="diffex_v5gen", wait_for_completion=False)
+
+
+def _submit_topup(partition="gpu"):
+    """PHASE 200-cell top-up: build_phase_topup per gene-chunk for genes still missing cell199 (idempotent).
+    Light job → weak GPUs are fine. Launch from a shared-fs cwd (repo), not /tmp."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    genes = C.all_genes()
+    jobs = [{"name": f"topup_{i}", "func": build_phase_topup, "kwargs": {"grain": "geneKO", "targets": genes[i:i + 8]}}
+            for i in range(0, len(genes), 8)]
+    sp = dict(_gpu_sp(300)); sp["slurm_partition"] = partition; sp["slurm_constraint"] = "[a40|a6000|l40s]"
+    print(f"[topup] {len(jobs)} shards ({partition}, weak GPU ok) → viewer_assets_v5/phase/geneKO")
+    submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5inv", slurm_params=sp,
+                         log_dir="diffex_v5inv", wait_for_completion=False)
+
+
 if __name__ == "__main__":
+    # NOTE: run from a shared-fs cwd (the repo), NOT /tmp — submitit writes logs relative to cwd and compute
+    # nodes cannot read /tmp, so /tmp-launched jobs all die at ~1min with empty logs.
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    arg2 = sys.argv[2] if len(sys.argv) > 2 else None
     if cmd == "prebuild":
         _submit_prebuild()
     elif cmd == "setup":
         setup_v5inv()
     elif cmd == "gen":
         setup_v5inv()
-        _submit_gen(sys.argv[2] if len(sys.argv) > 2 else None)
+        _submit_gen(arg2)
+    elif cmd == "fluor":
+        _submit_fluor(arg2 or "gpu")
+    elif cmd == "topup":
+        _submit_topup(arg2 or "gpu")
     elif cmd == "altanchors":
         _submit_altanchors()
     else:
-        print("usage: _build_v5_inverted.py prebuild | setup | gen [after_jobid] | altanchors")
+        print("usage: _build_v5_inverted.py prebuild | setup | gen [after_jobid] | fluor [partition] | topup [partition] | altanchors")
