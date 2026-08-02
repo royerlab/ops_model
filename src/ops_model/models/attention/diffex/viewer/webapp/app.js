@@ -1598,8 +1598,7 @@ function renderTop() {
   for (const e of tcEntries()) {
     const gd = tcData(e.gene), cells = gd ? (gd[e.mode] || []).slice(lo, lo + n) : [];
     const sk = e.mode === "attention" ? "attn" : "conf";
-    const tag = e.current ? `· current (${e.mode})` : `· ${e.mode}`;
-    h += `<div class="tc-row"><div class="tc-hd">${e.gene} <span class="hint">${tag}</span><span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip">`;
+    h += `<div class="tc-row"><div class="tc-hd">${e.gene}<span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)

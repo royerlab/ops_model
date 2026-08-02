@@ -113,7 +113,7 @@ button:hover{border-color:var(--accent)}
 .playctl .seg{flex:0 0 auto;padding:4px 11px}   /* speed pills size to their text (0.25×/0.5× fully visible); group grows leftward since playctl is right-justified */
 
 #grid{display:flex;flex-direction:column;gap:20px;width:100%;max-width:1100px}
-#grid.cols-layout{flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
+#grid.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
 #grid.cols-layout .group{flex:0 0 auto;width:var(--tilepx,170px)}                              /* each column fixed to tile width (title can't force it wide) */
 #grid.cols-layout .group-cells{grid-template-columns:var(--tilepx,170px)}                      /* one vertical column of cells */
 #grid.cols-layout .group-hd{font-size:11px;line-height:1.2;height:2.9em;display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word;overflow:hidden}   /* centered + wrapped within the column width, fixed height → all columns' images stay aligned */
@@ -222,7 +222,7 @@ button:hover{border-color:var(--accent)}
 .tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;align-items:center;gap:8px}
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
 .tc-strip{gap:4px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
-#tc-view.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;gap:12px;overflow-x:auto}   /* perturbations side-by-side as columns */
+#stage.top-active>#tc-view.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;gap:12px;overflow-x:auto}   /* perturbations side-by-side; selector must out-specify the '#stage.top-active>#tc-view{display:block}' show rule */
 #tc-view.cols-layout .tc-row{flex:0 0 auto;margin-bottom:0;width:calc(var(--tcpx,150px) + 18px)}   /* fixed-width column (cell + strip padding) so long titles can't stretch it */
 #tc-view.cols-layout .tc-strip{flex-direction:column;flex-wrap:nowrap}
 #tc-view.cols-layout .tc-hd{white-space:normal;text-align:center;justify-content:center;word-break:break-word;flex-wrap:wrap}
