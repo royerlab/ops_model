@@ -33,7 +33,7 @@ def _completed_in_v5():
     for d, mc, ch in C.complete_markers():
         s = slugify(mc)
         frp = f"{FRP_DIR}/{s}.parquet"
-        if not os.path.exists(frp) or not os.path.isdir(f"{BACKUP}/{s}"):   # merged-inverted only
+        if not os.path.exists(frp):   # all v5 fluor is inverted now (_inv retired) → gate only on a ranking + complete geneKO
             continue
         exp = len(_genes_for(frp))
         dn = len([x for x in glob.glob(f"{OUT}/{V5}/{s}/geneKO/*")

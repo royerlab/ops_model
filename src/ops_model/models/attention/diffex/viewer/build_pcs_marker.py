@@ -253,7 +253,7 @@ def build_marker_layouts(mont_dir=None):
     the phase layout's rich gene annotations for color-by. Cheap (no tiles) → Live renders these per marker."""
     import anndata as ad
     from . import build_umap_montage as BM
-    mont_dir = mont_dir or f"{C.OUT}/viewer_assets/_montage"
+    mont_dir = mont_dir or f"{C.OUT}/viewer_assets_v5/_montage"
     phase = json.load(open(f"{mont_dir}/layout_umap.json"))
     ann_of = {g["g"]: {k: v for k, v in g.items() if k not in ("g", "nx", "ny")} for g in phase["genes"]}
     cfields = phase["color_fields"]
@@ -298,9 +298,18 @@ def enrich_shard(markers, out=PCS_OUT):
 
 
 def _all_markers():
-    m = json.load(open(f"{C.OUT}/viewer_assets/manifest.json"))
+    m = json.load(open(f"{C.OUT}/viewer_assets_v5/manifest.json"))
     mks = [x["marker_channel"] for x in m["markers"] if x.get("marker_channel") and ML.resolve_leaf(x["marker_channel"])]
     return sorted(set(mks))
+
+
+def build_all_layouts(mont_dir=None):
+    """Live-mode layout assets into viewer_assets_v5/_montage: the shared phase layout (gene annotations +
+    phase positions) + per-marker layouts repositioned by each marker's own embedding. Cheap, no SLURM."""
+    from . import build_umap_montage as BM
+    mont_dir = mont_dir or f"{C.OUT}/viewer_assets_v5/_montage"
+    BM.build_layout(ML.embedding_h5ad(None), mont_dir)   # shared phase layout_{umap,phate}.json (color-fields + phase positions)
+    build_marker_layouts(mont_dir)
 
 
 def submit_strips(out=PCS_OUT):
@@ -332,9 +341,12 @@ if __name__ == "__main__":
     ap.add_argument("--features-slug", help="build per-marker features.json for an already-built slug")
     ap.add_argument("--submit-strips", action="store_true", help="SLURM fan-out strips+features for all 55")
     ap.add_argument("--submit-enrich", action="store_true", help="SLURM throttled enrichment for all 55")
+    ap.add_argument("--layouts", action="store_true", help="build Live-mode layouts (shared phase + per-marker) into viewer_assets_v5/_montage")
     ap.add_argument("--out", default=PCS_OUT)
     a = ap.parse_args()
-    if a.submit_strips:
+    if a.layouts:
+        build_all_layouts()
+    elif a.submit_strips:
         submit_strips(a.out)
     elif a.submit_enrich:
         submit_enrich(a.out)
