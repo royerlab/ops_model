@@ -129,6 +129,57 @@ def build_phase_topup(grain, targets, lo=45, hi=200, tree="viewer_assets_v5"):
     return build_phase_shap(grain, todo, tree=tree, n_cells=hi, cell_range=(lo, hi))
 
 
+def build_phase_anchor_multirank(hi=400):
+    """MULTI-BAG anchor: append cells 200..hi-1 = top-(hi-200) NTC from the MULTIRANK ranking (PMA_SHAP_G),
+    keeping the existing single-bag anchors 0..199 intact. This is the fix for the anchor gather using the old
+    pma_v5 ranking — here we gather NTC by the multirank so cells 200-399 are the clean multi_bag anchors."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    from .precompute import _gather_class, _save_webp
+    from ..diffae.data import normalize
+    from ..directions.config import DirConfig
+    _use_v5()
+    rd = Path(C.OUT) / _V5 / "phase" / "_anchors" / "NTC"
+    z = dict(np.load(rd / "ctrl.npz"))
+    have = len(z["anchor_imgs"])
+    if have >= hi:
+        return {"note": f"anchor already {have} cells"}
+    n_new = hi - 200
+    cfg = DirConfig(grain="geneKO", target="NTC", control="NTC", device="cuda")
+    imgs, emb = _gather_class(cfg, "NTC", n_new, parquet=PMA_SHAP_G)          # multirank NTC ranks 1..n_new
+    real_new = normalize(imgs[:n_new])
+    real_all = np.concatenate([z["anchor_imgs"][:200], real_new], axis=0)     # 0..199 single_bag kept; 200.. multirank
+    emb_all = np.concatenate([z["ctrl_embs"][:200], emb[:n_new]], axis=0)
+    tp = ThreadPoolExecutor(8)
+    for c in range(200, hi):
+        (rd / f"cell{c}").mkdir(parents=True, exist_ok=True)
+        tp.submit(_save_webp, rd / f"cell{c}" / "real.webp", real_all[c, 0], 256)
+    tp.shutdown(wait=True)
+    np.savez(rd / "ctrl.npz", ctrl_embs=emb_all, mu_ctrl=emb_all.mean(0), anchor_imgs=real_all)
+    print(f"[phase-anchor-mr] appended multirank {have}→{hi} anchors -> {rd/'ctrl.npz'}")
+    return {"from": have, "to": hi}
+
+
+def _submit_multibag(partition="gpu"):
+    """MULTI-BAG phase traversals: build the multirank NTC anchor (cells 200-399), then generate phase
+    traversals for cells 200-399 across all genes (cached multirank directions, 100-step inverted). Existing
+    single_bag cells 0-199 are untouched. Frame shards depend (afterany) on the anchor job."""
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    sp_a = dict(_gpu_sp(120)); sp_a["slurm_partition"] = partition; sp_a["slurm_constraint"] = "[a40|a6000|l40s]"
+    r = submit_parallel_jobs(jobs_to_submit=[{"name": "mbag_anchor", "func": build_phase_anchor_multirank, "kwargs": {"hi": 400}}],
+                             experiment="diffex_v5inv", slurm_params=sp_a, log_dir="diffex_v5inv", wait_for_completion=False)
+    anchor_job = r["base_job_id"]
+    genes, cx = C.all_genes(), C.ebi_complexes()                              # both grains → 1000 geneKO + 98 complex
+    jobs = [{"name": f"mbag_g{i}", "func": build_phase_topup, "kwargs": {"grain": "geneKO", "targets": genes[i:i + 6], "lo": 200, "hi": 400}}
+            for i in range(0, len(genes), 6)]
+    jobs += [{"name": f"mbag_c{i}", "func": build_phase_topup, "kwargs": {"grain": "complex", "targets": cx[i:i + 6], "lo": 200, "hi": 400}}
+             for i in range(0, len(cx), 6)]
+    sp_f = dict(_gpu_sp(720)); sp_f["slurm_partition"] = partition; sp_f["slurm_constraint"] = "[a40|a6000|l40s]"
+    sp_f["slurm_additional_parameters"] = {"dependency": f"afterany:{anchor_job}"}
+    print(f"[multibag] anchor job {anchor_job} → {len(jobs)} frame shards ({len(genes)} geneKO + {len(cx)} complex, cells 200-399) [after anchor]")
+    submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5inv", slurm_params=sp_f, log_dir="diffex_v5inv", wait_for_completion=False)
+
+
 def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
     """Resume-aware phase-shap build for the preempted chain: regenerate only targets NOT already rebuilt this
     run — meta.json missing, older than `cutoff` (this rebuild's launch time), or not at `ddim_steps`. Idempotent
@@ -492,9 +543,10 @@ def _submit_topup(partition="gpu"):
     Light job → weak GPUs are fine. Launch from a shared-fs cwd (repo), not /tmp."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     genes = C.all_genes()
-    jobs = [{"name": f"topup_{i}", "func": build_phase_topup, "kwargs": {"grain": "geneKO", "targets": genes[i:i + 8]}}
-            for i in range(0, len(genes), 8)]
-    sp = dict(_gpu_sp(300)); sp["slurm_partition"] = partition; sp["slurm_constraint"] = "[a40|a6000|l40s]"
+    jobs = [{"name": f"topup_{i}", "func": build_phase_topup, "kwargs": {"grain": "geneKO", "targets": genes[i:i + 6]}}
+            for i in range(0, len(genes), 6)]
+    # 155-cell guided inversion is ~30min/gene on weak GPUs → 6 genes/shard, 12h timeout (5h timed out at 8/shard)
+    sp = dict(_gpu_sp(720)); sp["slurm_partition"] = partition; sp["slurm_constraint"] = "[a40|a6000|l40s]"
     print(f"[topup] {len(jobs)} shards ({partition}, weak GPU ok) → viewer_assets_v5/phase/geneKO")
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5inv", slurm_params=sp,
                          log_dir="diffex_v5inv", wait_for_completion=False)
@@ -516,6 +568,8 @@ if __name__ == "__main__":
         _submit_fluor(arg2 or "gpu")
     elif cmd == "topup":
         _submit_topup(arg2 or "gpu")
+    elif cmd == "multibag":
+        _submit_multibag(arg2 or "gpu")
     elif cmd == "altanchors":
         _submit_altanchors()
     else:
