@@ -1,7 +1,7 @@
 // DiffEx traversal viewer — static, reads viewer_assets/manifest.json (or window.MANIFEST_URL).
 // α scrubs precomputed WebP frames. One grid: perturbation rows (current + pinned) × cells-per-page.
 const ASSET_VER = "v5";                 // v4/v5 toggle removed — the viewer always uses the v5 assets
-const ASSET_PREFIX = "_v5/";            // _v5/ is a symlink → viewer_assets_v5/
+const ASSET_PREFIX = "";                // app is served from inside the v5 assets dir — data is alongside index.html
 const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
