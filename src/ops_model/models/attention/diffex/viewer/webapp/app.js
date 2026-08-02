@@ -1016,6 +1016,8 @@ function renderPinned() {
 function rebuild() {
   const set = activeSet();
   const N = state.cellCount, start = state.page * N;
+  const cr = state.target ? state.target.n_cells : (set[0] ? set[0].n_cells : 0);   // rank range of the current perturbation's cells
+  $("cellrange").textContent = cr ? `${Math.min(start + 1, cr)}-${Math.min(start + N, cr)} (${cr})` : "";
   const g = $("grid"); g.innerHTML = "";
   state.panels = []; state.groups = []; let k = 0;
   if (state.showReal) {                             // real cells shown ONCE as their own group (shared starting cells → identical across NTC-anchored perturbations)
@@ -1620,6 +1622,7 @@ function renderTop() {
   v.innerHTML = h || '<div class="empty">select a perturbation</div>';
   v.classList.toggle("masked", tc.mask !== false);   // show/hide the blue seg overlay layer
   $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcEntries().length} row(s)`;
+  $("cellrange").textContent = `${lo + 1}-${Math.min(cap, lo + n)} (${cap})`;   // top-bar rank range (matches traversal)
 }
 function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
