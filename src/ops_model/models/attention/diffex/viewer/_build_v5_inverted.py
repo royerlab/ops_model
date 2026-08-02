@@ -160,24 +160,33 @@ def build_phase_anchor_multirank(hi=400):
     return {"from": have, "to": hi}
 
 
-def _submit_multibag(partition="gpu"):
-    """MULTI-BAG phase traversals: build the multirank NTC anchor (cells 200-399), then generate phase
-    traversals for cells 200-399 across all genes (cached multirank directions, 100-step inverted). Existing
-    single_bag cells 0-199 are untouched. Frame shards depend (afterany) on the anchor job."""
+def _submit_multibag(gk_partition="preempted", cx_partition="gpu"):
+    """MULTI-BAG phase traversals (cells 200-399, multirank anchor + cached directions, 100-step inverted).
+    Anchor built once (idempotent — skipped if already 400). Frame shards SPLIT by grain: geneKO scavenges
+    gk_partition (default preempted, +requeue), complex runs on cx_partition (default gpu). single_bag 0-199 untouched."""
+    import numpy as np
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-    sp_a = dict(_gpu_sp(120)); sp_a["slurm_partition"] = partition; sp_a["slurm_constraint"] = "[a40|a6000|l40s]"
-    r = submit_parallel_jobs(jobs_to_submit=[{"name": "mbag_anchor", "func": build_phase_anchor_multirank, "kwargs": {"hi": 400}}],
-                             experiment="diffex_v5inv", slurm_params=sp_a, log_dir="diffex_v5inv", wait_for_completion=False)
-    anchor_job = r["base_job_id"]
-    genes, cx = C.all_genes(), C.ebi_complexes()                              # both grains → 1000 geneKO + 98 complex
-    jobs = [{"name": f"mbag_g{i}", "func": build_phase_topup, "kwargs": {"grain": "geneKO", "targets": genes[i:i + 6], "lo": 200, "hi": 400}}
-            for i in range(0, len(genes), 6)]
-    jobs += [{"name": f"mbag_c{i}", "func": build_phase_topup, "kwargs": {"grain": "complex", "targets": cx[i:i + 6], "lo": 200, "hi": 400}}
-             for i in range(0, len(cx), 6)]
-    sp_f = dict(_gpu_sp(720)); sp_f["slurm_partition"] = partition; sp_f["slurm_constraint"] = "[a40|a6000|l40s]"
-    sp_f["slurm_additional_parameters"] = {"dependency": f"afterany:{anchor_job}"}
-    print(f"[multibag] anchor job {anchor_job} → {len(jobs)} frame shards ({len(genes)} geneKO + {len(cx)} complex, cells 200-399) [after anchor]")
-    submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5inv", slurm_params=sp_f, log_dir="diffex_v5inv", wait_for_completion=False)
+    ap = Path(C.OUT) / _V5 / "phase" / "_anchors" / "NTC" / "ctrl.npz"
+    have = len(np.load(ap)["anchor_imgs"]) if ap.exists() else 0
+    after = None
+    if have < 400:                                                           # build the multirank anchor first
+        sp_a = dict(_gpu_sp(120)); sp_a["slurm_partition"] = cx_partition; sp_a["slurm_constraint"] = "[a40|a6000|l40s]"
+        r = submit_parallel_jobs(jobs_to_submit=[{"name": "mbag_anchor", "func": build_phase_anchor_multirank, "kwargs": {"hi": 400}}],
+                                 experiment="diffex_v5inv", slurm_params=sp_a, log_dir="diffex_v5inv", wait_for_completion=False)
+        after = r["base_job_id"]
+    for grain, targets, tag, part in [("geneKO", C.all_genes(), "g", gk_partition), ("complex", C.ebi_complexes(), "c", cx_partition)]:
+        jobs = [{"name": f"mbag_{tag}{i}", "func": build_phase_topup, "kwargs": {"grain": grain, "targets": targets[i:i + 6], "lo": 200, "hi": 400}}
+                for i in range(0, len(targets), 6)]
+        sp = dict(_gpu_sp(720)); sp["slurm_partition"] = part; sp["slurm_constraint"] = "[a40|a6000|l40s]"
+        addl = {}
+        if after:
+            addl["dependency"] = f"afterany:{after}"
+        if part == "preempted":
+            addl["requeue"] = True                                          # survive preemption instead of FAIL
+        if addl:
+            sp["slurm_additional_parameters"] = addl
+        print(f"[multibag] {grain}: {len(jobs)} frame shards on {part} (cells 200-399)" + (f" [after {after}]" if after else ""))
+        submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_v5inv", slurm_params=sp, log_dir="diffex_v5inv", wait_for_completion=False)
 
 
 def build_phase_shap_resume(grain, targets, cutoff, tree="viewer_assets_v5", ddim_steps=100):
@@ -569,7 +578,7 @@ if __name__ == "__main__":
     elif cmd == "topup":
         _submit_topup(arg2 or "gpu")
     elif cmd == "multibag":
-        _submit_multibag(arg2 or "gpu")
+        _submit_multibag()   # geneKO→preempted, complex→gpu (anchor idempotent)
     elif cmd == "altanchors":
         _submit_altanchors()
     else:
