@@ -205,7 +205,7 @@ async function boot() {
   $("m-vs").onclick = () => {                                // Virtual staining toggle: lock cell 1, tiles renderer (α stays scrubbable)
     $("m-vs").classList.toggle("active");
     const vs = vsMode(); $("m-cell").disabled = vs;
-    if (vs) { $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
+    if (vs) { $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); ovlSel = "__allmarkers__"; $("m-ovsel").value = overlayLabel(); }   // default overlay = all markers on entering VS
     else { ovlSel = "off"; $("m-ovsel").value = "off"; $("m-phaseoff").classList.remove("active"); }   // leaving VS clears overlay
     updateVsUI();
     loadMontage();
