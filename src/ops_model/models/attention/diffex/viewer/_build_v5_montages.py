@@ -85,11 +85,12 @@ def main():
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "phase":
         submit_phase(); return
+    force = "force" in sys.argv[1:]      # mtime skip is unreliable (frames overwritten in place don't bump the dir mtime) → force a full rebuild
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     comp = _completed_in_v5()
     per_marker = sum(1 for mc, _ in comp if ML.embedding_h5ad(mc))
     print(f"[v5mont] {len(comp)} completed markers in v5 ({per_marker} with own embedding, "
-          f"{len(comp) - per_marker} phase-fallback)")
+          f"{len(comp) - per_marker} phase-fallback){' [FORCE]' if force else ''}")
     jobs = []
     for mc, s in comp:
         gk = f"{OUT}/{V5}/{s}/geneKO"
@@ -98,7 +99,7 @@ def main():
             for cell in CELLS:
                 for a in ALPHAS:
                     tj = f"{OUT}/{V5}/_montage/{s}_geneKO_{emb}_cell{cell}_a{a:g}_tiles/tiles.json"
-                    if os.path.exists(tj) and os.path.getmtime(tj) >= cm:
+                    if not force and os.path.exists(tj) and os.path.getmtime(tj) >= cm:
                         continue                                  # montage already reflects current cache
                     jobs.append({"name": f"mtg5_{s[:10]}_{emb[:2]}_c{cell}_a{a:g}", "func": mont_job,
                                  "kwargs": {"marker_channel": mc, "slug": s, "cell": cell, "alpha": a, "emb": emb}})

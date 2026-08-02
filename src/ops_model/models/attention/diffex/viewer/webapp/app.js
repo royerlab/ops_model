@@ -184,7 +184,7 @@ async function boot() {
     $("stage").classList.toggle("attn-active", view === "attn");
     $("stage").classList.toggle("pc-active", view === "pc");
     $("stage").classList.toggle("top-active", view === "top");
-    if (view === "montage") { if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
+    if (view === "montage") { updateVsUI(); if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
     if (view === "attn") renderAttn();
     if (view === "pc") loadPC();
     if (view === "top") loadTop();
@@ -207,6 +207,7 @@ async function boot() {
     const vs = vsMode(); $("m-cell").disabled = vs;
     if (vs) { $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
     else { ovlSel = "off"; $("m-ovsel").value = "off"; $("m-phaseoff").classList.remove("active"); }   // leaving VS clears overlay
+    updateVsUI();
     loadMontage();
   };
   wireCombo("m-ovsel", "m-ovsel-list", renderOverlayList, overlayLabel);   // searchable Overlay picker
@@ -374,6 +375,11 @@ function pickOverlay(value) {
 }
 function enterVsMode() { $("m-vs").classList.add("active"); $("m-cell").disabled = true; $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
 function vsMode() { return !!($("m-vs") && $("m-vs").classList.contains("active")); }
+function updateVsUI() {   // Virtual staining is phase-only; its overlay options appear only once VS is toggled on
+  const ph = attnModality() === "phase", vo = $("vs-opts");
+  if ($("m-vs")) $("m-vs").style.display = ph ? "" : "none";
+  if (vo) vo.style.display = (ph && vsMode()) ? "" : "none";
+}
 function overlaySel() { return ovlSel; }       // "off" | "__allmarkers__" | marker slug
 function phaseHidden() { return !!($("m-phaseoff") && $("m-phaseoff").classList.contains("active")); }
 function overlayActive() { return vsMode() && overlaySel() !== "off"; }
@@ -803,6 +809,7 @@ function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   refreshTargets();
   fillCellDropdown();   // phase → 45 cells, markers → 20 (reflect what was built)
+  updateVsUI();         // Virtual staining is phase-only
   if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage());   // switch to this marker (keeps chosen renderer)
   if (state.view === "pc") loadPC();
 }
