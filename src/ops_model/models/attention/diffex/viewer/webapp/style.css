@@ -116,7 +116,8 @@ button:hover{border-color:var(--accent)}
 #grid.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
 #grid.cols-layout .group{flex:0 0 auto;width:var(--tilepx,170px)}                              /* each column fixed to tile width (title can't force it wide) */
 #grid.cols-layout .group-cells{grid-template-columns:var(--tilepx,170px)}                      /* one vertical column of cells */
-#grid.cols-layout .group-hd{font-size:11px;line-height:1.2;height:2.9em;display:flex;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word;overflow:hidden}   /* centered + wrapped within the column width, fixed height → all columns' images stay aligned */
+#grid.cols-layout .group-hd{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word}   /* same font as rows layout; wrap+center within the column */
+#grid.cols-layout .setacc{display:block;margin:3px auto 0}   /* score chip drops below the title so it can't stretch the narrow column */
 .group{display:flex;flex-direction:column;gap:8px}
 .group-hd{font:650 20px ui-monospace,Menlo,monospace}   /* single header per group, ~2× old caption */
 .rowlbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}

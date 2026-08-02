@@ -849,8 +849,13 @@ function renderTargetList() {
   arr.forEach(t => {
     if (q && !t.target.toLowerCase().includes(q)) return;
     const d = document.createElement("div"); d.className = "combo-item" + (state.target && t.slug === state.target.slug ? " sel" : "");
-    d.textContent = targetLabel(t);
-    if (state.targetSort === "setacc") { const a = targetAcc(t); const s = document.createElement("span"); s.className = "ci-sub"; s.textContent = a < 0 ? " —" : ` acc ${a.toFixed(2)}`; d.appendChild(s); }
+    if (state.targetSort === "setacc") {   // show the set-score % (P(target) @ α=1), not the mAP
+      const a = targetAcc(t), suffix = t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : "";
+      d.textContent = `${t.target}${suffix}`;
+      const s = document.createElement("span"); s.className = "ci-sub"; s.textContent = a < 0 ? " —" : ` ${Math.round(a * 100)}%`; d.appendChild(s);
+    } else {
+      d.textContent = targetLabel(t);
+    }
     d.onmousedown = (e) => { e.preventDefault(); pickTarget(t.slug); }; list.appendChild(d); n++;
   });
   if (!n) list.innerHTML = '<div class="combo-empty">no matches</div>';
@@ -1594,11 +1599,12 @@ function renderTop() {
   const cap = tc.data.top_n || 20;
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
-  let h = "";
+  let h = "", ci = 0;
   for (const e of tcEntries()) {
     const gd = tcData(e.gene), cells = gd ? (gd[e.mode] || []).slice(lo, lo + n) : [];
     const sk = e.mode === "attention" ? "attn" : "conf";
-    h += `<div class="tc-row"><div class="tc-hd">${e.gene}<span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip">`;
+    const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}">${e.gene}<span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
