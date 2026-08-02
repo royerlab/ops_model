@@ -77,7 +77,7 @@ def submit_phase():
         jobs_to_submit=jobs, experiment="diffex_v5mont",
         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 4, "mem_gb": 24, "timeout_min": 60,
                       "slurm_array_parallelism": 100,
-                      "slurm_setup": ["export OPS_DIFFEX_ASSETS=viewer_assets_v5_inv"]},
+                      "slurm_setup": ["export OPS_DIFFEX_ASSETS=viewer_assets_v5"]},
         log_dir="diffex_v5mont", wait_for_completion=False)
 
 
