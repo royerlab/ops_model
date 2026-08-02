@@ -86,7 +86,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (!s) return false;
   if (s.alpha != null) restoredAlpha = s.alpha;   // consumed by the first rebuild → holds α across reload/version-switch
   // filters/prefs that affect the target list — set BEFORE marker/target resolution
-  if (s.grain) $("grain").value = s.grain;
+  if (s.grain && s.grain !== "all") $("grain").value = s.grain;   // 'all' grain removed → fall back to default geneKO
   if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
   if (s.tcCols != null) { $("tc-cols").checked = s.tcCols; $("tc-view").classList.toggle("cols-layout", s.tcCols); }
   if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
@@ -139,6 +139,7 @@ async function boot() {
   $("alpha").oninput = () => showIdx(+$("alpha").value);
   $("alpha").onchange = saveState;   // persist α on release so reloads / v4↔v5 hold the current traversal position
   $("tile-scale").oninput = () => document.documentElement.style.setProperty("--tilepx", $("tile-scale").value + "px");   // traversal image scale
+  $("tc-scale").oninput = () => document.documentElement.style.setProperty("--tcpx", $("tc-scale").value + "px");   // top-cells image scale
   $("colslayout").onchange = () => $("grid").classList.toggle("cols-layout", $("colslayout").checked);   // perturbations rows ↔ columns
   $("exportgif").onclick = exportGif;
   $("play").onclick = togglePlay;
@@ -308,7 +309,7 @@ const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology
 };
 // display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
 const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
-const mont = { osd: null, labels: [], W: 0, mode: "both", imgAlpha: 1, ovlAlpha: 0.55, ptAlpha: 0.8, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
+const mont = { osd: null, labels: [], W: 0, mode: "images", imgAlpha: 1, ovlAlpha: 0.55, ptAlpha: 0.15, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
 // montage set-score value → {v:0..1 for heat, txt}: P(target) as %, or target rank on the same white→red heat (rank1→red, ≥100→white)
 function saVal(raw) { return mont.setaccMetric === "rank" ? { v: Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, raw)) / 2)), txt: `rank ${raw}` } : { v: raw, txt: `${Math.round(raw * 100)}%` }; }
 const saData = () => mont.setaccMode === "complex" ? (mont.setaccMetric === "rank" ? mont.setaccCxRank : mont.setaccCx) : (mont.setaccMetric === "rank" ? mont.setaccRank : mont.setacc);
@@ -752,7 +753,7 @@ function findTargetEntry(gene) {   // manifest target entry for a gene (prefer p
 // clicking a montage gene selects it in the browse search box (falls back to info-only if the
 // current marker/grain has no geneKO entry for it — e.g. a fluor marker lacking that gene).
 function selectGeneFromMontage(gene) {
-  if ($("grain").value === "complex") { $("grain").value = "all"; $("grain")._segSync?.(); refreshTargets(); }   // montage genes are geneKO
+  if ($("grain").value === "complex") { $("grain").value = "geneKO"; $("grain")._segSync?.(); refreshTargets(); }   // montage genes are geneKO
   const t = state.targets.find(x => x.target === gene && x.grain === "geneKO");
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
   else renderInfo(findTargetEntry(gene) || { target: gene, grain: "geneKO", desc: (state.geneDesc || {})[gene] });

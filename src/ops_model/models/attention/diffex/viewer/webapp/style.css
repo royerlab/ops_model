@@ -223,12 +223,13 @@ button:hover{border-color:var(--accent)}
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
 .tc-strip{gap:4px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
 #tc-view.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;gap:12px;overflow-x:auto}   /* perturbations side-by-side as columns */
-#tc-view.cols-layout .tc-row{flex:0 0 auto;margin-bottom:0}
+#tc-view.cols-layout .tc-row{flex:0 0 auto;margin-bottom:0;width:calc(var(--tcpx,150px) + 18px)}   /* fixed-width column (cell + strip padding) so long titles can't stretch it */
 #tc-view.cols-layout .tc-strip{flex-direction:column;flex-wrap:nowrap}
-#tc-view.cols-layout .tc-hd{white-space:normal;text-align:center;justify-content:center;word-break:break-word}
+#tc-view.cols-layout .tc-hd{white-space:normal;text-align:center;justify-content:center;word-break:break-word;flex-wrap:wrap}
 .tc-cell{position:relative;flex:none}
+#tc-view .pc-cell{width:var(--tcpx,150px);height:var(--tcpx,150px)}   /* Image-scale slider (--tcpx) drives top-cell size; scoped so the PC tab stays 150px */
 .tc-rank{position:absolute;top:3px;left:3px;font:700 11px ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;padding:0 5px}
-.tc-ov{position:absolute;top:0;left:0;width:150px;height:150px;border-radius:3px;pointer-events:none;display:none}
+.tc-ov{position:absolute;top:0;left:0;width:var(--tcpx,150px);height:var(--tcpx,150px);border-radius:3px;pointer-events:none;display:none}
 #tc-view.masked .tc-ov{display:block}
 .pc-head{display:flex;align-items:center;gap:14px;margin-bottom:12px}
 .pc-head h2{margin:0;font:650 20px ui-monospace,monospace}
