@@ -11,7 +11,7 @@ function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation
   $("side-about").classList.toggle("active", m === "about");
   $("side-info-view").style.display = m === "info" ? "" : "none";
   $("side-about-view").style.display = m === "about" ? "" : "none";
-  $("sidebar").classList.remove("hidden");
+  if (!init) $("sidebar").classList.remove("hidden");   // init only sets the active panel; sidebar stays collapsed until clicked
   if (!init && typeof saveState === "function") saveState();
 }
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
