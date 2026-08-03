@@ -502,10 +502,30 @@ def _ratio_and_mean_from_map(map_df):
     return ratio, mean_map
 
 
+def _record_metric(result: dict, name: str, map_df, ratio, subset_targets) -> None:
+    """Write one metric's ratio + mean mAP into ``result``.
+
+    With ``subset_targets`` the mAP came from all perturbations but only the
+    subset's rows are summarised (Option B). Without it, the scorer's own ratio
+    is authoritative and the mean is read off the map when present.
+    """
+    if subset_targets is not None:
+        result[f"{name}_ratio"], result[f"{name}_map_mean"] = (
+            _ratio_and_mean_from_map(_filter_map_to_targets(map_df, subset_targets))
+        )
+        return
+    result[f"{name}_ratio"] = float(ratio)
+    if map_df is not None and "mean_average_precision" in map_df.columns:
+        result[f"{name}_map_mean"] = float(map_df["mean_average_precision"].mean())
+
+
 def _score_all_metrics(
     g_norm: ad.AnnData, _logger, distance="cosine", subset_targets: Optional[set] = None
 ) -> dict:
-    """Score all 4 metrics on a guide-level AnnData. Returns dict of ratios + mAPs.
+    """Score every metric in METRICS on a guide-level AnnData.
+
+    Returns a dict of ``{metric}_ratio`` / ``{metric}_map_mean`` (METRIC_COLUMNS),
+    NaN for anything that failed to score.
 
     If ``subset_targets`` is provided, mAP is computed using ALL perturbations
     (so the full context is preserved) but ratios and means are reported only
@@ -518,31 +538,19 @@ def _score_all_metrics(
         phenotypic_consistency_manual_annotation,
     )
 
-    result = {
-        "activity_ratio": math.nan,
-        "activity_map_mean": math.nan,
-        "distinctiveness_ratio": math.nan,
-        "distinctiveness_map_mean": math.nan,
-        "corum_ratio": math.nan,
-        "corum_map_mean": math.nan,
-        "chad_ratio": math.nan,
-        "chad_map_mean": math.nan,
-        "ebi_ratio": math.nan,
-        "ebi_map_mean": math.nan,
-    }
+    result = {col: math.nan for col in METRIC_COLUMNS}
 
+    # Activity is deliberately not part of the loops below: it builds the
+    # copairs view every later metric reuses, and it reads its map unguarded, so
+    # a failure here aborts the whole pass instead of falling through.
     try:
         g_copairs = _prepare_for_copairs(g_norm.copy())
         activity_map, active_ratio = phenotypic_activity_assesment(
-            g_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            distance=distance,
+            g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
         if subset_targets is not None:
-            filt = _filter_map_to_targets(activity_map, subset_targets)
-            result["activity_ratio"], result["activity_map_mean"] = (
-                _ratio_and_mean_from_map(filt)
+            _record_metric(
+                result, "activity", activity_map, active_ratio, subset_targets,
             )
         else:
             result["activity_ratio"] = float(active_ratio)
@@ -555,87 +563,30 @@ def _score_all_metrics(
 
     try:
         dist_map, dist_ratio = phenotypic_distinctivness(
-            g_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            distance=distance,
+            g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
-        if subset_targets is not None:
-            filt = _filter_map_to_targets(dist_map, subset_targets)
-            result["distinctiveness_ratio"], result["distinctiveness_map_mean"] = (
-                _ratio_and_mean_from_map(filt)
-            )
-        else:
-            result["distinctiveness_ratio"] = float(dist_ratio)
-            if dist_map is not None and "mean_average_precision" in dist_map.columns:
-                result["distinctiveness_map_mean"] = float(
-                    dist_map["mean_average_precision"].mean()
-                )
+        _record_metric(result, "distinctiveness", dist_map, dist_ratio, subset_targets)
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
 
+    # Consistency metrics score the gene-level matrix and share a similarity
+    # cache. One try for the group, so a failure in the first skips the rest —
+    # matching the previous single-try block.
+    gene_scorers = (
+        ("corum", phenotypic_consistency_corum),
+        ("chad", phenotypic_consistency_manual_annotation),
+        ("ebi", phenotypic_consistency_ebi),
+    )
     try:
-        e_norm = aggregate_to_level(
-            g_copairs, "gene", preserve_batch_info=False, subsample_controls=False
-        )
-        e_copairs = _prepare_for_copairs(e_norm)
-
-        corum_map, corum_ratio = phenotypic_consistency_corum(
-            e_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            cache_similarity=True,
-            distance=distance,
-        )
-        if subset_targets is not None:
-            filt = _filter_map_to_targets(corum_map, subset_targets)
-            result["corum_ratio"], result["corum_map_mean"] = _ratio_and_mean_from_map(
-                filt
+        e_copairs = _prepare_for_copairs(aggregate_to_level(
+            g_copairs, "gene", preserve_batch_info=False, subsample_controls=False,
+        ))
+        for name, scorer in gene_scorers:
+            map_df, ratio = scorer(
+                e_copairs, plot_results=False, null_size=NULL_SIZE,
+                cache_similarity=True, distance=distance,
             )
-        else:
-            result["corum_ratio"] = float(corum_ratio)
-            if corum_map is not None and "mean_average_precision" in corum_map.columns:
-                result["corum_map_mean"] = float(
-                    corum_map["mean_average_precision"].mean()
-                )
-
-        chad_map, chad_ratio = phenotypic_consistency_manual_annotation(
-            e_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            cache_similarity=True,
-            distance=distance,
-        )
-        if subset_targets is not None:
-            filt = _filter_map_to_targets(chad_map, subset_targets)
-            result["chad_ratio"], result["chad_map_mean"] = _ratio_and_mean_from_map(
-                filt
-            )
-        else:
-            result["chad_ratio"] = float(chad_ratio)
-            if chad_map is not None and "mean_average_precision" in chad_map.columns:
-                result["chad_map_mean"] = float(
-                    chad_map["mean_average_precision"].mean()
-                )
-
-        ebi_map, ebi_ratio = phenotypic_consistency_ebi(
-            e_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            cache_similarity=True,
-            distance=distance,
-        )
-        if subset_targets is not None:
-            filt = _filter_map_to_targets(ebi_map, subset_targets)
-            result["ebi_ratio"], result["ebi_map_mean"] = _ratio_and_mean_from_map(
-                filt
-            )
-        else:
-            result["ebi_ratio"] = float(ebi_ratio)
-            if ebi_map is not None and "mean_average_precision" in ebi_map.columns:
-                result["ebi_map_mean"] = float(
-                    ebi_map["mean_average_precision"].mean()
-                )
+            _record_metric(result, name, map_df, ratio, subset_targets)
     except Exception as exc:
         _logger.warning(f"    Consistency scoring failed: {exc}")
 
