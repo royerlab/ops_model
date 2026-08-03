@@ -1,9 +1,8 @@
 """Per-reporter cell-count titration analysis.
 
 Reads existing per-signal guide h5ads, repeatedly downsamples cells at each
-guide (3/4 ratio per step, from all cells down to 50k), scores all 4 phenotypic
-metrics at each titration point, and produces two summary plots per reporter
-plus a combined overview:
+guide (3/4 ratio per step), scores every metric in ``METRICS`` at each titration
+point, and produces two summary plots per reporter plus a combined overview:
 
   1. **% significant** — fraction of perturbations/complexes passing corrected
      p-value threshold for each metric vs cell count.
@@ -11,25 +10,17 @@ plus a combined overview:
 
 Usage::
 
-    # Run locally for a single variant (default -o matches pca_optimization.py)
-    python -m ops_model.post_process.combination.titration.titration
-
-    # Submit as SLURM jobs (one per reporter)
-    python -m ops_model.post_process.combination.titration.titration --slurm
-
-    # Include minibinder geneKO subset analysis with comparison overlay plots
-    python -m ops_model.post_process.combination.titration.titration --minibinder-subset
-
-    # Minibinder subset with SLURM submission
-    python -m ops_model.post_process.combination.titration.titration --minibinder-subset --slurm
-
-    # Override root (same as pca_optimization -o)
+    # Run locally for a single variant. -o is the same root passed to
+    # pca_optimization; the remaining flags select the variant beneath it.
     python -m ops_model.post_process.combination.titration.titration \
-        -o /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
+        -o <pca_optimization_root> --cell-dino --paper-v1
+
+    # Submit as SLURM jobs
+    python -m ops_model.post_process.combination.titration.titration \
+        -o <pca_optimization_root> --cell-dino --paper-v1 --slurm
 """
 
 import argparse
-import glob
 import logging
 import math
 import time
@@ -88,12 +79,6 @@ TITRATION_MAP_LABELS = {
     "ebi": "EBI mAP",
 }
 SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
-
-MINIBINDER_TARGETS_CSV = Path("/hpc/projects/icd.fast.ops/configs/library/minibinder_geneKO_targets.csv")
-
-# Same default root as pca_optimization.py --output-dir
-DEFAULT_PCA_OPT_ROOT = "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3"
-
 
 def _format_cell_count(n: int) -> str:
     """Format cell count as human-readable string: 1.2M, 500K, 50K, etc."""
@@ -473,58 +458,22 @@ def _aggregate_draws(
     return scores
 
 
-def _filter_map_to_targets(map_df, targets):
-    """Filter a map DataFrame to only rows whose perturbation is in ``targets``."""
-    if map_df is None or targets is None or "perturbation" not in map_df.columns:
-        return map_df
-    return map_df[map_df["perturbation"].isin(targets)]
-
-
-def _ratio_and_mean_from_map(map_df):
-    """Extract (ratio_significant, mean_mAP) from a map DataFrame."""
-    if map_df is None or len(map_df) == 0:
-        return math.nan, math.nan
-    ratio = (
-        float(map_df["below_corrected_p"].mean())
-        if "below_corrected_p" in map_df.columns
-        else math.nan
-    )
-    mean_map = (
-        float(map_df["mean_average_precision"].mean())
-        if "mean_average_precision" in map_df.columns
-        else math.nan
-    )
-    return ratio, mean_map
-
-
-def _record_metric(result: dict, name: str, map_df, ratio, subset_targets) -> None:
+def _record_metric(result: dict, name: str, map_df, ratio) -> None:
     """Write one metric's ratio + mean mAP into ``result``.
 
-    With ``subset_targets`` the mAP came from all perturbations but only the
-    subset's rows are summarised (Option B). Without it, the scorer's own ratio
-    is authoritative and the mean is read off the map when present.
+    The scorer's own ratio is authoritative; the mean is read off the map when
+    the scorer returned one.
     """
-    if subset_targets is not None:
-        result[f"{name}_ratio"], result[f"{name}_map_mean"] = (
-            _ratio_and_mean_from_map(_filter_map_to_targets(map_df, subset_targets))
-        )
-        return
     result[f"{name}_ratio"] = float(ratio)
     if map_df is not None and "mean_average_precision" in map_df.columns:
         result[f"{name}_map_mean"] = float(map_df["mean_average_precision"].mean())
 
 
-def _score_all_metrics(
-    g_norm: ad.AnnData, _logger, distance="cosine", subset_targets: Optional[set] = None
-) -> dict:
+def _score_all_metrics(g_norm: ad.AnnData, _logger, distance="cosine") -> dict:
     """Score every metric in METRICS on a guide-level AnnData.
 
     Returns a dict of ``{metric}_ratio`` / ``{metric}_map_mean`` (METRIC_COLUMNS),
     NaN for anything that failed to score.
-
-    If ``subset_targets`` is provided, mAP is computed using ALL perturbations
-    (so the full context is preserved) but ratios and means are reported only
-    for the perturbations in ``subset_targets`` (Option B scoring).
     """
     from ops_utils.analysis.map_scores import (
         phenotypic_distinctivness,
@@ -543,15 +492,10 @@ def _score_all_metrics(
         activity_map, active_ratio = phenotypic_activity_assesment(
             g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
-        if subset_targets is not None:
-            _record_metric(
-                result, "activity", activity_map, active_ratio, subset_targets,
-            )
-        else:
-            result["activity_ratio"] = float(active_ratio)
-            result["activity_map_mean"] = float(
-                activity_map["mean_average_precision"].mean()
-            )
+        result["activity_ratio"] = float(active_ratio)
+        result["activity_map_mean"] = float(
+            activity_map["mean_average_precision"].mean()
+        )
     except Exception as exc:
         _logger.warning(f"    Activity scoring failed: {exc}")
         return result
@@ -560,7 +504,7 @@ def _score_all_metrics(
         dist_map, dist_ratio = phenotypic_distinctivness(
             g_copairs, plot_results=False, null_size=NULL_SIZE, distance=distance,
         )
-        _record_metric(result, "distinctiveness", dist_map, dist_ratio, subset_targets)
+        _record_metric(result, "distinctiveness", dist_map, dist_ratio)
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
 
@@ -581,7 +525,7 @@ def _score_all_metrics(
                 e_copairs, plot_results=False, null_size=NULL_SIZE,
                 cache_similarity=True, distance=distance,
             )
-            _record_metric(result, name, map_df, ratio, subset_targets)
+            _record_metric(result, name, map_df, ratio)
     except Exception as exc:
         _logger.warning(f"    Consistency scoring failed: {exc}")
 
@@ -593,32 +537,12 @@ def _score_all_metrics(
 # ---------------------------------------------------------------------------
 
 
-def _load_minibinder_targets() -> set:
-    """Load the 20 minibinder geneKO target names from the library CSV."""
-    df = pd.read_csv(MINIBINDER_TARGETS_CSV)
-    return set(df["gene_name"].dropna().unique())
-
-
-def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
-    """Subset cell-level adata to cells whose perturbation is in ``targets`` or is a control (NTC)."""
-    pert_col = _pert_col(adata)
-    mask = adata.obs[pert_col].isin(targets) | adata.obs[pert_col].str.startswith("NTC")
-    n_before = adata.n_obs
-    adata_sub = adata[mask].copy()
-    _logger.info(
-        f"  Subset to {len(targets)} targets + NTC: {n_before:,} → {adata_sub.n_obs:,} cells"
-    )
-    return adata_sub
-
-
 def _run_titration_points(
-    adata_cells, cell_targets, norm_method, signal, rng, _logger, subset_targets=None,
+    adata_cells, cell_targets, norm_method, signal, rng, _logger,
     min_exp=False, per_ko=False, per_guide=False, n_bootstraps=1, replace=False,
 ):
     """Score all titration points for an adata, returning a DataFrame of results.
 
-    If ``subset_targets`` is provided, scores are computed using all perturbations
-    but reported only for the subset (Option B).
     If ``per_ko`` is True, ``cell_targets`` are interpreted as cells-per-perturbation.
     If ``per_guide`` is True, ``cell_targets`` are interpreted as cells-per-sgRNA.
     If ``n_bootstraps`` > 1, runs N independent draws per titration point (different
@@ -655,7 +579,7 @@ def _run_titration_points(
                 replace=replace, min_exp=min_exp,
             )
             g_norm = normalize_guide_adata(g_sub, norm_method)
-            scores_b = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
+            scores_b = _score_all_metrics(g_norm, _logger)
             draw_rows.append(scores_b)
             g_sub_last = g_sub
 
@@ -817,7 +741,6 @@ def titrate_single_reporter(
     output_dir: str,
     norm_method: str = "ntc",
     random_seed: int = 42,
-    minibinder_subset: bool = False,
     min_exp: bool = False,
     per_ko: bool = False,
     per_ko_max: bool = False,
@@ -831,10 +754,8 @@ def titrate_single_reporter(
     """Run cell-count titration for a single reporter.
 
     Loads the full cell-level PCA-reduced h5ad, subsamples real cells at each
-    titration point, re-aggregates to guide level, and scores all 4 metrics.
-
-    If ``minibinder_subset`` is True, also runs the titration on only the 20
-    minibinder geneKO targets and produces a comparison overlay plot.
+    titration point, re-aggregates to guide level, and scores every metric in
+    ``METRICS``.
 
     Returns a status string.
     """
@@ -929,96 +850,9 @@ def titrate_single_reporter(
         _logger.info("  All targets cached; skipping recompute.")
     df_full = _merge_and_write(df_new, cached_rows, full_target_col, csv_path, _logger)
 
-    # --- Minibinder subset titrations ---
-    df_library = None  # Option A: subset cells, score subset perturbations
-    df_scores = None  # Option B: all cells, score only subset perturbations
-    minibinder_dir = None
-    if minibinder_subset:
-        targets = _load_minibinder_targets()
-        minibinder_dir = output_dir / "minibinder" / sig_safe
-        minibinder_dir.mkdir(parents=True, exist_ok=True)
-
-        # Option A — subset library: filter cells to targets, titrate smaller pool
-        _logger.info("  [Option A] Subset library titration...")
-        adata_sub = _subset_to_targets(adata_cells, targets, _logger)
-        sub_targets = _build_per_ko_schedule(adata_sub.n_obs, MIN_CELLS)
-        _logger.info(f"  Subset titration points: {sub_targets}")
-        lib_csv = minibinder_dir / f"{sig_safe}_titration_library.csv"
-        sub_target_col = _target_col("total")
-        sub_to_run, sub_cached = (
-            _cache_split(lib_csv, sub_targets, sub_target_col, _logger)
-            if cache else (list(sub_targets), [])
-        )
-        if sub_to_run:
-            df_lib_new = _run_titration_points(
-                adata_sub,
-                sub_to_run,
-                norm_method,
-                signal,
-                np.random.RandomState(random_seed),
-                _logger,
-            )
-        else:
-            df_lib_new = pd.DataFrame()
-        df_library = _merge_and_write(df_lib_new, sub_cached, sub_target_col, lib_csv, _logger)
-
-        # Option B — subset scores: same full cells, but report only subset mAP/ratios
-        _logger.info("  [Option B] Subset scores from full pool...")
-        scores_csv = minibinder_dir / f"{sig_safe}_titration_scores.csv"
-        scores_to_run, scores_cached = (
-            _cache_split(scores_csv, cell_targets, full_target_col, _logger)
-            if cache else (list(cell_targets), [])
-        )
-        if scores_to_run:
-            df_scores_new = _run_titration_points(
-                adata_cells.copy(),
-                scores_to_run,
-                norm_method,
-                signal,
-                np.random.RandomState(random_seed),
-                _logger,
-                subset_targets=targets,
-            )
-        else:
-            df_scores_new = pd.DataFrame()
-        df_scores = _merge_and_write(
-            df_scores_new, scores_cached, full_target_col, scores_csv, _logger,
-        )
-
     # Plot — PNG + SVG for each scale
     try:
-        plt = _plt()
-        _plot_titration(df_full, signal, reporter_dir, sig_safe, plt)
-        if minibinder_dir is not None:
-            mb_metrics = ("activity", "distinctiveness")
-            _plot_titration(
-                df_library, signal, minibinder_dir, sig_safe, plt, metrics=mb_metrics
-            )
-            # Option A comparison: full vs subset library
-            _plot_titration_comparison(
-                df_full,
-                df_library,
-                signal,
-                minibinder_dir,
-                sig_safe,
-                plt,
-                label_a="All Perts",
-                label_b="Minibinder Library",
-                metrics=mb_metrics,
-            )
-            # Option B comparison: full scores vs subset scores (same cells)
-            _plot_titration_comparison(
-                df_full,
-                df_scores,
-                signal,
-                minibinder_dir,
-                sig_safe,
-                plt,
-                label_a="All Perts",
-                label_b="Minibinder Scores",
-                suffix="scores",
-                metrics=mb_metrics,
-            )
+        _plot_titration(df_full, signal, reporter_dir, sig_safe, _plt())
     except Exception as exc:
         _logger.warning(f"  Plotting failed: {exc}")
 
@@ -1032,16 +866,6 @@ _X_AXIS_VARIANTS = [
     ("cells_per_guide", "Cells / Guide", "perguide"),
 ]
 
-# Background "fluorescent pack" for the BF-vs-phase comparison plot: every
-# fluor / 4i / cell-painting marker titration (the EBI-inclusive combined run),
-# drawn in low-alpha gray so the labelfree reconstructions visibly break out of
-# the pack. Labelfree signals (anything with "phase" in the name) are excluded.
-_FLUOR_PACK_GLOB = (
-    "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
-    "zscore_per_exp/paper_v1/with_cp/with_4i/all_livecell/fixed_80%/cosine/"
-    "titration_guide_median/*/*_titration.csv"
-)
-
 
 def titration_x_axis_base_label(x_col: str) -> str:
     """Human-readable x-axis title segment for a titration CSV column."""
@@ -1051,14 +875,13 @@ def titration_x_axis_base_label(x_col: str) -> str:
     return x_col
 
 
-def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None):
+def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt):
     """Generate titration plots for one reporter across all scales and x-axis types.
 
     Saves PNG + SVG for each (scale × x-axis) combination into ``reporter_dir``.
     All text is sized at 1.5× the matplotlib default for legibility.
     """
-    if metrics is None:
-        metrics = METRICS
+    metrics = METRICS
     reporter_dir = Path(reporter_dir)
     reporter_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1141,140 +964,12 @@ def _plot_series(ax, x, df, col, scale_y=1.0, **kwargs):
         ax.plot(x, vals, **kwargs)
 
 
-def _plot_titration_comparison(
-    df_full,
-    df_subset,
-    signal,
-    reporter_dir,
-    sig_safe,
-    plt,
-    label_a="All Perts",
-    label_b="Minibinder",
-    suffix="library",
-    metrics=("activity", "distinctiveness"),
-):
-    """Overlay two titration curves to show the shift.
-
-    Produces one figure per (scale × x-axis) combination with 2 panels.
-    Curve A shown as solid lines, curve B as dashed lines.
-    Both total-cells and cells/perturbation x-axes are generated.
-    ``suffix`` distinguishes Option A (library) vs Option B (scores) filenames.
-    """
-    reporter_dir = Path(reporter_dir)
-    colors = TITRATION_METRIC_COLORS
-    ratio_labels = TITRATION_RATIO_LABELS
-    map_labels = TITRATION_MAP_LABELS
-    _scale_label = SCALE_LABEL_SHORT
-
-    # Dump the (x, y, sem) points for every series plotted, long format.
-    long_rows: List[Dict] = []
-    for series_label, df_src in ((label_a, df_full), (label_b, df_subset)):
-        for x_col_, _, _ in _X_AXIS_VARIANTS:
-            if x_col_ not in df_src.columns:
-                continue
-            for metric in metrics:
-                for kind in ("ratio", "map_mean"):
-                    ycol = f"{metric}_{kind}"
-                    sem_col = f"{ycol}_sem"
-                    if ycol not in df_src.columns:
-                        continue
-                    for _, row in df_src.iterrows():
-                        long_rows.append({
-                            "series": series_label,
-                            "metric": metric,
-                            "kind": kind,
-                            "x_col": x_col_,
-                            "x": float(row[x_col_]),
-                            "y": float(row[ycol]) if pd.notna(row.get(ycol)) else float("nan"),
-                            "sem": float(row[sem_col]) if sem_col in df_src.columns and pd.notna(row.get(sem_col)) else float("nan"),
-                        })
-    if long_rows:
-        cmp_csv = reporter_dir / f"{sig_safe}_comparison_{suffix}.csv"
-        pd.DataFrame(long_rows).to_csv(cmp_csv, index=False)
-
-    for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
-        if x_col not in df_full.columns or x_col not in df_subset.columns:
-            continue
-        x_full = df_full[x_col].values
-        x_sub = df_subset[x_col].values
-        x_all = np.concatenate([x_full, x_sub])
-
-        for scale in SCALES:
-            fig, axes = plt.subplots(1, 2, figsize=(22, 9))
-            xlabel = f"{x_label_base} ({_scale_label[scale]})"
-
-            # Panel 1: % significant
-            ax = axes[0]
-            for metric in metrics:
-                col = f"{metric}_ratio"
-                c = colors[metric]
-                _plot_series(ax, x_full, df_full, col, scale_y=100,
-                             marker="o", color=c, linewidth=3.5, markersize=8,
-                             label=f"{ratio_labels[metric]} ({label_a})")
-                _plot_series(ax, x_sub, df_subset, col, scale_y=100,
-                             marker="^", color=c, linewidth=3.5, markersize=8,
-                             linestyle="--", alpha=0.7,
-                             label=f"{ratio_labels[metric]} ({label_b})")
-            ax.set_xlabel(xlabel, fontsize=22)
-            ax.set_ylabel("% Significant", fontsize=22)
-            ax.set_title(
-                f"{signal} — % Significant: {label_a} vs {label_b}", fontsize=22
-            )
-            ax.tick_params(axis="y", labelsize=18)
-            _apply_x_scale(ax, x_all, scale, tick_fontsize=18)
-
-            # Panel 2: mean mAP
-            ax = axes[1]
-            for metric in metrics:
-                col = f"{metric}_map_mean"
-                c = colors[metric]
-                _plot_series(ax, x_full, df_full, col,
-                             marker="s", color=c, linewidth=3.5, markersize=8,
-                             label=f"{map_labels[metric]} ({label_a})")
-                _plot_series(ax, x_sub, df_subset, col,
-                             marker="D", color=c, linewidth=3.5, markersize=8,
-                             linestyle="--", alpha=0.7,
-                             label=f"{map_labels[metric]} ({label_b})")
-            ax.set_xlabel(xlabel, fontsize=22)
-            ax.set_ylabel("Mean mAP", fontsize=22)
-            ax.set_title(f"{signal} — Mean mAP: {label_a} vs {label_b}", fontsize=22)
-            ax.tick_params(axis="y", labelsize=18)
-            _apply_x_scale(ax, x_all, scale, tick_fontsize=18)
-
-            # Single legend below the plots
-            handles, labels_list = axes[0].get_legend_handles_labels()
-            fig.legend(
-                handles,
-                labels_list,
-                loc="lower center",
-                ncol=4,
-                fontsize=14,
-                bbox_to_anchor=(0.5, -0.02),
-            )
-
-            fig.suptitle(
-                f"Titration {suffix.title()} — {signal}  [{scale}]",
-                fontsize=31,
-                fontweight="bold",
-            )
-            fig.tight_layout(rect=[0, 0.06, 1, 0.97])
-
-            stem = reporter_dir / f"{sig_safe}_comparison_{suffix}_{x_suffix}_{scale}"
-            fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
-            fig.savefig(f"{stem}.svg", bbox_inches="tight")
-            plt.close(fig)
-
-
 def _plot_combined_titration(
     output_dir,
     plt,
     csv_glob="**/*_titration.csv",
     title_suffix=None,
     filename_prefix="titration_combined",
-    fluor_pack_glob=None,
-    save_dir=None,
-    x_cap=None,
-    perpert_log10_only=False,
 ):
     """Combine all per-reporter titration CSVs into one summary plot.
 
@@ -1288,15 +983,8 @@ def _plot_combined_titration(
     all_dfs = [pd.read_csv(f) for f in csv_files]
     combined = pd.concat(all_dfs, ignore_index=True)
 
-    # Optional cap on cells/perturbation (focus on the cell-limited regime).
-    if x_cap is not None and "cells_per_perturbation" in combined.columns:
-        combined = combined[combined["cells_per_perturbation"] <= x_cap]
-
     # Export the combined DataFrame as CSV next to the plots
-    combined_csv = Path(save_dir or output_dir) / f"{filename_prefix}.csv"
-    if save_dir:
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
-    combined.to_csv(combined_csv, index=False)
+    combined.to_csv(Path(output_dir) / f"{filename_prefix}.csv", index=False)
 
     signals = combined["signal"].unique()
     n_signals = len(signals)
@@ -1376,49 +1064,16 @@ def _plot_combined_titration(
 
     _scale_label = SCALE_LABEL_SHORT
 
-    # Optional "fluorescent pack" overlay (every fluor/4i/CP marker), drawn as
-    # gray context behind the labelfree curves so Phase2D/Focus3D/raw-BF break
-    # out of the pack. Only active when a glob is passed; phase signals excluded.
-    # Plots saved to save_dir (a dedicated subdir) so the standard pack-free
-    # plots are not overwritten.
-    dest = Path(save_dir) if save_dir else Path(output_dir)
-    if save_dir:
-        dest.mkdir(parents=True, exist_ok=True)
-    bg_combined = None
-    _pack_glob = fluor_pack_glob
-    if _pack_glob:
-        _bg_files = sorted(glob.glob(_pack_glob))
-        if _bg_files:
-            _bg = pd.concat([pd.read_csv(f) for f in _bg_files], ignore_index=True)
-            _bg = _bg[~_bg["signal"].astype(str).str.lower().str.contains("phase")]
-            if x_cap is not None and "cells_per_perturbation" in _bg.columns:
-                _bg = _bg[_bg["cells_per_perturbation"] <= x_cap]
-            if len(_bg):
-                bg_combined = _bg
-                _n_pack = _bg["signal"].nunique()
-
-    def _plot_pack(ax, col, x_col, scale_to_pct=False):
-        """Draw the fluor pack in low-alpha gray behind the main curves."""
-        if bg_combined is None or col not in bg_combined.columns:
-            return
-        for _, bsub in bg_combined.groupby("signal", observed=True):
-            bsub = bsub.sort_values(x_col)
-            y = bsub[col] * (100 if scale_to_pct else 1)
-            ax.plot(bsub[x_col], y, color="0.55", alpha=0.45, linewidth=1.8,
-                    zorder=0.5, solid_capstyle="round")
+    dest = Path(output_dir)
 
     for x_col, x_label_base, x_suffix in _X_AXIS_VARIANTS:
         if x_col not in combined.columns:
-            continue
-        if perpert_log10_only and x_suffix != "perpert":
             continue
         x_all = combined[x_col].values
         x_min, x_max = float(x_all.min()), float(x_all.max())
 
         n_metrics_plot = len(metric_info)
         for scale in SCALES:
-            if perpert_log10_only and scale != "log10":
-                continue
             fig, axes = plt.subplots(2, n_metrics_plot, figsize=(14 * n_metrics_plot, 18))
             xlabel = f"{x_label_base} ({_scale_label[scale]})"
 
@@ -1430,10 +1085,6 @@ def _plot_combined_titration(
             for col_idx, (metric, label) in enumerate(metric_info):
                 ax = axes[0, col_idx]
                 ratio_col = f"{metric}_ratio"
-                _plot_pack(ax, ratio_col, x_col, scale_to_pct=True)
-                if bg_combined is not None and col_idx == 0:
-                    ax.plot([], [], color="0.55", alpha=0.7, linewidth=2.5,
-                            label=f"fluor / 4i / CP markers (n={_n_pack})")
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if ratio_col in sub.columns:
@@ -1462,7 +1113,6 @@ def _plot_combined_titration(
             for col_idx, (metric, label) in enumerate(metric_info):
                 ax = axes[1, col_idx]
                 map_col = f"{metric}_map_mean"
-                _plot_pack(ax, map_col, x_col)
                 for i, sig in enumerate(sorted(signals)):
                     sub = combined[combined["signal"] == sig].sort_values(x_col)
                     if map_col in sub.columns:
@@ -1522,7 +1172,7 @@ def _plot_combined_titration(
             _sigset = set(signals)
             _phase_sig = ("Phase2D" if "Phase2D" in _sigset
                           else "Phase" if "Phase" in _sigset else None)
-            if (_is_bf_run and _pack_glob is None and "BF_z3" in _sigset
+            if (_is_bf_run and "BF_z3" in _sigset
                     and _phase_sig is not None
                     and x_suffix == "perpert" and scale == "log10"):
                 _delta_dir = Path(output_dir) / "phase2d_vs_bfmid"
@@ -1620,8 +1270,8 @@ def _build_parser():
         allow_abbrev=False,
     )
     parser.add_argument(
-        "-o", "--output-dir", type=str, default=DEFAULT_PCA_OPT_ROOT,
-        help=f"Root output directory (same as pca_optimization -o; default: {DEFAULT_PCA_OPT_ROOT})",
+        "-o", "--output-dir", type=str, required=True,
+        help="Root output directory — the same path passed to pca_optimization -o.",
     )
     parser.add_argument("--norm-method", type=str, default="ntc",
                         help="Normalization method (default: ntc)")
@@ -1675,10 +1325,10 @@ def _build_parser():
         help="Look under only_cp/ (same as pca_optimization --only-cp). Implies --with-cp.",
     )
     parser.add_argument(
-        "--paper-v1", type=str, nargs="?",
-        const="/hpc/projects/icd.fast.ops/configs/good_experiment_list_v1.yml",
-        default=None,
-        help="Look under paper_v1/ (same as pca_optimization --paper-v1).",
+        "--paper-v1", action="store_true",
+        help="Look under paper_v1/ (mirrors pca_optimization --paper-v1). This "
+             "script only uses it to nest the output path, never to read an "
+             "experiment list, so it takes no value.",
     )
     parser.add_argument(
         "--run-tag", type=str, default=None,
@@ -1686,9 +1336,6 @@ def _build_parser():
              "after paper_v1/ and before the channel-set subdir (e.g. "
              "'corrected' resolves to paper_v1/corrected/phase_only/...).",
     )
-    parser.add_argument("--minibinder-subset", action="store_true",
-                        help="Also run titration on the 20 minibinder geneKO targets "
-                             "and produce comparison overlay plots")
     parser.add_argument(
         "--fixed-threshold", type=float, default=0.80,
         help="Match pca_optimization --fixed-threshold (uses fixed_<pct>/ not consensus_sweep/). "
@@ -1752,17 +1399,12 @@ def _build_parser():
              "writes a shard CSV (<reporter>_titration_t<target>.csv), and "
              "shards are merged into the canonical <reporter>_titration.csv "
              "after all tasks complete. Requires --slurm. Trades extra "
-             "h5ad-load I/O per task for wall-clock parallelism. "
-             "NOTE: --minibinder-subset is not supported in this mode (only "
-             "the full titration is sharded) — pass --no-per-target-slurm to "
-             "fall back to one-job-per-reporter when running with "
-             "--minibinder-subset.",
+             "h5ad-load I/O per task for wall-clock parallelism.",
     )
     parser.add_argument(
         "--no-per-target-slurm", dest="per_target_slurm", action="store_false",
         help="Disable per-(reporter,target) SLURM fan-out and revert to "
-             "one job per reporter. Required when pairing with "
-             "--minibinder-subset.",
+             "one job per reporter.",
     )
     phase_group = parser.add_mutually_exclusive_group()
     phase_group.add_argument("--phase-only", action="store_true")
@@ -1831,163 +1473,16 @@ def _resolve_output_dir(args) -> Path:
     return output_dir
 
 
-def _plot_labelfree_vs_pack(
-    titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
-    x_col="cells_per_guide", x_label="Cells / Guide", scale="log10",
-    metrics=("activity", "distinctiveness", "ebi"),
-    rows=(("ratio", True), ("map_mean", False)),
-    multicolor_pack=False,
-    include_brightfield=True,
-    title_override=None,
-    xlim=None,
-    ylim=None,
-    font_scale=1.0,
-    pack_linewidth=1.8,
-    pack_markersize=4,
-    filename="titration_midslice_phase2d_vs_pack_perguide_log10",
-):
-    """Focused 'money plot' for dark slides: fluorescent pack behind, only
-    BF-mid + Phase2D highlighted. Transparent background, white borders/text.
-    `metrics`/`rows` subset the panels; `multicolor_pack` colors each marker
-    distinctly instead of gray. Saved to vs_fluor_pack/.
-    """
-    plt.rcParams["pdf.fonttype"] = 42
-    titration_dir = Path(titration_dir)
-    csvs = sorted(titration_dir.glob("*/*_titration.csv"))
-    if not csvs:
-        return
-    comb = pd.concat([pd.read_csv(f) for f in csvs], ignore_index=True)
-    bg = None
-    bgf = sorted(glob.glob(fluor_pack_glob))
-    if bgf:
-        bg = pd.concat([pd.read_csv(f) for f in bgf], ignore_index=True)
-        bg = bg[~bg["signal"].astype(str).str.lower().str.contains("phase")]
-
-    names = {"activity": "Activity", "distinctiveness": "Distinctiveness", "ebi": "EBI"}
-    metrics = list(metrics)
-    rows = list(rows)
-    # Dark-background figure: Phase2D = white (hero), BF-mid = bright cyan.
-    highlight = {"Phase2D": ("#ffffff", "Phase Reconstruction")}
-    if include_brightfield:
-        highlight["BF_z3"] = ("#2ec4d6", "Brightfield")
-    x_all = comb[x_col].values
-    xmin, xmax = float(x_all.min()), float(x_all.max())
-    if xlim is not None:
-        xmin, xmax = float(xlim[0]), float(xlim[1])
-    _scale_sfx = {"linear": "", "log2": " (log₂)", "log10": " (log₁₀)"}[scale]
-
-    pack_colors = None
-    if multicolor_pack and bg is not None:
-        _sigs = sorted(bg["signal"].unique())
-        _cmap = plt.cm.gist_rainbow(np.linspace(0, 1, len(_sigs)))
-        pack_colors = {s: _cmap[i] for i, s in enumerate(_sigs)}
-
-    from matplotlib.ticker import (LogLocator, LogFormatterSciNotation,
-                                   NullFormatter, AutoMinorLocator)
-    nrows, ncols = len(rows), len(metrics)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(11 * ncols, 11 * nrows),
-                             squeeze=False)
-    for r, (suf, as_pct) in enumerate(rows):
-        for c, m in enumerate(metrics):
-            ax = axes[r][c]
-            col = f"{m}_{suf}"
-            if bg is not None and col in bg.columns:
-                for sig, bs in bg.groupby("signal", observed=True):
-                    bs = bs.sort_values(x_col)
-                    color = pack_colors[sig] if pack_colors else "0.7"
-                    ax.plot(bs[x_col], bs[col] * (100 if as_pct else 1),
-                            color=color, alpha=0.55, linewidth=pack_linewidth,
-                            marker="o", markersize=pack_markersize,
-                            zorder=0.5, solid_capstyle="round")
-            for sig, (color, lab) in highlight.items():
-                s = comb[comb["signal"] == sig].sort_values(x_col)
-                if col in s.columns and len(s):
-                    ax.plot(s[x_col], s[col] * (100 if as_pct else 1),
-                            color=color, linewidth=3.5, marker="o", markersize=9,
-                            label=lab, zorder=5)
-            _apply_x_scale(ax, [xmin, xmax], scale,
-                           tick_fontsize=int(round(19 * font_scale)))
-            ax.grid(False)
-            # Tick marks: decade 10^n (log) or evenly-spaced (linear), with
-            # minor ticks so the axis is easy to read.
-            if scale == "linear":
-                ax.xaxis.set_minor_locator(AutoMinorLocator())
-            else:
-                ax.xaxis.set_major_locator(LogLocator(base=10.0))
-                ax.xaxis.set_major_formatter(LogFormatterSciNotation(base=10.0))
-                ax.xaxis.set_minor_locator(
-                    LogLocator(base=10.0, subs=(2, 3, 4, 5, 6, 7, 8, 9)))
-                ax.xaxis.set_minor_formatter(NullFormatter())
-            ax.tick_params(axis="x", which="both", colors="white", rotation=0)
-            ax.tick_params(axis="x", which="major", length=9, width=1.5)
-            ax.tick_params(axis="x", which="minor", length=5, width=1.0)
-            ax.set_box_aspect(1)  # square panel
-            if xlim is not None:
-                ax.set_xlim(*xlim)
-            else:
-                ax.set_xlim(xmin * 0.7, xmax * 1.3)
-            if ylim is not None:
-                ax.set_ylim(*ylim)
-            ax.set_xlabel(f"{x_label}{_scale_sfx}", fontsize=24 * font_scale)
-            ax.set_ylabel("% Significant" if as_pct else "Mean mAP", fontsize=24 * font_scale)
-            ax.set_title(title_override or (names[m] if as_pct else f"{names[m]} mAP"),
-                         fontsize=26 * font_scale)
-            # White borders + text for a dark slide background.
-            for spine in ax.spines.values():
-                spine.set_color("white")
-            ax.tick_params(axis="both", colors="white", labelsize=19 * font_scale)
-            ax.xaxis.label.set_color("white")
-            ax.yaxis.label.set_color("white")
-            ax.title.set_color("white")
-    if bg is not None and not multicolor_pack:
-        axes[0][0].plot([], [], color="0.7", alpha=0.85, linewidth=2.5,
-                        label=f"fluor / 4i / CP markers (n={bg['signal'].nunique()})")
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    leg = fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=20 * font_scale,
-                     bbox_to_anchor=(0.5, 0.005), labelcolor="white")
-    leg.get_frame().set_facecolor("none")
-    leg.get_frame().set_edgecolor("white")
-    fig.tight_layout(rect=[0, 0.06, 1, 0.97])
-    out = titration_dir / "vs_fluor_pack"
-    out.mkdir(exist_ok=True)
-    stem = out / filename
-    fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight", transparent=True)
-    fig.savefig(f"{stem}.svg", bbox_inches="tight", transparent=True)
-    plt.close(fig)
-
-
-def _emit_combined_plots(titration_dir, minibinder_subset: bool = False) -> None:
-    """Across-reporter combined plot, plus the minibinder library/scores pair.
-
-    The tail step of every run mode (local, per-reporter SLURM, per-target
-    SLURM, and --replot), which each used to inline this block.
-    """
-    plt = _plt()
+def _emit_combined_plots(titration_dir) -> None:
+    """Across-reporter combined plot — the tail step of every run mode
+    (local, per-reporter SLURM, per-target SLURM, and --replot)."""
     titration_dir = Path(titration_dir)
     print("Generating combined titration plot...")
-    _plot_combined_titration(titration_dir, plt)
+    _plot_combined_titration(titration_dir, _plt())
     print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
 
-    if not minibinder_subset:
-        return
-    mb_base = titration_dir / "minibinder"
-    if not mb_base.exists():
-        return
-    print("Generating minibinder combined plots...")
-    # Each call no-ops when its glob matches nothing.
-    _plot_combined_titration(
-        mb_base, plt, csv_glob="**/*_titration_library.csv",
-        title_suffix="Minibinder Library",
-    )
-    _plot_combined_titration(
-        mb_base, plt, csv_glob="**/*_titration_scores.csv",
-        title_suffix="Minibinder Scores",
-        filename_prefix="titration_scores_combined",
-    )
-    print(f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}")
 
-
-def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
+def _replot_one(csv_path: Path) -> str:
     """Plot a single reporter from its CSV; returns sig_safe for progress reporting."""
     plt = _plt()
     df = pd.read_csv(csv_path)
@@ -2000,76 +1495,29 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
     sig_safe = reporter_dir.name
     _plot_titration(df, signal, reporter_dir, sig_safe, plt)
 
-    # Replot minibinder subset plots if CSVs exist
-    if minibinder_subset:
-        titration_dir = reporter_dir.parent
-        mb_dir = titration_dir / "minibinder" / sig_safe
-        mb_library_csv = mb_dir / f"{sig_safe}_titration_library.csv"
-        mb_scores_csv = mb_dir / f"{sig_safe}_titration_scores.csv"
-        mb_metrics = ("activity", "distinctiveness")
-
-        if mb_library_csv.exists():
-            df_library = pd.read_csv(mb_library_csv)
-            _plot_titration(
-                df_library, signal, mb_dir, sig_safe, plt, metrics=mb_metrics
-            )
-            _plot_titration_comparison(
-                df,
-                df_library,
-                signal,
-                mb_dir,
-                sig_safe,
-                plt,
-                label_a="All Perts",
-                label_b="Minibinder Library",
-                metrics=mb_metrics,
-            )
-
-        if mb_scores_csv.exists():
-            df_scores = pd.read_csv(mb_scores_csv)
-            _plot_titration_comparison(
-                df,
-                df_scores,
-                signal,
-                mb_dir,
-                sig_safe,
-                plt,
-                label_a="All Perts",
-                label_b="Minibinder Scores",
-                suffix="scores",
-                metrics=mb_metrics,
-            )
-
     plt.close("all")
     return sig_safe
 
 
-def _replot(titration_dir, minibinder_subset: bool = False):
+def _replot(titration_dir):
     """Regenerate all per-reporter and combined plots from existing CSVs, in parallel."""
     titration_dir = Path(titration_dir)
-    plt = _plt()
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from ops_utils.hpc.resource_manager import get_optimal_workers
     from tqdm import tqdm
 
-    # Only glob top-level reporter CSVs, not minibinder subdirectory CSVs
-    csv_files = sorted(
-        p
-        for p in titration_dir.glob("*/*_titration.csv")
-        if "minibinder" not in p.parts
-    )
+    csv_files = sorted(titration_dir.glob("*/*_titration.csv"))
     if not csv_files:
         print(f"No *_titration.csv files found under {titration_dir}")
         return
 
     # Plotting is CPU + light RAM bound; leave GPU out of the equation
     n_workers = get_optimal_workers(use_gpu=False, model_ram_gb=0.05, data_ram_gb=0.2)
-    label = "reporters" + (" + minibinder" if minibinder_subset else "")
-    print(f"Replotting {len(csv_files)} {label} with {n_workers} workers...")
+    print(f"Replotting {len(csv_files)} reporters with {n_workers} workers...")
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futures = {
-            pool.submit(_replot_one, csv_path, minibinder_subset): csv_path
+            pool.submit(_replot_one, csv_path): csv_path
             for csv_path in csv_files
         }
         with tqdm(total=len(futures), unit="reporter") as pbar:
@@ -2080,45 +1528,7 @@ def _replot(titration_dir, minibinder_subset: bool = False):
                     pbar.set_postfix_str(f"ERROR {futures[fut].stem}: {exc}")
                 pbar.update(1)
 
-    _emit_combined_plots(titration_dir, minibinder_subset)
-
-    # BF run: also emit a fluorescent-pack overlay variant in its own subdir,
-    # so the labelfree curves can be seen breaking out from the fluor/4i/CP pack.
-    if sorted(Path(titration_dir).glob("BF_z*/*_titration.csv")):
-        _plot_combined_titration(
-            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
-            save_dir=Path(titration_dir) / "vs_fluor_pack",
-            filename_prefix="titration_vs_fluor_pack")
-        # Capped variant: perpert log10 only, stopping at 3k cells/pert (the
-        # cell-limited regime where the labelfree breakout is clearest).
-        _plot_combined_titration(
-            titration_dir, plt, fluor_pack_glob=_FLUOR_PACK_GLOB,
-            save_dir=Path(titration_dir) / "vs_fluor_pack",
-            filename_prefix="titration_vs_fluor_pack_cap3k",
-            x_cap=3000, perpert_log10_only=True)
-        print(f"Saved {titration_dir}/vs_fluor_pack/titration_vs_fluor_pack[_cap3k]_*.{{png,svg}}")
-        # Focused money plot: pack in gray, only BF-mid + Phase2D highlighted.
-        _plot_labelfree_vs_pack(titration_dir, plt)
-        # Single-panel distinctiveness mean-mAP, multicolor fluorescent pack.
-        _plot_labelfree_vs_pack(
-            titration_dir, plt, metrics=("distinctiveness",),
-            rows=(("map_mean", False),), multicolor_pack=True, title_override="geneKO mean mAP",
-            filename="titration_midslice_phase2d_vs_pack_distinct_meanmap_perguide_log10_multicolor")
-        # Same, but Phase only (no brightfield mid-slice curve).
-        _plot_labelfree_vs_pack(
-            titration_dir, plt, metrics=("distinctiveness",),
-            rows=(("map_mean", False),), multicolor_pack=True, include_brightfield=False,
-            title_override="geneKO mean mAP",
-            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_log10_multicolor")
-        # Linear-scale zoom on the workhorse regime (100-1000 cells/guide), Phase only.
-        _plot_labelfree_vs_pack(
-            titration_dir, plt, metrics=("distinctiveness",), rows=(("map_mean", False),),
-            multicolor_pack=True, include_brightfield=False, title_override="geneKO mean mAP",
-            scale="linear", xlim=(100, 1000), ylim=(0.0, 0.25),
-            font_scale=1.25, pack_linewidth=3.5, pack_markersize=9,
-            filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
-
-
+    _emit_combined_plots(titration_dir)
 
 # ---------------------------------------------------------------------------
 # Per-target SLURM helpers (picklable top-level functions for submitit)
@@ -2320,10 +1730,7 @@ def main():
             jobs = [{
                 "name": f"titr_replot_{titration_dir.parent.name}",
                 "func": _replot,
-                "kwargs": {
-                    "titration_dir": str(titration_dir),
-                    "minibinder_subset": args.minibinder_subset,
-                },
+                "kwargs": {"titration_dir": str(titration_dir)},
             }]
             slurm_params = {
                 "timeout_min": args.slurm_time,
@@ -2340,7 +1747,7 @@ def main():
                 wait_for_completion=True,
             )
         else:
-            _replot(titration_dir, minibinder_subset=args.minibinder_subset)
+            _replot(titration_dir)
         return
 
     per_signal_dir = variant_dir / "per_signal"
@@ -2360,10 +1767,6 @@ def main():
     if args.per_target_slurm and not args.slurm:
         print("[info] --per-target-slurm is the default but only takes effect "
               "under --slurm; running locally (one reporter at a time).")
-        args.per_target_slurm = False
-    if args.per_target_slurm and args.minibinder_subset:
-        print("[info] --minibinder-subset doesn't support per-target fan-out; "
-              "falling back to one SLURM job per reporter for this run.")
         args.per_target_slurm = False
 
     if args.per_target_slurm:
@@ -2487,7 +1890,7 @@ def main():
         _merge_per_target_shards(titration_dir, target_col, _logger)
 
         # Combined plot across reporters
-        _emit_combined_plots(titration_dir, args.minibinder_subset)
+        _emit_combined_plots(titration_dir)
         return
 
     if args.slurm:
@@ -2505,7 +1908,6 @@ def main():
                     "cells_h5ad_path": str(cf),
                     "output_dir": str(titration_dir),
                     "norm_method": args.norm_method,
-                    "minibinder_subset": args.minibinder_subset,
                     "min_exp": args.min_exp_titration,
                     "per_ko": args.per_ko_min_titration,
                     "per_ko_max": args.per_ko_max_titration,
@@ -2592,7 +1994,7 @@ def main():
             print(f"\nAll {total_jobs} titration jobs complete")
 
         # Generate combined plot from all CSVs
-        _emit_combined_plots(titration_dir, args.minibinder_subset)
+        _emit_combined_plots(titration_dir)
 
     else:
         print("\nRunning locally (sequential)...")
@@ -2601,7 +2003,6 @@ def main():
                 cells_h5ad_path=str(cf),
                 output_dir=str(titration_dir),
                 norm_method=args.norm_method,
-                minibinder_subset=args.minibinder_subset,
                 min_exp=args.min_exp_titration,
                 per_ko=args.per_ko_min_titration,
                 per_ko_max=args.per_ko_max_titration,
@@ -2614,7 +2015,7 @@ def main():
             )
             print(f"  {result}")
 
-        _emit_combined_plots(titration_dir, args.minibinder_subset)
+        _emit_combined_plots(titration_dir)
 
 
 if __name__ == "__main__":
