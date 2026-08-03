@@ -59,7 +59,13 @@ logger = logging.getLogger(__name__)
 DOWNSAMPLE_RATIO = 0.75  # multiply cell count by this each step
 MIN_CELLS = 5_000  # stop titrating below this
 NULL_SIZE = 10_000  # smaller null for speed (per-reporter)
-METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi", "ebi_plus")
+METRICS = ("activity", "distinctiveness", "corum", "chad", "ebi")
+# Canonical per-metric CSV columns. Derived from METRICS so this module and
+# combined_titration can't drift apart the way they did when each kept its own
+# hand-written list.
+METRIC_COLUMNS = tuple(
+    f"{metric}_{kind}" for metric in METRICS for kind in ("ratio", "map_mean")
+)
 SCALES = ("linear", "log2", "log10")  # x-axis scale variants to save
 
 # Shared plot styling / labels (used by compare_titration_versions and below)
@@ -69,7 +75,6 @@ TITRATION_METRIC_COLORS = {
     "corum": "mediumpurple",
     "chad": "darkorange",
     "ebi": "crimson",
-    "ebi_plus": "deeppink",
 }
 TITRATION_RATIO_LABELS = {
     "activity": "% Active",
@@ -77,7 +82,6 @@ TITRATION_RATIO_LABELS = {
     "corum": "% CORUM consistent",
     "chad": "% CHAD consistent",
     "ebi": "% EBI consistent",
-    "ebi_plus": "% EBI+ significant",
 }
 TITRATION_MAP_LABELS = {
     "activity": "Activity mAP",
@@ -85,7 +89,6 @@ TITRATION_MAP_LABELS = {
     "corum": "CORUM mAP",
     "chad": "CHAD mAP",
     "ebi": "EBI mAP",
-    "ebi_plus": "EBI+ mAP",
 }
 SCALE_LABEL_SHORT = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
 
@@ -395,7 +398,6 @@ def _score_all_metrics(
         phenotypic_consistency_corum,
         phenotypic_consistency_ebi,
         phenotypic_consistency_manual_annotation,
-        phenotypic_ebi_plus,
     )
 
     result = {
@@ -409,8 +411,6 @@ def _score_all_metrics(
         "chad_map_mean": math.nan,
         "ebi_ratio": math.nan,
         "ebi_map_mean": math.nan,
-        "ebi_plus_ratio": math.nan,
-        "ebi_plus_map_mean": math.nan,
     }
 
     try:
@@ -455,23 +455,6 @@ def _score_all_metrics(
                 )
     except Exception as exc:
         _logger.warning(f"    Distinctiveness scoring failed: {exc}")
-
-    try:
-        ebi_plus_map, ebi_plus_ratio = phenotypic_ebi_plus(
-            g_copairs,
-            plot_results=False,
-            null_size=NULL_SIZE,
-            distance=distance,
-        )
-        # EBI+ groups by complex, not perturbation, so subset_targets (a set of
-        # perturbation names) does not cleanly filter it — report the full ratio.
-        result["ebi_plus_ratio"] = float(ebi_plus_ratio)
-        if ebi_plus_map is not None and "mean_average_precision" in ebi_plus_map.columns:
-            result["ebi_plus_map_mean"] = float(
-                ebi_plus_map["mean_average_precision"].mean()
-            )
-    except Exception as exc:
-        _logger.warning(f"    EBI+ scoring failed: {exc}")
 
     try:
         e_norm = aggregate_to_level(
@@ -590,14 +573,7 @@ def _run_titration_points(
         )
 
     base_seed = int(rng.randint(0, 2**31 - 1))
-    metric_cols = [
-        "activity_ratio", "activity_map_mean",
-        "distinctiveness_ratio", "distinctiveness_map_mean",
-        "corum_ratio", "corum_map_mean",
-        "chad_ratio", "chad_map_mean",
-        "ebi_ratio", "ebi_map_mean",
-        "ebi_plus_ratio", "ebi_plus_map_mean",
-    ]
+    metric_cols = list(METRIC_COLUMNS)
 
     rows = []
     for target in cell_targets:
@@ -694,7 +670,6 @@ def _run_titration_points(
             f"corum={scores['corum_ratio']:.1%}±{scores.get('corum_ratio_sem', 0):.1%} "
             f"chad={scores['chad_ratio']:.1%}±{scores.get('chad_ratio_sem', 0):.1%} "
             f"ebi={scores['ebi_ratio']:.1%}±{scores.get('ebi_ratio_sem', 0):.1%} "
-            f"ebi+={scores['ebi_plus_ratio']:.1%}±{scores.get('ebi_plus_ratio_sem', 0):.1%} "
             f"({time.time() - t_step:.0f}s)"
         )
     return pd.DataFrame(rows)
@@ -2163,14 +2138,16 @@ def _build_schedule_for_cells_path(
     """
     a = ad.read_h5ad(cells_h5ad_path, backed="r")
     if per_guide_min or per_guide_max or per_guide_median:
-        if "sgRNA" not in a.obs.columns:
+        guide_col_name = _guide_col(a)
+        if guide_col_name not in a.obs.columns:
             raise ValueError(
-                f"{cells_h5ad_path.name}: per-guide titration requires 'sgRNA' obs col"
+                f"{cells_h5ad_path.name}: per-guide titration requires "
+                f"{guide_col_name!r} obs col"
             )
         pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
         # Single groupby pass (size + first together) instead of two separate
         # groupbys over the full ~60M-row obs.
-        sg = a.obs.groupby("sgRNA", observed=True).agg(
+        sg = a.obs.groupby(guide_col_name, observed=True).agg(
             n=(pert_col, "size"), pert=(pert_col, "first"))
         sg_counts = sg["n"]
         non_ntc_counts = sg.loc[~sg["pert"].astype(str).str.startswith("NTC"), "n"]

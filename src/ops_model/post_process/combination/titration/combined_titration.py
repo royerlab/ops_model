@@ -52,6 +52,7 @@ from ops_model.features.anndata_utils import (
 from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
 from ops_model.post_process.combination.titration.titration import (
     DOWNSAMPLE_RATIO,
+    METRIC_COLUMNS,
     METRICS,
     MIN_CELLS,
     SCALES,
@@ -61,6 +62,8 @@ from ops_model.post_process.combination.titration.titration import (
     _apply_x_scale,
     _build_parser as _titr_parser,  # reuse common nesting flags
     _build_per_ko_schedule,
+    _guide_col,
+    _merge_and_write,
     _prepare_for_copairs,
     _resolve_output_dir,
     _score_all_metrics,
@@ -548,11 +551,14 @@ def _per_reporter_guide_counts(paths: List[Path]) -> List[np.ndarray]:
     per_reporter: List[np.ndarray] = []
     for p in paths:
         a = ad.read_h5ad(p, backed="r")
-        if "sgRNA" not in a.obs.columns:
-            raise ValueError(f"{p.name}: per-guide titration requires 'sgRNA' obs col")
+        guide_col_name = _guide_col(a)
+        if guide_col_name not in a.obs.columns:
+            raise ValueError(
+                f"{p.name}: per-guide titration requires {guide_col_name!r} obs col"
+            )
         pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        sg_counts = a.obs.groupby("sgRNA", observed=True).size()
-        sg_pert = a.obs.groupby("sgRNA", observed=True)[pert_col].first()
+        sg_counts = a.obs.groupby(guide_col_name, observed=True).size()
+        sg_pert = a.obs.groupby(guide_col_name, observed=True)[pert_col].first()
         non_ntc_sg = sg_pert[~sg_pert.astype(str).str.startswith("NTC")].index
         pool = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
         if len(pool) == 0:
@@ -977,13 +983,7 @@ def run_combined_titration(
             cached_rows = []
             targets_to_run = list(schedule)
 
-    metric_cols = [
-        "activity_ratio", "activity_map_mean",
-        "distinctiveness_ratio", "distinctiveness_map_mean",
-        "corum_ratio", "corum_map_mean",
-        "chad_ratio", "chad_map_mean",
-        "ebi_ratio", "ebi_map_mean",
-    ]
+    metric_cols = list(METRIC_COLUMNS)
     base_seed = int(rng.randint(0, 2**31 - 1))
     rows = []
 
@@ -2156,13 +2156,13 @@ def main():
             if not parts:
                 print(f"[merge] {g}: no per-target CSVs produced — skipping group")
                 continue
-            merged = pd.concat(parts, ignore_index=True)
-            if target_col in merged.columns:
-                merged = (merged.drop_duplicates(subset=[target_col])
-                                .sort_values(target_col, ascending=False)
-                                .reset_index(drop=True))
             canonical = group_outdirs[g] / f"combined_titration_{g}.csv"
-            merged.to_csv(canonical, index=False)
+            # Shared merge helper: dedupes on target_col with keep="last" (this
+            # site previously kept the FIRST row, so a re-scored target was
+            # silently discarded here while the other three merge sites took it).
+            merged = _merge_and_write(
+                pd.concat(parts, ignore_index=True), [], target_col, canonical, logger,
+            )
             csvs_by_group[g] = canonical
             print(f"[merge] {g}: {len(merged)} rows → {canonical}")
     elif args.slurm:
