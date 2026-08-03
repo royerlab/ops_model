@@ -48,7 +48,7 @@ import submitit
 
 from ops_model.data import data_loader
 from ops_model.data.labels import load_immunostaining_labels, SOURCE_FILENAME_TEMPLATES
-from ops_model.features.cp_extraction import (
+from ops_model.models.cellprofiler.cp_extraction import (
     extract_cp_features,
     extract_cp_features_parallel,
     extract_cp_features_bulk_read,

@@ -615,7 +615,9 @@ def _process_cell_range(indices: list[int]):
                 if granularity_fcn is not None and _use_gpu_gran:
                     # CPU: texture normalize + background removal
                     # GPU worker only does the fast hot loop
-                    from ops_model.features.gpu_granularity import background_remove_cpu
+                    from ops_model.models.cellprofiler.gpu_granularity import (
+                        background_remove_cpu,
+                    )
                     gran_img = (img - np.min(img)) / (np.max(img) - np.min(img) + 1e-8) * 2 - 1
                     try:
                         bg_removed = background_remove_cpu(gran_img, mask)
@@ -753,7 +755,10 @@ def extract_cp_features_parallel(
     ]
 
     # Start GPU workers for granularity (shared queue, separate CUDA contexts)
-    from ops_model.features.gpu_worker import start_gpu_workers, stop_gpu_workers
+    from ops_model.models.cellprofiler.gpu_worker import (
+        start_gpu_workers,
+        stop_gpu_workers,
+    )
     gpu_procs, gran_queue, result_store, result_lock = start_gpu_workers(batch_size=500)
     print(f"  {len(gpu_procs)} GPU workers started (auto-scaled to VRAM)", flush=True)
 

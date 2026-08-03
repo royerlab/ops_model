@@ -4,7 +4,7 @@ from cp_measure.bulk import get_correlation_measurements
 
 from ops_model.data import data_loader
 from ops_model.data.paths import OpsPaths
-from ops_model.features.cp_extraction import colocalization_features
+from ops_model.models.cellprofiler.cp_extraction import colocalization_features
 
 
 @pytest.fixture(scope="module")

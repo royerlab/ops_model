@@ -30,7 +30,7 @@ import pandas as pd
 import yaml
 
 from ops_model.data import data_loader
-from ops_model.features.cp_extraction import extract_cp_features_parallel
+from ops_model.models.cellprofiler.cp_extraction import extract_cp_features_parallel
 from ops_model.features.processing_common import process_features_csv
 
 # ---------------------------------------------------------------------------

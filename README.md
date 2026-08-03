@@ -54,12 +54,12 @@ uv run python ops_model/src/ops_model/models/subcell.py \
     --config_list experiments/embedding/configs/subcell/subcell_config_list.txt
 ```
 
-### CellProfiler — `features/cp_features.py`
+### CellProfiler — `models/cellprofiler/cp_features.py`
 
 Hand-crafted CellProfiler morphology and intensity features. Outputs a cell-level CSV plus aggregated AnnData at cell, guide, and gene level.
 
 ```bash
-uv run python ops_model/src/ops_model/features/cp_features.py \
+uv run python ops_model/src/ops_model/models/cellprofiler/cp_features.py \
     --config_path experiments/embedding/configs/cell-profiler/ops0141_cp_20260401.yml
 ```
 
