@@ -34,7 +34,7 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import anndata as ad
 import numpy as np
@@ -183,6 +183,73 @@ def _init_logger():
     return logging.getLogger(__name__)
 
 
+def _plt():
+    """Return a pyplot bound to the Agg backend (headless SLURM workers)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
+def _pert_col(adata: ad.AnnData) -> str:
+    """The .obs column holding perturbation names."""
+    return "perturbation" if "perturbation" in adata.obs.columns else "label_str"
+
+
+def _non_ntc(counts: pd.Series) -> pd.Series:
+    """Drop NTC entries from a Series indexed by perturbation name."""
+    return counts[~counts.index.astype(str).str.startswith("NTC")]
+
+
+def _guide_count_pools(adata: ad.AnnData) -> Tuple[pd.Series, pd.Series]:
+    """Return (all per-guide cell counts, non-NTC subset) for a cells AnnData.
+
+    One groupby pass computing size and the guide's perturbation together —
+    the two-pass version this replaces was the dominant cost on Phase-sized
+    obs frames (~60M rows). Works on backed reads (``obs``/``uns`` only).
+    """
+    guide_col_name = _guide_col(adata)
+    if guide_col_name not in adata.obs.columns:
+        raise ValueError(
+            f"per-guide titration requires {guide_col_name!r} column in obs"
+        )
+    pert_col = _pert_col(adata)
+    sg = adata.obs.groupby(guide_col_name, observed=True).agg(
+        n=(pert_col, "size"), pert=(pert_col, "first"))
+    return sg["n"], sg.loc[~sg["pert"].astype(str).str.startswith("NTC"), "n"]
+
+
+# Titration mode -> the schedule/x-axis column its targets are counted in.
+_TARGET_COL_BY_MODE = {
+    "per_guide": "cells_per_guide",
+    "per_guide_median": "cells_per_guide",
+    "per_ko": "cells_per_perturbation",
+    "total": "n_cells",
+}
+_UNIT_BY_MODE = {
+    "per_guide": "cells/guide",
+    "per_guide_median": "cells/guide",
+    "per_ko": "cells/KO",
+    "total": "cells",
+}
+
+
+def _mode_from_flags(per_guide: bool, per_ko: bool) -> str:
+    """Collapse the per_guide/per_ko flag pair to a mode string."""
+    if per_guide:
+        return "per_guide"
+    if per_ko:
+        return "per_ko"
+    return "total"
+
+
+def _target_col(mode: str) -> str:
+    """Schedule x-axis column for a titration mode. Single source of truth."""
+    return _TARGET_COL_BY_MODE[mode]
+
+
 def _prepare_for_copairs(adata: ad.AnnData) -> ad.AnnData:
     """Strip obs to copairs-required columns and cast X to float64."""
     if "n_cells" not in adata.obs.columns:
@@ -255,8 +322,7 @@ def _subsample_per_ko_and_aggregate(
     adata_cells: ad.AnnData, cells_per_ko: int, rng: np.random.RandomState,
 ) -> ad.AnnData:
     """Subsample up to ``cells_per_ko`` cells per perturbation, then aggregate to guide level."""
-    pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
-    perts = adata_cells.obs[pert_col].values
+    perts = adata_cells.obs[_pert_col(adata_cells)].values
     kept_idx = []
     for p in np.unique(perts):
         p_idx = np.where(perts == p)[0]
@@ -358,6 +424,58 @@ def _subsample_and_aggregate(
         subsample_controls=False,
     )
     return g
+
+
+def _subsample_one(
+    adata_cells: ad.AnnData, target: int, mode: str, rng: np.random.RandomState,
+    replace: bool = False, min_exp: bool = False,
+) -> ad.AnnData:
+    """Subsample to ``target`` under ``mode``, then aggregate to guide level.
+
+    The single dispatch point over the three samplers, shared by the
+    per-reporter loop and combined_titration's per-reporter prep.
+    """
+    if mode in ("per_guide", "per_guide_median"):
+        return _subsample_per_guide_and_aggregate(
+            adata_cells, target, rng, replace=replace,
+        )
+    if mode == "per_ko":
+        return _subsample_per_ko_and_aggregate(adata_cells, target, rng)
+    return _subsample_and_aggregate(adata_cells, target, rng, min_exp=min_exp)
+
+
+def _aggregate_draws(
+    draw_rows: List[Dict], metric_cols: Sequence[str], n_bootstraps: int,
+) -> Dict:
+    """Collapse N bootstrap draws to mean + STD + SEM per metric column.
+
+    SEM is std/sqrt(N) over the finite draws. With ``n_bootstraps`` > 1 the raw
+    per-draw values are also kept as a pipe-separated ``{col}_draws`` string so
+    downstream code can recompute alternative error bars.
+    """
+    scores: Dict = {}
+    for k in metric_cols:
+        vals = np.array([r.get(k, float("nan")) for r in draw_rows], dtype=float)
+        finite = vals[np.isfinite(vals)]
+        if len(finite) == 0:
+            scores[k] = float("nan")
+            scores[f"{k}_sem"] = float("nan")
+            scores[f"{k}_std"] = float("nan")
+        else:
+            scores[k] = float(np.mean(finite))
+            if len(finite) > 1:
+                std = float(np.std(finite, ddof=1))
+                scores[f"{k}_std"] = std
+                scores[f"{k}_sem"] = std / np.sqrt(len(finite))
+            else:
+                scores[f"{k}_std"] = 0.0
+                scores[f"{k}_sem"] = 0.0
+        if n_bootstraps > 1:
+            scores[f"{k}_draws"] = "|".join(
+                "nan" if not np.isfinite(v) else f"{v:.6g}" for v in vals
+            )
+    scores["n_bootstraps"] = n_bootstraps
+    return scores
 
 
 def _filter_map_to_targets(map_df, targets):
@@ -537,7 +655,7 @@ def _load_minibinder_targets() -> set:
 
 def _subset_to_targets(adata: ad.AnnData, targets: set, _logger) -> ad.AnnData:
     """Subset cell-level adata to cells whose perturbation is in ``targets`` or is a control (NTC)."""
-    pert_col = "perturbation" if "perturbation" in adata.obs.columns else "label_str"
+    pert_col = _pert_col(adata)
     mask = adata.obs[pert_col].isin(targets) | adata.obs[pert_col].str.startswith("NTC")
     n_before = adata.n_obs
     adata_sub = adata[mask].copy()
@@ -574,15 +692,11 @@ def _run_titration_points(
 
     base_seed = int(rng.randint(0, 2**31 - 1))
     metric_cols = list(METRIC_COLUMNS)
+    mode = _mode_from_flags(per_guide, per_ko)
+    unit = _UNIT_BY_MODE[mode]
 
     rows = []
     for target in cell_targets:
-        if per_guide:
-            unit = "cells/guide"
-        elif per_ko:
-            unit = "cells/KO"
-        else:
-            unit = "cells"
         _logger.info(f"  Scoring at {target:,} {unit} ({n_bootstraps} draw{'s' if n_bootstraps > 1 else ''})...")
         t_step = time.time()
 
@@ -590,50 +704,19 @@ def _run_titration_points(
         g_sub_last = None
         for b in range(n_bootstraps):
             draw_rng = np.random.RandomState(base_seed + b * 9973 + target)
-            if per_guide:
-                g_sub = _subsample_per_guide_and_aggregate(
-                    adata_cells, target, draw_rng, replace=replace,
-                )
-            elif per_ko:
-                g_sub = _subsample_per_ko_and_aggregate(adata_cells, target, draw_rng)
-            else:
-                g_sub = _subsample_and_aggregate(adata_cells, target, draw_rng, min_exp=min_exp)
+            g_sub = _subsample_one(
+                adata_cells, target, mode, draw_rng,
+                replace=replace, min_exp=min_exp,
+            )
             g_norm = normalize_guide_adata(g_sub, norm_method)
             scores_b = _score_all_metrics(g_norm, _logger, subset_targets=subset_targets)
             draw_rows.append(scores_b)
             g_sub_last = g_sub
 
-        # Aggregate across draws: mean for the metric value, SEM = std / sqrt(N),
-        # and STD. Also save the raw per-draw values as a pipe-separated string
-        # so downstream code can recompute alternative error bars if desired.
         g_sub = g_sub_last
-        scores = {}
-        for k in metric_cols:
-            vals = np.array([r.get(k, float("nan")) for r in draw_rows], dtype=float)
-            finite = vals[np.isfinite(vals)]
-            if len(finite) == 0:
-                scores[k] = float("nan")
-                scores[f"{k}_sem"] = float("nan")
-                scores[f"{k}_std"] = float("nan")
-            else:
-                scores[k] = float(np.mean(finite))
-                if len(finite) > 1:
-                    std = float(np.std(finite, ddof=1))
-                    scores[f"{k}_std"] = std
-                    scores[f"{k}_sem"] = std / np.sqrt(len(finite))
-                else:
-                    scores[f"{k}_std"] = 0.0
-                    scores[f"{k}_sem"] = 0.0
-            if n_bootstraps > 1:
-                # Raw draws (pipe-separated so CSV parsers handle it cleanly)
-                scores[f"{k}_draws"] = "|".join(
-                    "nan" if not np.isfinite(v) else f"{v:.6g}" for v in vals
-                )
-        scores["n_bootstraps"] = n_bootstraps
+        scores = _aggregate_draws(draw_rows, metric_cols, n_bootstraps)
 
-        pert_col = (
-            "perturbation" if "perturbation" in g_sub.obs.columns else "label_str"
-        )
+        pert_col = _pert_col(g_sub)
         n_perts = g_sub.obs[pert_col].nunique()
         if per_guide or per_ko:
             # total cells from guide n_cells sum
@@ -675,18 +758,6 @@ def _run_titration_points(
     return pd.DataFrame(rows)
 
 
-def _build_titration_schedule(total_cells: int) -> list:
-    """Build titration schedule: total, total*0.75, total*0.75^2, ... >= MIN_CELLS."""
-    cell_targets = []
-    n = total_cells
-    while n >= MIN_CELLS:
-        cell_targets.append(int(n))
-        n = int(n * DOWNSAMPLE_RATIO)
-    if not cell_targets:
-        cell_targets = [total_cells]
-    return cell_targets
-
-
 def _build_per_ko_schedule(
     max_cells_per_ko: int, min_cells_per_ko: int = 1, ratio: float = DOWNSAMPLE_RATIO,
 ) -> list:
@@ -704,24 +775,65 @@ def _build_per_ko_schedule(
     return targets
 
 
-def _cache_split(
-    csv_path: Path, cell_targets: List[int], target_col: str, _logger,
-) -> Tuple[List[int], List[Dict]]:
-    """Return (targets_to_run, cached_rows) — subset ``cell_targets`` to those
-    not yet present in the CSV at ``csv_path`` under ``target_col``.
+def _read_cache(
+    csv_path: Path, target_col: str, row_filter=None, _logger=None,
+) -> Optional[pd.DataFrame]:
+    """Read a titration CSV for cache reuse, or None if it can't be used.
 
-    On any read error, returns (cell_targets, []) (i.e. recompute everything).
+    ``row_filter`` optionally drops rows that don't match the current run
+    (combined_titration uses it to discard rows scored at a different
+    ``second_pca_threshold``).
     """
     if not csv_path.is_file():
-        return list(cell_targets), []
+        return None
     try:
         df_old = pd.read_csv(csv_path)
     except Exception as exc:
-        _logger.warning(f"  Cache read failed ({exc}); recomputing all.")
-        return list(cell_targets), []
+        if _logger is not None:
+            _logger.warning(f"  Cache read failed ({exc}); recomputing all.")
+        return None
     if target_col not in df_old.columns:
+        return None
+    if row_filter is not None:
+        df_old = row_filter(df_old)
+    return df_old
+
+
+def _scored_targets(
+    csv_path: Path, target_col: str, required_cols: Sequence[str] = (),
+    row_filter=None,
+) -> set:
+    """Targets in ``csv_path`` that are already fully scored.
+
+    A row only counts when every column in ``required_cols`` is non-null — an
+    older CSV that has the target but predates a metric must be re-scored, not
+    skipped.
+    """
+    df_old = _read_cache(csv_path, target_col, row_filter=row_filter)
+    if df_old is None:
+        return set()
+    if required_cols:
+        if any(c not in df_old.columns for c in required_cols):
+            return set()
+        df_old = df_old.loc[df_old[list(required_cols)].notna().all(axis=1)]
+    return {int(v) for v in df_old[target_col].dropna().astype(int).tolist()}
+
+
+def _cache_split(
+    csv_path: Path, cell_targets: List[int], target_col: str, _logger,
+    required_cols: Sequence[str] = (), row_filter=None,
+) -> Tuple[List[int], List[Dict]]:
+    """Return (targets_to_run, cached_rows) — subset ``cell_targets`` to those
+    not yet fully scored in the CSV at ``csv_path`` under ``target_col``.
+
+    On any read error, returns (cell_targets, []) (i.e. recompute everything).
+    """
+    df_old = _read_cache(csv_path, target_col, row_filter=row_filter, _logger=_logger)
+    if df_old is None:
         return list(cell_targets), []
-    done = {int(v) for v in df_old[target_col].dropna().astype(int).tolist()}
+    done = _scored_targets(
+        csv_path, target_col, required_cols=required_cols, row_filter=row_filter,
+    )
     missing = [t for t in cell_targets if int(t) not in done]
     cached_rows = df_old.to_dict(orient="records")
     if cached_rows:
@@ -752,15 +864,6 @@ def _merge_and_write(
         f"{len(cached_rows)} cached)"
     )
     return df
-
-
-def _titration_target_col(per_guide: bool, per_ko: bool) -> str:
-    """Schedule x-axis column matching ``_run_titration_points`` outputs."""
-    if per_guide:
-        return "cells_per_guide"
-    if per_ko:
-        return "cells_per_perturbation"
-    return "n_cells"
 
 
 def titrate_single_reporter(
@@ -807,16 +910,7 @@ def titrate_single_reporter(
     _logger.info(f"Titrating {signal}: {total_cells:,} cells, {adata_cells.n_vars} PCs")
 
     if per_guide or per_guide_max or per_guide_median:
-        guide_col_name = _guide_col(adata_cells)
-        if guide_col_name not in adata_cells.obs.columns:
-            raise ValueError(
-                f"Per-guide titration requires {guide_col_name!r} column in obs"
-            )
-        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
-        sg_counts = adata_cells.obs.groupby(guide_col_name, observed=True).size()
-        sg_to_pert = adata_cells.obs.groupby(guide_col_name, observed=True)[pert_col].first()
-        non_ntc_sg = sg_to_pert[~sg_to_pert.astype(str).str.startswith("NTC")].index
-        non_ntc_counts = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
+        sg_counts, non_ntc_counts = _guide_count_pools(adata_cells)
         pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
         if per_guide_median:
             # Start at the MEDIAN of non-NTC cells/guide (more conservative
@@ -837,9 +931,8 @@ def titrate_single_reporter(
         _logger.info(f"  Per-guide titration points ({mode_label} non-NTC = {start_per_guide:,} cells/guide): {cell_targets}")
         per_guide = True
     elif per_ko or per_ko_max:
-        pert_col = "perturbation" if "perturbation" in adata_cells.obs.columns else "label_str"
-        counts = adata_cells.obs[pert_col].value_counts()
-        non_ntc_counts = counts[~counts.index.astype(str).str.startswith("NTC")]
+        counts = adata_cells.obs[_pert_col(adata_cells)].value_counts()
+        non_ntc_counts = _non_ntc(counts)
         if per_ko_max:
             # Clip to p90 non-NTC so one outlier KO doesn't stretch the schedule
             pool = non_ntc_counts if len(non_ntc_counts) else counts
@@ -854,7 +947,7 @@ def titrate_single_reporter(
         # _run_titration_points uses per_ko flag; per_ko_max uses same sampling code path
         per_ko = True
     else:
-        cell_targets = _build_titration_schedule(total_cells)
+        cell_targets = _build_per_ko_schedule(total_cells, MIN_CELLS)
         _logger.info(f"  Titration points: {cell_targets}")
 
     from ops_utils.data.feature_discovery import sanitize_signal_filename
@@ -867,7 +960,7 @@ def titrate_single_reporter(
 
     # --- Full titration ---
     csv_path = reporter_dir / f"{sig_safe}_titration.csv"
-    full_target_col = _titration_target_col(per_guide=per_guide, per_ko=per_ko)
+    full_target_col = _target_col(_mode_from_flags(per_guide, per_ko))
     targets_to_run, cached_rows = (
         _cache_split(csv_path, cell_targets, full_target_col, _logger)
         if cache else (list(cell_targets), [])
@@ -903,10 +996,10 @@ def titrate_single_reporter(
         # Option A — subset library: filter cells to targets, titrate smaller pool
         _logger.info("  [Option A] Subset library titration...")
         adata_sub = _subset_to_targets(adata_cells, targets, _logger)
-        sub_targets = _build_titration_schedule(adata_sub.n_obs)
+        sub_targets = _build_per_ko_schedule(adata_sub.n_obs, MIN_CELLS)
         _logger.info(f"  Subset titration points: {sub_targets}")
         lib_csv = minibinder_dir / f"{sig_safe}_titration_library.csv"
-        sub_target_col = _titration_target_col(per_guide=False, per_ko=False)
+        sub_target_col = _target_col("total")
         sub_to_run, sub_cached = (
             _cache_split(lib_csv, sub_targets, sub_target_col, _logger)
             if cache else (list(sub_targets), [])
@@ -949,11 +1042,7 @@ def titrate_single_reporter(
 
     # Plot — PNG + SVG for each scale
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
+        plt = _plt()
         _plot_titration(df_full, signal, reporter_dir, sig_safe, plt)
         if minibinder_dir is not None:
             mb_metrics = ("activity", "distinctiveness")
@@ -1045,22 +1134,11 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
             # Panel 1: % significant
             ax = axes[0]
             for metric in metrics:
-                col = f"{metric}_ratio"
-                if col in df.columns:
-                    vals = df[col].values * 100
-                    sem_col = f"{col}_sem"
-                    if sem_col in df.columns:
-                        sem = df[sem_col].values * 100
-                        ax.errorbar(
-                            x, vals, yerr=sem, marker="o", color=colors[metric],
-                            label=ratio_labels[metric], linewidth=3.5, markersize=8,
-                            capsize=4, elinewidth=1.5,
-                        )
-                    else:
-                        ax.plot(
-                            x, vals, marker="o", color=colors[metric],
-                            label=ratio_labels[metric], linewidth=3.5, markersize=8,
-                        )
+                _plot_series(
+                    ax, x, df, f"{metric}_ratio", scale_y=100,
+                    marker="o", color=colors[metric],
+                    label=ratio_labels[metric], linewidth=3.5, markersize=8,
+                )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("% Significant", fontsize=22)
             ax.set_title(f"{signal} — % Significant", fontsize=24)
@@ -1070,22 +1148,11 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
             # Panel 2: mean mAP
             ax = axes[1]
             for metric in metrics:
-                col = f"{metric}_map_mean"
-                if col in df.columns:
-                    vals = df[col].values
-                    sem_col = f"{col}_sem"
-                    if sem_col in df.columns:
-                        sem = df[sem_col].values
-                        ax.errorbar(
-                            x, vals, yerr=sem, marker="s", color=colors[metric],
-                            label=map_labels[metric], linewidth=3.5, markersize=8,
-                            capsize=4, elinewidth=1.5,
-                        )
-                    else:
-                        ax.plot(
-                            x, vals, marker="s", color=colors[metric],
-                            label=map_labels[metric], linewidth=3.5, markersize=8,
-                        )
+                _plot_series(
+                    ax, x, df, f"{metric}_map_mean",
+                    marker="s", color=colors[metric],
+                    label=map_labels[metric], linewidth=3.5, markersize=8,
+                )
             ax.set_xlabel(xlabel, fontsize=22)
             ax.set_ylabel("Mean mAP", fontsize=22)
             ax.set_title(f"{signal} — Mean mAP", fontsize=24)
@@ -1948,13 +2015,40 @@ def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
     return _resolve_output_dir(args) / "titration"
 
 
+def _emit_combined_plots(titration_dir, minibinder_subset: bool = False) -> None:
+    """Across-reporter combined plot, plus the minibinder library/scores pair.
+
+    The tail step of every run mode (local, per-reporter SLURM, per-target
+    SLURM, and --replot), which each used to inline this block.
+    """
+    plt = _plt()
+    titration_dir = Path(titration_dir)
+    print("Generating combined titration plot...")
+    _plot_combined_titration(titration_dir, plt)
+    print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+
+    if not minibinder_subset:
+        return
+    mb_base = titration_dir / "minibinder"
+    if not mb_base.exists():
+        return
+    print("Generating minibinder combined plots...")
+    # Each call no-ops when its glob matches nothing.
+    _plot_combined_titration(
+        mb_base, plt, csv_glob="**/*_titration_library.csv",
+        title_suffix="Minibinder Library",
+    )
+    _plot_combined_titration(
+        mb_base, plt, csv_glob="**/*_titration_scores.csv",
+        title_suffix="Minibinder Scores",
+        filename_prefix="titration_scores_combined",
+    )
+    print(f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}")
+
+
 def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
     """Plot a single reporter from its CSV; returns sig_safe for progress reporting."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    plt = _plt()
     df = pd.read_csv(csv_path)
     signal = (
         df["signal"].iloc[0]
@@ -2012,10 +2106,7 @@ def _replot_one(csv_path: Path, minibinder_subset: bool = False) -> str:
 def _replot(titration_dir, minibinder_subset: bool = False):
     """Regenerate all per-reporter and combined plots from existing CSVs, in parallel."""
     titration_dir = Path(titration_dir)
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _plt()
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from ops_utils.hpc.resource_manager import get_optimal_workers
     from tqdm import tqdm
@@ -2048,9 +2139,7 @@ def _replot(titration_dir, minibinder_subset: bool = False):
                     pbar.set_postfix_str(f"ERROR {futures[fut].stem}: {exc}")
                 pbar.update(1)
 
-    print("Generating combined titration plot...")
-    _plot_combined_titration(titration_dir, plt)
-    print(f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}")
+    _emit_combined_plots(titration_dir, minibinder_subset)
 
     # BF run: also emit a fluorescent-pack overlay variant in its own subdir,
     # so the labelfree curves can be seen breaking out from the fluor/4i/CP pack.
@@ -2088,33 +2177,6 @@ def _replot(titration_dir, minibinder_subset: bool = False):
             font_scale=1.25, pack_linewidth=3.5, pack_markersize=9,
             filename="titration_phase_only_vs_pack_distinct_meanmap_perguide_LINEAR_100-1000_multicolor")
 
-    if minibinder_subset:
-        mb_base = titration_dir / "minibinder"
-        mb_library_csvs = sorted(mb_base.glob("**/*_titration_library.csv"))
-        mb_scores_csvs = sorted(mb_base.glob("**/*_titration_scores.csv"))
-        if mb_library_csvs:
-            print("Generating minibinder library combined plot...")
-            _plot_combined_titration(
-                mb_base,
-                plt,
-                csv_glob="**/*_titration_library.csv",
-                title_suffix="Minibinder Library",
-            )
-            print(
-                f"Saved {mb_base}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
-            )
-        if mb_scores_csvs:
-            print("Generating minibinder scores combined plot...")
-            _plot_combined_titration(
-                mb_base,
-                plt,
-                csv_glob="**/*_titration_scores.csv",
-                title_suffix="Minibinder Scores",
-                filename_prefix="titration_scores_combined",
-            )
-            print(
-                f"Saved {mb_base}/titration_scores_combined_{{linear,log2,log10}}.{{png,svg}}"
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -2138,19 +2200,7 @@ def _build_schedule_for_cells_path(
     """
     a = ad.read_h5ad(cells_h5ad_path, backed="r")
     if per_guide_min or per_guide_max or per_guide_median:
-        guide_col_name = _guide_col(a)
-        if guide_col_name not in a.obs.columns:
-            raise ValueError(
-                f"{cells_h5ad_path.name}: per-guide titration requires "
-                f"{guide_col_name!r} obs col"
-            )
-        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        # Single groupby pass (size + first together) instead of two separate
-        # groupbys over the full ~60M-row obs.
-        sg = a.obs.groupby(guide_col_name, observed=True).agg(
-            n=(pert_col, "size"), pert=(pert_col, "first"))
-        sg_counts = sg["n"]
-        non_ntc_counts = sg.loc[~sg["pert"].astype(str).str.startswith("NTC"), "n"]
+        sg_counts, non_ntc_counts = _guide_count_pools(a)
         pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
         if per_guide_median:
             start = int(np.median(pool.values))
@@ -2163,9 +2213,8 @@ def _build_schedule_for_cells_path(
             )
         return _build_per_ko_schedule(start)
     if per_ko_min or per_ko_max:
-        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        counts = a.obs[pert_col].value_counts()
-        non_ntc_counts = counts[~counts.index.astype(str).str.startswith("NTC")]
+        counts = a.obs[_pert_col(a)].value_counts()
+        non_ntc_counts = _non_ntc(counts)
         if per_ko_max:
             pool = non_ntc_counts if len(non_ntc_counts) else counts
             start = int(np.percentile(pool.values, 90))
@@ -2175,7 +2224,7 @@ def _build_schedule_for_cells_path(
                 if len(non_ntc_counts) else int(counts.min())
             )
         return _build_per_ko_schedule(start)
-    return _build_titration_schedule(a.n_obs)
+    return _build_per_ko_schedule(a.n_obs, MIN_CELLS)
 
 
 def titrate_single_target_for_reporter(
@@ -2263,32 +2312,22 @@ def _merge_per_target_shards(
                 continue
         if not dfs:
             continue
-        merged = pd.concat(dfs, ignore_index=True)
-        # Honor any pre-existing canonical rows (e.g. from a prior non-per-target run)
+        # Honor any pre-existing canonical rows (e.g. from a prior non-per-target
+        # run) by feeding them in as the cached side of the shared merge, so the
+        # newly-merged shards win on duplicate targets.
         canonical = reporter_dir / f"{sig_safe}_titration.csv"
-        if canonical.is_file():
-            try:
-                prior = pd.read_csv(canonical)
-                if not prior.empty:
-                    merged = pd.concat([prior, merged], ignore_index=True)
-            except Exception:
-                pass
-        if target_col in merged.columns:
-            merged = (
-                merged.dropna(subset=[target_col])
-                      .drop_duplicates(subset=[target_col], keep="last")
-                      .sort_values(target_col, ascending=False)
-                      .reset_index(drop=True)
-            )
-        merged.to_csv(canonical, index=False)
+        prior = _read_cache(canonical, target_col, _logger=_logger)
+        merged = _merge_and_write(
+            pd.concat(dfs, ignore_index=True),
+            prior.to_dict(orient="records") if prior is not None else [],
+            target_col, canonical, _logger,
+        )
         written.append(canonical)
         _logger.info(
             f"[merge] {sig_safe}: {len(merged)} rows ({len(shards)} shards) → {canonical}"
         )
         try:
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot as plt
+            plt = _plt()
             signal = (
                 str(merged["signal"].iloc[0])
                 if "signal" in merged.columns and len(merged)
@@ -2389,14 +2428,11 @@ def main():
     if args.per_target_slurm:
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-        target_col = (
-            "cells_per_guide"
-            if (args.per_guide_min_titration or args.per_guide_max_titration
-                or args.per_guide_median_titration)
-            else "cells_per_perturbation"
-            if (args.per_ko_min_titration or args.per_ko_max_titration)
-            else "n_cells"
-        )
+        target_col = _target_col(_mode_from_flags(
+            per_guide=(args.per_guide_min_titration or args.per_guide_max_titration
+                       or args.per_guide_median_titration),
+            per_ko=(args.per_ko_min_titration or args.per_ko_max_titration),
+        ))
 
         # Build per-reporter schedules in parallel — each reads one cells h5ad's
         # obs (~60M rows) + a groupby, which is independent across reporters.
@@ -2431,17 +2467,6 @@ def main():
         # after CHAD on 2026-05-19) should NOT be skipped.
         required_metric_cols = [f"{m}_map_mean" for m in METRICS]
 
-        def _fully_scored_targets(df: pd.DataFrame) -> set:
-            if target_col not in df.columns:
-                return set()
-            missing = [c for c in required_metric_cols if c not in df.columns]
-            if missing:
-                return set()
-            mask = df[required_metric_cols].notna().all(axis=1)
-            return {
-                int(v) for v in df.loc[mask, target_col].dropna().astype(int).tolist()
-            }
-
         all_jobs = []
         skipped_cache = 0
         n_planned = 0
@@ -2452,11 +2477,10 @@ def main():
             reporter_dir = titration_dir / sig_safe
             canonical = reporter_dir / f"{sig_safe}_titration.csv"
             cached_targets: set = set()
-            if args.cache and canonical.is_file():
-                try:
-                    cached_targets = _fully_scored_targets(pd.read_csv(canonical))
-                except Exception:
-                    cached_targets = set()
+            if args.cache:
+                cached_targets = _scored_targets(
+                    canonical, target_col, required_cols=required_metric_cols,
+                )
             for target in per_reporter_schedule[cf]:
                 n_planned += 1
                 if int(target) in cached_targets:
@@ -2466,13 +2490,11 @@ def main():
                 # A shard from a pre-EBI run won't have ebi_map_mean so it
                 # falls through and gets re-scored.
                 shard = reporter_dir / f"{sig_safe}_titration_t{int(target)}.csv"
-                if args.cache and shard.is_file():
-                    try:
-                        if int(target) in _fully_scored_targets(pd.read_csv(shard)):
-                            skipped_cache += 1
-                            continue
-                    except Exception:
-                        pass
+                if args.cache and int(target) in _scored_targets(
+                    shard, target_col, required_cols=required_metric_cols,
+                ):
+                    skipped_cache += 1
+                    continue
                 all_jobs.append({
                     "name": f"titr_{sig_safe}_t{int(target)}",
                     "func": titrate_single_target_for_reporter,
@@ -2524,16 +2546,7 @@ def main():
         _merge_per_target_shards(titration_dir, target_col, _logger)
 
         # Combined plot across reporters
-        print("Generating combined titration plot...")
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        _plot_combined_titration(titration_dir, plt)
-        print(
-            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
-        )
+        _emit_combined_plots(titration_dir, args.minibinder_subset)
         return
 
     if args.slurm:
@@ -2638,37 +2651,7 @@ def main():
             print(f"\nAll {total_jobs} titration jobs complete")
 
         # Generate combined plot from all CSVs
-        print("Generating combined titration plot...")
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        _plot_combined_titration(titration_dir, plt)
-        print(
-            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
-        )
-
-        if args.minibinder_subset:
-            mb_base = titration_dir / "minibinder"
-            if mb_base.exists():
-                print("Generating minibinder combined plots...")
-                _plot_combined_titration(
-                    mb_base,
-                    plt,
-                    csv_glob="**/*_titration_library.csv",
-                    title_suffix="Minibinder Library",
-                )
-                _plot_combined_titration(
-                    mb_base,
-                    plt,
-                    csv_glob="**/*_titration_scores.csv",
-                    title_suffix="Minibinder Scores",
-                    filename_prefix="titration_scores_combined",
-                )
-                print(
-                    f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}"
-                )
+        _emit_combined_plots(titration_dir, args.minibinder_subset)
 
     else:
         print("\nRunning locally (sequential)...")
@@ -2690,37 +2673,7 @@ def main():
             )
             print(f"  {result}")
 
-        print("\nGenerating combined titration plot...")
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        _plot_combined_titration(titration_dir, plt)
-        print(
-            f"Saved {titration_dir}/titration_combined_{{linear,log2,log10}}.{{png,svg}}"
-        )
-
-        if args.minibinder_subset:
-            mb_base = titration_dir / "minibinder"
-            if mb_base.exists():
-                print("Generating minibinder combined plots...")
-                _plot_combined_titration(
-                    mb_base,
-                    plt,
-                    csv_glob="**/*_titration_library.csv",
-                    title_suffix="Minibinder Library",
-                )
-                _plot_combined_titration(
-                    mb_base,
-                    plt,
-                    csv_glob="**/*_titration_scores.csv",
-                    title_suffix="Minibinder Scores",
-                    filename_prefix="titration_scores_combined",
-                )
-                print(
-                    f"Saved {mb_base}/titration_*_combined_{{linear,log2,log10}}.{{png,svg}}"
-                )
+        _emit_combined_plots(titration_dir, args.minibinder_subset)
 
 
 if __name__ == "__main__":

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import re
 import time
 from pathlib import Path
@@ -51,25 +50,27 @@ from ops_model.features.anndata_utils import (
 )
 from ops_utils.analysis.pca import fit_pca, n_pcs_for_threshold
 from ops_model.post_process.combination.titration.titration import (
-    DOWNSAMPLE_RATIO,
     METRIC_COLUMNS,
     METRICS,
     MIN_CELLS,
     SCALES,
     SCALE_LABEL_SHORT,
     TITRATION_MAP_LABELS,
-    TITRATION_RATIO_LABELS,
+    _UNIT_BY_MODE,
+    _aggregate_draws,
     _apply_x_scale,
     _build_parser as _titr_parser,  # reuse common nesting flags
     _build_per_ko_schedule,
-    _guide_col,
+    _cache_split,
+    _guide_count_pools,
     _merge_and_write,
-    _prepare_for_copairs,
+    _non_ntc,
+    _pert_col,
+    _plt,
     _resolve_output_dir,
     _score_all_metrics,
-    _subsample_and_aggregate,
-    _subsample_per_guide_and_aggregate,
-    _subsample_per_ko_and_aggregate,
+    _subsample_one,
+    _target_col,
     titration_x_axis_base_label,
 )
 
@@ -547,32 +548,16 @@ def _resolve_compare_dir(
 
 
 def _per_reporter_guide_counts(paths: List[Path]) -> List[np.ndarray]:
-    """For each reporter h5ad, return the per-sgRNA cell-count array (non-NTC)."""
+    """For each reporter h5ad, return the per-guide cell-count array (non-NTC).
+
+    Falls back to all guides for a reporter with no identifiable NTC.
+    """
     per_reporter: List[np.ndarray] = []
     for p in paths:
-        a = ad.read_h5ad(p, backed="r")
-        guide_col_name = _guide_col(a)
-        if guide_col_name not in a.obs.columns:
-            raise ValueError(
-                f"{p.name}: per-guide titration requires {guide_col_name!r} obs col"
-            )
-        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        sg_counts = a.obs.groupby(guide_col_name, observed=True).size()
-        sg_pert = a.obs.groupby(guide_col_name, observed=True)[pert_col].first()
-        non_ntc_sg = sg_pert[~sg_pert.astype(str).str.startswith("NTC")].index
-        pool = sg_counts.loc[sg_counts.index.intersection(non_ntc_sg)]
-        if len(pool) == 0:
-            pool = sg_counts
+        sg_counts, non_ntc_counts = _guide_count_pools(ad.read_h5ad(p, backed="r"))
+        pool = non_ntc_counts if len(non_ntc_counts) else sg_counts
         per_reporter.append(np.asarray(pool.values, dtype=int))
     return per_reporter
-
-
-def _per_guide_pool(paths: List[Path]) -> np.ndarray:
-    """Pooled non-NTC sgRNA cell counts across all reporters (or all sgRNAs if no NTC info)."""
-    per_reporter = _per_reporter_guide_counts(paths)
-    if not per_reporter:
-        return np.asarray([], dtype=int)
-    return np.concatenate(per_reporter)
 
 
 # Allowed values for the median-schedule start policy.
@@ -610,15 +595,10 @@ def _per_guide_median_start(
 
 
 def _build_per_guide_max_schedule(paths: List[Path]) -> List[int]:
-    """cells/guide schedule starting at p90 of pooled non-NTC sgRNA cell counts."""
-    pool = _per_guide_pool(paths)
-    start = int(np.percentile(pool, 90))
-    schedule: List[int] = []
-    n = start
-    while n >= 1:
-        schedule.append(n)
-        n = int(n * DOWNSAMPLE_RATIO)
-    return schedule
+    """cells/guide schedule starting at p90 of pooled non-NTC guide cell counts."""
+    per_reporter = _per_reporter_guide_counts(paths)
+    pool = np.concatenate(per_reporter) if per_reporter else np.asarray([], dtype=int)
+    return _build_per_ko_schedule(int(np.percentile(pool, 90)))
 
 
 def _build_per_guide_median_schedule(
@@ -638,14 +618,6 @@ def _build_per_guide_median_schedule(
     if start_override is not None:
         return _build_per_ko_schedule(int(start_override))
     return _build_per_ko_schedule(_per_guide_median_start(paths, policy=policy))
-
-
-def _per_guide_median(paths: List[Path], policy: str = "pool") -> int:
-    """Schedule start point for a group's per-guide-median titration.
-
-    See :func:`_per_guide_median_start` for the semantics of ``policy``.
-    """
-    return _per_guide_median_start(paths, policy=policy)
 
 
 # ─── SLURM-prep worker: compute medians for one group on a compute node ────
@@ -709,47 +681,21 @@ def _build_per_ko_max_schedule(paths: List[Path]) -> List[int]:
     starts = []
     for p in paths:
         a = ad.read_h5ad(p, backed="r")
-        pert_col = "perturbation" if "perturbation" in a.obs.columns else "label_str"
-        counts = a.obs.groupby(pert_col, observed=True).size()
-        non_ntc = counts.loc[~counts.index.astype(str).str.startswith("NTC")]
+        counts = a.obs.groupby(_pert_col(a), observed=True).size()
+        non_ntc = _non_ntc(counts)
         starts.append(int(non_ntc.max() if len(non_ntc) else counts.max()))
-    start = int(np.max(starts))
-    schedule = []
-    n = start
-    while n >= 1:
-        schedule.append(n)
-        n = int(n * DOWNSAMPLE_RATIO)
-    return schedule
+    return _build_per_ko_schedule(int(np.max(starts)))
 
 
 def _build_total_schedule(paths: List[Path]) -> List[int]:
     """Plain n_cells schedule starting at the SMALLEST reporter's total cell count."""
     totals = [ad.read_h5ad(p, backed="r").n_obs for p in paths]
-    start = int(min(totals))
-    schedule = []
-    n = start
-    while n >= MIN_CELLS:
-        schedule.append(n)
-        n = int(n * DOWNSAMPLE_RATIO)
-    return schedule or [start]
+    return _build_per_ko_schedule(int(min(totals)), MIN_CELLS)
 
 
 # ---------------------------------------------------------------------------
 # Core: subsample → aggregate → NTC-normalize → h-concat → score
 # ---------------------------------------------------------------------------
-
-
-def _subsample_one(
-    adata_cells: ad.AnnData, target: int, sampling_mode: str, rng: np.random.RandomState,
-    replace: bool = False,
-) -> ad.AnnData:
-    if sampling_mode in ("per_guide", "per_guide_median"):
-        return _subsample_per_guide_and_aggregate(
-            adata_cells, target, rng, replace=replace,
-        )
-    if sampling_mode == "per_ko":
-        return _subsample_per_ko_and_aggregate(adata_cells, target, rng)
-    return _subsample_and_aggregate(adata_cells, target, rng)
 
 
 def _apply_fixed_second_pca(
@@ -941,58 +887,40 @@ def run_combined_titration(
     _logger.info(f"[{group_label}] Schedule ({len(schedule)} pts): {schedule}")
 
     csv_path = out_dir / f"combined_titration_{group_label}.csv"
-    target_col = (
-        "cells_per_guide" if sampling_mode in ("per_guide", "per_guide_median")
-        else "cells_per_perturbation" if sampling_mode == "per_ko"
-        else "n_cells"
+    target_col = _target_col(sampling_mode)
+    # Cache-by-threshold: a cached row only counts when it was scored at the
+    # same second_pca_threshold (missing column == 0.0, i.e. a legacy
+    # no-second-pca run). That filter is the one combined-specific piece; the
+    # rest of the cache split is shared with the per-reporter titration.
+    def _same_threshold(df_old: pd.DataFrame) -> pd.DataFrame:
+        stored = (
+            df_old.get("second_pca_threshold", pd.Series([0.0] * len(df_old)))
+                  .fillna(0.0).astype(float)
+        )
+        keep = np.isclose(stored.to_numpy(), float(effective_second_pca), atol=1e-6)
+        n_dropped = int((~keep).sum())
+        if n_dropped:
+            _logger.info(
+                f"[{group_label}] Dropping {n_dropped} cached rows whose "
+                f"second_pca_threshold ≠ {effective_second_pca:.2f}"
+            )
+        return df_old.loc[keep].reset_index(drop=True)
+
+    targets_to_run, cached_rows = (
+        _cache_split(
+            csv_path, list(schedule), target_col, _logger,
+            row_filter=_same_threshold,
+        )
+        if cache else (list(schedule), [])
     )
-    cached_rows: List[Dict] = []
-    targets_to_run = list(schedule)
-    if cache and csv_path.is_file():
-        try:
-            df_old = pd.read_csv(csv_path)
-            if target_col in df_old.columns:
-                # Cache-by-threshold: drop any cached row whose stored
-                # ``second_pca_threshold`` disagrees with the requested value
-                # (treat missing column as 0.0 = legacy no-second-pca run).
-                stored = (
-                    df_old.get("second_pca_threshold", pd.Series([0.0] * len(df_old)))
-                          .fillna(0.0).astype(float)
-                )
-                keep_mask = np.isclose(stored.to_numpy(),
-                                       float(effective_second_pca), atol=1e-6)
-                n_dropped = int((~keep_mask).sum())
-                df_old = df_old.loc[keep_mask].reset_index(drop=True)
-                if n_dropped:
-                    _logger.info(
-                        f"[{group_label}] Dropping {n_dropped} cached rows whose "
-                        f"second_pca_threshold ≠ {effective_second_pca:.2f}"
-                    )
-                done = {int(v) for v in df_old[target_col].dropna().astype(int).tolist()}
-                cached_rows = df_old.to_dict(orient="records")
-                targets_to_run = [t for t in schedule if int(t) not in done]
-                if cached_rows:
-                    _logger.info(
-                        f"[{group_label}] Cache hit: {len(cached_rows)} existing "
-                        f"rows in {csv_path.name}; "
-                        f"{len(targets_to_run)}/{len(schedule)} targets need scoring "
-                        f"(skipped: {sorted(done & set(int(t) for t in schedule))})"
-                    )
-        except Exception as exc:
-            _logger.warning(f"[{group_label}] Cache read failed ({exc}); recomputing all.")
-            cached_rows = []
-            targets_to_run = list(schedule)
 
     metric_cols = list(METRIC_COLUMNS)
     base_seed = int(rng.randint(0, 2**31 - 1))
     rows = []
 
+    unit = _UNIT_BY_MODE[sampling_mode]
+
     for target in targets_to_run:
-        unit = (
-            "cells/guide" if sampling_mode in ("per_guide", "per_guide_median")
-            else "cells/KO" if sampling_mode == "per_ko"
-            else "cells"
-        )
         _logger.info(
             f"[{group_label}] Scoring at {target:,} {unit} "
             f"({n_bootstraps} draw{'s' if n_bootstraps > 1 else ''})..."
@@ -1014,34 +942,11 @@ def run_combined_titration(
             draws.append(scores_b)
             last_combined = combined
 
-        scores: Dict[str, float] = {}
-        for k in metric_cols:
-            vals = np.array([d.get(k, float("nan")) for d in draws], dtype=float)
-            finite = vals[np.isfinite(vals)]
-            if len(finite) == 0:
-                scores[k] = float("nan")
-                scores[f"{k}_sem"] = float("nan")
-                scores[f"{k}_std"] = float("nan")
-            else:
-                scores[k] = float(np.mean(finite))
-                if len(finite) > 1:
-                    std = float(np.std(finite, ddof=1))
-                    scores[f"{k}_std"] = std
-                    scores[f"{k}_sem"] = std / np.sqrt(len(finite))
-                else:
-                    scores[f"{k}_std"] = 0.0
-                    scores[f"{k}_sem"] = 0.0
-            if n_bootstraps > 1:
-                scores[f"{k}_draws"] = "|".join(
-                    "nan" if not np.isfinite(v) else f"{v:.6g}" for v in vals
-                )
+        scores: Dict[str, float] = _aggregate_draws(draws, metric_cols, n_bootstraps)
 
         # x-axis bookkeeping
         n_guides = last_combined.n_obs if last_combined is not None else 0
-        pert_col = (
-            "perturbation" if "perturbation" in last_combined.obs.columns
-            else "label_str"
-        )
+        pert_col = _pert_col(last_combined)
         n_perts = last_combined.obs[pert_col].nunique()
         n_reporters = len(cells_blocks)
         if sampling_mode in ("per_guide", "per_guide_median"):
@@ -1063,7 +968,7 @@ def run_combined_titration(
         scores["n_guides"] = int(n_guides)
         scores["n_perturbations"] = int(n_perts)
         scores["n_reporters"] = n_reporters
-        scores["n_bootstraps"] = n_bootstraps
+        # n_bootstraps is already set by _aggregate_draws.
         scores["group"] = group_label
         scores["second_pca_threshold"] = float(effective_second_pca)
         rows.append(scores)
@@ -1078,19 +983,8 @@ def run_combined_titration(
         )
 
     # Merge cached + newly-scored, dedupe on the target column, sort descending
-    all_rows = (cached_rows or []) + rows
-    df = pd.DataFrame(all_rows)
-    if target_col in df.columns:
-        df = (
-            df.dropna(subset=[target_col])
-              .drop_duplicates(subset=[target_col], keep="last")
-              .sort_values(target_col, ascending=False)
-              .reset_index(drop=True)
-        )
-    df.to_csv(csv_path, index=False)
-    _logger.info(
-        f"[{group_label}] Wrote {csv_path} ({len(df)} rows: "
-        f"{len(rows)} new + {len(cached_rows)} cached)"
+    df = _merge_and_write(
+        pd.DataFrame(rows), cached_rows, target_col, csv_path, _logger,
     )
 
     # Per-metric plot
@@ -1103,24 +997,11 @@ def run_combined_titration(
 # ---------------------------------------------------------------------------
 
 
-def _x_col_for_mode(sampling_mode: str) -> str:
-    return {
-        "per_guide": "cells_per_guide",
-        "per_guide_median": "cells_per_guide",
-        "per_ko": "cells_per_perturbation",
-        "total": "n_cells",
-    }[sampling_mode]
-
-
 def _plot_group_curves(
     df: pd.DataFrame, group_label: str, out_dir: Path, sampling_mode: str,
 ) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    x_col = _x_col_for_mode(sampling_mode)
+    plt = _plt()
+    x_col = _target_col(sampling_mode)
     if x_col not in df.columns or df.empty:
         return
     x = df[x_col].values
@@ -1173,11 +1054,7 @@ def plot_group_comparison(
     text annotation under the legend so the reader sees which markers each
     set used.
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    plt = _plt()
     output_dir.mkdir(parents=True, exist_ok=True)
     dfs: Dict[str, pd.DataFrame] = {}
     for g, csv in csvs_by_group.items():
@@ -1189,7 +1066,7 @@ def plot_group_comparison(
         logger.warning("Need >=2 groups for comparison; got %d", len(dfs))
         return
 
-    x_col = _x_col_for_mode(sampling_mode)
+    x_col = _target_col(sampling_mode)
 
     # Dump the exact (x, y, sem) points plotted, long format, one row per
     # (group, metric, x). Same data for every scale variant of the plot.
@@ -1376,11 +1253,7 @@ def _plot_combo_envelope(
     """Combos collapsed into a min/max band + median; cp/4i (and any other
     non-combo groups) drawn as solid prominent curves on top.
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    plt = _plt()
     # Build per-x stats across combo curves on a shared sorted x-grid
     x_grid = np.array(sorted({float(v) for d in combo_dfs.values() for v in d[x_col].values}))
     if x_grid.size < 2:
@@ -1477,11 +1350,7 @@ def _plot_marker_swap_effects(
 
     Layout: rows = organelle (variable markers only), cols = metric (4).
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    plt = _plt()
     # organelle → list of distinct markers seen across combos
     organelle_markers: Dict[str, List[str]] = {}
     for g, mp in matched_set_membership.items():
@@ -1617,10 +1486,7 @@ def _plot_combo_by_swap_count(
     """Color combo curves by Hamming distance (# swaps) from the baseline combo
     so visually-close combos differ from baseline at similar dimensions.
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _plt()
     from matplotlib import cm
     from matplotlib.colors import Normalize
 
@@ -1969,7 +1835,7 @@ def main():
         and args.shared_start
     ):
         medians = {
-            g: _per_guide_median(group_paths[g], policy=args.median_start_policy)
+            g: _per_guide_median_start(group_paths[g], policy=args.median_start_policy)
             for g in groups
         }
         shared_start = min(medians.values())
@@ -2053,11 +1919,7 @@ def main():
         # cluster slots. We submit ALL (group, target) jobs in one
         # submit_parallel_jobs call so SLURM sees them as a single array.
         from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-        target_col = (
-            "cells_per_guide" if sampling_mode in ("per_guide", "per_guide_median")
-            else "cells_per_perturbation" if sampling_mode == "per_ko"
-            else "n_cells"
-        )
+        target_col = _target_col(sampling_mode)
         n_workers = (
             int(args.n_workers) if args.n_workers is not None
             else int(args.slurm_cpus)
