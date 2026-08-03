@@ -44,7 +44,6 @@ import numpy as np
 import pandas as pd
 
 from ops_model.features.anndata_utils import (
-    aggregate_to_level,
     hconcat_by_perturbation,
     normalize_guide_adata,
 )
@@ -123,8 +122,7 @@ def _per_signal_dir(args: argparse.Namespace, group: str) -> Path:
         # comparison (57 markers instead of 40).
         ns.include_cp = bool(getattr(args, "include_cp", False))
         ns.include_4i = bool(getattr(args, "include_4i", False))
-        # No channel-set flags — use the all-livecell dir
-        pass
+        # No channel-set flags beyond those — use the all-livecell dir.
     else:
         raise ValueError(f"Unknown group: {group!r}")
     variant_dir = _resolve_output_dir(ns)

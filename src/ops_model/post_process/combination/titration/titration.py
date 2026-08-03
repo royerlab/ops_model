@@ -45,10 +45,7 @@ from ops_model.features.anndata_utils import (
     aggregate_to_level,
     normalize_guide_adata,
 )
-from ops_utils.analysis.map_scores import (
-    compute_auc_score,
-    phenotypic_activity_assesment,
-)
+from ops_utils.analysis.map_scores import phenotypic_activity_assesment
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +113,6 @@ def _round_ticks(x_min: float, x_max: float, n: int = 7) -> list:
     1 significant figure, so ticks always land on human-readable values
     (e.g. 50K, 100K, 500K, 1M) regardless of where the raw data falls.
     """
-    import math
-
     positions = np.geomspace(x_min, x_max, n)
     ticks = []
     seen = set()
@@ -848,7 +843,6 @@ def titrate_single_reporter(
     cells_h5ad_path = Path(cells_h5ad_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    rng = np.random.RandomState(random_seed)
 
     adata_cells = ad.read_h5ad(cells_h5ad_path)
     signal = adata_cells.obs.get(
@@ -1314,7 +1308,6 @@ def _plot_combined_titration(
     _MARKER_CYCLE = ["o", "s", "D", "^", "v", "P", "X", "*", "h"]
     def _style_for(i):
         return _COLOR_CYCLE[i % len(_COLOR_CYCLE)], _MARKER_CYCLE[i % len(_MARKER_CYCLE)]
-    colors_cycle = _COLOR_CYCLE  # keep for back-compat with any other refs
 
     # BF-slice titration color scheme (only when BF_z* signals are present, so
     # production biological-signal plots are unaffected): the raw brightfield
@@ -1366,12 +1359,14 @@ def _plot_combined_titration(
             return "BF-mid" if k == _bf_mid else f"BF{k - _bf_mid:+d}"
         return str(sig)[:25]
 
+    # Short labels for the dense multi-reporter grid; the longer
+    # TITRATION_RATIO_LABELS wording doesn't fit these subplot titles.
     metric_info = [
-        ("activity", "% Active", "steelblue"),
-        ("distinctiveness", "% Distinctive", "mediumseagreen"),
-        ("corum", "% CORUM", "mediumpurple"),
-        ("chad", "% CHAD", "darkorange"),
-        ("ebi", "% EBI", "crimson"),
+        ("activity", "% Active"),
+        ("distinctiveness", "% Distinctive"),
+        ("corum", "% CORUM"),
+        ("chad", "% CHAD"),
+        ("ebi", "% EBI"),
     ]
     # BF run: collection plots show only activity, distinctiveness, EBI
     # (CORUM/CHAD mAP dropped).
@@ -1379,7 +1374,7 @@ def _plot_combined_titration(
         metric_info = [m for m in metric_info
                        if m[0] in ("activity", "distinctiveness", "ebi")]
 
-    _scale_label = {"linear": "linear", "log2": "log₂", "log10": "log₁₀"}
+    _scale_label = SCALE_LABEL_SHORT
 
     # Optional "fluorescent pack" overlay (every fluor/4i/CP marker), drawn as
     # gray context behind the labelfree curves so Phase2D/Focus3D/raw-BF break
@@ -1432,7 +1427,7 @@ def _plot_combined_titration(
                 ax.set_xlim(_xmin * 0.7, _xmax * 1.3)
 
             # Row 0: % significant per metric
-            for col_idx, (metric, label, _) in enumerate(metric_info):
+            for col_idx, (metric, label) in enumerate(metric_info):
                 ax = axes[0, col_idx]
                 ratio_col = f"{metric}_ratio"
                 _plot_pack(ax, ratio_col, x_col, scale_to_pct=True)
@@ -1464,7 +1459,7 @@ def _plot_combined_titration(
                 _style_combined_axis(ax)
 
             # Row 1: mean mAP per metric
-            for col_idx, (metric, label, _) in enumerate(metric_info):
+            for col_idx, (metric, label) in enumerate(metric_info):
                 ax = axes[1, col_idx]
                 map_col = f"{metric}_map_mean"
                 _plot_pack(ax, map_col, x_col)
@@ -1541,7 +1536,7 @@ def _plot_combined_titration(
                 dfig, daxes = plt.subplots(1, _ndm, figsize=(14 * _ndm, 9))
                 if _ndm == 1:
                     daxes = [daxes]
-                for col_idx, (metric, label, _) in enumerate(_dmetrics):
+                for col_idx, (metric, label) in enumerate(_dmetrics):
                     ax = daxes[col_idx]
                     map_col = f"{metric}_map_mean"
                     if (map_col in bf.columns and map_col in ph.columns
@@ -1576,7 +1571,7 @@ def _plot_combined_titration(
                 pfig, paxes = plt.subplots(1, _ndm, figsize=(14 * _ndm, 9))
                 if _ndm == 1:
                     paxes = [paxes]
-                for col_idx, (metric, label, _) in enumerate(_dmetrics):
+                for col_idx, (metric, label) in enumerate(_dmetrics):
                     ax = paxes[col_idx]
                     map_col = f"{metric}_map_mean"
                     if (map_col in bf.columns and map_col in ph.columns
@@ -1959,11 +1954,6 @@ def _plot_labelfree_vs_pack(
     fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight", transparent=True)
     fig.savefig(f"{stem}.svg", bbox_inches="tight", transparent=True)
     plt.close(fig)
-
-
-def resolve_titration_output_dir(args: argparse.Namespace) -> Path:
-    """Where ``titration`` writes per-reporter outputs: ``<variant>/titration``."""
-    return _resolve_output_dir(args) / "titration"
 
 
 def _emit_combined_plots(titration_dir, minibinder_subset: bool = False) -> None:
