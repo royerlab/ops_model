@@ -40,12 +40,12 @@ EXPERIMENTS = [
     'ops0114_20260112', 'ops0116_20260120', 'ops0117_20260128', 'ops0118_20260129', 'ops0119_20260203',
     'ops0120_20260204', 'ops0121_20260210', 'ops0122_20260211', 'ops0124_20260218', 'ops0125_20260219',
     'ops0126_20260224', 'ops0128_20260225', 'ops0129_20260303', 'ops0130_20260304', 'ops0131_20260310',
-    'ops0132_20260316', 'ops0134_20260317', 'ops0135_20260318', 'ops0137_20260323', 'ops0139_20260325',
-    'ops0140_20260331', 'ops0142_20260401', 'ops0143_20260407', 'ops0144_20260406', 'ops0146_20260402',
+    'ops0132_20260316', 'ops0134_20260317', 'ops0135_20260318', 'ops0137_20260323',
+    'ops0142_20260401', 'ops0143_20260407', 'ops0144_20260406',
 ]
 print(f"Loading {len(EXPERIMENTS)} experiments...")
 adatas = [
-    zscore_adata(ad.read_h5ad(f'/hpc/projects/icd.fast.ops/{exp}/3-assembly/dino_features/anndata_objects/guide_bulked_Phase.h5ad'))
+    zscore_adata(ad.read_h5ad(f'/hpc/projects/icd.fast.ops/{exp}/3-assembly/cell_dino_features/anndata_objects/guide_bulked_Phase.h5ad'))
     for exp in tqdm(EXPERIMENTS, desc='Loading')
 ]
 adata = ad.concat(adatas, axis=0)
@@ -68,12 +68,20 @@ print(f"Perturbations: {len(perturbations_unique)}")
 print(f"Features     : {X.shape[1]}")
 print(f"NTC rows     : {(perturbations == 'NTC').sum()}")
 
+#%%
+adata_cells = [
+    zscore_adata(ad.read_h5ad(f'/hpc/projects/icd.fast.ops/{exp}/3-assembly/cell_dino_features/anndata_objects/features_processed_Phase.h5ad'))
+    for exp in tqdm(EXPERIMENTS, desc='Loading')
+]
+adata_cells = ad.concat(adata_cells, axis=0)
+print(f"Cell-level observations : {len(adata_cells)}")
 # %% Within-experiment pairwise similarity — all guides
 # For each experiment, compute the full pairwise cosine similarity matrix across all
 # guide embeddings and extract the off-diagonal values. High mean similarity suggests
 # that embeddings are not spread across the feature space, which could indicate that
 # perturbation signal is weak or that batch effects dominate the variance.
 records = []
+records_all_raw = []
 for exp in tqdm(experiments_unique):
     mask = experiments == exp
     X_exp = X_norm[mask]
@@ -90,6 +98,7 @@ for exp in tqdm(experiments_unique):
         'min_sim':      float(off_diag.min()),
         'max_sim':      float(off_diag.max()),
     })
+    records_all_raw.append(off_diag)
 
 results = pd.DataFrame(records).set_index('experiment')
 print("\nMean pairwise cosine similarity within each experiment:")
@@ -185,13 +194,16 @@ print(results_cross.to_string(float_format=lambda x: f"{x:.4f}"))
 
 # Overlay within- vs cross-experiment NTC distributions to quantify the batch gap
 fig, ax = plt.subplots(figsize=(8, 5))
+ax.hist(np.concatenate(records_all_raw), bins=100, range=(-1, 1),
+        color='mediumseagreen', edgecolor='black', alpha=0.5, label='All guides within-experiment', density=True)
 ax.hist(np.concatenate(records_cross_raw), bins=100, range=(-1, 1),
         color='steelblue', edgecolor='black', alpha=0.5, label='NTC cross-experiment', density=True)
 ax.hist(np.concatenate(records_ntc_raw), bins=100, range=(-1, 1),
         color='lightcoral', edgecolor='black', alpha=0.5, label='NTC within-experiment', density=True)
 ax.axvline(np.concatenate(records_cross_raw).mean(), color='steelblue', linestyle='--')
 ax.axvline(np.concatenate(records_ntc_raw).mean(), color='lightcoral', linestyle='--')
-ax.set_title('Cosine similarity distribution: NTCs within vs cross-experiment')
+ax.axvline(np.concatenate(records_all_raw).mean(), color='mediumseagreen', linestyle='--')
+ax.set_title('Cosine similarity distribution')
 ax.set_xlabel('Cosine similarity')
 ax.set_ylabel('Density')
 ax.set_xlim(-1, 1)
@@ -206,12 +218,14 @@ fig.tight_layout()
 # i.e. residual batch structure not removed by per-feature z-scoring.
 exp_means = np.stack([X_norm[experiments == exp].mean(axis=0) for exp in experiments_unique])
 exp_means /= np.linalg.norm(exp_means, axis=1, keepdims=True) + 1e-10
-sim_matrix = pd.DataFrame(exp_means @ exp_means.T, index=experiments_unique, columns=experiments_unique)
+short_labels = [e.split('_')[0] for e in experiments_unique]
+sim_matrix = pd.DataFrame(exp_means @ exp_means.T, index=short_labels, columns=short_labels)
 
 fig, ax = plt.subplots(figsize=(20, 15))
 sns.heatmap(sim_matrix, vmin=0, vmax=1, cmap='Reds', annot=False, fmt='.2f', ax=ax)
 ax.set_title('Mean embedding cosine similarity between experiments')
 fig.tight_layout()
+fig.savefig('/hpc/mydata/alexander.hillsley/ops/ops_monorepo/figures/batch_effect_experiment_similarity.svg')
 # %% UMAP of NTC guides coloured by experiment
 # Project all NTC guide embeddings into 2D with UMAP to reveal whether any
 # experiment's NTCs occupy a distinct region — a sign of residual batch structure

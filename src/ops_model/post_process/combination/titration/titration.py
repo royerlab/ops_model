@@ -282,9 +282,9 @@ def _subsample_per_guide_and_aggregate(
 
     ``replace=True`` switches from subsample-without-replacement to a true
     nonparametric bootstrap (draw ``min(count, budget)`` cells per guide *with*
-    replacement). The per-guide cell count is unchanged from the legacy path, so
+    replacement). The per-guide cell count is unchanged either way, so
     ``n_cells`` / x-axis bookkeeping stays directly comparable — only the draw
-    changes. The bootstrap path is also fully vectorized (see
+    changes. Both paths share the fully vectorized index helper (see
     :func:`_bootstrap_indices_per_group`).
     """
     guide_col_name = _guide_col(adata_cells)
@@ -292,33 +292,19 @@ def _subsample_per_guide_and_aggregate(
         raise ValueError(
             f"Per-guide titration requires {guide_col_name!r} column in obs"
         )
+    codes = pd.Categorical(adata_cells.obs[guide_col_name].values).codes
+    kept_idx = _bootstrap_indices_per_group(
+        codes, cells_per_guide, rng, replace=replace,
+    )
+    # Preserve duplicates (do NOT de-dup); sort only to make the row order
+    # deterministic for aggregation.
+    kept_idx = np.sort(kept_idx)
+    sub = adata_cells[kept_idx].copy()
     if replace:
-        codes = pd.Categorical(adata_cells.obs[guide_col_name].values).codes
-        kept_idx = _bootstrap_indices_per_group(
-            codes, cells_per_guide, rng, replace=True,
-        )
-        # Preserve duplicates (do NOT de-dup); sort only to make the row order
-        # deterministic for aggregation.
-        kept_idx = np.sort(kept_idx)
-        sub = adata_cells[kept_idx].copy()
         # With replacement, obs_names repeat — make them unique so downstream
         # AnnData ops don't choke; guide-level grouping is by the guide column,
         # not the index, so this doesn't affect aggregation.
         sub.obs_names_make_unique()
-        return aggregate_to_level(
-            sub, level="guide", method="mean",
-            preserve_batch_info=False, subsample_controls=False,
-        )
-    sgrnas = adata_cells.obs[guide_col_name].values
-    kept_idx = []
-    for s in np.unique(sgrnas):
-        s_idx = np.where(sgrnas == s)[0]
-        if len(s_idx) <= cells_per_guide:
-            kept_idx.extend(s_idx)
-        else:
-            kept_idx.extend(rng.choice(s_idx, cells_per_guide, replace=False))
-    kept_idx = np.sort(np.asarray(kept_idx))
-    sub = adata_cells[kept_idx].copy()
     return aggregate_to_level(
         sub, level="guide", method="mean",
         preserve_batch_info=False, subsample_controls=False,

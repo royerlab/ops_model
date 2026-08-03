@@ -735,9 +735,12 @@ def _build_total_schedule(paths: List[Path]) -> List[int]:
 
 def _subsample_one(
     adata_cells: ad.AnnData, target: int, sampling_mode: str, rng: np.random.RandomState,
+    replace: bool = False,
 ) -> ad.AnnData:
     if sampling_mode in ("per_guide", "per_guide_median"):
-        return _subsample_per_guide_and_aggregate(adata_cells, target, rng)
+        return _subsample_per_guide_and_aggregate(
+            adata_cells, target, rng, replace=replace,
+        )
     if sampling_mode == "per_ko":
         return _subsample_per_ko_and_aggregate(adata_cells, target, rng)
     return _subsample_and_aggregate(adata_cells, target, rng)
@@ -786,6 +789,7 @@ def _build_combined_at_target(
     *,
     second_pca_threshold: float = 0.0,
     n_workers: int = 1,
+    replace: bool = False,
     _logger: Optional[logging.Logger] = None,
 ) -> ad.AnnData:
     """For each reporter: subsample → aggregate → NTC-normalize, then h-concat.
@@ -814,7 +818,7 @@ def _build_combined_at_target(
     def _prep_one(idx_adata: Tuple[int, ad.AnnData]) -> ad.AnnData:
         idx, adata = idx_adata
         local_rng = np.random.RandomState(reporter_seeds[idx])
-        g_sub = _subsample_one(adata, target, sampling_mode, local_rng)
+        g_sub = _subsample_one(adata, target, sampling_mode, local_rng, replace=replace)
         g_norm = normalize_guide_adata(g_sub, norm_method)
         sig = str(adata.obs.get("signal", pd.Series(["?"])).iloc[0])
         g_norm.var_names = [f"{sig}::{v}" for v in g_norm.var_names]
@@ -859,6 +863,7 @@ def run_combined_titration(
     schedule_start_override: Optional[int] = None,
     median_start_policy: str = "pool",
     n_workers: int = 1,
+    replace: bool = False,
 ) -> str:
     """Run the combined-titration loop for one group and write CSV + plots.
 
@@ -1002,6 +1007,7 @@ def run_combined_titration(
                 cells_blocks, target, sampling_mode, norm_method, draw_rng,
                 second_pca_threshold=effective_second_pca,
                 n_workers=int(n_workers),
+                replace=replace,
                 _logger=_logger,
             )
             scores_b = _score_all_metrics(combined, _logger)
@@ -2101,6 +2107,7 @@ def main():
                         "median_start_policy": args.median_start_policy,
                         "second_pca_threshold": thr,
                         "n_workers": int(n_workers),
+                        "replace": bool(args.bootstrap_replace),
                     },
                     "metadata": {"group": g, "target": int(target),
                                   "shard_csv": str(out_csv)},
@@ -2225,6 +2232,7 @@ def main():
                     "median_start_policy": args.median_start_policy,
                     "second_pca_threshold": float(args.second_pca_threshold),
                     "n_workers": int(n_workers),
+                    "replace": bool(args.bootstrap_replace),
                 },
             }
             if phase_in_group:
@@ -2282,6 +2290,7 @@ def main():
                 median_start_policy=args.median_start_policy,
                 second_pca_threshold=float(args.second_pca_threshold),
                 n_workers=int(n_workers_local),
+                replace=bool(args.bootstrap_replace),
             )
             csvs_by_group[g] = group_outdirs[g] / f"combined_titration_{g}.csv"
 
