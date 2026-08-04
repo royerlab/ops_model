@@ -175,8 +175,9 @@ def _submit_multibag(gk_partition="preempted", cx_partition="gpu"):
                                  experiment="diffex_v5inv", slurm_params=sp_a, log_dir="diffex_v5inv", wait_for_completion=False)
         after = r["base_job_id"]
     for grain, targets, tag, part in [("geneKO", C.all_genes(), "g", gk_partition), ("complex", C.ebi_complexes(), "c", cx_partition)]:
-        jobs = [{"name": f"mbag_{tag}{i}", "func": build_phase_topup, "kwargs": {"grain": grain, "targets": targets[i:i + 6], "lo": 200, "hi": 400}}
-                for i in range(0, len(targets), 6)]
+        chunk = 2 if grain == "geneKO" else 6      # 200 cells/gene is heavy → 2 geneKO/shard fits the 12h limit (6 timed out)
+        jobs = [{"name": f"mbag_{tag}{i}", "func": build_phase_topup, "kwargs": {"grain": grain, "targets": targets[i:i + chunk], "lo": 200, "hi": 400}}
+                for i in range(0, len(targets), chunk)]
         sp = dict(_gpu_sp(720)); sp["slurm_partition"] = part; sp["slurm_constraint"] = "[a40|a6000|l40s]"
         addl = {}
         if after:
@@ -578,7 +579,7 @@ if __name__ == "__main__":
     elif cmd == "topup":
         _submit_topup(arg2 or "gpu")
     elif cmd == "multibag":
-        _submit_multibag()   # geneKO→preempted, complex→gpu (anchor idempotent)
+        _submit_multibag(arg2 or "preempted", (sys.argv[3] if len(sys.argv) > 3 else "gpu"))   # gk_partition cx_partition
     elif cmd == "altanchors":
         _submit_altanchors()
     else:
