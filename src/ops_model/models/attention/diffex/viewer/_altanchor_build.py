@@ -36,7 +36,7 @@ def gen_shard(grain, classes, pairs):
     parq = V5G if grain == "geneKO" else V5C
     P.precompute_anchors_marker(grain=grain, classes=classes, ckpt=PHASE_CK, out_root=ROOT,
                                 marker_channel=None, channel="Phase2D", n_cells=N_CELLS,
-                                pairs=pairs, accuracy_parquet=parq, force=True)
+                                pairs=pairs, accuracy_parquet=parq, force=True, v5_score=True)
 
 
 def gen_shard_fluor(d, marker_channel, channel, grain, classes, pairs):
@@ -48,7 +48,7 @@ def gen_shard_fluor(d, marker_channel, channel, grain, classes, pairs):
     parq = f"{FRANK}/{grain}/{slugify(marker_channel)}.parquet"
     P.precompute_anchors_marker(grain=grain, classes=classes, ckpt=f"{C.DD}/{d}/diffae_best.pt", out_root=ROOT,
                                 marker_channel=marker_channel, channel=channel, n_cells=N_CELLS,
-                                pairs=pairs, accuracy_parquet=parq, force=True)
+                                pairs=pairs, accuracy_parquet=parq, force=True, v5_score=True)
 
 
 def submit_fluor():

@@ -265,7 +265,7 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
                               fluor_csv=None, n_cells=20, w=1.5, alphas=VIEWER_ALPHAS, device="cuda",
                               upsize=256, batch=48, n_workers=8, load_workers=12, n_per_class=1000,
                               pairs=None, accuracy_parquet=None, force=False,
-                              invert_anchors=True):
+                              invert_anchors=True, v5_score=False, v5_bag=None):
     """A→B anchors among `classes` for ONE marker: gather each class's cells ONCE (single CSV read),
     then generate every ordered pair a→b (anchor a's cells morphed toward b's centroid). The gather is
     amortized across all K·(K−1) pairs; the mean-diff direction is b_centroid − a_centroid."""
@@ -289,6 +289,14 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
             cache[cls] = (imgs, embs)
     al = sorted(alphas); A = len(al); H = cfg.crop_size
     diffae = load_diffae(cfg, dev); null_base = diffae.null_emb.detach()[None].to(dev)
+    v5ctx = None                                          # inline v5 SetTransformer scoring — same as precompute_marker
+    if v5_score:
+        from .set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
+        from .score_generated import score_embs_v5
+        _vmod = "fluor" if marker_channel else "phase"
+        _vrun = V5_RUNS[(_vmod, "geneKO" if grain == "geneKO" else "complex_ebionly")]
+        _vm, _vg2i, _vc2i = load_set_classifier(run=_vrun, device=dev, root=V5_CKPT_ROOT)
+        v5ctx = (_vm, _vg2i, _vc2i.get(marker_channel or "Phase2D", 0), _vrun, score_embs_v5)
     done = 0
     ordered = list(pairs) if pairs is not None else [(a, b) for a in classes for b in classes if a != b]
     setup = {}
@@ -341,10 +349,20 @@ def precompute_anchors_marker(grain, classes, ckpt, out_root, marker_channel=Non
                 for ai in range(A):
                     fp.submit(_save_webp, cdir / f"frame_{ai:02d}.webp", gen[c, ai], upsize)
             fp.shutdown(wait=True)
+            v5d = None
+            if v5ctx is not None:                        # inline P(target b) + rank, reusing the generated frames (no re-decode)
+                try:
+                    gemb = embed_crops(gen.reshape(-1, 1, H, H).astype(np.float32), cfg, cache_path=None).reshape(ncell, A, -1)
+                    _vm, _vg2i, _vci, _vrun, _score_embs = v5ctx
+                    v5d = _score_embs([gemb[:, ai, :] for ai in range(A)], al, b, _vm, _vg2i, _vci, _vrun, dev, v5_bag)
+                    if v5d is not None:
+                        (adir / "scores_v5.json").write_text(json.dumps(v5d))
+                except Exception as e:
+                    print(f"[v5score ERR] {b}: {repr(e)[:120]}")
             (adir / "meta.json").write_text(json.dumps(
                 {"grain": grain, "target": b, "modality": modality, "control": a, "marker_channel": marker_channel,
                  "channel": channel, "slug": slug, "w": w, "alphas": al, "gap": gap, "n_cells": ncell,
-                 "has_scores": False, "has_real": True, "real_dir": f"{modality}/_anchors/{anchor}",
+                 "has_scores": False, "has_scores_v5": v5d is not None, "has_real": True, "real_dir": f"{modality}/_anchors/{anchor}",
                  "asset_dir": f"{modality}/{grain}/{slug}"}))
             done += 1
             print(f"[anchor] {modality}/{grain}/{slug}: {ncell}×{A}")
