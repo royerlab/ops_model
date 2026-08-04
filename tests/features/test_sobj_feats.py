@@ -127,8 +127,8 @@ def test_zernike(batch, core_measurements):
     return
 
 
-def test_ferret(batch, core_measurements):
-    fcn = core_measurements["ferret"]
+def test_feret(batch, core_measurements):
+    fcn = core_measurements["feret"]
     out = fcn(
         batch["cell_mask"][0, 0].detach().cpu().numpy(),
         batch["data"][0, 0].detach().cpu().numpy(),
