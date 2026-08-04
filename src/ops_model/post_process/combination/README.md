@@ -5,12 +5,11 @@ CellProfiler / …) from many OPS experiments into **combined guide- and gene-le
 objects**, scored on phenotypic metrics. The supported pipeline is the **`pca_optimization`
 subpackage**.
 
-- **How it works (internals / data flow):** [`pca_optimization_dataflow.md`](pca_optimization_dataflow.md)
-- **What every file in this dir is (core vs supplemental):** [`SCRIPT_MAP.md`](SCRIPT_MAP.md)
+- **Cell-count titration of the combined outputs:** [`titration/README.md`](titration/README.md)
 
 > The older config-driven `cli.py` / `baseline.yml` path (`run_combination`,
 > `PcaOptimizationCombiner`, `ComprehensiveCombiner`, …) has been **removed**. Use the
-> argparse subpackage below. (History: `SCRIPT_MAP.md` §3.)
+> argparse subpackage below.
 
 ---
 
@@ -248,8 +247,9 @@ Inside the resolved dir:
 
 ## Supplemental tools (run separately, not part of a combine)
 
-Post-hoc analysis/visualization that consume the combined outputs, in the `analysis/`
-subpackage (run via `python -m ops_model.post_process.combination.analysis.<name>`) — see
-`SCRIPT_MAP.md`: `analysis/compare_map_scores.py`, `analysis/compare_modalities.py`,
-`analysis/pca_component_to_feature.py`, `analysis/embedding_overlays.py`, plus the
-`titration/` and `hand_annotations/` analyses.
+`titration/` — how the phenotypic metrics degrade as you spend fewer cells, per
+reporter or for a combined panel. See [`titration/README.md`](titration/README.md).
+
+The former `analysis/` and `hand_annotations/` subpackages (comparison plots,
+embedding overlays, hand-annotated cluster tooling) have been removed; that work
+now lives in the `ops-paper-analysis` repo.
