@@ -156,8 +156,18 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
             raise RuntimeError(f"invert_anchors=True but no lossless anchor_imgs in {acache}; pre-build the "
                                f"anchor cache first (lossy real.webp inversion is disabled).")
         x0a = torch.as_tensor(anchor_imgs[:ncell], dtype=torch.float32, device=dev)
-        xT = {c: _ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True) for c in cells}
-        print(f"[invert] anchored xT via guided DDIM inversion (w={w}) for {len(cells)} cell(s)")
+        xT, _nc = {}, 0                                  # cache each cell's inverted xT (ckpt/w/steps-fixed) → invert ONCE, reuse across shards
+        for c in cells:
+            xtp = realdir / f"cell{c}" / f"xT_w{w:g}_s{ddim_steps}.npz"
+            if xtp.exists():
+                xT[c] = torch.as_tensor(np.load(xtp)["xT"], dtype=torch.float32, device=dev); _nc += 1
+            else:
+                xt = _ddim_guided(diffae, x0a[c:c + 1], z0[c:c + 1], null_base, w, cfg, inverse=True)
+                xtp.parent.mkdir(parents=True, exist_ok=True)
+                tmp = xtp.parent / f".xT_{os.getpid()}_{c}.npz"          # atomic write → concurrent shards can't corrupt the cache
+                np.savez(tmp, xT=xt.detach().cpu().numpy()); os.replace(tmp, xtp)
+                xT[c] = xt
+        print(f"[invert] anchored xT for {len(cells)} cell(s) ({_nc} from cache, w={w})")
     else:
         xT = {c: torch.randn(1, 1, H, H, generator=torch.Generator(device=dev).manual_seed(1234 + c), device=dev) for c in cells}
 
