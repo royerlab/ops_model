@@ -52,7 +52,6 @@ def _aggregate_then_second_pca(
     second_pca_sweep_thresholds: Optional[List[float]],
     random_seed: int = 42,
     agg_method: str = "mean",
-    chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
     consensus_metrics=None,
     sweep_metric: str = "mean_map",
@@ -79,7 +78,6 @@ def _aggregate_then_second_pca(
         distance=distance,
         random_seed=random_seed,
         agg_method=agg_method,
-        chromosome_csv=chromosome_csv,
         umap_type=umap_type,
     )
     if str(agg_result).startswith("FAILED"):
@@ -94,7 +92,6 @@ def _aggregate_then_second_pca(
         sweep_thresholds=second_pca_sweep_thresholds,
         random_seed=random_seed,
         agg_method=agg_method,
-        chromosome_csv=chromosome_csv,
         umap_type=umap_type,
         consensus_metrics=consensus_metrics,
         sweep_metric=sweep_metric,
@@ -129,7 +126,6 @@ def _submit_aggregation_slurm(
     second_pca_kwargs: Optional[Dict] = None,
     random_seed: int = 42,
     agg_method: str = "mean",
-    chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
     consensus_metrics=None,
     sweep_metric: str = "mean_map",
@@ -146,7 +142,6 @@ def _submit_aggregation_slurm(
             "distance": distance,
             "random_seed": random_seed,
             "agg_method": agg_method,
-            "chromosome_csv": chromosome_csv,
             "umap_type": umap_type,
             "consensus_metrics": consensus_metrics,
             "sweep_metric": sweep_metric,
@@ -164,7 +159,6 @@ def _submit_aggregation_slurm(
             "distance": distance,
             "random_seed": random_seed,
             "agg_method": agg_method,
-            "chromosome_csv": chromosome_csv,
             "umap_type": umap_type,
         }
         job_name = f"{manifest_prefix}_aggregate"
@@ -225,7 +219,6 @@ def _submit_phase1_slurm(
             second_pca_kwargs=_build_second_pca_kwargs(args),
             random_seed=getattr(args, "seed", 42),
             agg_method=getattr(args, "agg_method", "mean"),
-            chromosome_csv=getattr(args, "chromosome_csv", None),
             umap_type=getattr(args, "umap_type", "max"),
             consensus_metrics=getattr(args, "second_pca_consensus_metrics", None),
             sweep_metric=getattr(args, "sweep_metric", "mean_map"),

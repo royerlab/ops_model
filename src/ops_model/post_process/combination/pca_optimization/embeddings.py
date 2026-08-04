@@ -14,7 +14,6 @@ time.
 
 from __future__ import annotations
 
-from typing import Optional
 
 import numpy as np
 
@@ -30,11 +29,6 @@ from ops_utils.data.positive_controls import plot_positive_controls_grid
 from ops_model.post_process.combination.pca_optimization.aggregation import (
     _annotate_genes_from_panel,
 )
-from ops_model.post_process.combination.pipeline_add_ons.chromosome import (
-    _load_chromosome_map,
-    _plot_chromosome_overlay,
-    _plot_chromosome_overlay_html,
-)
 
 
 def _compute_and_plot_embeddings(
@@ -44,7 +38,6 @@ def _compute_and_plot_embeddings(
     plt,
     _logger,
     random_seed: int = 42,
-    chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
 ):
     """Compute UMAP + PHATE embeddings for guide/gene levels, plot overlays + positive controls.
@@ -52,10 +45,6 @@ def _compute_and_plot_embeddings(
     Returns adata_gene_embed with embeddings stored in obsm — caller should save it.
     The same ``random_seed`` is threaded into ``split_ntc_for_embedding``, UMAP,
     and PHATE so a given seed deterministically reproduces the same embedding.
-
-    ``chromosome_csv``: optional CSV (columns include ``perturbation``,
-    ``chromosome``, ``chromosome_arm``). When provided, also writes a
-    chromosome-arm-colored gene-level scatter for each embedding.
 
     ``umap_type``: which UMAP recipe to use.
 
@@ -195,11 +184,6 @@ def _compute_and_plot_embeddings(
 
             return _fit
 
-    # Load chromosome map once (None if not requested or file is unreadable)
-    chrom_df = (
-        _load_chromosome_map(chromosome_csv, _logger) if chromosome_csv else None
-    )
-
     for embed_name, pkg_hint in [("UMAP", "umap-learn"), ("PHATE", "phate")]:
         try:
             fit_fn = _make_embedder(embed_name)
@@ -244,24 +228,6 @@ def _compute_and_plot_embeddings(
                 embed_csv_name = f"{level_name}_{embed_name.lower()}_coords.csv"
                 embed_df.to_csv(plots_dir / embed_csv_name, index=False)
                 _logger.info(f"  Saved plots/{embed_csv_name}")
-                # Chromosome-arm overlay (gene level only — guide level has 4×
-                # the points and the same chr_arm per perturbation, so the
-                # plot would just be a denser copy).
-                if chrom_df is not None and level_name == "gene":
-                    try:
-                        chrom_stem = plots_dir / f"{level_name}_{embed_name.lower()}_chromosome"
-                        _plot_chromosome_overlay(
-                            coords, perts, chrom_df, embed_name,
-                            chrom_stem, plt, _logger,
-                        )
-                        _plot_chromosome_overlay_html(
-                            coords, perts, chrom_df, embed_name,
-                            chrom_stem, _logger,
-                        )
-                    except Exception as chr_err:
-                        _logger.warning(
-                            f"  Chromosome overlay ({embed_name}) failed: {chr_err}"
-                        )
         except Exception as err:
             _logger.warning(f"  {embed_name} plots failed: {err}")
 

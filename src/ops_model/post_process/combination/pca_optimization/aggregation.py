@@ -52,9 +52,8 @@ from ops_model.post_process.combination.pca_optimization.sweep_core import (
 )
 
 
-ANNOTATED_GENE_PANEL_PATH = Path(
-    "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
-)
+# Resolved at run time from --gene-panel (see pca_optimization.GENE_PANEL_PATH).
+# Module-level indirection keeps the helpers picklable for submitit.
 
 
 def _plot_chad_umap(umap_coords, genes, gene_to_cluster, out_path, plt, _logger):
@@ -586,10 +585,14 @@ def _annotate_genes_from_panel(adata_gene: ad.AnnData, _logger) -> None:
     In_corum_complexes, funk_cluster, Gene_Category, ... — matching the reference
     gene-level h5ad layout (cropseq_gene_level.h5ad).
     """
-    if not ANNOTATED_GENE_PANEL_PATH.exists():
-        _logger.warning(f"  Gene panel not found at {ANNOTATED_GENE_PANEL_PATH}, skipping annotation")
+    from ops_model.post_process.combination.pca_optimization import GENE_PANEL_PATH
+
+    if not GENE_PANEL_PATH or not Path(GENE_PANEL_PATH).is_file():
+        _logger.warning(
+            f"  Gene panel not found at {GENE_PANEL_PATH}, skipping annotation"
+        )
         return
-    panel = pd.read_csv(ANNOTATED_GENE_PANEL_PATH, index_col=0)
+    panel = pd.read_csv(GENE_PANEL_PATH, index_col=0)
     panel = panel.set_index("Gene.name")
     # Preserve existing obs columns; only add panel columns that aren't already present
     cols_to_add = [c for c in panel.columns if c not in adata_gene.obs.columns]

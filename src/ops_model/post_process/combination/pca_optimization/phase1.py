@@ -29,7 +29,6 @@ from ops_utils.data.feature_discovery import (
     get_channel_maps_path,
     get_storage_roots,
     load_attribution_config,
-    load_cell_h5ad,
     sanitize_signal_filename,
 )
 

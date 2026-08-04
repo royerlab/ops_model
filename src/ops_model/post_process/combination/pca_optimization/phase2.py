@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import anndata as ad
 import numpy as np
@@ -82,7 +82,6 @@ def aggregate_channels(
     distance: str = "cosine",
     random_seed: int = 42,
     agg_method: str = "mean",
-    chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
 ) -> str:
     """Load per-channel (or per-signal) h5ads, concatenate, normalize, score, save.
@@ -94,8 +93,6 @@ def aggregate_channels(
             "per_channel" for standard mode, "per_signal" for downsampled mode.
         agg_method: cells→guides / guides→geneKOs reduction (``mean`` or
             ``median``). Default ``mean``.
-        chromosome_csv: optional CSV mapping perturbation → chromosome /
-            chromosome_arm; used to color gene-level UMAP + PHATE.
     """
     CHAD_ANNOTATION_PATH, _, MIN_PCS = _lazy_globals()
 
@@ -188,7 +185,6 @@ def aggregate_channels(
     adata_gene_embed = _compute_and_plot_embeddings(
         adata_guide, metric_lookup, plots_dir, plt, _logger,
         random_seed=random_seed,
-        chromosome_csv=chromosome_csv,
         umap_type=umap_type,
     )
     # Re-save guide + gene-embed with embeddings now populated
@@ -328,7 +324,7 @@ def aggregate_channels(
     except Exception as exc:
         _logger.warning(f"  1st-pass metric violin plot failed: {exc}")
 
-    _chad_path = CHAD_ANNOTATION_PATH or "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
+    _chad_path = CHAD_ANNOTATION_PATH
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
             import yaml as _yaml
@@ -350,35 +346,6 @@ def aggregate_channels(
         except Exception as e:
             _logger.warning(f"  CHAD UMAP failed: {e}")
 
-    # Extra overlays (super-category, Leiden, interactive HTML)
-    try:
-        from ops_model.post_process.combination.analysis.embedding_overlays import (
-            save_extra_overlays,
-        )
-
-        save_extra_overlays(
-            adata_guide=adata_guide,
-            adata_gene_embed=adata_gene_embed,
-            plots_dir=plots_dir,
-            plt=plt,
-            activity_map=activity_map,
-            dist_map=dist_map,
-            corum_map=corum_map,
-            chad_map=chad_map,
-            chad_path_override=CHAD_ANNOTATION_PATH,
-            _logger=_logger,
-        )
-        # Re-save h5ads now that leiden_r* columns + neighbors graph have been
-        # added to the in-memory adata objects by save_extra_overlays
-        _atomic_write_h5ad(adata_guide, output_dir / "guide_pca_optimized.h5ad", _logger)
-        if adata_gene_embed is not None:
-            _atomic_write_h5ad(
-                adata_gene_embed,
-                output_dir / "gene_embedding_pca_optimized.h5ad",
-                _logger,
-            )
-    except Exception as e:
-        _logger.warning(f"  Extra overlays failed: {e}")
 
     elapsed = time.time() - t_start
     _logger.info(f"\nDone in {elapsed/60:.1f} minutes")
@@ -600,7 +567,6 @@ def apply_second_pass_pca(
     sweep_thresholds: Optional[List[float]] = None,
     random_seed: int = 42,
     agg_method: str = "mean",
-    chromosome_csv: Optional[str] = None,
     input_path: Optional[str] = None,
     subdir_suffix: str = "",
     skip_pca: bool = False,
@@ -942,7 +908,6 @@ def apply_second_pass_pca(
     adata_gene_embed = _compute_and_plot_embeddings(
         adata_guide, metric_lookup, plots_dir, plt, _logger,
         random_seed=random_seed,
-        chromosome_csv=chromosome_csv,
         umap_type=umap_type,
     )
     _atomic_write_h5ad(adata_guide, out_dir / "guide_pca_optimized.h5ad", _logger)
@@ -1045,10 +1010,7 @@ def apply_second_pass_pca(
     except Exception as exc:
         _logger.warning(f"  Metric violin plot failed: {exc}")
 
-    _chad_path = (
-        CHAD_ANNOTATION_PATH
-        or "/hpc/projects/icd.fast.ops/configs/gene_clusters/chad_positive_controls_v5_hierarchy.yml"
-    )
+    _chad_path = CHAD_ANNOTATION_PATH
     if adata_gene_embed is not None and "X_umap" in adata_gene_embed.obsm:
         try:
             import yaml as _yaml
@@ -1071,34 +1033,6 @@ def apply_second_pass_pca(
         except Exception as exc:
             _logger.warning(f"  CHAD UMAP failed: {exc}")
 
-    # Extra overlays (super-category, Leiden, interactive HTML)
-    try:
-        from ops_model.post_process.combination.analysis.embedding_overlays import (
-            save_extra_overlays,
-        )
-
-        save_extra_overlays(
-            adata_guide=adata_guide,
-            adata_gene_embed=adata_gene_embed,
-            plots_dir=plots_dir,
-            plt=plt,
-            activity_map=activity_map,
-            dist_map=dist_map,
-            corum_map=corum_map,
-            chad_map=chad_map,
-            chad_path_override=CHAD_ANNOTATION_PATH,
-            _logger=_logger,
-        )
-        # Re-save h5ads with leiden_r* columns + neighbors graph just added
-        _atomic_write_h5ad(adata_guide, out_dir / "guide_pca_optimized.h5ad", _logger)
-        if adata_gene_embed is not None:
-            _atomic_write_h5ad(
-                adata_gene_embed,
-                out_dir / "gene_embedding_pca_optimized.h5ad",
-                _logger,
-            )
-    except Exception as exc:
-        _logger.warning(f"  Extra overlays failed: {exc}")
 
     summary = {
         "n_guides": int(n_guides),

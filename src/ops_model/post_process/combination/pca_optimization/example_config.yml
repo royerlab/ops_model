@@ -1,56 +1,48 @@
 # Example config for the pca_optimization combination pipeline.
 #
 # Run with:
-#   python -m ops_model.post_process.combination.pca_optimization --config <this file>
+#   python -m ops_model.post_process.combination.pca_optimization \
+#       --config <this file> \
+#       --signal Phase=/data/runA/phase.h5ad \
+#       --signal MAP4=/data/runA/map4.h5ad,/data/runB/map4.h5ad
 #
 # Keys are the CLI argument names as snake_case (argparse "dest" names):
-#   --cell-dino   -> cell_dino
-#   --phase-only  -> phase_only
-#   --output-dir  -> output_dir
+#   --cell-dino       -> cell_dino
+#   --output-dir      -> output_dir
 #   --fixed-threshold -> fixed_threshold
 # Anything omitted here falls back to the CLI default. Any flag passed on the
-# command line overrides the value here (e.g. `--config this.yml --no-slurm`).
+# command line overrides the value here.
 # Run the module with --help for the full key list.
 #
-# This example reproduces the validation-cohort run from the module docstring.
+# NOTE: --signal is repeatable and has no sensible single-value YAML form, so
+# signal groups are always given on the command line, not in this file.
 
-# --- Feature mode (exactly ONE of: cell_dino / dino / cell_profiler / dynaclr / subcell / organelle_profiler) ---
+# --- Feature mode (exactly ONE of: cell_dino / dino / cell_profiler / dynaclr / subcell) ---
 cell_dino: true
 
 # --- Output ---
-output_dir: /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
-run_tag: paper_v1/validation_4exp_phase_only   # organizational output subfolder
-
-# --- Experiment / channel selection ---
-experiments: ops0146,ops0147,ops0150,ops0151   # comma-separated short names; omit for full discovery
-phase_only: true                               # Phase (brightfield) channels only; or set no_phase: true
+output_dir: /path/to/pca_optimization_output_root
+run_tag: my_run            # organizational output subfolder
 
 # --- PCA ---
 fixed_threshold: 0.80      # single variance cutoff; set 0 to run the full consensus sweep
+
+# --- Sampling ---
+target_cells: 10000000     # total pooled-cell budget per signal group
+# downsample_per_guide: true   # instead cap per sgRNA, at cells_per_guide
+# cells_per_guide: 250
 
 # --- Normalization ---
 norm_method: ntc           # ntc | global
 zscore_per_experiment: true
 
-# --- Consistency-score annotation ---
-chad_annotation: /hpc/projects/icd.fast.ops/configs/gene_clusters/val_library_chad_positive_controls_v1.yml
+# --- Required annotation inputs (no defaults; must point somewhere real) ---
+chad_annotation: /path/to/chad_positive_controls.yml
+ebi_annotation: /path/to/EBI_complexes.yaml
+gene_panel: /path/to/annotated_gene_panel.csv
 
 # --- Execution ---
 slurm: true                # false → run Phase 1 + Phase 2 in-process
 
 # To turn OFF a default-on flag, set it false, e.g.:
 # second_pca: false
-
-# --- External embeddings (optional) ---
-# To combine embeddings that live OUTSIDE the standard experiment layout, set
-# `signal_paths` here instead of using experiment discovery. It maps a
-# signal-group name -> one h5ad path or a list of paths (pooled). Each h5ad must
-# have the same schema as the discovery features_processed_*.h5ad (obs: sgRNA /
-# perturbation / experiment; X = embedding). When set, `experiments` / feature
-# discovery are ignored and output lands under <output_dir>/external/.
-#
-# signal_paths:
-#   Phase: /data/runA/phase_embeddings.h5ad        # one file = one signal
-#   MAP4:                                          # multiple files pooled
-#     - /data/runA/map4_embeddings.h5ad
-#     - /data/runB/map4_embeddings.h5ad
