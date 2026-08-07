@@ -144,10 +144,11 @@ TITLE = 0.86         # title + subheader band above the tiles
 BGX, BGY = 0.34, 0.3  # gaps between blocks (combined figure)
 SUP, FOOT = 0.62, 0.5   # suptitle / footer bands
 FS_TITLE, FS_SUB, FS_GENE, FS_BADGE, FS_SUP, FS_LET = 21, 16, 17, 12, 26, 26
-BADGE_A = 0.3        # rank-badge alpha — faint, so it never competes with the cell
+SHOW_BADGES = False  # rank badges on each tile (cells are rank-ordered regardless)
+BADGE_A = 0.3        # rank-badge alpha when shown
 HALF = N_CELLS * T + (N_CELLS - 1) * GAP           # width of one 3-tile half
-CAPTION = ("Cells ordered by per-cell SHAP from the EBI-complex multi_rank screen (badge = SHAP rank within "
-           "class); NTC = top-SHAP non-targeting cells of the same channel, shared intensity window per channel.")
+CAPTION = ("Cells ordered by per-cell SHAP from the EBI-complex multi_rank screen (most predictive first, left to "
+           "right); NTC = top-SHAP non-targeting cells of the same channel, shared intensity window per channel.")
 
 
 def block_h(nrows):
@@ -166,9 +167,10 @@ def _put(fig, W, H, x, y, im, badge):
     ax.set_xticks([]); ax.set_yticks([])
     for s in ax.spines.values():
         s.set_edgecolor("#888"); s.set_linewidth(0.5)
-    ax.text(0.04, 0.96, badge, transform=ax.transAxes, fontsize=FS_BADGE, fontweight="bold", color="white",
-            alpha=0.72, va="top", ha="left",
-            bbox=dict(boxstyle="round,pad=0.12", fc="#c1272d", ec="none", alpha=BADGE_A))
+    if SHOW_BADGES:
+        ax.text(0.04, 0.96, badge, transform=ax.transAxes, fontsize=FS_BADGE, fontweight="bold", color="white",
+                alpha=0.72, va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.12", fc="#c1272d", ec="none", alpha=BADGE_A))
 
 
 def draw_block(fig, blk, x0, y0, lo, hi, W, H, letter=None):

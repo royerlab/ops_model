@@ -47,7 +47,7 @@ plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]   # Aria
 
 N_TOP = 1000         # cells per group = top-N SHAP-ranked cells matched into the store
 BGY_C = 0.2          # vertical gap between composite rows
-CAPTION_C = ("Images: top-SHAP cells (badge = rank). Violins: organelle morphometrics of the top-1000 SHAP-ranked real "
+CAPTION_C = ("Images: top-SHAP cells, most predictive first (left to right). Violins: organelle morphometrics of the top-1000 SHAP-ranked real "
              "cells per class (n≈1000 each) from the op_cp_features store — except A, where 'peripheral' = droplets in "
              "the outer 20% of the nucleus→edge axis, measured per droplet; bar = median, % = Δmedian vs NTC.")
 VIEW_PCT = (2, 96)   # y-view clip — tails cropped from the VIEW only, medians/KDE stay on the full data
