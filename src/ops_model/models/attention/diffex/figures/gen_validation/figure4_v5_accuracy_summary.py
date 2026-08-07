@@ -116,22 +116,24 @@ def _render(series, out_stem, title, overlays=None):
 
 def main():
     suf = os.environ.get("SUMMARY_SUFFIX", "")   # e.g. "_corrected" → new files, don't overwrite the old plot
+    ov_full = None if os.environ.get("NO_OVERLAY") else [("geneKO", None, "geneKO 200-cell bag", "#1f77b4", VALID200),
+                                                          ("complex", None, "complex 200-cell bag", "#d62728", VALID200)]
     # full: all geneKO + all complexes
     _render([("geneKO", None, "geneKO (1K)", "#1f77b4"), ("complex", None, "EBI complexes", "#d62728")],
             "v5_accuracy_vs_alpha_summary" + suf,
             "Generated-traversal accuracy vs α\n(generated mean ± SEM; dotted = real-cell mean top1_acc @bag20)",
-            overlays=[("geneKO", None, "geneKO 200-cell bag", "#1f77b4", VALID200),
-                      ("complex", None, "complex 200-cell bag", "#d62728", VALID200)])
+            overlays=ov_full)
     # filtered: high real-accuracy classes (real acc>thr @bag20). Dotted line = real-cell ceiling for that set.
     for thr, stem in [(0.8, "v5_accuracy_vs_alpha_realacc80" + suf), (0.9, "v5_accuracy_vs_alpha_realacc90" + suf)]:
         gk, cx = _geneKO_allow(thr), _complex_allow(thr)
         print(f"filtered allowlists (>{thr}): {len(gk)} geneKO, {len(cx)} complex")
+        ov = None if os.environ.get("NO_OVERLAY") else [("geneKO", gk, f"geneKO 200-cell bag (real acc>{thr})", "#1f77b4", VALID200),
+                                                        ("complex", cx, f"complex 200-cell bag (real acc>{thr})", "#d62728", VALID200)]
         _render([("geneKO", gk, f"geneKO (real acc>{thr} @bag20)", "#1f77b4"),
                  ("complex", cx, f"EBI complex (mean member real acc>{thr})", "#d62728")],
                 stem,
                 f"Generated accuracy vs α — high real-accuracy classes only\n(geneKO real acc>{thr}; complex mean-member real acc>{thr}; @bag20)",
-                overlays=[("geneKO", gk, f"geneKO 200-cell bag (real acc>{thr})", "#1f77b4", VALID200),
-                          ("complex", cx, f"complex 200-cell bag (real acc>{thr})", "#d62728", VALID200)])
+                overlays=ov)
 
 
 if __name__ == "__main__":

@@ -161,12 +161,16 @@ def plot(overlay=None, overlay_label="200-cell bag", overlay_K=50, fname="distin
 def main():
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     keys = [g[0] for g in GRAINS]
-    jobs = [{"name": f"grd_real_{g}", "func": compute_real, "kwargs": {"grain": g}} for g in keys]
+    mem = int(os.environ.get("GRD_MEM", 240))              # bump for high-K geneKO (1000-class copairs OOMs >240)
+    tmin = int(os.environ.get("GRD_TIME", 180))
+    gen_only = os.environ.get("GRD_GEN_ONLY") == "1"       # skip real (already computed; uses only 30 cached cells)
+    ais = [int(x) for x in os.environ["GRD_AIS"].split(",")] if os.environ.get("GRD_AIS") else list(range(NA))  # resubmit specific α
+    jobs = [] if gen_only else [{"name": f"grd_real_{g}", "func": compute_real, "kwargs": {"grain": g}} for g in keys]
     for g in keys:
-        jobs += [{"name": f"grd_{g}_{ai}", "func": compute_gen, "kwargs": {"grain": g, "ai": ai}} for ai in range(NA)]
-    print(f"[gen-real-distinct] {len(jobs)} jobs (real ×2 + gen ×{NA}×2)")
+        jobs += [{"name": f"grd_{g}_{ai}", "func": compute_gen, "kwargs": {"grain": g, "ai": ai}} for ai in ais]
+    print(f"[gen-real-distinct] {len(jobs)} jobs · mem={mem}GB · grains={keys}")
     submit_parallel_jobs(jobs, experiment="gen_real_distinct",
-                         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 16, "mem_gb": 240, "timeout_min": 180},
+                         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 16, "mem_gb": mem, "timeout_min": tmin},
                          log_dir="gen_real_distinct", wait_for_completion=False)
 
 
