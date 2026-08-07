@@ -76,6 +76,7 @@ function saveState() {
       cellCount: state.cellCount, page: state.page, tilepx: $("tile-scale").value,
       scoreMode: state.scoreMode, showReal: state.showReal, altAnchor: state.altAnchorsOnly, sidePanel: state.sidePanel,
       cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, view: state.view,
+      bag: $("m-bag") ? $("m-bag").value : null,
       alpha: (state.alphas && state.idx != null && state.idx < state.alphas.length) ? state.alphas[state.idx] : null,   // hold α (by value) across reloads
       pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
     }));
@@ -87,6 +88,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (s.alpha != null) restoredAlpha = s.alpha;   // consumed by the first rebuild → holds α across reload/version-switch
   // filters/prefs that affect the target list — set BEFORE marker/target resolution
   if (s.grain && s.grain !== "all") $("grain").value = s.grain;   // 'all' grain removed → fall back to default geneKO
+  if (s.bag && $("m-bag")) $("m-bag").value = s.bag;   // restore anchor bag before marker resolution (montageCells depends on it)
   if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
   if (s.tcCols != null) { $("tc-cols").checked = s.tcCols; $("tc-view").classList.toggle("cols-layout", s.tcCols); }
   if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
@@ -260,6 +262,7 @@ async function boot() {
   let _saveTimer;   // persist selection/prefs after any change settles (debounced; snapshot reads live state)
   const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
   document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
+  setupBagUI();                                               // anchor-bag selector (multi_bag default) before first marker selection
   if (!restoreState()) {                                       // restore last session, else default = phase marker + HSPA5
     selectMarker(0); $("markerfilter").value = markerLabel(0);
     const defT = state.targets.find(t => t.target === "HSPA5");
@@ -343,9 +346,19 @@ function featColor(gene) {   // gene → its feature value → colormap; missing
 }
 
 function ensureMontage() { if (!mont.osd) loadMontage(); else drawOverlay(); }
+// ---- anchor bag (phase-only): single_bag = disk cells 0-199 (attn+acc), multi_bag = disk cells 200-399 (multirank).
+// The bag selector adds a fixed disk-cell OFFSET; display rank stays 1-based so the UI reads rank 1..N either bag.
+function bagAware() { return ASSET_VER === "v5" && attnModality() === "phase" && $("m-bag") && (state.manifest.bags != null); }
+function bagName() { return bagAware() ? ($("m-bag").value || (state.manifest.bags.default || "single_bag")) : "single_bag"; }
+function bagCfg() { return (state.manifest.bags || {})[bagName()] || {}; }
+function bagOffset() { return bagAware() ? (bagCfg().offset || 0) : 0; }
+function diskCell(c) { return bagOffset() + c; }   // display rank (0-based) → disk cell index
+// alt-anchor (A→B) dirs only have single-bag cells 0-44 — the multibag offset applies ONLY to NTC-anchored traversals
+function diskCellFor(anchor, c) { return (anchor && anchor !== "NTC") ? c : diskCell(c); }
+
 // montage is per-marker: phase (default) or the selected fluor marker's own gene embedding
-// montage cell count = how many cells were built per modality: v5 phase = 45 (20 attn + 25 acc), else 20
-function montageCells() { return (ASSET_VER === "v5" && attnModality() === "phase") ? 45 : 20; }
+// montage cell count = how many cells were built per modality: v5 phase single_bag=45, multi_bag=50, else 20
+function montageCells() { return (ASSET_VER === "v5" && attnModality() === "phase") ? (bagCfg().montage_cells || 45) : 20; }
 function fillCellDropdown() {
   const sel = $("m-cell"), prev = +sel.value || 0, n = montageCells();
   sel.innerHTML = "";
@@ -380,6 +393,19 @@ function updateVsUI() {   // Virtual staining is phase-only; its overlay options
   if ($("m-vs")) $("m-vs").style.display = ph ? "" : "none";
   if (vo) vo.style.display = (ph && vsMode()) ? "" : "none";
 }
+function setupBagUI() {   // populate the anchor-bag selector from manifest.bags (default = manifest.bags.default), once at boot
+  const sel = $("m-bag"), bags = state.manifest.bags; if (!sel || !bags) return;
+  sel.innerHTML = "";
+  for (const id of Object.keys(bags)) {
+    if (id === "default") continue;
+    const o = document.createElement("option"); o.value = id; o.textContent = bags[id].label || id; sel.appendChild(o);
+  }
+  sel.value = bags.default || sel.options[0]?.value || "single_bag";
+  sel.onchange = () => { state.page = 0; fillCellDropdown(); rebuild(); if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage()); saveState(); };
+}
+function updateBagUI() {   // bag concept is phase-only (fluor markers have no multibag cells) → hide for markers
+  const f = $("bag-field"); if (f) f.style.display = (state.manifest.bags && attnModality() === "phase") ? "" : "none";
+}
 function overlaySel() { return ovlSel; }       // "off" | "__allmarkers__" | marker slug
 function phaseHidden() { return !!($("m-phaseoff") && $("m-phaseoff").classList.contains("active")); }
 function overlayActive() { return vsMode() && overlaySel() !== "off"; }
@@ -394,7 +420,7 @@ function montageBase() {
       return phaseMontageBase();
     return `${BASE}_montage_vs/${attnModality()}_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`;
   }
-  return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${$("m-cell").value}_a${$("m-alpha").value}_tiles`;
+  return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${diskCell(+$("m-cell").value)}_a${$("m-alpha").value}_tiles`;
 }
 
 const osdSrc = (base, tj) => {   // OSD tileSource from a montage base URL + its tiles.json
@@ -504,10 +530,10 @@ function liveDraw() {
       const g = live.byGene[t.target]; if (!g || (t.n_cells || 0) <= cell) continue;
       const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2;
       if (x > W || y > H || x + cw < 0 || y + cw < 0) continue;
-      const im = liveImg(`${BASE}${t.asset_dir}/cell${cell}/frame_${PAD(ai)}.webp`);
+      const im = liveImg(`${BASE}${t.asset_dir}/cell${diskCell(cell)}/frame_${PAD(ai)}.webp`);
       if (im.complete && im.naturalWidth) ctx.drawImage(im, x, y, cw, cw);
     }
-    const ntc = liveImg(`${BASE}${attnModality()}/_anchors/NTC/cell${cell}/real.webp`);   // the NTC anchor cell
+    const ntc = liveImg(`${BASE}${attnModality()}/_anchors/NTC/cell${diskCell(cell)}/real.webp`);   // the NTC anchor cell
     if (ntc.complete && ntc.naturalWidth) for (const g of live.layout) {
       if (!g.g.startsWith("NTC")) continue;
       const x = lsx(g.nx) - cw / 2, y = lsy(g.ny) - cw / 2;
@@ -808,7 +834,8 @@ const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || 
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   refreshTargets();
-  fillCellDropdown();   // phase → 45 cells, markers → 20 (reflect what was built)
+  updateBagUI();        // anchor-bag selector is phase-only (before fillCellDropdown: montageCells depends on bag)
+  fillCellDropdown();   // phase → 45/50 cells (bag), markers → 20 (reflect what was built)
   updateVsUI();         // Virtual staining is phase-only
   if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage());   // switch to this marker (keeps chosen renderer)
   if (state.view === "pc") loadPC();
@@ -1036,7 +1063,7 @@ function rebuild() {
       const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
       for (let c = start; c < Math.min(start + N, rp0.n_cells); c++) {
         const rp = document.createElement("div"); rp.className = "panel";
-        const rimg = document.createElement("img"); rimg.src = `${travBase(rp0.real_dir)}${rp0.real_dir}/cell${c}/real.webp`;
+        const rimg = document.createElement("img"); rimg.src = `${travBase(rp0.real_dir)}${rp0.real_dir}/cell${diskCellFor(rp0.anchor, c)}/real.webp`;
         rp.appendChild(rimg); rr.appendChild(rp);
       }
       rgroup.appendChild(rhd); rgroup.appendChild(rr); g.appendChild(rgroup);
@@ -1053,7 +1080,7 @@ function rebuild() {
     const cells = document.createElement("div"); cells.className = "group-cells";
     cells.style.setProperty("--cols", Math.min(N, 5));   // max 5 per row; wrap instead of stretching
     for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
-      const frames = p.alphas.map((_, i) => frameURL(p.asset_dir, c, i));
+      const frames = p.alphas.map((_, i) => frameURL(p.asset_dir, diskCellFor(p.anchor, c), i));
       frames.forEach(src => { const im = new Image(); im.src = src; });
       const panel = document.createElement("div"); panel.className = "panel" + (c === start ? " lead" : "");
       const img = document.createElement("img"); img.id = `pimg${k}`;
