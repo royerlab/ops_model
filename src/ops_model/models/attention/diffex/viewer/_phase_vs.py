@@ -174,14 +174,15 @@ def compose_all_shard(genes, cell=1, alpha=5.0):
     return {"done": done}
 
 
-def submit_compose_all(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), chunk=60):
+def submit_compose_all(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), chunk=60, cells=None):
     from . import catalog as C
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     genes = C.all_genes()
     ch = lambda l, n: [l[i:i + n] for i in range(0, len(l), n)]
-    jobs = [{"name": f"pvsall_a{a:g}_{i}", "func": compose_all_shard, "kwargs": {"genes": s, "cell": cell, "alpha": a}}
-            for a in alphas for i, s in enumerate(ch(genes, chunk))]
-    print(f"[phasevs] {len(genes)} genes × {len(alphas)} α → {len(jobs)} all-marker merge shards")
+    cs = cells if cells is not None else [cell]
+    jobs = [{"name": f"pvsall_c{c}_a{a:g}_{i}", "func": compose_all_shard, "kwargs": {"genes": s, "cell": c, "alpha": a}}
+            for c in cs for a in alphas for i, s in enumerate(ch(genes, chunk))]
+    print(f"[phasevs] {len(genes)} genes × {len(cs)} cells × {len(alphas)} α → {len(jobs)} all-marker merge shards")
     submit_parallel_jobs(jobs_to_submit=jobs, experiment="diffex_phasevs",
                          slurm_params={"slurm_partition": "cpu", "cpus_per_task": 4, "mem_gb": 32, "timeout_min": 40,
                                        "slurm_array_parallelism": 32},
@@ -274,14 +275,15 @@ def montage_vs_tiles(marker_slug, cell=1, alpha=5.0, embedding="phate", tile=256
     return {"marker": marker_slug, "genes": len(genes)}
 
 
-def submit_vs_tiles(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0)):
-    """Build interactive VS montage tiles for all 42 markers × {umap, phate} × each α → viewer_assets_v5/_montage_vs/."""
+def submit_vs_tiles(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), cells=None):
+    """Build interactive VS montage tiles for all 42 markers × {umap, phate} × each cell × α → viewer_assets_v5/_montage_vs/."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     markers = json.load(open(f"{VS_OUT}/markers.json"))
-    jobs = [{"name": f"vstile_{slugify(m)[:10]}_{e[:2]}_a{a:g}", "func": montage_vs_tiles,
-             "kwargs": {"marker_slug": slugify(m), "cell": cell, "alpha": a, "embedding": e}}
-            for m in markers for e in ("umap", "phate") for a in alphas]
-    print(f"[phasevs] {len(jobs)} VS montage-tile jobs (42 markers × 2 emb × {len(alphas)} α)")
+    cs = cells if cells is not None else [cell]
+    jobs = [{"name": f"vstile_{slugify(m)[:10]}_{e[:2]}_c{c}_a{a:g}", "func": montage_vs_tiles,
+             "kwargs": {"marker_slug": slugify(m), "cell": c, "alpha": a, "embedding": e}}
+            for m in markers for c in cs for e in ("umap", "phate") for a in alphas]
+    print(f"[phasevs] {len(jobs)} VS montage-tile jobs (42 markers × {len(cs)} cells × 2 emb × {len(alphas)} α)")
     submit_parallel_jobs(
         jobs_to_submit=jobs, experiment="diffex_phasevs",
         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 6, "mem_gb": 48, "timeout_min": 60,
@@ -347,13 +349,14 @@ def montage_all_tiles(cell=1, alpha=5.0, embedding="phate", tile=256, ppu=5600):
     return {"genes": len(genes)}
 
 
-def submit_all_tiles(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0)):
-    """Build interactive ALL-MARKERS montage tiles for {umap, phate} × each α → viewer_assets_v5/_montage_vs/."""
+def submit_all_tiles(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), cells=None):
+    """Build interactive ALL-MARKERS montage tiles for {umap, phate} × each cell × α → viewer_assets_v5/_montage_vs/."""
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
-    jobs = [{"name": f"vsalltile_{e[:2]}_a{a:g}", "func": montage_all_tiles,
-             "kwargs": {"cell": cell, "alpha": a, "embedding": e}}
-            for e in ("umap", "phate") for a in alphas]
-    print(f"[phasevs] {len(jobs)} all-marker montage-tile jobs (2 emb × {len(alphas)} α)")
+    cs = cells if cells is not None else [cell]
+    jobs = [{"name": f"vsalltile_{e[:2]}_c{c}_a{a:g}", "func": montage_all_tiles,
+             "kwargs": {"cell": c, "alpha": a, "embedding": e}}
+            for c in cs for e in ("umap", "phate") for a in alphas]
+    print(f"[phasevs] {len(jobs)} all-marker montage-tile jobs ({len(cs)} cells × 2 emb × {len(alphas)} α)")
     submit_parallel_jobs(
         jobs_to_submit=jobs, experiment="diffex_phasevs",
         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 6, "mem_gb": 48, "timeout_min": 60,
@@ -414,5 +417,11 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "proto"
     if cmd == "stain_multibag":
         submit_stain_multibag()
+    elif cmd == "compose_multibag":                       # 42-marker RGB overlay for cells 200-209 (α5) → STAINED_ALL
+        submit_compose_all(cells=MULTIBAG_CELLS, alphas=(5.0,))
+    elif cmd == "vstiles_multibag":                       # interactive per-marker montage tiles (reads STAINED, done)
+        submit_vs_tiles(cells=MULTIBAG_CELLS, alphas=(5.0,))
+    elif cmd == "alltiles_multibag":                      # interactive all-markers overlay tiles (reads STAINED_ALL → run AFTER compose_multibag)
+        submit_all_tiles(cells=MULTIBAG_CELLS, alphas=(5.0,))
     else:
         proto()
