@@ -221,7 +221,11 @@ async function boot() {
   $("m-tilesize").oninput = () => { mont.tileSize = +$("m-tilesize").value; liveDraw(); };
   $("m-detail").oninput = () => {
     mont.detail = +$("m-detail").value;
-    if (mont.osd) { mont.osd.minPixelRatio = mont.detail; if (mont.osd.world.getItemCount()) mont.osd.world.getItemAt(0).minPixelRatio = mont.detail; mont.osd.forceRedraw(); }
+    if (mont.osd) {                                          // apply to EVERY layer (phase base + VS overlay) so they stay in sync
+      mont.osd.minPixelRatio = mont.detail;
+      for (let i = 0; i < mont.osd.world.getItemCount(); i++) mont.osd.world.getItemAt(i).minPixelRatio = mont.detail;
+      mont.osd.forceRedraw();
+    }
   };
   wireCombo("m-color-search", "m-color-list", renderColorList, colorLabel);
   $("m-cmap").onchange = () => { mont.cmapName = $("m-cmap").value; if (isFeatField()) { renderLegend(); drawOverlay(); if (LIVE()) liveDraw(); } };
@@ -459,7 +463,7 @@ async function loadMontage() {
   } else { mont.osd.close(); mont.osd.open(layers); }        // replace all layers
   mont.osd.addOnceHandler("open", () => {
     if (keep) mont.osd.viewport.fitBounds(keep, true);        // α/cell switch keeps current pan/zoom
-    layers.forEach((l, i) => { const it = mont.osd.world.getItemAt(i); if (it) it.setOpacity(l.opacity); });
+    layers.forEach((l, i) => { const it = mont.osd.world.getItemAt(i); if (it) { it.setOpacity(l.opacity); it.minPixelRatio = mont.detail; } });   // every layer opens at the current Zoom-detail so base + overlay stay synced
     drawOverlay();
   });
   populateColorFields(tj.color_fields || []);
