@@ -407,22 +407,36 @@ function setupBagUI() {   // populate the anchor-bag selector from manifest.bags
   sel.value = bags.default || sel.options[0]?.value || "single_bag";
   sel.onchange = () => { state.page = 0; fillCellDropdown(); rebuild(); if (state.view === "montage") (mont.renderMode === "live" ? liveRefresh() : loadMontage()); saveState(); };
 }
-function updateBagUI() {   // bag concept is phase-only (fluor markers have no multibag cells) → hide for markers
-  const f = $("bag-field"); if (f) f.style.display = (state.manifest.bags && attnModality() === "phase") ? "" : "none";
+function bagAvailable(bagId) {   // multi_bag was built ONLY for geneKO + complex; single_bag exists for every grain (incl. minibinder/PC)
+  if (bagId !== "multi_bag") return true;
+  const g = $("grain").value; return g === "geneKO" || g === "complex";
+}
+function updateBagUI() {   // bag is phase-only; grey out + auto-switch away from a bag the current grain lacks so the user never sees blank tiles
+  const f = $("bag-field"), sel = $("m-bag"); if (!f) return false;
+  const show = state.manifest.bags && attnModality() === "phase";
+  f.style.display = show ? "" : "none";
+  if (!show || !sel) return false;
+  for (const o of sel.options) o.disabled = !bagAvailable(o.value);      // grey out bags this grain doesn't have
+  if (!bagAvailable(sel.value)) {                                        // current bag missing for this selection → switch to an available one
+    const alt = [...sel.options].find(o => bagAvailable(o.value));
+    if (alt && alt.value !== sel.value) { sel.value = alt.value; return true; }
+  }
+  return false;
 }
 function overlaySel() { return ovlSel; }       // "off" | "__allmarkers__" | marker slug
 function phaseHidden() { return !!($("m-phaseoff") && $("m-phaseoff").classList.contains("active")); }
 function overlayActive() { return vsMode() && overlaySel() !== "off"; }
-function phaseMontageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`; }
+function vsCell() { return bagName() === "multi_bag" ? 200 : 1; }   // VS montage representative cell per bag (single_bag=cell1, multi_bag=first multibag anchor)
+function phaseMontageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell${vsCell()}_a${$("m-alpha").value}_tiles`; }
 function overlayBase() {   // the stained layer selected in the Overlay dropdown (all-markers merge or a single marker)
-  return `${BASE}_montage_vs/${overlaySel()}_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`;
+  return `${BASE}_montage_vs/${overlaySel()}_${$("m-emb").value}_cell${vsCell()}_a${$("m-alpha").value}_tiles`;
 }
 function montageBase() {
   if (overlayActive()) return overlayBase();   // top stained layer (phase base added separately in loadMontage)
-  if (vsMode()) {   // cell 1, α scrubbable. Phase = the input traversal montage; markers → stained tiles at this α
+  if (vsMode()) {   // representative VS cell per bag, α scrubbable. Phase = the input traversal montage; markers → stained tiles
     if (attnModality() === "phase")
       return phaseMontageBase();
-    return `${BASE}_montage_vs/${attnModality()}_${$("m-emb").value}_cell1_a${$("m-alpha").value}_tiles`;
+    return `${BASE}_montage_vs/${attnModality()}_${$("m-emb").value}_cell${vsCell()}_a${$("m-alpha").value}_tiles`;
   }
   return `${BASE}_montage/${attnModality()}_geneKO_${$("m-emb").value}_cell${diskCell(+$("m-cell").value)}_a${$("m-alpha").value}_tiles`;
 }
@@ -858,6 +872,7 @@ function pickMarker(i) { selectMarker(i); $("markerfilter").value = markerLabel(
 
 const targetLabel = (t) => `${t.target}${t.grain === "pc" && t.explained_variance != null ? ` (${t.explained_variance.toFixed(1)}%)` : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : ""}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
 function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
+  updateBagUI();              // correct the anchor bag for this grain BEFORE building the grid (minibinder/PC → single_bag; never blank)
   const g = $("grain").value;
   const altSet = new Set(state.marker.targets.filter(e => e.control).map(e => e.target));   // names with a non-NTC anchor
   state.targets = state.marker.targets.filter(t => !t.control && (g === "all" || t.grain === g)
