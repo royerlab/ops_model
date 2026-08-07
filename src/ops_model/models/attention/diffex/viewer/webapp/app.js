@@ -204,11 +204,12 @@ async function boot() {
   $("m-alpha").oninput = updateAlphaRead;   // live label while dragging (montage only reloads on release via onchange)
   updateAlphaRead();
   $("m-cell").onchange = () => LIVE() ? liveRefresh() : loadMontage();
-  $("m-vs").onclick = () => {                                // Virtual staining toggle: lock cell 1, tiles renderer (α stays scrubbable)
+  $("m-vs").onclick = () => {                                // Virtual staining toggle: tiles renderer, cell scrubbable over cells that have stained tiles (α scrubbable)
     $("m-vs").classList.toggle("active");
-    const vs = vsMode(); $("m-cell").disabled = vs;
-    if (vs) { $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); ovlSel = "__allmarkers__"; $("m-ovsel").value = overlayLabel(); }   // default overlay = all markers on entering VS
+    const vs = vsMode(); $("m-cell").disabled = false;
+    if (vs) { $("m-render").value = "tiles"; setRenderMode(); ovlSel = "__allmarkers__"; $("m-ovsel").value = overlayLabel(); }   // default overlay = all markers on entering VS
     else { ovlSel = "off"; $("m-ovsel").value = "off"; $("m-phaseoff").classList.remove("active"); }   // leaving VS clears overlay
+    fillCellDropdown();                                      // VS → only cells with stained tiles; non-VS → full montage range
     updateVsUI();
     loadMontage();
   };
@@ -363,11 +364,21 @@ function diskCellFor(anchor, c) { return (anchor && anchor !== "NTC") ? c : disk
 // montage is per-marker: phase (default) or the selected fluor marker's own gene embedding
 // montage cell count = how many cells were built per modality: v5 phase single_bag=45, multi_bag=50, else 20
 function montageCells() { return (ASSET_VER === "v5" && attnModality() === "phase") ? (bagCfg().montage_cells || 45) : 20; }
+function vsCells() {   // disk cells that actually have VS montage_vs tiles, per bag (single_bag=cell1; multi_bag=200-209)
+  return bagName() === "multi_bag" ? Array.from({ length: 10 }, (_, i) => 200 + i) : [1];
+}
 function fillCellDropdown() {
-  const sel = $("m-cell"), prev = +sel.value || 0, n = montageCells();
+  const sel = $("m-cell"), prev = +sel.value;
   sel.innerHTML = "";
-  for (let c = 0; c < n; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; sel.appendChild(o); }
-  sel.value = Math.min(prev, n - 1);
+  if (vsMode()) {                                    // VS: only cells that have stained tiles — option value = disk cell, label = rank
+    const cells = vsCells();
+    cells.forEach((dc, i) => { const o = document.createElement("option"); o.value = dc; o.textContent = `cell ${i + 1}`; sel.appendChild(o); });
+    sel.value = cells.includes(prev) ? prev : cells[0];
+  } else {
+    const n = montageCells();
+    for (let c = 0; c < n; c++) { const o = document.createElement("option"); o.value = c; o.textContent = `cell ${c}`; sel.appendChild(o); }
+    sel.value = Math.min(prev || 0, n - 1);
+  }
 }
 let ovlItems = [{ value: "off", label: "off" }, { value: "__allmarkers__", label: "All markers" }];   // Overlay combo entries
 let ovlSel = "off";                                                                                    // current overlay selection
@@ -390,7 +401,7 @@ function pickOverlay(value) {
   $("m-ovsel").value = overlayLabel(); $("m-ovsel").blur(); $("m-ovsel-list").classList.add("hidden");
   loadMontage();
 }
-function enterVsMode() { $("m-vs").classList.add("active"); $("m-cell").disabled = true; $("m-cell").value = 1; $("m-render").value = "tiles"; setRenderMode(); }
+function enterVsMode() { $("m-vs").classList.add("active"); $("m-cell").disabled = false; $("m-render").value = "tiles"; setRenderMode(); fillCellDropdown(); }
 function vsMode() { return !!($("m-vs") && $("m-vs").classList.contains("active")); }
 function updateVsUI() {   // Virtual staining is phase-only; its overlay options appear only once VS is toggled on
   const ph = attnModality() === "phase", vo = $("vs-opts");
@@ -426,7 +437,7 @@ function updateBagUI() {   // bag is phase-only; grey out + auto-switch away fro
 function overlaySel() { return ovlSel; }       // "off" | "__allmarkers__" | marker slug
 function phaseHidden() { return !!($("m-phaseoff") && $("m-phaseoff").classList.contains("active")); }
 function overlayActive() { return vsMode() && overlaySel() !== "off"; }
-function vsCell() { return bagName() === "multi_bag" ? 200 : 1; }   // VS montage representative cell per bag (single_bag=cell1, multi_bag=first multibag anchor)
+function vsCell() { const v = +$("m-cell").value; return vsCells().includes(v) ? v : vsCells()[0]; }   // selected VS disk cell (scrubbable over cells that have stained tiles)
 function phaseMontageBase() { return `${BASE}_montage/phase_geneKO_${$("m-emb").value}_cell${vsCell()}_a${$("m-alpha").value}_tiles`; }
 function overlayBase() {   // the stained layer selected in the Overlay dropdown (all-markers merge or a single marker)
   return `${BASE}_montage_vs/${overlaySel()}_${$("m-emb").value}_cell${vsCell()}_a${$("m-alpha").value}_tiles`;
