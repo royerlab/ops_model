@@ -53,7 +53,8 @@ def mont_job(marker_channel, slug, cell, alpha, emb):
     return BM.build_montage_web(h5ad=h5, out_zarr=oz, cell=cell, alpha=alpha, embedding=emb, modality=slug)
 
 
-PHASE_CELLS = list(range(45))   # phase anchors = 45 cells (20 attention + 25 accuracy)
+PHASE_CELLS = list(range(45))            # single_bag anchors (cells 0-44)
+MULTIBAG_CELLS = list(range(200, 250))   # multi_bag anchors: first 50 of the 200 multirank cells (disk 200-249 → display rank 1-50)
 
 
 def phase_mont_job(cell, alpha, emb):
@@ -67,12 +68,12 @@ def phase_mont_job(cell, alpha, emb):
     return BM.build_montage_web(h5ad=h5, out_zarr=oz, cell=cell, alpha=alpha, embedding=emb, modality="phase")
 
 
-def submit_phase():
+def submit_phase(cells=PHASE_CELLS):
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     jobs = [{"name": f"mtg5_phase_{emb[:2]}_c{cell}_a{a:g}", "func": phase_mont_job,
              "kwargs": {"cell": cell, "alpha": a, "emb": emb}}
-            for emb in EMBS for cell in PHASE_CELLS for a in ALPHAS]
-    print(f"[v5mont] phase: {len(jobs)} montage jobs ({len(PHASE_CELLS)} cells × {len(ALPHAS)} α × {len(EMBS)} emb) → viewer_assets_v5/_montage")
+            for emb in EMBS for cell in cells for a in ALPHAS]
+    print(f"[v5mont] phase: {len(jobs)} montage jobs ({len(cells)} cells × {len(ALPHAS)} α × {len(EMBS)} emb) → viewer_assets_v5/_montage")
     submit_parallel_jobs(
         jobs_to_submit=jobs, experiment="diffex_v5mont",
         slurm_params={"slurm_partition": "cpu", "cpus_per_task": 4, "mem_gb": 24, "timeout_min": 60,
@@ -85,6 +86,8 @@ def main():
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "phase":
         submit_phase(); return
+    if len(sys.argv) > 1 and sys.argv[1] == "phase_multibag":
+        submit_phase(cells=MULTIBAG_CELLS); return
     force = "force" in sys.argv[1:]      # mtime skip is unreliable (frames overwritten in place don't bump the dir mtime) → force a full rebuild
     from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
     comp = _completed_in_v5()

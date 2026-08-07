@@ -67,25 +67,27 @@ def _save(path, arr):
     Image.fromarray((np.clip((arr + 1) / 2, 0, 1) * 255).astype("uint8")).resize((256, 256)).save(path, quality=90, method=6)
 
 
-def stain_shard(genes, cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0)):
-    """Stain a chunk of geneKOs into all 42 markers at (cell, each α); write <marker_slug>/<gene>_c<c>_a<a>.webp.
-    Model loaded once per shard; all requested alphas stained per gene (skip-guard resumes)."""
+def stain_shard(genes, cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), cells=None):
+    """Stain a chunk of geneKOs into all 42 markers at (each cell, each α); write <marker_slug>/<gene>_c<c>_a<a>.webp.
+    Model loaded once per shard; all requested cells×alphas stained per gene (skip-guard resumes).
+    `cells` (list) overrides `cell` to cover multiple anchor cells in one shard (e.g. multibag 200-209)."""
     dev = torch.device("cuda")
     ema, markers, cfg, ep = load_vs(dev)
-    last = slugify(markers[-1]); done = skip = 0              # gene×α complete once the LAST marker webp exists
-    for g in genes:
-        for a in alphas:
-            an = f"a{a:g}"
-            if os.path.exists(f"{STAINED}/{last}/{slugify(g)}_c{cell}_{an}.webp"):
-                skip += 1; continue                           # resume: already stained
-            ph = _load_phase(g, cell, AI_OF[a], cfg.crop_size)
-            if ph is None:
-                continue
-            preds = stain(ema, markers, cfg, dev, ph)
-            for mid, name in enumerate(markers):
-                _save(f"{STAINED}/{slugify(name)}/{slugify(g)}_c{cell}_{an}.webp", preds[mid])
-            done += 1
-    print(f"[phasevs] stained {done} gene×α ({skip} already done) × {len(markers)} markers (VS ep{ep}) -> {STAINED}")
+    last = slugify(markers[-1]); done = skip = 0              # gene×cell×α complete once the LAST marker webp exists
+    for c in (cells if cells is not None else [cell]):
+        for g in genes:
+            for a in alphas:
+                an = f"a{a:g}"
+                if os.path.exists(f"{STAINED}/{last}/{slugify(g)}_c{c}_{an}.webp"):
+                    skip += 1; continue                       # resume: already stained
+                ph = _load_phase(g, c, AI_OF[a], cfg.crop_size)
+                if ph is None:
+                    continue
+                preds = stain(ema, markers, cfg, dev, ph)
+                for mid, name in enumerate(markers):
+                    _save(f"{STAINED}/{slugify(name)}/{slugify(g)}_c{c}_{an}.webp", preds[mid])
+                done += 1
+    print(f"[phasevs] stained {done} gene×cell×α ({skip} already done) × {len(markers)} markers (VS ep{ep}) -> {STAINED}")
     return {"done": done, "skipped": skip, "markers": len(markers)}
 
 
@@ -105,6 +107,30 @@ def submit_stain(cell=1, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), chunk=8, parallel=64)
                       "timeout_min": 90, "slurm_constraint": "[a100_80|h100|h200|6000_blackwell]",
                       "slurm_array_parallelism": parallel},
         log_dir="diffex_phasevs", wait_for_completion=False)
+
+
+MULTIBAG_CELLS = list(range(200, 210))   # VS on the top-10 multi_bag anchor cells (disk 200-209 → display rank 1-10)
+
+
+def submit_stain_multibag(cells=MULTIBAG_CELLS, alphas=(1.0, 2.0, 3.0, 4.0, 5.0), chunk=8, parallel=64):
+    """Stain the multibag anchor cells (200-209) → all 42 markers at each α. One shard per (cell, gene-chunk)
+    to keep shards short + parallelism high. Resumable (skip-guard). Also stains the α0 NTC anchor per cell."""
+    from . import catalog as C
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    genes = C.all_genes()
+    ch = lambda l, n: [l[i:i + n] for i in range(0, len(l), n)]
+    jobs = [{"name": f"pvs_c{c}_{i}", "func": stain_shard,
+             "kwargs": {"genes": s, "cell": c, "alphas": list(alphas)}}
+            for c in cells for i, s in enumerate(ch(genes, chunk))]
+    jobs += [{"name": f"pvsntc_c{c}", "func": stain_ntc, "kwargs": {"cell": c}} for c in cells]
+    print(f"[phasevs] multibag: {len(cells)} cells × {len(genes)} genes → {len(jobs)} stain shards "
+          f"(chunk {chunk}, parallel {parallel}, α={list(alphas)}) + {len(cells)} NTC anchors")
+    submit_parallel_jobs(
+        jobs_to_submit=jobs, experiment="diffex_phasevs_mb",
+        slurm_params={"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": 8, "mem_gb": 64,
+                      "timeout_min": 90, "slurm_constraint": "[a100_80|h100|h200|6000_blackwell]",
+                      "slurm_array_parallelism": parallel},
+        log_dir="diffex_phasevs_mb", wait_for_completion=False)
 
 
 COMPOSED = "/hpc/projects/icd.fast.ops/analysis/figure4_embedding/phase_vs_combine/composed"
@@ -381,3 +407,12 @@ def proto():
     fig.savefig(f"{out}/proto.png", dpi=150, bbox_inches="tight"); plt.close(fig)
     print(f"[phasevs] proto -> {out}/proto.png ({genes})")
     return {"genes": genes}
+
+
+if __name__ == "__main__":
+    import sys
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "proto"
+    if cmd == "stain_multibag":
+        submit_stain_multibag()
+    else:
+        proto()
