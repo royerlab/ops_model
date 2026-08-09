@@ -373,3 +373,14 @@ svg.mth *{transform-box:fill-box}
 .mth-refs{margin-top:12px;font-size:12px;color:var(--mut)}
 .mth-refs a{color:var(--accent);text-decoration:none}
 .mth-refs a:hover{text-decoration:underline}
+.mth-defs{margin-top:12px;border-top:1px solid rgba(255,255,255,.08);padding-top:8px}
+.mth-defs>summary{cursor:pointer;font-size:12px;color:var(--accent);font-weight:600;list-style:none}
+.mth-defs>summary::-webkit-details-marker{display:none}
+.mth-defs>summary::before{content:"▸ ";color:var(--mut)}
+.mth-defs[open]>summary::before{content:"▾ "}
+.mth-defs dl{margin:9px 0 0}
+.mth-defs dl>div{margin-bottom:7px}
+.mth-defs dt{font-size:12.5px;font-weight:600;color:var(--fg)}
+.mth-defs dd{margin:1px 0 0;font-size:12.5px;line-height:1.5;color:var(--mut)}
+@keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(304px);opacity:.9}100%{transform:translateX(304px);opacity:0}}
+.mth-sweep{animation:mthSweep 3.4s ease-in-out infinite}
