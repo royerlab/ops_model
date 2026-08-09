@@ -404,3 +404,7 @@ svg.mth *{transform-box:fill-box}
 .mth-more>summary::before{content:"▸ ";color:var(--mut)}
 .mth-more[open]>summary::before{content:"▾ "}
 .mth-more p{margin:8px 0 0;font-size:16px;line-height:1.65;color:var(--fg)}
+.mth-sec{margin-bottom:4px}
+.mth-seccap{font-size:13px;color:var(--accent);font-weight:600;margin-bottom:2px;text-align:center}
+.mth-sec .mth-stage{padding:4px 0 8px}
+.mth-sec .mth-stage svg.mth{max-width:620px}
