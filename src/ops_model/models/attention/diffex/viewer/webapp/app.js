@@ -1613,7 +1613,7 @@ function pcCell(i) {   // click a strip cell → glassy pop-out for close inspec
     `<a href="#" onclick="pcGeneOverlay('${c.gene}');return false">${c.gene} → top PCs ↗</a>`);
 }
 // glassy, draggable, stackable inset — you can still see the viewer through it
-const PO_W = 300, PO_GAIN = 1.7;   // pop-out base width; drag gain (>1 = tile moves faster than the cursor)
+const PO_W = 450, PO_GAIN = 1.7;   // pop-out base width (matches .popout CSS); drag gain (>1 = tile moves faster than the cursor)
 function popOut(imgUrl, title, metaHtml, ovUrl) {
   const el = document.createElement("div"); el.className = "popout";
   const pops = document.querySelectorAll(".popout").length;   // stagger horizontally by a full tile width, wrap rows
