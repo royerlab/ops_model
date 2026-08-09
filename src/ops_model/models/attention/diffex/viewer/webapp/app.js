@@ -186,10 +186,12 @@ async function boot() {
     $("stage").classList.toggle("attn-active", view === "attn");
     $("stage").classList.toggle("pc-active", view === "pc");
     $("stage").classList.toggle("top-active", view === "top");
+    $("stage").classList.toggle("methods-active", view === "methods");
     if (view === "montage") { updateVsUI(); if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
     if (view === "attn") renderAttn();
     if (view === "pc") loadPC();
     if (view === "top") loadTop();
+    if (view === "methods") renderMethods();
   });
   fillCellDropdown();      // per-modality cell count (phase 45, markers 20); refilled on marker change
   fillOverlayMarkers();    // load the 42 VS marker names into the Overlay dropdown

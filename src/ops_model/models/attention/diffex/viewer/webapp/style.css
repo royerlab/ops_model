@@ -318,3 +318,58 @@ button:hover{border-color:var(--accent)}
 .po-body{padding:8px 10px;font-size:clamp(11px,4.2cqw,20px);line-height:1.5;color:var(--fg);overflow-wrap:break-word}
 .po-body .po-sub{color:var(--mut);font-family:ui-monospace,monospace}
 .po-body a{color:var(--accent);text-decoration:none}
+
+/* ---- "How it works" methods tab ---- */
+#methods-view{display:none;width:100%;max-width:860px}
+#stage.methods-active{justify-content:flex-start}
+#stage.methods-active>*{display:none}
+#stage.methods-active>#methods-view{display:block}
+.mth-rail{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+.mth-railitem{display:flex;align-items:center;gap:9px;text-align:left;background:none;border:none;color:var(--mut);
+  padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px;border-left:3px solid transparent;width:100%}
+.mth-railitem:hover{background:rgba(255,255,255,.05);color:var(--fg)}
+.mth-railitem.on{background:rgba(88,166,255,.12);color:var(--fg);border-left-color:var(--accent)}
+.mth-num{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;
+  background:rgba(255,255,255,.08);font-size:11px;flex:0 0 auto}
+.mth-railitem.on .mth-num{background:var(--accent);color:#08111f}
+.mth-card{background:rgba(22,27,34,.5);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:22px 26px 18px}
+.mth-kicker{font:600 11px ui-monospace,monospace;letter-spacing:.14em;color:var(--accent);text-transform:uppercase}
+.mth-title{margin:6px 0 4px;font-size:24px;font-weight:700;color:var(--fg)}
+.mth-stage{display:flex;justify-content:center;padding:8px 0 14px}
+.mth-stage svg.mth{width:100%;max-width:520px;height:auto}
+.mth-body{font-size:15px;line-height:1.6;color:var(--fg);max-width:660px}
+.mth-body i{color:var(--mut)}
+.mth-why{margin-top:12px;font-size:13.5px;line-height:1.55;color:var(--mut);border-left:3px solid var(--accent);padding-left:11px}
+.mth-why b{color:var(--accent)}
+.mth-navbar{display:flex;align-items:center;justify-content:space-between;margin-top:18px}
+.mth-navbar button{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);color:var(--fg);
+  padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px}
+.mth-navbar button:disabled{opacity:.35;cursor:default}
+.mth-dots{display:flex;gap:7px}
+.mth-dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.2);cursor:pointer}
+.mth-dot.on{background:var(--accent)}
+/* SVG animations (group transforms + opacity; per-class transform-origin) */
+svg.mth *{transform-box:fill-box}
+@keyframes mthPulse{0%,100%{opacity:.35}50%{opacity:1}}
+.mth-pulse{transform-origin:center;animation:mthPulse 2.6s ease-in-out infinite}
+@keyframes mthBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
+.mth-breathe{transform-origin:center;animation:mthBreathe 3s ease-in-out infinite}
+@keyframes mthRise{0%{transform:scaleY(.05)}55%,100%{transform:scaleY(1)}}
+.mth-rise{transform-origin:bottom;animation:mthRise 2.6s ease-out infinite}
+@keyframes mthCollapse{0%{transform:scale(1.5);opacity:.85}62%{transform:scale(.18);opacity:0}100%{opacity:0}}
+.mth-collapse{transform-origin:center;animation:mthCollapse 3.6s ease-in infinite}
+@keyframes mthEmerge{0%,45%{opacity:0}72%,100%{opacity:1}}
+.mth-emerge{animation:mthEmerge 3.6s ease-out infinite}
+@keyframes mthMorph{0%,100%{transform:scale(1,1)}50%{transform:scale(1.28,.74)}}
+.mth-morph{transform-origin:center;animation:mthMorph 3s ease-in-out infinite}
+@keyframes mthSlide{0%,100%{transform:translateX(0)}50%{transform:translateX(280px)}}
+.mth-slide{animation:mthSlide 3.2s ease-in-out infinite}
+@keyframes mthGlow{0%,100%{transform:scale(.7);opacity:.35}50%{transform:scale(1.15);opacity:.9}}
+.mth-glow{transform-origin:center;animation:mthGlow 2.2s ease-in-out infinite}
+@keyframes mthCycA{0%,100%{opacity:1}50%{opacity:.12}}
+.mth-cycA{animation:mthCycA 3s ease-in-out infinite}
+@keyframes mthCycB{0%,100%{opacity:.12}50%{opacity:1}}
+.mth-cycB{animation:mthCycB 3s ease-in-out infinite}
+.mth-refs{margin-top:12px;font-size:12px;color:var(--mut)}
+.mth-refs a{color:var(--accent);text-decoration:none}
+.mth-refs a:hover{text-decoration:underline}

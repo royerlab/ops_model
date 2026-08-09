@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — OPS interpretability viewer</title>
-<link rel="stylesheet" href="style.css?v=125"/>
+<link rel="stylesheet" href="style.css?v=126"/>
 </head>
 <body>
 <header>
@@ -71,7 +71,9 @@
       <button class="tab" data-tab="attn">Attn heads</button>
       <button class="tab" data-tab="pc">PCs</button>
       <button class="tab" data-tab="top">Top cells</button>
+      <button class="tab" data-tab="methods">How it works</button>
     </div>
+    <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">
       <label>Anchor <span class="hint">(the α=0 center)</span>
@@ -285,6 +287,7 @@
     <div id="attn-view"><div id="attn-head-lbl"></div><div id="attn-grid"></div></div>
     <div id="pc-view"></div>
     <div id="tc-view"></div>
+    <div id="methods-view"></div>
   </main>
 
   <aside id="sidebar" class="hidden">
@@ -322,6 +325,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=171"></script>
+<script src="app.js?v=172"></script>
+<script src="methods.js?v=2"></script>
 </body>
 </html>
