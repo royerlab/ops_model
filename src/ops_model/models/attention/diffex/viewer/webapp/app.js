@@ -881,7 +881,13 @@ function renderMarkerList() {
 }
 function pickMarker(i) { selectMarker(i); $("markerfilter").value = markerLabel(i); $("markerfilter").blur(); $("marker-list").classList.add("hidden"); }
 
-const targetLabel = (t) => `${t.target}${t.grain === "pc" && t.explained_variance != null ? ` (${t.explained_variance.toFixed(1)}%)` : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : ""}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
+const targetLabel = (t) => {
+  const sa = state.targetSort === "setacc" ? targetAcc(t) : -1;   // sorting by SET ACC → show set-accuracy in parens instead of mAP
+  const paren = t.grain === "pc" && t.explained_variance != null ? ` (${t.explained_variance.toFixed(1)}%)`
+    : sa >= 0 ? ` (${Math.round(sa * 100)}% acc)`
+    : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : "";
+  return `${t.target}${paren}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
+};
 function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
   updateBagUI();              // correct the anchor bag for this grain BEFORE building the grid (minibinder/PC → single_bag; never blank)
   const g = $("grain").value;
@@ -1113,7 +1119,14 @@ function rebuild() {
       const frames = p.alphas.map((_, i) => frameURL(p.asset_dir, diskCellFor(p.anchor, c), i));
       frames.forEach(src => { const im = new Image(); im.src = src; });
       const panel = document.createElement("div"); panel.className = "panel" + (c === start ? " lead" : "");
-      const img = document.createElement("img"); img.id = `pimg${k}`;
+      const img = document.createElement("img"); img.id = `pimg${k}`; img.style.cursor = "zoom-in";
+      { const kk = k, pp = p, cc = c;                          // click → pop-out the current-α frame (same glassy popout as PC/Top-cells)
+        img.onclick = () => { const pn = state.panels[kk]; if (!pn) return;
+          const pre = pp.anchor && pp.anchor !== "NTC" ? `${pp.anchor}→` : "";
+          const av = (state.alphas && state.idx != null) ? state.alphas[Math.min(state.idx, state.alphas.length - 1)] : "";
+          const sch = setChip(state.scoresV5[pp.asset_dir], state.idx);
+          popOut(pn.frames[Math.min(state.idx, pn.frames.length - 1)], `${pre}${pp.target} · ${pp.markerName}`,
+            `<div class="po-sub">α ${av} · cell ${cc + 1}${sch ? " · " + sch.txt : ""}</div>`); }; }
       if (c === start) img.style.borderLeftColor = color;      // colour bar only on left-most cell
       const badge = document.createElement("div"); badge.className = "badge"; badge.id = `pbadge${k}`; badge.style.display = "none";
       panel.appendChild(img); panel.appendChild(badge); cells.appendChild(panel);
@@ -1417,7 +1430,10 @@ function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: 
     rl.textContent = attnHeadLabel(heads, h);
     const cells = document.createElement("div"); cells.className = "arow-cells"; cells.style.setProperty("--acols", ncols);
     for (let c = start; c < end; c++) {
-      const tile = mkTile();
+      const tile = mkTile(); tile.el.style.cursor = "zoom-in";
+      { const cc = c, hh = h;                                  // click → pop-out a snapshot of the rendered crop+attention composite
+        tile.el.onclick = () => { let src; try { src = tile.cv.toDataURL(); } catch (e) { src = `${base}/cell${cc}/crop.webp`; }
+          popOut(src, `${ref.label}`, `<div class="po-sub">cell ${cc + 1} · ${attnHeadLabel(heads, hh)}</div>`); }; }
       cells.appendChild(tile.el);
       drawAttnCell(tile.cv, `${base}/cell${c}/crop.webp`, `${base}/cell${c}/mask.webp`, `${base}/cell${c}/head${h}.webp`, heads.gene_max);
     }
