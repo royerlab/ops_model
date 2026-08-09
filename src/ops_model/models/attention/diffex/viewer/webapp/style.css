@@ -384,3 +384,23 @@ svg.mth *{transform-box:fill-box}
 .mth-defs dd{margin:1px 0 0;font-size:12.5px;line-height:1.5;color:var(--mut)}
 @keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(304px);opacity:.9}100%{transform:translateX(304px);opacity:0}}
 .mth-sweep{animation:mthSweep 3.4s ease-in-out infinite}
+/* methods tab — larger text + wider layout + Learn-more dropdown (feedback) */
+#methods-view{max-width:1180px}
+#stage.methods-active{padding:16px 30px}
+.mth-title{font-size:30px}
+.mth-kicker{font-size:14px}
+.mth-body{font-size:19px;max-width:940px}
+.mth-why{font-size:17px}
+.mth-refs{font-size:15px}
+.mth-stage svg.mth{max-width:680px}
+.mth-defs>summary{font-size:15px}
+.mth-defs dt{font-size:15.5px}
+.mth-defs dd{font-size:15.5px}
+.mth-navbar button{font-size:16px}
+.mth-railitem{font-size:14px}
+.mth-more{margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
+.mth-more>summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:15px;list-style:none}
+.mth-more>summary::-webkit-details-marker{display:none}
+.mth-more>summary::before{content:"▸ ";color:var(--mut)}
+.mth-more[open]>summary::before{content:"▾ "}
+.mth-more p{margin:8px 0 0;font-size:16px;line-height:1.65;color:var(--fg)}

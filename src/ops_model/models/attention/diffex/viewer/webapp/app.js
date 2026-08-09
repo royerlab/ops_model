@@ -187,6 +187,7 @@ async function boot() {
     $("stage").classList.toggle("pc-active", view === "pc");
     $("stage").classList.toggle("top-active", view === "top");
     $("stage").classList.toggle("methods-active", view === "methods");
+    $("score-legend").style.display = (view === "traversal" && state.scoreMode !== "none") ? "flex" : "none";   // score legend is traversal-only; its inline display would otherwise leak onto every tab
     if (view === "montage") { updateVsUI(); if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
     if (view === "attn") renderAttn();
     if (view === "pc") loadPC();
