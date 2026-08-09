@@ -19,21 +19,22 @@ const _box = (x, y, w, h, l1, l2 = "") =>
   `<text x="${x + w / 2}" y="${y + h / 2 + (l2 ? -2 : 4)}" fill="${MTH_C.fg}" font-size="11" text-anchor="middle">${l1}</text>` +
   (l2 ? `<text x="${x + w / 2}" y="${y + h / 2 + 12}" fill="#8b949e" font-size="9" text-anchor="middle">${l2}</text>` : "");
 const _lbl = (x, y, t, col = "#8b949e", sz = 11) => `<text x="${x}" y="${y}" fill="${col}" font-size="${sz}" text-anchor="middle">${t}</text>`;
+const _mix = (a, b, t) => { const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); const A = p(a), B = p(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",")})`; };   // hex→hex lerp
 const _patchGrid = (x, y, s, n, hot) => Array.from({ length: n * n }, (_, i) => {
   const gx = x + (i % n) * s, gy = y + Math.floor(i / n) * s, on = hot.includes(i);
   return `<rect x="${gx}" y="${gy}" width="${s - 1}" height="${s - 1}" fill="${on ? MTH_C.ko : "rgba(255,255,255,.04)"}" stroke="rgba(255,255,255,.08)" ${on ? 'class="mth-glow" style="animation-delay:' + (i % 5) * 0.2 + 's"' : ""}/>`;
 }).join("");
 
 const MTH_REFS = {
-  "The screen": [["Funk et al. · Cell 2022", "https://www.sciencedirect.com/science/article/pii/S0092867422013599"], ["Chad et al. · bioRxiv 2026", "https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1"]],
-  "Fingerprint": [["DINO · Caron 2021", "https://arxiv.org/abs/2104.14294"], ["DINOv2 · Oquab 2023", "https://arxiv.org/abs/2304.07193"]],
+  "The screen": [["Optical pooled screens · Feldman 2019", "https://doi.org/10.1016/j.cell.2019.09.016"], ["Funk et al. · Cell 2022", "https://www.sciencedirect.com/science/article/pii/S0092867422013599"], ["Chad et al. · bioRxiv 2026", "https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1"]],
+  "Embedding": [["DINO · Caron 2021", "https://arxiv.org/abs/2104.14294"], ["DINOv2 · Oquab 2023", "https://arxiv.org/abs/2304.07193"]],
   "Classifier": [["Set Transformer · Lee 2019", "https://arxiv.org/abs/1810.00825"], ["Attention-based multiple-instance learning · Ilse 2018", "https://arxiv.org/abs/1802.04712"]],
   "Top cells": [["Explaining by removing · Covert 2021", "https://arxiv.org/abs/2011.14878"], ["SHAP · Lundberg & Lee 2017", "https://arxiv.org/abs/1705.07874"]],
   "Diffusion": [["DDPM · Ho 2020", "https://arxiv.org/abs/2006.11239"], ["Diffusion autoencoders · Preechakul 2022", "https://arxiv.org/abs/2111.15640"], ["DDIM · Song 2020", "https://arxiv.org/abs/2010.02502"]],
   "Traversal": [["Diffusion autoencoders · Preechakul 2022", "https://arxiv.org/abs/2111.15640"], ["Classifier-free guidance · Ho & Salimans 2022", "https://arxiv.org/abs/2207.12598"]],
   "DDIM": [["DDIM · Song 2020", "https://arxiv.org/abs/2010.02502"]],
   "Attention heads": [["DINO attention · Caron 2021", "https://arxiv.org/abs/2104.14294"], ["Attention is all you need · Vaswani 2017", "https://arxiv.org/abs/1706.03762"]],
-  "Embedding": [["UMAP · McInnes 2018", "https://arxiv.org/abs/1802.03426"], ["PHATE · Moon 2019", "https://doi.org/10.1038/s41587-019-0336-3"]],
+  "Montage": [["UMAP · McInnes 2018", "https://arxiv.org/abs/1802.03426"], ["PHATE · Moon 2019", "https://doi.org/10.1038/s41587-019-0336-3"]],
   "Virtual staining": [["In silico labeling · Christiansen 2018", "https://doi.org/10.1016/j.cell.2018.03.040"], ["Diffusion autoencoders · Preechakul 2022", "https://arxiv.org/abs/2111.15640"]],
   "What's next": [["CROP-seq · Datlinger 2017", "https://doi.org/10.1038/nmeth.4177"], ["Perturbation autoencoder (CPA) · Lotfollahi 2023", "https://doi.org/10.15252/msb.202211517"]],
 };
@@ -41,14 +42,14 @@ const MTH_REFS = {
 // longer "Learn more" paragraph per slide (keyed by nav) — unpacks the concept for readers who want depth
 const MTH_MORE = {
   "The screen": "A traditional CRISPR screen gives one number per gene — did cells grow, did a reporter switch on. An optical pooled screen instead keeps the cells in place and photographs them, so the readout is the cell's full appearance. The trick: each cell also carries a short DNA barcode unique to its CRISPR guide, and a round of in-situ sequencing lights that barcode up letter-by-letter right in the microscope — so we can match every cell's image to the exact gene it lost. One imaging run yields millions of (gene, picture) pairs. The hard part is what comes next: those cells are a mix of thousands of perturbations, each present in many copies that vary enormously for reasons unrelated to the knockout — cell cycle, size, local density, position on the plate — and most knockouts nudge the phenotype only slightly. So the central problem is signal-in-noise: for every perturbation, which cells and which features actually capture its distinctive effect, rather than the technique's inherent variability? The classifier, rankings, and generative traversals in this viewer are complementary tools for answering exactly that.",
-  "Fingerprint": "A raw microscope image is hundreds of thousands of pixels — too many, and too noisy, to compare directly. We need a compact summary that keeps what's biologically meaningful (shape, texture, organelle layout) and drops what isn't (exact position, lighting). CellDINO is a vision transformer trained by self-supervision: shown only images, never gene labels, it learns embeddings where two crops of the same cell agree and different cells differ. The result is a 1,024-number fingerprint per cell whose distances track real morphological similarity — which is what lets us cluster phenotypes, rank genes, and steer the generative model later.",
+  "Embedding": "A raw microscope image is hundreds of thousands of pixels — too many, and too noisy, to compare directly. We need a compact summary that keeps what's biologically meaningful (shape, texture, organelle layout) and drops what isn't (exact position, lighting). CellDINO is a vision transformer trained by self-supervision: shown only images, never gene labels, it learns embeddings where two crops of the same cell agree and different cells differ. The result is a 1,024-number fingerprint per cell whose distances track real morphological similarity — which is what lets us cluster phenotypes, rank genes, and steer the generative model later.",
   "Classifier": "A single knocked-out cell is often ambiguous — cells vary a lot even with no perturbation — so the signal lives in the distribution of a gene's cells. We therefore classify a whole bag at once (multiple-instance learning). The SetTransformer tags each cell's fingerprint with its imaging channel, uses attention so the cells in a bag can inform one another, then pools them into a single bag-vector with attention (PMA) rather than a plain average, letting it weight the informative cells. Because attention and pooling ignore order, shuffling the bag can't change the answer; because it trained across bag sizes it can score anywhere from 10 to thousands of cells. The output is a probability over 1,000 genes (+NTC), or over 99 protein complexes when we ask about pathways instead of single genes.",
   "Top cells": "Once the classifier works, we ask which individual cells it actually relies on, borrowing an idea from model explanation called \"explaining by removing\": a cell is important if taking it out of a bag makes the classifier less sure of the right answer. Concretely we take the probability of the correct class with the cell in the bag minus the probability without it, and average that marginal contribution over many random bags and bag sizes (a Monte-Carlo estimate). The highest-scoring cells are the clearest examples of a perturbation's phenotype — these top-predictive cells are exactly what the Top Cells tab shows and what the diffusion traversals are anchored to. Up-weighting them also sharpens the gene-level distinctiveness score (mAP).",
   "Diffusion": "A diffusion model learns to reverse a corruption process. In training we take a real cell and add a little Gaussian noise over and over until it's indistinguishable from static, and a network learns to look at a noisy image and predict the noise that was added. To generate, we start from pure static and repeatedly subtract the predicted noise until a realistic cell condenses out. In a diffusion autoencoder we split a cell's description in two: a compact semantic code — the cell's identity, its shape/texture/phenotype, the \"what\" — and a noise seed holding the leftover pixel-level randomness. Keeping them separate is the key: fix the noise and change the identity code, and you change what the cell is without disturbing its incidental details. By default that noise seed is random, so decoding a code gives a representative cell, not any particular real one — and a morph from a generic cell is hard to trust. DDIM fixes this: it makes the reverse process deterministic (same seed → same cell, a diffusion \"ODE\" rather than a random walk), and being deterministic it can be run in reverse — starting from a real cell's pixels and integrating backwards to recover the exact seed that regenerates it. We invert under the same guidance used to generate (\"guided inversion\"), so decoding at α = 0 reproduces the original cell almost perfectly (pixel correlation ≈ 0.99). Every traversal therefore begins anchored to a genuine cell.",
   "Traversal": "The semantic code lives in a space where nearby points are similar-looking cells and directions correspond to consistent visual changes. To build a knockout's \"movie\" we average the codes of control (NTC) cells and of that knockout's cells; the vector between them is the direction that turns control-looking into knockout-looking. Starting from one cell's code we step along it — α = 0 is the cell itself, α = 1 applies the full average shift, larger α exaggerates subtle effects — decoding an image at each step. Because the noise seed is held fixed throughout, only the phenotype moves: you're watching the same cell change, not a slideshow of different cells.",
   "DDIM": "By default the noise seed is random, so decoding a code gives a representative cell, not any particular real one — and a traversal from a generic cell is hard to trust. DDIM fixes this two ways. First it makes generation deterministic: the same seed always yields the same image (a diffusion \"ODE\", not a random walk). Second, being deterministic, it can run in reverse — starting from a real cell's pixels and integrating backwards to recover the exact noise seed that regenerates it. We invert under the same guidance used to generate (\"guided inversion\"), so decoding at α = 0 reproduces the original cell almost perfectly (pixel correlation ≈ 0.99). Every traversal here therefore begins anchored to a genuine cell, and the changes you see are real counterfactuals, not artifacts of a random start.",
   "Attention heads": "The vision transformer doesn't read pixels one at a time — it breaks the image into a grid of patches and, in each attention \"head\", decides how much every patch should influence its summary of the cell. Reading those weights back out gives a heat-map showing where the model concentrated. Different heads specialize on different structures, and the viewer lets you step through them and compare a perturbation against its control. The payoff is interpretability: instead of only telling you that a gene has a distinctive phenotype, the map shows you where the model is looking — e.g. a head that consistently lights up mitochondria for a mitochondrial gene — which you can check against the biology.",
-  "Embedding": "A single traversal shows one gene's effect; the Embedding tab shows all of them at once — and controls for cell-to-cell variation by using the same anchor cell throughout. We morph that one cell toward each of the ~1,000 knockouts, giving 1,000 counterfactual images of the same starting cell. Each image is then positioned by its gene's coordinates on a UMAP or PHATE embedding of the gene-level phenotype space, so knockouts that produce similar morphologies land near one another. LatentLens stitches the crops into a continuous, zoomable atlas — pan and zoom to compare neighborhoods, spot phenotype clusters, and see where a gene of interest falls relative to the whole library.",
+  "Montage": "A single traversal shows one gene's effect; the Montage tab shows all of them at once — and controls for cell-to-cell variation by using the same anchor cell throughout. We morph that one cell toward each of the ~1,000 knockouts, giving 1,000 counterfactual images of the same starting cell. Each image is then positioned by its gene's coordinates on a UMAP or PHATE embedding of the gene-level phenotype space, so knockouts that produce similar morphologies land near one another. LatentLens stitches the crops into a continuous, zoomable atlas — pan and zoom to compare neighborhoods, spot phenotype clusters, and see where a gene of interest falls relative to the whole library.",
   "Virtual staining": "Fluorescent markers reveal specific structures but cost extra dyes, channels, and imaging, and you can only stain a few at once. Label-free phase imaging is cheap and gentle but hard to read. Virtual staining bridges them: we reuse the diffusion autoencoder and condition it on a phase image in two complementary ways. The semantic path sends the phase image through a frozen Cell-DINO ViT to a pooled code that, together with a learned marker id, globally modulates the U-Net (FiLM) — telling it what to draw. The spatial path concatenates the raw phase image as an extra U-Net input channel, so generation keeps the input's pixel layout and the predicted marker stays registered to the real cell (this is what lifts fidelity from ~0.13 to ~0.78 Pearson). One model, trained on paired (phase, marker) crops, covers all 42 live markers; switching the marker id renders any channel, and applied to a traversal it gives a full multi-channel phenotype for every perturbation from a single grayscale image.",
   "What's next": "So far every direction has been morphological — defined in the image-fingerprint space. But the same knockout library was also measured by CROP-seq, which reads each cell's transcriptome (its gene-expression profile) instead of its picture. That opens a new axis of control: define the traversal direction from the transcriptional change a knockout causes, and let the diffusion model render how the cell's appearance should follow. Comparing the transcriptome-driven morph with the morphology-driven one reveals which genes couple gene-expression change to visible phenotype and which decouple them — a gene that reshapes the transcriptome but barely changes the image, or vice versa. That coupling is the central question of the transcriptional project this viewer is being extended toward.",
 };
@@ -56,27 +57,26 @@ const MTH_MORE = {
 const METHODS_SLIDES = [
   {
     nav: "The screen", kicker: "THE QUESTION", title: "Thousands of knockouts, mixed in one noisy dish",
-    svg: () => `<svg viewBox="0 0 484 200" class="mth">
-      <ellipse cx="92" cy="102" rx="78" ry="82" fill="rgba(255,255,255,.03)" stroke="#30363d" stroke-width="2"/>
-      ${Array.from({ length: 20 }, (_, i) => { const a = i * 0.98, r = 18 + (i % 3) * 24, x = 92 + r * Math.cos(a), y = 102 + r * Math.sin(a);
-        const c = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel, MTH_C.ntc][i % 6];
-        return `<g class="mth-pulse" style="animation-delay:${(i % 6) * 0.2}s">${_cellBlob(x, y, 7, c)}</g>`; }).join("")}
-      ${_lbl(92, 196, "well — pooled knockouts, all mixed")}
-      ${_arrow(176, 214, 102)}
-      ${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<rect x="${186 + i * 4}" y="89" width="${1.5 + (i % 2) * 2}" height="26" fill="#e6e8ec"/>`).join("")}
-      <text x="202" y="82" fill="#8b949e" font-size="8" text-anchor="middle">read barcode</text>
-      ${_arrow(226, 264, 102)}
-      ${Array.from({ length: 12 }, (_, i) => `<circle cx="${272 + (i * 53) % 128}" cy="${30 + (i * 71) % 150}" r="1" fill="#8b949e" opacity=".35"/>`).join("")}
-      ${[["A", MTH_C.acc], ["B", MTH_C.ko], ["C", MTH_C.grn]].map((g, i) => { const y = 50 + i * 52;
-        return `<g class="mth-emerge" style="animation-delay:${i * 0.25}s">
-          <rect x="272" y="${y - 22}" width="122" height="44" rx="6" fill="rgba(255,255,255,.04)" stroke="#30363d"/>
-          <circle cx="294" cy="${y}" r="15" fill="rgba(255,255,255,.05)" stroke="#30363d"/>
-          <circle cx="291" cy="${y - 3}" r="5" fill="${MTH_C.acc}"/>
-          <ellipse cx="299" cy="${y + 4}" rx="6" ry="2.4" fill="${MTH_C.ko}" transform="rotate(30 299 ${y + 4})"/>
-          <circle cx="287" cy="${y + 5}" r="2" fill="${MTH_C.grn}"/>
-          <text x="340" y="${y - 3}" fill="${g[1]}" font-size="10" text-anchor="middle">knockout ${g[0]}</text>
-          <text x="340" y="${y + 11}" fill="#8b949e" font-size="9" text-anchor="middle">phenotype = ?</text></g>`; }).join("")}
-    </svg>`,
+    svg: () => { const COL = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel]; const cells = [];
+      for (let r = 0; r < 6; r++) for (let c = 0; c < 5; c++) { const x = 30 + c * 30 + ((r * 37) % 9 - 4), y = 40 + r * 24 + ((c * 53) % 9 - 4);
+        if (((x - 92) / 74) ** 2 + ((y - 100) / 80) ** 2 <= 0.92) cells.push([x, y, (r * 2 + c) % 5]); }
+      return `<svg viewBox="0 0 484 200" class="mth">
+        <ellipse cx="92" cy="100" rx="80" ry="86" fill="rgba(255,255,255,.03)" stroke="#30363d" stroke-width="2"/>
+        ${cells.map(([x, y, ci]) => `<g ${ci === 1 ? 'class="mth-pulse"' : 'opacity=".8"'}>${_cellBlob(x, y, 7, COL[ci])}</g>`).join("")}
+        ${_lbl(92, 194, "well — pooled knockouts, all mixed")}
+        ${_arrow(176, 200, 100)}
+        ${[0, 1, 2, 3, 4, 5, 6].map(i => `<rect x="${208 + i * 4}" y="88" width="${1.5 + (i % 2) * 2}" height="24" fill="#e6e8ec"/>`).join("")}
+        <text x="224" y="80" fill="#8b949e" font-size="8" text-anchor="middle">debarcode</text>
+        ${_arrow(242, 270, 100)}
+        <rect x="278" y="42" width="120" height="116" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
+        <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
+        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g>${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
+          i === 0 ? `<ellipse cx="${p[0]}" cy="${p[1]}" rx="9" ry="3" fill="rgba(0,0,0,.45)"/>`
+            : i === 1 ? `<circle cx="${p[0] + 3}" cy="${p[1] - 2}" r="5" fill="rgba(0,0,0,.45)"/>`
+              : i === 2 ? Array.from({ length: 4 }, (_, j) => `<circle cx="${p[0] - 6 + j * 4}" cy="${p[1] + 4}" r="1.6" fill="rgba(0,0,0,.45)"/>`).join("")
+                : `<rect x="${p[0] - 7}" y="${p[1] - 2}" width="14" height="3.5" rx="1" fill="rgba(0,0,0,.45)"/>`}</g>`).join("")}
+        <text x="338" y="152" fill="#8b949e" font-size="8.5" text-anchor="middle">many phenotypes — which is real?</text>
+      </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of gene knockouts are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the gene knocked out inside it. This yields millions of (gene, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation.",
     why: "The core question this whole viewer answers: for each perturbation, <b>which change in the cell captures its true phenotype</b> — separated from the noise of the technique's scale and heterogeneity? Everything that follows is one answer.",
     defs: [["Pooled optical screen", "imaging a mixed population where every cell has a different gene knocked out, all together."],
@@ -84,34 +84,47 @@ const METHODS_SLIDES = [
       ["Perturbation", "the genetic change applied to a cell — here a CRISPR knockout; NTC = non-targeting control (no gene cut)."]]
   },
   {
-    nav: "Fingerprint", kicker: "REPRESENT", title: "Turning a cell image into numbers",
-    svg: () => `<svg viewBox="0 0 420 200" class="mth">
-      <g class="mth-breathe">${_cellBlob(85, 100, 46, MTH_C.acc)}
-        ${_patchGrid(50, 65, 14, 5, [])}</g>
-      ${_arrow(150, 232, 100)}
-      <g>${_bars(252, 150, [70, 30, 95, 45, 60, 20, 80, 40], 15, 6, MTH_C.pur)}</g>
-      ${_lbl(305, 172, "embedding vector")}
+    nav: "Embedding", kicker: "REPRESENT", title: "Turning a cell image into numbers (a ViT)",
+    svg: () => `<svg viewBox="0 0 468 200" class="mth">
+      ${_cellBlob(44, 100, 32, MTH_C.acc)}
+      ${_patchGrid(14, 72, 15, 4, [])}
+      ${_lbl(44, 150, "image crop")}
+      <text x="106" y="80" fill="#8b949e" font-size="8" text-anchor="middle">patchify</text>
+      ${_arrow(82, 128, 100)}
+      ${[0, 1, 2, 3, 4, 5].map(i => `<rect x="134" y="${42 + i * 20}" width="18" height="16" rx="3" fill="rgba(38,198,255,.15)" stroke="${MTH_C.acc}" class="mth-glow" style="animation-delay:${i * 0.18}s"/>`).join("")}
+      ${_lbl(143, 178, "patch tokens")}
+      ${_arrow(158, 200, 100)}
+      ${_box(204, 74, 98, 52, "Transformer", "self-attention")}
+      ${_arrow(306, 346, 100)}
+      <g>${_bars(352, 136, [58, 26, 72, 40, 54, 20, 66, 34], 11, 4, MTH_C.pur, "")}</g>
+      ${_lbl(400, 156, "1024-d feature")}
     </svg>`,
-    body: "A <b>self-supervised</b> vision transformer (<b>CellDINO</b>) splits each image into patches and, learning from images alone with no labels, distils it into a numeric <b>embedding</b> — a point in a high-dimensional \"morphology space\".",
-    why: "Similar-looking cells land nearby, so morphology becomes math we can compare, cluster, and rank.",
-    defs: [["Embedding", "a list of numbers (a vector) that summarizes an image."],
-      ["Self-supervised", "the model learns structure from raw images with no human labels."],
-      ["Vision transformer (ViT)", "a network that cuts an image into patches and relates them with attention."],
-      ["CellDINO", "our DINO-style self-supervised ViT trained on these cell images."]]
+    body: "A <b>vision transformer</b> (CellDINO) cuts the image into a grid of <b>patches</b>, turns each into a token, and lets them <b>attend</b> to one another; the tokens are pooled into one <b>1,024-d feature vector</b> — a compact fingerprint of the cell's morphology. It's trained <b>self-supervised</b> (no labels), so similar cells get similar vectors.",
+    why: "Turning each cell into a comparable vector is what makes morphology <i>measurable</i> — the basis for clustering, ranking, and steering the generative model.",
+    defs: [["Patch / token", "the small square pieces the image is cut into; each becomes one input token to the transformer."],
+      ["Vision transformer (ViT)", "a network that relates all patch-tokens with attention, rather than scanning with convolutions."],
+      ["Self-supervised (DINO)", "trained on images alone — no gene labels — so it learns general-purpose morphology features."],
+      ["Feature vector / embedding", "the pooled 1,024 numbers summarizing the cell; distances between vectors track visual similarity."]]
   },
   {
     nav: "Classifier", kicker: "THE MODEL", title: "A classifier that reads a whole group of cells",
-    svg: () => { const X = [50, 160, 264, 372], L0 = [42, 80, 118, 156], LH = [60, 99, 138], L3 = [42, 80, 118, 156];
-      const edges = (xa, ya, xb, yb) => ya.map((a, i) => yb.map((b, j) => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".8" opacity=".45" class="mth-pulse" style="animation-delay:${((i + j) % 5) * 0.25}s"/>`).join("")).join("");
-      return `<svg viewBox="0 0 440 200" class="mth">
-        ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${edges(X[2], LH, X[3], L3)}
-        ${L0.map((y, i) => _cellBlob(X[0], y, 9, [MTH_C.grn, MTH_C.acc, MTH_C.pur, MTH_C.ko][i])).join("")}
+    svg: () => { const X = [72, 170, 262, 372], L0 = [46, 82, 118, 154], LH = [64, 100, 136], OY = [38, 72, 106, 140, 174], OC = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel];
+      const edges = (xa, ya, xb, yb) => ya.map(a => yb.map(b => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".3"/>`).join("")).join("");
+      return `<svg viewBox="0 0 460 200" class="mth">
+        <rect x="12" y="34" width="46" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
+        ${L0.map(y => _cellBlob(35, y, 9, MTH_C.acc)).join("")}
+        ${_lbl(35, 182, "one gene's bag")}
+        ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${LH.map(a => OY.map(b => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".3"/>`).join("")).join("")}
+        ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
-        ${L3.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? MTH_C.ko : "rgba(255,255,255,.07)"}" stroke="${i === 1 ? MTH_C.ko : "#30363d"}" ${i === 1 ? 'class="mth-pulse"' : ""}/>`).join("")}
-        ${_lbl(50, 184, "set of cells")}${_lbl(160, 168, "attention")}${_lbl(264, 168, "pool (PMA)")}${_lbl(398, 84, "class", MTH_C.ko, 11)}
+        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
+        <rect x="64" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".55" class="mth-sweep"/>
+        ${_lbl(66, 26, "cells attend + pool", "#8b949e", 8)}
+        ${_lbl(372, 196, "class scores (genes)")}
+        <text x="386" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
       </svg>`; },
-    body: "The <b>SetTransformer</b> is a <b>multiple-instance-learning</b> classifier: it reads a <i>bag</i> of a perturbation's cells and predicts the class (1,000 genes + NTC, or 99 protein complexes). Each cell's 1,024-d CellDINO embedding is tagged with a <b>channel embedding</b>, projected to 512-d, then passed through two <b>inducing-point attention layers</b> (ISAB, 32 inducing points, 4 heads); a <b>PMA</b> layer pools the bag into one vector and a cosine classifier scores every class.",
+    body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once and ask it to name the gene. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 genes</b> (or 99 protein complexes) — and the answer doesn't change if you shuffle the cells. (The architecture is a <b>SetTransformer</b>; the how is below.)",
     why: "Trained on random bags of 100 cells yet able to score any bag size (10–5,000), it reads the population phenotype and is invariant to how the cells are ordered.",
     defs: [["Multiple-instance learning", "classify a whole bag from one shared label, without labeling individual cells."],
       ["Bag / permutation-invariant", "an unordered set of a perturbation's cells; shuffling them can't change the prediction."],
@@ -121,18 +134,29 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Top cells", kicker: "EXPLAINING BY REMOVING", title: "Which cells carry the phenotype?",
-    svg: () => `<svg viewBox="0 0 440 200" class="mth">
-      <rect x="22" y="58" width="92" height="84" rx="10" fill="rgba(255,255,255,.04)" stroke="#30363d"/>
-      ${_cellBlob(48, 84, 9, MTH_C.acc)}${_cellBlob(88, 88, 9, MTH_C.grn)}${_cellBlob(58, 120, 9, MTH_C.pur)}
-      <g class="mth-pulse">${_cellBlob(96, 120, 11, MTH_C.ko)}</g>
-      ${_lbl(68, 158, "bag + cell x")}
-      <rect x="146" y="66" width="18" height="64" rx="2" fill="${MTH_C.acc}"/>
-      <rect x="178" y="92" width="18" height="38" rx="2" fill="${MTH_C.ntc}"/>
-      ${_lbl(155, 146, "with x")}${_lbl(187, 146, "without x")}
-      ${_lbl(174, 58, "Δ = score(x)", MTH_C.ko, 10)}
-      ${_arrow(210, 250, 98)}
-      ${[0, 1, 2, 3, 4].map(i => `<g class="mth-emerge" style="animation-delay:${i * 0.15}s">${_cellBlob(282 + i * 32, 98, 13, i < 2 ? MTH_C.ko : MTH_C.acc)}</g>`).join("")}
-      ${_lbl(346, 140, "top-predictive cells")}
+    svg: () => `<svg viewBox="0 0 468 200" class="mth">
+      <rect x="14" y="46" width="66" height="108" rx="8" fill="rgba(255,255,255,.04)" stroke="#30363d"/>
+      ${_cellBlob(36, 68, 9, MTH_C.acc)}${_cellBlob(58, 90, 9, MTH_C.acc)}${_cellBlob(34, 116, 9, MTH_C.acc)}
+      <g class="mth-pulse">${_cellBlob(58, 134, 11, MTH_C.ko)}</g>
+      ${_lbl(47, 170, "bag · cell x")}
+      ${_arrow(84, 140, 100)}
+      ${[64, 100, 136].flatMap(a => [64, 100, 136].map(b => `<line x1="150" y1="${a}" x2="192" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".6" opacity=".3"/>`)).join("")}
+      ${[64, 100, 136].map(y => `<circle cx="150" cy="${y}" r="6" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
+      ${[64, 100, 136].map(y => `<circle cx="192" cy="${y}" r="6" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
+      ${_lbl(171, 28, "classifier", "#8b949e", 8)}
+      ${_arrow(204, 240, 100)}
+      <text x="292" y="42" fill="#e6e8ec" font-size="9" text-anchor="middle">P(gene X)</text>
+      <rect x="250" y="60" width="26" height="80" rx="3" fill="rgba(255,255,255,.06)"/>
+      <rect x="250" y="60" width="26" height="80" rx="3" fill="${MTH_C.acc}" opacity=".85"/>
+      ${_lbl(263, 154, "with x")}
+      <rect x="298" y="60" width="26" height="80" rx="3" fill="rgba(255,255,255,.06)"/>
+      <rect x="298" y="96" width="26" height="44" rx="3" fill="${MTH_C.ntc}" opacity=".85"/>
+      ${_lbl(311, 154, "without x")}
+      <line x1="276" y1="62" x2="298" y2="96" stroke="${MTH_C.ko}" stroke-width="1.4" stroke-dasharray="3 2"/>
+      <text x="288" y="52" fill="${MTH_C.ko}" font-size="9" text-anchor="middle">Δ = score(x)</text>
+      ${_arrow(334, 368, 100)}
+      ${[0, 1, 2, 3, 4].map(i => `<circle cx="${380 + i * 11}" cy="100" r="6" fill="${i < 2 ? MTH_C.ko : MTH_C.acc}"/>`).join("")}
+      ${_lbl(406, 126, "rank cells")}
     </svg>`,
     body: "To find a perturbation's most telling cells, we score each cell by how much it <b>helps the classifier</b>: the drop in predicted probability when the cell is <b>removed</b> from a bag (\"explaining by removing\"), averaged over many bag sizes and random partners. The top-scoring <b>top-predictive cells</b> carry the phenotypic signature — the cells the viewer anchors its traversals to and shows in Top Cells. Re-weighting the gene-level <b>mAP</b> by these cells sharpens the distinctiveness ranking.",
     why: "It picks, per perturbation, the handful of cells that most define its phenotype — the exemplars every traversal starts from.",
@@ -144,7 +168,9 @@ const METHODS_SLIDES = [
   {
     nav: "Diffusion", kicker: "SIMULATE & INVERT", title: "From noise to a cell — and back",
     sections: [
-      { cap: "Generate — denoise pure noise into a cell (x_T → x_0)", svg: () => `<svg viewBox="0 0 420 145" class="mth">
+      { cap: "1 · Generate — denoise pure noise into a cell (x_T → x_0)",
+        text: "In training we corrupt a real cell to pure static, then learn to undo it. To <b>generate</b>, we start from noise and remove a little at each step until a realistic cell appears.",
+        svg: () => `<svg viewBox="0 0 420 145" class="mth">
         ${[0, 1, 2, 3, 4].map(i => { const x = 34 + i * 76, op = i / 4;
           const noise = Array.from({ length: (4 - i) * 6 + 2 }, (_, j) => `<circle cx="${x + 8 + (j * 13) % 44}" cy="${58 + (j * 17) % 44}" r="1.6" fill="#8b949e" opacity="${1 - op * 0.85}"/>`).join("");
           return `<rect x="${x}" y="50" width="60" height="60" rx="6" fill="rgba(0,0,0,.25)" stroke="#30363d"/>${noise}<g opacity="${op}">${_cellBlob(x + 30, 80, 19, MTH_C.acc)}</g>`; }).join("")}
@@ -152,13 +178,16 @@ const METHODS_SLIDES = [
         ${_lbl(210, 20, "reverse process — denoise →", MTH_C.acc, 11)}
         ${_lbl(64, 126, "x_T (pure noise)")}${_lbl(364, 126, "x_0 (a cell)")}
       </svg>` },
-      { cap: "DDIM inversion — run it backwards to anchor a real cell", svg: () => `<svg viewBox="0 0 420 165" class="mth">
+      { cap: "2 · DDIM inversion — run it backwards to anchor a real cell",
+        text: "Because DDIM is <b>deterministic</b>, it also runs in reverse — recovering the <i>exact</i> noise seed of one specific real cell, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
+        svg: () => `<svg viewBox="0 0 420 165" class="mth">
         ${_cellBlob(70, 90, 32, MTH_C.grn)}${_lbl(70, 146, "real cell")}
-        <g class="mth-collapse">${Array.from({ length: 22 }, (_, i) => `<circle cx="${185 + (i * 37) % 60 - 30}" cy="${90 + (i * 53) % 60 - 30}" r="2" fill="#8b949e"/>`).join("")}</g>
+        <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
+        ${Array.from({ length: 20 }, (_, i) => `<circle cx="${188 + (i * 13) % 44}" cy="${72 + (i * 17) % 36}" r="1.6" fill="#8b949e"/>`).join("")}
         ${_lbl(210, 146, "its exact seed x_T")}
         ${_cellBlob(350, 90, 32, MTH_C.grn)}${_lbl(350, 146, "same cell (r≈0.99)")}
-        <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 68, "invert ↩", MTH_C.pur, 10)}</g>
-        <g class="mth-cycB">${_arrow(244, 310, 78, MTH_C.acc)}${_lbl(277, 68, "generate →", MTH_C.acc, 10)}</g>
+        <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 60, "invert ↩", MTH_C.pur, 10)}</g>
+        <g class="mth-cycB">${_arrow(244, 310, 78, MTH_C.acc)}${_lbl(277, 60, "generate →", MTH_C.acc, 10)}</g>
       </svg>` }
     ],
     body: "A <b>diffusion model</b> builds a cell by reversing noise: in training we corrupt a real cell to pure static (x_T), and a network learns to predict and remove that noise step by step until a realistic cell (x_0) emerges. <b>DDIM</b> makes this reverse process <b>deterministic</b> — the same seed always gives the same cell — so it can also run <b>backwards</b>, recovering the exact seed of a specific real cell for our morphs to start from.",
@@ -205,14 +234,17 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Attention heads", kicker: "INTERPRET", title: "Where does the model look?",
-    svg: () => `<svg viewBox="0 0 420 200" class="mth">
-      <g opacity=".5">${_cellBlob(115, 100, 62, MTH_C.acc)}</g>
-      ${_patchGrid(70, 55, 15, 6, [8, 9, 15, 16, 21])}
-      ${_lbl(115, 190, "head A")}
-      <g opacity=".5">${_cellBlob(305, 100, 62, MTH_C.acc)}</g>
-      ${_patchGrid(260, 55, 15, 6, [20, 26, 27, 33])}
-      ${_lbl(305, 190, "head B")}
-    </svg>`,
+    svg: () => { const cell = (cx, hot, lbl) => `
+      <circle cx="${cx}" cy="98" r="56" fill="rgba(38,198,255,.08)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
+      <circle cx="${cx - 12}" cy="92" r="21" fill="rgba(188,140,255,.4)"/>
+      <circle cx="${cx - 17}" cy="88" r="4" fill="#3a2a5a"/><circle cx="${cx - 8}" cy="96" r="3" fill="#3a2a5a"/>
+      ${[0, 1, 2, 3].map(k => `<ellipse cx="${cx + 14 + (k % 2) * 8}" cy="${86 + k * 11}" rx="16" ry="3.6" fill="${MTH_C.ko}" opacity=".6" transform="rotate(${25 + 22 * k} ${cx + 14 + (k % 2) * 8} ${86 + k * 11})"/>`).join("")}
+      ${_patchGrid(cx - 45, 53, 15, 6, hot)}
+      ${_lbl(cx, 186, lbl)}`;
+      return `<svg viewBox="0 0 440 200" class="mth">
+        ${cell(112, [16, 17, 22, 23], "head A — tubules")}
+        ${cell(330, [7, 8, 13], "head B — nucleoli")}
+      </svg>`; },
     body: "The vision transformer splits the cell into <b>patches</b>, and each <b>attention head</b> weights which patches it focuses on. Drawn as a heat-map, a head shows <i>which structures</i> the model attends to for a given cell — for example one that concentrates on mitochondria.",
     why: "It makes the model's focus visible and checkable against known biology, rather than leaving the phenotype call as a black box.",
     defs: [["Patch / token", "the small square pieces a vision transformer breaks the image into."],
@@ -220,19 +252,17 @@ const METHODS_SLIDES = [
       ["Attention map", "a head's per-patch weights, drawn as a heat-map — where the model concentrates (an attention pattern, suggestive of but not a formal attribution of the decision)."]]
   },
   {
-    nav: "Embedding", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
-    svg: () => `<svg viewBox="0 0 440 200" class="mth">
-      ${_cellBlob(46, 100, 28, MTH_C.grn, "mth-breathe")}${_lbl(46, 148, "one anchor cell")}
-      ${_arrow(84, 250, 100)}
-      <rect x="168" y="26" width="256" height="150" rx="10" fill="rgba(255,255,255,.03)" stroke="#30363d"/>
-      ${[[205, 58, MTH_C.grn], [230, 50, MTH_C.grn], [216, 78, MTH_C.grn], [248, 66, MTH_C.grn],
-        [330, 52, MTH_C.ko], [356, 68, MTH_C.ko], [338, 84, MTH_C.ko], [368, 56, MTH_C.ko],
-        [246, 132, MTH_C.pur], [272, 146, MTH_C.pur], [236, 150, MTH_C.pur], [262, 120, MTH_C.pur],
-        [352, 134, MTH_C.acc], [380, 148, MTH_C.acc], [366, 120, MTH_C.acc], [342, 152, MTH_C.acc]]
-        .map((p, i) => `<g class="mth-emerge" style="animation-delay:${(i % 8) * 0.12}s">${_cellBlob(p[0], p[1], 8, p[2])}</g>`).join("")}
-      ${_lbl(296, 194, "gene embedding — tiled by LatentLens")}
-    </svg>`,
-    body: "The <b>Embedding</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
+    nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
+    svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
+      let out = "";
+      B.forEach(([col, a0]) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66; out += _cellBlob(x, y, 8, _mix(MTH_C.ntc, col, i / 5)); } });
+      return `<svg viewBox="0 0 460 200" class="mth">
+        ${out}
+        <g class="mth-pulse">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
+        ${_lbl(cx, cy + 28, "NTC")}
+        ${_lbl(230, 194, "each direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
+      </svg>`; },
+    body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
     why: "It turns 1,000 separate what-ifs into a single navigable landscape — genes with similar phenotypes cluster together, visible at a glance.",
     defs: [["Gene embedding (UMAP / PHATE)", "a 2-D map where each point is a gene, placed so phenotypically similar knockouts sit close together."],
       ["Anchor cell", "the one real cell (see DDIM) whose counterfactual we render for every perturbation, so the comparison is apples-to-apples."],
@@ -240,45 +270,21 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Virtual staining", kicker: "CROSS-CHANNEL", title: "Predicting fluorescent stains from phase",
-    sections: [
-      { cap: "Two conditioning paths: semantic (what) + spatial (where) → conditional U-Net", svg: () => `<svg viewBox="0 0 484 200" class="mth">
-        ${_cellBlob(36, 100, 24, MTH_C.ntc)}${_lbl(36, 138, "phase")}
-        <line x1="56" y1="86" x2="92" y2="56" stroke="${MTH_C.pur}" stroke-width="1.6"/>
-        <rect x="94" y="40" width="82" height="30" rx="6" fill="rgba(188,140,255,.12)" stroke="${MTH_C.pur}"/>
-        <text x="135" y="52" fill="${MTH_C.pur}" font-size="8.5" text-anchor="middle">Cell-DINO ViT</text>
-        <text x="135" y="63" fill="${MTH_C.pur}" font-size="7.5" text-anchor="middle">(frozen)</text>
-        ${_arrow(178, 204, 55, MTH_C.pur)}
-        ${[0, 1, 2, 3, 4].map(i => `<rect x="${208 + i * 7}" y="46" width="6" height="18" rx="1" fill="${MTH_C.pur}" opacity="${0.55 + 0.09 * i}"/>`).join("")}
-        <text x="230" y="34" fill="${MTH_C.pur}" font-size="8" text-anchor="middle">semantic z + marker id</text>
-        <path d="M232,66 C232,80 262,74 284,80" fill="none" stroke="${MTH_C.pur}" stroke-width="1.4" stroke-dasharray="3 2"/>
-        <text x="256" y="72" fill="${MTH_C.pur}" font-size="8" text-anchor="middle">FiLM</text>
-        <line x1="54" y1="112" x2="92" y2="148" stroke="#2ca089" stroke-width="1.6"/>
-        <rect x="104" y="140" width="16" height="16" fill="#111" stroke="#2ca089"/>
-        ${[0, 1, 2, 3].map(i => `<circle cx="${107 + (i * 5) % 12}" cy="${143 + (i * 7) % 12}" r="1.1" fill="#8b949e"/>`).join("")}
-        <text x="112" y="135" fill="#8b949e" font-size="7" text-anchor="middle">x_T</text>
-        <text x="128" y="153" fill="#2ca089" font-size="11" text-anchor="middle">⊕</text>
-        ${_cellBlob(146, 148, 8, MTH_C.ntc)}
-        <text x="150" y="172" fill="#2ca089" font-size="7.5" text-anchor="middle">phase pixels → 2-channel input</text>
-        ${_arrow(168, 250, 128, "#2ca089")}
-        <rect x="252" y="72" width="92" height="58" rx="8" fill="rgba(255,255,255,.05)" stroke="#e6e8ec" stroke-width="1.5"/>
-        <text x="298" y="96" fill="#e6e8ec" font-size="10" text-anchor="middle">conditional</text>
-        <text x="298" y="110" fill="#e6e8ec" font-size="10" text-anchor="middle">U-Net</text>
-        <text x="298" y="123" fill="#8b949e" font-size="8" text-anchor="middle">DDIM</text>
-        ${_arrow(348, 392, 101)}
-        <rect x="396" y="77" width="48" height="48" rx="4" fill="#000" stroke="${MTH_C.ko}" stroke-width="2"/>
-        ${[0, 1, 2].map(i => `<ellipse cx="${410 + i * 9}" cy="${94 + i * 11}" rx="10" ry="3.6" fill="${MTH_C.ko}" opacity=".9" transform="rotate(${35 * i} ${410 + i * 9} ${94 + i * 11})"/>`).join("")}
-        ${_lbl(420, 140, "predicted marker")}
-      </svg>` },
-      { cap: "Render any marker — switch the marker id (one model, 42 channels)", svg: () => `<svg viewBox="0 0 460 150" class="mth">
-        ${_cellBlob(38, 78, 28, MTH_C.ntc, "mth-breathe")}${_lbl(38, 120, "same phase cell")}
-        ${_arrow(74, 116, 78)}
-        ${[["mito", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["lyso", MTH_C.pur]].map((m, i) => { const x = 150 + i * 76;
-          return `<g class="mth-emerge" style="animation-delay:${i * 0.18}s"><rect x="${x}" y="46" width="58" height="58" rx="5" fill="#000" stroke="${m[1]}" stroke-width="2"/>
-            ${Array.from({ length: 6 }, (_, j) => `<circle cx="${x + 12 + (j * 15) % 40}" cy="${54 + (j * 11) % 40}" r="2.2" fill="${m[1]}"/>`).join("")}
-            <text x="${x + 29}" y="120" fill="${m[1]}" font-size="9" text-anchor="middle">${m[0]}</text></g>`; }).join("")}
-        ${_lbl(290, 22, "switch marker id → any of 42 channels", MTH_C.acc, 11)}
-      </svg>` }
-    ],
+    svg: () => `<svg viewBox="0 0 470 200" class="mth">
+      ${_cellBlob(42, 100, 30, MTH_C.ntc, "mth-breathe")}${_lbl(42, 148, "phase cell")}
+      ${_arrow(80, 134, 100)}
+      <rect x="142" y="58" width="124" height="84" rx="10" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
+      <text x="204" y="84" fill="#e6e8ec" font-size="11" text-anchor="middle">diffusion staining</text>
+      <text x="204" y="98" fill="#e6e8ec" font-size="11" text-anchor="middle">model</text>
+      <text x="204" y="118" fill="${MTH_C.pur}" font-size="8.5" text-anchor="middle">semantic (what)</text>
+      <text x="204" y="131" fill="#2ca089" font-size="8.5" text-anchor="middle">+ spatial (where)</text>
+      ${_arrow(270, 304, 100)}
+      ${[["mito", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lyso", MTH_C.yel]].map((m, i) => { const y = 38 + i * 32;
+        return `<g><rect x="318" y="${y - 13}" width="26" height="26" rx="4" fill="#000" stroke="${m[1]}" stroke-width="1.8"/>
+          ${Array.from({ length: 3 }, (_, j) => `<circle cx="${324 + j * 7}" cy="${y - 4 + j * 4}" r="1.8" fill="${m[1]}"/>`).join("")}
+          <text x="352" y="${y + 4}" fill="${m[1]}" font-size="9" text-anchor="start">${m[0]}</text></g>`; }).join("")}
+      ${_lbl(362, 194, "42 fluorescent channels \u2014 pick any")}
+    </svg>`,
     body: "We reuse the diffusion autoencoder as a <b>virtual-staining</b> model, conditioning it on a phase image in <b>two ways</b>: a <b>semantic</b> path (phase → frozen Cell-DINO ViT → a pooled code that FiLM-conditions the U-Net, with a marker id — the <i>what</i>) and a <b>spatial</b> path (the raw phase pixels concatenated into the U-Net input — keeping the <i>layout</i>, so the output stays pixel-registered). Switching the marker id renders any of 42 fluorescent channels from the same phase cell.",
     why: "The spatial conditioning is what makes it faithful — predicted markers line up with the real cell's structures (Pearson lifts ~0.13 → ~0.78). One model covers all 42 live markers from a single label-free image; run on a traversal it yields a full multi-channel phenotype per perturbation.",
     defs: [["Virtual staining", "predicting fluorescent-marker images from a label-free phase image."],
@@ -303,8 +309,8 @@ const METHODS_SLIDES = [
 ];
 
 // display order (narrative arc): data → represent → classify+interpret → generate+arrange → cross-channel → next
-const MTH_ORDER = ["The screen", "Fingerprint", "Classifier", "Top cells", "Attention heads",
-  "Diffusion", "Traversal", "Embedding", "Virtual staining", "What's next"];   // DDIM folded into the Diffusion slide as a 2nd section
+const MTH_ORDER = ["The screen", "Embedding", "Classifier", "Top cells", "Attention heads",
+  "Diffusion", "Traversal", "Montage", "Virtual staining", "What's next"];   // DDIM folded into the Diffusion slide as a 2nd section
 const MTH_DECK = MTH_ORDER.map(n => METHODS_SLIDES.find(s => s.nav === n)).filter(Boolean);
 
 let _mthIdx = 0;
@@ -321,7 +327,7 @@ function renderMethods() {
   view.innerHTML = `<div class="mth-card">
     <div class="mth-kicker">${s.kicker} · ${_mthIdx + 1} / ${MTH_DECK.length}</div>
     <h2 class="mth-title">${s.title}</h2>
-    ${s.sections ? s.sections.map(sec => `<div class="mth-sec"><div class="mth-seccap">${sec.cap}</div><div class="mth-stage">${sec.svg()}</div></div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
+    ${s.sections ? s.sections.map(sec => `<div class="mth-sec"><div class="mth-seccap">${sec.cap}</div><div class="mth-stage">${sec.svg()}</div>${sec.text ? `<div class="mth-sectext">${sec.text}</div>` : ""}</div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
     <div class="mth-body">${s.body}</div>
     ${MTH_MORE[s.nav] ? `<details class="mth-more"><summary>Learn more</summary><p>${MTH_MORE[s.nav]}</p></details>` : ""}
     <div class="mth-why"><b>Why it matters —</b> ${s.why}</div>
