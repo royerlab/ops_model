@@ -62,7 +62,7 @@ const METHODS_SLIDES = [
         if (((x - 92) / 74) ** 2 + ((y - 100) / 80) ** 2 <= 0.92) cells.push([x, y, (r * 2 + c) % 5]); }
       return `<svg viewBox="0 0 484 200" class="mth">
         <ellipse cx="92" cy="100" rx="80" ry="86" fill="rgba(255,255,255,.03)" stroke="#30363d" stroke-width="2"/>
-        ${cells.map(([x, y, ci]) => `<g ${ci === 1 ? 'class="mth-pulse"' : 'opacity=".8"'}>${_cellBlob(x, y, 7, COL[ci])}</g>`).join("")}
+        ${cells.map(([x, y, ci]) => `<g class="${ci === 1 ? "mth-hi" : "mth-pulse"}" style="animation-delay:${((x + y) / 90).toFixed(2)}s">${_cellBlob(x, y, 7, COL[ci])}</g>`).join("")}
         ${_lbl(92, 194, "well — pooled knockouts, all mixed")}
         ${_arrow(176, 200, 100)}
         ${[0, 1, 2, 3, 4, 5, 6].map(i => `<rect x="${208 + i * 4}" y="88" width="${1.5 + (i % 2) * 2}" height="24" fill="#e6e8ec"/>`).join("")}
@@ -70,7 +70,7 @@ const METHODS_SLIDES = [
         ${_arrow(242, 270, 100)}
         <rect x="278" y="42" width="120" height="116" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
-        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g>${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
+        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
           i === 0 ? `<ellipse cx="${p[0]}" cy="${p[1]}" rx="9" ry="3" fill="rgba(0,0,0,.45)"/>`
             : i === 1 ? `<circle cx="${p[0] + 3}" cy="${p[1] - 2}" r="5" fill="rgba(0,0,0,.45)"/>`
               : i === 2 ? Array.from({ length: 4 }, (_, j) => `<circle cx="${p[0] - 6 + j * 4}" cy="${p[1] + 4}" r="1.6" fill="rgba(0,0,0,.45)"/>`).join("")
@@ -96,7 +96,7 @@ const METHODS_SLIDES = [
       ${_arrow(158, 200, 100)}
       ${_box(204, 74, 98, 52, "Transformer", "self-attention")}
       ${_arrow(306, 346, 100)}
-      <g>${_bars(352, 136, [58, 26, 72, 40, 54, 20, 66, 34], 11, 4, MTH_C.pur, "")}</g>
+      <g>${_bars(352, 136, [58, 26, 72, 40, 54, 20, 66, 34], 11, 4, MTH_C.pur, "mth-jit")}</g>
       ${_lbl(400, 156, "1024-d feature")}
     </svg>`,
     body: "A <b>vision transformer</b> (CellDINO) cuts the image into a grid of <b>patches</b>, turns each into a token, and lets them <b>attend</b> to one another; the tokens are pooled into one <b>1,024-d feature vector</b> — a compact fingerprint of the cell's morphology. It's trained <b>self-supervised</b> (no labels), so similar cells get similar vectors.",
@@ -108,23 +108,24 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Classifier", kicker: "THE MODEL", title: "A classifier that reads a whole group of cells",
-    svg: () => { const X = [72, 170, 262, 372], L0 = [46, 82, 118, 154], LH = [64, 100, 136], OY = [38, 72, 106, 140, 174], OC = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel];
-      const edges = (xa, ya, xb, yb) => ya.map(a => yb.map(b => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".3"/>`).join("")).join("");
-      return `<svg viewBox="0 0 460 200" class="mth">
-        <rect x="12" y="34" width="46" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
-        ${L0.map(y => _cellBlob(35, y, 9, MTH_C.acc)).join("")}
-        ${_lbl(35, 182, "one gene's bag")}
-        ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${LH.map(a => OY.map(b => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".3"/>`).join("")).join("")}
+    svg: () => { const X = [118, 205, 290, 392], L0 = [46, 82, 118, 154], LH = [64, 100, 136], OY = [38, 72, 106, 140, 174], OC = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel];
+      const edges = (xa, ya, xb, yb) => ya.map(a => yb.map(b => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28"/>`).join("")).join("");
+      const set = (col, by, hl) => `<g class="${hl ? "mth-hi" : ""}" ${hl ? 'style="animation-delay:.2s"' : 'opacity=".5"'}>${[[16, by], [30, by], [16, by + 14], [30, by + 14]].map(c => _cellBlob(c[0], c[1], 5.5, col)).join("")}</g>`;
+      return `<svg viewBox="0 0 470 200" class="mth">
+        ${[MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur].map((col, s) => set(col, 30 + s * 40, col === MTH_C.acc)).join("")}
+        ${_lbl(26, 190, "sets (one per gene)")}
+        ${_arrow(46, 108, 100, MTH_C.acc)}
+        ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${LH.map(a => OY.map(b => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28"/>`).join("")).join("")}
         ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
-        <rect x="64" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".55" class="mth-sweep"/>
-        ${_lbl(66, 26, "cells attend + pool", "#8b949e", 8)}
-        ${_lbl(372, 196, "class scores (genes)")}
-        <text x="386" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
+        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".5" class="mth-sweep"/>
+        ${_lbl(200, 26, "cells attend + pool", "#8b949e", 8)}
+        ${_lbl(392, 196, "class scores (genes)")}
+        <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
       </svg>`; },
-    body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once and ask it to name the gene. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 genes</b> (or 99 protein complexes) — and the answer doesn't change if you shuffle the cells. (The architecture is a <b>SetTransformer</b>; the how is below.)",
+    body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once and ask it to name the gene. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 genes</b> (or 99 protein complexes). The architecture is a <b>SetTransformer</b> — the how is below.",
     why: "Trained on random bags of 100 cells yet able to score any bag size (10–5,000), it reads the population phenotype and is invariant to how the cells are ordered.",
     defs: [["Multiple-instance learning", "classify a whole bag from one shared label, without labeling individual cells."],
       ["Bag / permutation-invariant", "an unordered set of a perturbation's cells; shuffling them can't change the prediction."],
@@ -155,8 +156,8 @@ const METHODS_SLIDES = [
       <line x1="276" y1="62" x2="298" y2="96" stroke="${MTH_C.ko}" stroke-width="1.4" stroke-dasharray="3 2"/>
       <text x="288" y="52" fill="${MTH_C.ko}" font-size="9" text-anchor="middle">Δ = score(x)</text>
       ${_arrow(334, 368, 100)}
-      ${[0, 1, 2, 3, 4].map(i => `<circle cx="${380 + i * 11}" cy="100" r="6" fill="${i < 2 ? MTH_C.ko : MTH_C.acc}"/>`).join("")}
-      ${_lbl(406, 126, "rank cells")}
+      ${[0, 1, 2, 3, 4].map(i => `<g ${i === 0 ? 'class="mth-hi" style="animation-delay:.1s"' : ""}><circle cx="${380 + i * 13}" cy="100" r="${9 - i * 1.3}" fill="${i < 2 ? MTH_C.ko : MTH_C.acc}" opacity="${(1 - i * 0.14).toFixed(2)}"/></g>`).join("")}
+      ${_lbl(406, 128, "ranked cells")}
     </svg>`,
     body: "To find a perturbation's most telling cells, we score each cell by how much it <b>helps the classifier</b>: the drop in predicted probability when the cell is <b>removed</b> from a bag (\"explaining by removing\"), averaged over many bag sizes and random partners. The top-scoring <b>top-predictive cells</b> carry the phenotypic signature — the cells the viewer anchors its traversals to and shows in Top Cells. Re-weighting the gene-level <b>mAP</b> by these cells sharpens the distinctiveness ranking.",
     why: "It picks, per perturbation, the handful of cells that most define its phenotype — the exemplars every traversal starts from.",
@@ -206,7 +207,7 @@ const METHODS_SLIDES = [
       <circle cx="70" cy="158" r="5" fill="${MTH_C.ntc}"/><circle cx="350" cy="158" r="5" fill="${MTH_C.ko}"/>
       <circle cx="70" cy="158" r="8" fill="#fff" class="mth-slide"/>
       ${_lbl(70, 180, "NTC · α0")}${_lbl(350, 180, "knockout · α+", MTH_C.ko)}
-      <rect x="188" y="14" width="44" height="16" rx="4" fill="rgba(188,140,255,.2)" stroke="${MTH_C.pur}"/>${_lbl(210, 26, "code z", MTH_C.pur, 10)}
+      <g>${_bars(190, 26, [8, 4, 12, 6, 10, 5], 5, 2, MTH_C.pur, "mth-jit")}</g>${_lbl(211, 40, "z (CellDINO vector)", MTH_C.pur, 9)}
     </svg>`,
     body: "We take the cell's <b>semantic code</b> and slide it along the <b>NTC → knockout direction</b> (the average difference between control and knockout codes), decoding each step. α = 0 is the start; α = 1 applies the full knockout shift; beyond exaggerates it.",
     why: "It renders the phenotype a perturbation induces as a smooth, watchable transformation of one cell.",
@@ -238,8 +239,8 @@ const METHODS_SLIDES = [
       <circle cx="${cx}" cy="98" r="56" fill="rgba(38,198,255,.08)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
       <circle cx="${cx - 12}" cy="92" r="21" fill="rgba(188,140,255,.4)"/>
       <circle cx="${cx - 17}" cy="88" r="4" fill="#3a2a5a"/><circle cx="${cx - 8}" cy="96" r="3" fill="#3a2a5a"/>
-      ${[0, 1, 2, 3].map(k => `<ellipse cx="${cx + 14 + (k % 2) * 8}" cy="${86 + k * 11}" rx="16" ry="3.6" fill="${MTH_C.ko}" opacity=".6" transform="rotate(${25 + 22 * k} ${cx + 14 + (k % 2) * 8} ${86 + k * 11})"/>`).join("")}
-      ${_patchGrid(cx - 45, 53, 15, 6, hot)}
+      ${[0, 1, 2, 3].map(k => `<ellipse cx="${cx + 10 + (k % 2) * 7}" cy="${90 + k * 9}" rx="13" ry="3.4" fill="${MTH_C.ko}" opacity=".75" transform="rotate(${30 + 25 * k} ${cx + 10 + (k % 2) * 7} ${90 + k * 9})"/>`).join("")}
+      ${_patchGrid(cx - 42, 56, 14, 6, hot)}
       ${_lbl(cx, 186, lbl)}`;
       return `<svg viewBox="0 0 440 200" class="mth">
         ${cell(112, [16, 17, 22, 23], "head A — tubules")}
@@ -255,7 +256,7 @@ const METHODS_SLIDES = [
     nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       let out = "";
-      B.forEach(([col, a0]) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66; out += _cellBlob(x, y, 8, _mix(MTH_C.ntc, col, i / 5)); } });
+      B.forEach(([col, a0]) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; out += _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x}" cy="${y}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${a * 57} ${x} ${y})"/>`; } });
       return `<svg viewBox="0 0 460 200" class="mth">
         ${out}
         <g class="mth-pulse">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
@@ -270,21 +271,25 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Virtual staining", kicker: "CROSS-CHANNEL", title: "Predicting fluorescent stains from phase",
-    svg: () => `<svg viewBox="0 0 470 200" class="mth">
-      ${_cellBlob(42, 100, 30, MTH_C.ntc, "mth-breathe")}${_lbl(42, 148, "phase cell")}
-      ${_arrow(80, 134, 100)}
-      <rect x="142" y="58" width="124" height="84" rx="10" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
-      <text x="204" y="84" fill="#e6e8ec" font-size="11" text-anchor="middle">diffusion staining</text>
-      <text x="204" y="98" fill="#e6e8ec" font-size="11" text-anchor="middle">model</text>
-      <text x="204" y="118" fill="${MTH_C.pur}" font-size="8.5" text-anchor="middle">semantic (what)</text>
-      <text x="204" y="131" fill="#2ca089" font-size="8.5" text-anchor="middle">+ spatial (where)</text>
-      ${_arrow(270, 304, 100)}
-      ${[["mito", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lyso", MTH_C.yel]].map((m, i) => { const y = 38 + i * 32;
-        return `<g><rect x="318" y="${y - 13}" width="26" height="26" rx="4" fill="#000" stroke="${m[1]}" stroke-width="1.8"/>
-          ${Array.from({ length: 3 }, (_, j) => `<circle cx="${324 + j * 7}" cy="${y - 4 + j * 4}" r="1.8" fill="${m[1]}"/>`).join("")}
-          <text x="352" y="${y + 4}" fill="${m[1]}" font-size="9" text-anchor="start">${m[0]}</text></g>`; }).join("")}
-      ${_lbl(362, 194, "42 fluorescent channels \u2014 pick any")}
-    </svg>`,
+    svg: () => { const stain = (cx, cy, col, kind) => `<circle cx="${cx}" cy="${cy}" r="15" fill="rgba(255,255,255,.05)" stroke="#30363d"/>` + (
+        kind === "mito" ? [0, 1, 2].map(k => `<ellipse cx="${cx - 3 + k * 3}" cy="${cy - 3 + k * 4}" rx="8" ry="2.2" fill="${col}" transform="rotate(${30 + 30 * k} ${cx - 3 + k * 3} ${cy - 3 + k * 4})"/>`).join("")
+        : kind === "ER" ? [0, 1, 2, 3].map(k => `<circle cx="${cx - 6 + k * 4}" cy="${cy + (k % 2) * 5 - 2}" r="3.4" fill="none" stroke="${col}" stroke-width="1.2"/>`).join("")
+        : kind === "nucleus" ? `<circle cx="${cx}" cy="${cy}" r="8" fill="${col}"/>`
+        : kind === "actin" ? [0, 1, 2].map(k => `<line x1="${cx - 9}" y1="${cy - 6 + k * 6}" x2="${cx + 9}" y2="${cy - 4 + k * 6}" stroke="${col}" stroke-width="1.4"/>`).join("")
+        : [0, 1, 2, 3, 4].map(k => `<circle cx="${cx - 8 + (k * 5) % 16}" cy="${cy - 6 + (k * 7) % 14}" r="1.8" fill="${col}"/>`).join(""));
+      return `<svg viewBox="0 0 470 200" class="mth">
+        ${_cellBlob(42, 100, 28, MTH_C.ntc, "mth-breathe")}${_lbl(42, 144, "phase cell")}
+        ${_arrow(78, 130, 100)}
+        <rect x="140" y="58" width="120" height="84" rx="10" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
+        <text x="200" y="84" fill="#e6e8ec" font-size="11" text-anchor="middle">diffusion staining</text>
+        <text x="200" y="98" fill="#e6e8ec" font-size="11" text-anchor="middle">model</text>
+        <text x="200" y="118" fill="${MTH_C.pur}" font-size="8.5" text-anchor="middle">semantic (what)</text>
+        <text x="200" y="131" fill="#2ca089" font-size="8.5" text-anchor="middle">+ spatial (where)</text>
+        ${_arrow(264, 300, 100)}
+        ${[["mito", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lyso", MTH_C.yel]].map((m, i) => { const y = 34 + i * 33;
+          return `<g class="mth-hi" style="animation-delay:${(i * 0.55).toFixed(2)}s">${stain(328, y, m[1], m[0])}</g><text x="354" y="${y + 4}" fill="${m[1]}" font-size="9" text-anchor="start">${m[0]}</text>`; }).join("")}
+        ${_lbl(356, 197, "same cell shape, different stain \u2014 pick any of 42")}
+      </svg>`; },
     body: "We reuse the diffusion autoencoder as a <b>virtual-staining</b> model, conditioning it on a phase image in <b>two ways</b>: a <b>semantic</b> path (phase → frozen Cell-DINO ViT → a pooled code that FiLM-conditions the U-Net, with a marker id — the <i>what</i>) and a <b>spatial</b> path (the raw phase pixels concatenated into the U-Net input — keeping the <i>layout</i>, so the output stays pixel-registered). Switching the marker id renders any of 42 fluorescent channels from the same phase cell.",
     why: "The spatial conditioning is what makes it faithful — predicted markers line up with the real cell's structures (Pearson lifts ~0.13 → ~0.78). One model covers all 42 live markers from a single label-free image; run on a traversal it yields a full multi-channel phenotype per perturbation.",
     defs: [["Virtual staining", "predicting fluorescent-marker images from a label-free phase image."],

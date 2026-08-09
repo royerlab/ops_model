@@ -410,3 +410,7 @@ svg.mth *{transform-box:fill-box}
 .mth-sec .mth-stage{padding:4px 0 8px}
 .mth-sec .mth-stage svg.mth{max-width:620px}
 .mth-sectext{font-size:14px;line-height:1.5;color:var(--fg);text-align:center;max-width:640px;margin:2px auto 6px}
+@keyframes mthHi{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.3);opacity:1}}
+.mth-hi{transform-origin:center;animation:mthHi 2.4s ease-in-out infinite}
+@keyframes mthJit{0%,100%{transform:scaleY(.82)}50%{transform:scaleY(1.06)}}
+.mth-jit{transform-origin:bottom;animation:mthJit 1.9s ease-in-out infinite}
