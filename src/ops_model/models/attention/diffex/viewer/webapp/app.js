@@ -1619,7 +1619,7 @@ function popOut(imgUrl, title, metaHtml, ovUrl) {
   const pops = document.querySelectorAll(".popout").length;   // stagger horizontally by a full tile width, wrap rows
   const perRow = Math.max(1, Math.floor((window.innerWidth - 180) / (PO_W + 12)));
   el.style.left = `${150 + (pops % perRow) * (PO_W + 12)}px`;
-  el.style.top = `${100 + Math.floor(pops / perRow) * 320}px`;
+  el.style.top = `${100 + Math.floor(pops / perRow) * 46}px`;   // gentle downward cascade per wrapped row (was 320 — too big a jump)
   const ov = (ovUrl && tc.mask) ? `<img class="po-ov" src="${ovUrl}">` : "";   // follow the live mask toggle at click time
   el.innerHTML = `<div class="po-bar"><span>${title}</span><button title="close">×</button></div>` +
     `<div class="po-img"><img src="${imgUrl}">${ov}</div><div class="po-body">${metaHtml}</div>`;
