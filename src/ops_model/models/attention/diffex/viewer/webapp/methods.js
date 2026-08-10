@@ -24,6 +24,15 @@ const _patchGrid = (x, y, s, n, hot) => Array.from({ length: n * n }, (_, i) => 
   const gx = x + (i % n) * s, gy = y + Math.floor(i / n) * s, on = hot.includes(i);
   return `<rect x="${gx}" y="${gy}" width="${s - 1}" height="${s - 1}" fill="${on ? MTH_C.acc : "rgba(255,255,255,.04)"}" stroke="rgba(255,255,255,.08)" ${on ? 'class="mth-glow" style="animation-delay:' + (i % 5) * 0.2 + 's"' : ""}/>`;
 }).join("");
+// shared phenotype-cell presets (used by Embedding + The Screen): membrane aspect (ar), nucleus fraction (nf), organelle offsets (frac of s)
+const MTH_PHENO = [
+  { ar: 1.0, nf: 0.24, org: [[-0.27, -0.33]] },
+  { ar: 1.27, nf: 0.38, org: [[0.27, 0.33]] },
+  { ar: 0.82, nf: 0.5, org: [[0.27, -0.4], [-0.27, 0.4]] },
+  { ar: 0.72, nf: 0.3, org: [[-0.3, -0.18], [0.32, 0.26]] },
+];
+const _pheno = (cx, cy, s, p, fill) => `<ellipse cx="${cx}" cy="${cy}" rx="${(s * Math.sqrt(p.ar)).toFixed(1)}" ry="${(s / Math.sqrt(p.ar)).toFixed(1)}" fill="${fill}"/><circle cx="${cx}" cy="${cy}" r="${(s * p.nf).toFixed(1)}" fill="rgba(0,0,0,.45)"/>`
+  + p.org.map(o => { const ox = cx + o[0] * s, oy = cy + o[1] * s; return `<ellipse cx="${ox.toFixed(1)}" cy="${oy.toFixed(1)}" rx="${(s * 0.16).toFixed(1)}" ry="${(s * 0.07).toFixed(1)}" fill="rgba(0,0,0,.4)" transform="rotate(30 ${ox.toFixed(1)} ${oy.toFixed(1)})"/>`; }).join("");
 // low-res black&white "static" — a grid of grayscale pixels (deterministic per seed), like the paper schematic
 const _pixnoise = (x, y, w, h, cols, rows, seed, alpha) => { const cw = w / cols, ch = h / rows; let s = "";
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const k = r * cols + c, v = Math.abs(Math.sin((k + 1) * 12.9898 + seed * 78.233)) * 43758.5453, g = Math.floor((v - Math.floor(v)) * 255);
@@ -76,11 +85,7 @@ const METHODS_SLIDES = [
         ${_arrow(242, 270, 100)}
         <rect x="278" y="42" width="120" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
-        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
-          i === 0 ? `<ellipse cx="${p[0]}" cy="${p[1]}" rx="9" ry="3" fill="rgba(0,0,0,.45)"/>`
-            : i === 1 ? `<circle cx="${p[0] + 3}" cy="${p[1] - 2}" r="5" fill="rgba(0,0,0,.45)"/>`
-              : i === 2 ? Array.from({ length: 4 }, (_, j) => `<circle cx="${p[0] - 6 + j * 4}" cy="${p[1] + 4}" r="1.6" fill="rgba(0,0,0,.45)"/>`).join("")
-                : `<rect x="${p[0] - 7}" y="${p[1] - 2}" width="14" height="3.5" rx="1" fill="rgba(0,0,0,.45)"/>`}</g>`).join("")}
+        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_pheno(p[0], p[1], 15, MTH_PHENO[i], MTH_C.acc)}</g>`).join("")}
         <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of gene knockouts are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the gene knocked out inside it. This yields millions of (gene, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation.",
@@ -92,16 +97,14 @@ const METHODS_SLIDES = [
   {
     nav: "Embedding", kicker: "REPRESENT", title: "Turning a cell image into numbers (a ViT)",
     svg: () => { const A = MTH_C.acc, P = MTH_C.pur, gx = 14, gy = 72, gs = 15, gn = 4;
-      // three discrete phenotype states — cell, active patches, tokens, and the 1024-d vector all switch together
-      const CELL = [{ rx: 30, ry: 30, nr: 7, org: [[36, 90]] }, { rx: 33, ry: 26, nr: 11, org: [[52, 110]] }, { rx: 27, ry: 33, nr: 15, org: [[52, 88], [36, 112]] }];
+      // three discrete phenotype states — cell (shared MTH_PHENO presets), active patches, tokens, and the 1024-d vector all switch together
       const HOTC = [[2, 5, 9], [1, 6, 10, 13], [0, 4, 7, 11, 14]];
       const HOTT = [[0, 2, 4], [1, 4, 5], [0, 3, 4]];
       const VEC = [[58, 26, 72, 40, 54, 20, 66, 34], [30, 64, 20, 80, 44, 60, 28, 72], [70, 18, 50, 34, 78, 26, 42, 60]];
       const lattice = Array.from({ length: gn + 1 }, (_, k) => `<line x1="${gx + k * gs}" y1="${gy}" x2="${gx + k * gs}" y2="${gy + gn * gs}" stroke="rgba(255,255,255,.28)" stroke-width=".6"/><line x1="${gx}" y1="${gy + k * gs}" x2="${gx + gn * gs}" y2="${gy + k * gs}" stroke="rgba(255,255,255,.28)" stroke-width=".6"/>`).join("");
-      const cell = c => `<ellipse cx="44" cy="100" rx="${c.rx}" ry="${c.ry}" fill="${A}"/><circle cx="44" cy="100" r="${c.nr}" fill="rgba(0,0,0,.45)"/>${c.org.map(o => `<ellipse cx="${o[0]}" cy="${o[1]}" rx="4.5" ry="2" fill="rgba(0,0,0,.4)" transform="rotate(30 ${o[0]} ${o[1]})"/>`).join("")}`;
       const hotC = hot => hot.map(i => `<rect x="${gx + (i % gn) * gs}" y="${gy + Math.floor(i / gn) * gs}" width="${gs}" height="${gs}" fill="${A}" opacity=".45"/>`).join("");
       const tokens = hot => [0, 1, 2, 3, 4, 5].map(i => `<rect x="134" y="${42 + i * 20}" width="18" height="16" rx="3" fill="${hot.includes(i) ? "rgba(38,198,255,.6)" : "rgba(38,198,255,.12)"}" stroke="${A}"/>`).join("");
-      const stateG = s => `<g class="mth-st${s}">${cell(CELL[s])}${hotC(HOTC[s])}${lattice}${tokens(HOTT[s])}${_bars(352, 136, VEC[s], 11, 4, P, "")}</g>`;
+      const stateG = s => `<g class="mth-st${s}">${_pheno(44, 100, 30, MTH_PHENO[s], A)}${hotC(HOTC[s])}${lattice}${tokens(HOTT[s])}${_bars(352, 136, VEC[s], 11, 4, P, "")}</g>`;
       return `<svg viewBox="0 0 468 200" class="mth">
       ${[0, 1, 2].map(stateG).join("")}
       ${_lbl(44, 150, "image crop")}
