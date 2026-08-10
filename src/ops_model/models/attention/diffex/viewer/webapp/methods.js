@@ -135,7 +135,7 @@ const METHODS_SLIDES = [
         ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}" class="mth-flow-node"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:.5s"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:1s"/>`).join("")}
-        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
+        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-predict" style="animation-delay:1.25s"' : ""}/>`).join("")}
         ${_lbl(118, 18, "encode + channel-embed", "#8b949e", 7.5)}
         ${_lbl(247, 18, "ISAB ×2 · inducing-point attention", "#8b949e", 7.5)}
         ${_lbl(392, 18, "PMA pool → cosine", "#8b949e", 7.5)}
