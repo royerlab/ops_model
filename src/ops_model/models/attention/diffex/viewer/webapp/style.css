@@ -487,3 +487,11 @@ button:hover{border-color:var(--accent)}
 #info-body .narr-more{display:block;margin-top:6px;background:none;border:none;padding:0;
   color:var(--accent);font:inherit;font-size:12px;cursor:pointer}
 #info-body .narr-more:hover{text-decoration:underline}
+
+/* per-member affinage narrative on the complex page — collapsed by default */
+#info-body .cx-narr{margin:2px 0 2px 12px}
+#info-body .cx-narr>summary{cursor:pointer;color:var(--accent);font-size:11px;list-style:none}
+#info-body .cx-narr>summary::-webkit-details-marker{display:none}
+#info-body .cx-narr>summary::before{content:"▸ "}
+#info-body .cx-narr[open]>summary::before{content:"▾ "}
+#info-body .cx-narr .narr{font-size:12px;color:var(--fg);line-height:1.5;margin:4px 0 6px 12px}
