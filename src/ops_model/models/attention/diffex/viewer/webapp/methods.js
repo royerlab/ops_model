@@ -260,7 +260,7 @@ const METHODS_SLIDES = [
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       let out = "";
       B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; const cell = _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${(a * 57).toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${cell}</g>`; } });
-      return `<svg viewBox="0 0 460 200" class="mth">
+      return `<svg viewBox="0 -16 460 216" class="mth">
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
         ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
