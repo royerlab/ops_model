@@ -422,10 +422,10 @@ button:hover{border-color:var(--accent)}
 .mth-more[open]>summary::before{content:"▾ "}
 .mth-more p{margin:8px 0 0;font-size:16px;line-height:1.65;color:var(--fg)}
 .mth-sec{margin-bottom:4px}
-.mth-seccap{font-size:13px;color:var(--accent);font-weight:600;margin-bottom:2px;text-align:center}
+.mth-seccap{font-size:16px;color:var(--fg);font-weight:700;margin:10px 0 4px;text-align:center}   /* match deck typography (not the bright accent-blue) */
 .mth-sec .mth-stage{padding:4px 0 8px}
 .mth-sec .mth-stage svg.mth{max-width:620px}
-.mth-sectext{font-size:14px;line-height:1.5;color:var(--fg);text-align:center;max-width:640px;margin:2px auto 6px}
+.mth-sectext{font-size:19px;line-height:1.6;color:var(--fg);text-align:left;max-width:940px;margin:4px 0 10px}   /* same as .mth-body */
 @keyframes mthHi{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.16);opacity:1}}
 .mth-hi{transform-origin:center;animation:mthHi 3.2s ease-in-out infinite}
 @keyframes mthJit{0%,100%{transform:scaleY(.9)}50%{transform:scaleY(1.05)}}
