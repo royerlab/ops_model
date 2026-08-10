@@ -365,22 +365,25 @@ const MTH_ORDER = ["The screen", "Embedding", "Classifier", "Top cells", "Diffus
   "Attention heads", "Virtual staining", "mRNA phenotypes"];   // last 3 are Extras; DDIM folded into Diffusion
 const MTH_EXTRA = new Set(["Attention heads", "Virtual staining", "mRNA phenotypes"]);
 const MTH_DECK = MTH_ORDER.map(n => METHODS_SLIDES.find(s => s.nav === n)).filter(Boolean);
-const MTH_CORE_N = MTH_DECK.filter(s => !MTH_EXTRA.has(s.nav)).length;   // numbered slides (core methods, up to Montage)
+// public deck = steps 1–6 (Screen…Traversal); internal = full deck. isPublic() from app.js (loaded first).
+const _mthDeck = () => (typeof isPublic === "function" && isPublic()) ? MTH_DECK.slice(0, 6) : MTH_DECK;
 
 let _mthIdx = 0;
 function renderMethods() {
+  const deck = _mthDeck(), coreN = deck.filter(s => !MTH_EXTRA.has(s.nav)).length;
+  if (_mthIdx >= deck.length) _mthIdx = deck.length - 1;
   const rail = document.getElementById("tab-methods");
-  if (rail && !rail.querySelector(".mth-rail")) {
-    const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < MTH_DECK.length) _mthIdx = sv;   // restore last-viewed section across reloads
+  if (rail && rail.querySelectorAll(".mth-railitem").length !== deck.length) {   // (re)build when the deck size changes (e.g. public toggle)
+    if (!rail.dataset.inited) { const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < deck.length) _mthIdx = sv; rail.dataset.inited = "1"; }   // restore last-viewed once
     rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
-      <div class="mth-rail">${MTH_DECK.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
+      <div class="mth-rail">${deck.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
         return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>`;
   }
-  const s = MTH_DECK[_mthIdx], view = document.getElementById("methods-view");
+  const s = deck[_mthIdx], view = document.getElementById("methods-view");
   if (!view) return;
   const refs = MTH_REFS[s.nav] || [];
   view.innerHTML = `<div class="mth-card">
-    <div class="mth-kicker">${s.kicker} · ${MTH_EXTRA.has(s.nav) ? "Extra" : (_mthIdx + 1) + " / " + MTH_CORE_N}</div>
+    <div class="mth-kicker">${s.kicker} · ${MTH_EXTRA.has(s.nav) ? "Extra" : (_mthIdx + 1) + " / " + coreN}</div>
     <h2 class="mth-title">${s.title}</h2>
     ${s.sections ? s.sections.map(sec => `<div class="mth-sec"><div class="mth-seccap">${sec.cap}</div><div class="mth-stage">${sec.svg()}</div>${sec.text ? `<div class="mth-sectext">${sec.text}</div>` : ""}</div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
     <div class="mth-body">${s.body}</div>
@@ -390,14 +393,14 @@ function renderMethods() {
     ${(s.defs || []).length ? `<details class="mth-defs" open><summary>Key terms</summary><dl>${s.defs.map(d => `<div><dt>${d[0]}</dt><dd>${d[1]}</dd></div>`).join("")}</dl></details>` : ""}
     <div class="mth-navbar">
       <button onclick="methodsStep(-1)" ${_mthIdx === 0 ? "disabled" : ""}>← back</button>
-      <div class="mth-dots">${MTH_DECK.map((_, i) => `<span class="mth-dot${i === _mthIdx ? " on" : ""}" onclick="methodsGo(${i})"></span>`).join("")}</div>
-      <button onclick="methodsStep(1)" ${_mthIdx === MTH_DECK.length - 1 ? "disabled" : ""}>next →</button>
+      <div class="mth-dots">${deck.map((_, i) => `<span class="mth-dot${i === _mthIdx ? " on" : ""}" onclick="methodsGo(${i})"></span>`).join("")}</div>
+      <button onclick="methodsStep(1)" ${_mthIdx === deck.length - 1 ? "disabled" : ""}>next →</button>
     </div>
   </div>`;
   document.querySelectorAll(".mth-railitem").forEach((b, i) => b.classList.toggle("on", i === _mthIdx));
   const st = document.getElementById("stage"); if (st) st.scrollTop = 0;   // new slide → back to top (don't inherit the previous slide's scroll)
 }
-function methodsGo(i) { _mthIdx = Math.max(0, Math.min(MTH_DECK.length - 1, i)); try { localStorage.setItem("opsin.mth", _mthIdx); } catch (e) { } renderMethods(); }
+function methodsGo(i) { _mthIdx = Math.max(0, Math.min(_mthDeck().length - 1, i)); try { localStorage.setItem("opsin.mth", _mthIdx); } catch (e) { } renderMethods(); }
 function methodsStep(d) { methodsGo(_mthIdx + d); }
 document.addEventListener("keydown", (e) => {
   const active = document.querySelector(".tab.active");

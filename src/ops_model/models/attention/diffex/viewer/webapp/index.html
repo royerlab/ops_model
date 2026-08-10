@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=157"/>
+<link rel="stylesheet" href="style.css?v=158"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -12,6 +12,7 @@
   <div class="brand"><img class="opsin-eyes" src="opsin-eyes.svg" alt=""/><h1>OPSin<span style="color:var(--mut);font-weight:400">: <b style="color:var(--fg)">O</b>ptical <b style="color:var(--fg)">P</b>ooled <b style="color:var(--fg)">S</b>creening <b style="color:var(--fg)">In</b>terpretability Viewer</span></h1>
   </div>
   <div class="hdr-right">
+    <button id="envtoggle" class="verbtn envtoggle" title="Staging only — preview the public demo subset (Top cells + Traversal + How-it-works steps 1–6; hides Montage/PCs/Attention). Not shown on the public deployment.">🔒 Preview public</button>
     <div class="asset-ver" title="Right panel — Info: selected perturbation · About: what this viewer is">
       <button id="side-info" class="verbtn active" onclick="setSidePanel('info')">ⓘ Info</button>
       <button id="side-about" class="verbtn" onclick="setSidePanel('about')">About</button>
@@ -357,7 +358,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=182"></script>
-<script src="methods.js?v=47"></script>
+<script src="app.js?v=183"></script>
+<script src="methods.js?v=48"></script>
 </body>
 </html>

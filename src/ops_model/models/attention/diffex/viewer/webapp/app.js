@@ -4,6 +4,20 @@ const ASSET_VER = "v5";                 // v4/v5 toggle removed — the viewer a
 const ASSET_PREFIX = "";                // app is served from inside the v5 assets dir — data is alongside index.html
 const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
+
+// ── internal (full) vs public (demo subset) feature gating ─────────────────
+// The real public deployment shows only Top cells + Traversal (+ How-it-works steps 1–6).
+// Env resolution: window.VIEWER_ENV (future Argus-injected env.js) → hostname rule → default internal.
+// Add the prod ingress host to PUBLIC_HOSTS once assigned to auto-enable public mode there.
+const PUBLIC_HOSTS = [];
+const IS_PUBLIC_DEPLOY = (() => {
+  const v = (window.VIEWER_ENV || "").toLowerCase();
+  if (["public", "prod", "production"].includes(v)) return true;
+  if (["internal", "staging", "rdev", "dev"].includes(v)) return false;
+  return PUBLIC_HOSTS.includes(location.hostname);
+})();
+const PUBLIC_HIDDEN_TABS = new Set(["montage", "pc", "attn"]);   // hidden in public; Top cells/Traversal/How-it-works stay
+const isPublic = () => IS_PUBLIC_DEPLOY || state.publicPreview;   // publicPreview = staging-only manual toggle
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
   const bar = $("sidebar");
   if (!init && state.sidePanel === m) { bar.classList.toggle("hidden"); }   // re-click toggles visibility
@@ -31,6 +45,21 @@ function updateImgLevels() {
   for (const id of ["lvlR", "lvlG", "lvlB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
 }
 
+// show/hide features for the current mode (internal vs public). Cosmetic gate — the real
+// protection is that the hidden tabs' data isn't in the public S3 bucket. renderMethods()
+// independently trims the deck to steps 1–6 when isPublic().
+function applyFeatureGate() {
+  const pub = isPublic();
+  document.querySelectorAll("#tabbar .tab").forEach(b =>
+    b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_TABS.has(b.dataset.tab)));
+  if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
+    const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();
+  } else if (state.view === "methods") renderMethods();   // re-trim the deck in place
+  const tg = $("envtoggle");
+  if (tg) { tg.classList.toggle("pub-on", state.publicPreview);
+    tg.textContent = state.publicPreview ? "👁 Previewing public" : "🔒 Preview public"; }
+}
+
 const state = {
   manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", sidePanel: "info",
   cellCount: 8, page: 0, pinned: [], panels: [], alphas: [],
@@ -40,6 +69,7 @@ const state = {
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
   rangeLo: 0, rangeHi: 0, alphaLimit: 5,   // autoplay sweeps only within ±alphaLimit (scrub stays full)
   targetSort: "setacc",                    // perturbation list order default: "setacc" (SetTransformer set-accuracy) | "map" | "alpha"
+  publicPreview: false,                    // staging-only: preview the public feature subset without a real prod deploy
   altAnchorsOnly: false,                    // filter perturbation list to those with a non-NTC (A→B) anchor
   view: "traversal",                       // active view: traversal | montage | attn (all driven by browse selection)
   attnIndex: null, attnHeadsCache: {}, attnImgCache: {},   // attention-head assets
@@ -308,6 +338,9 @@ async function boot() {
   }
   document.querySelectorAll("select[data-seg]").forEach(segmentize);   // small dropdowns → segmented pills
   document.querySelectorAll("label.chk").forEach(toggleize);           // checkboxes → off/on segmented switches
+  if (IS_PUBLIC_DEPLOY) $("envtoggle").style.display = "none";   // the manual toggle is a staging-only preview aid
+  else $("envtoggle").onclick = () => { state.publicPreview = !state.publicPreview; applyFeatureGate(); };
+  applyFeatureGate();
   requestAnimationFrame(() => $("loading").classList.add("gone"));   // reveal the app only after first full render (no traversal flash)
 }
 // Turn a checkbox into an [off | <feature>] segmented switch (like Ontology/Features). The native checkbox
