@@ -119,20 +119,12 @@ to biological-signal groups via the channel maps
 `--organelle-profiler` instead reads consolidated `all_cells_*.h5ad` files from `--op-root`.
 
 Restrict the experiment set with `--experiments ops0100,ops0105,…`, or `--paper-v1`
-(the curated `good_experiment_list_v1.yml`). **Always start with `--dry-run`** to print the
-discovered signal-group manifest without processing.
+(the curated `good_experiment_list_v1.yml`). The discovered signal-group manifest is printed
+before processing starts.
 
 ---
 
 ## Quick start
-
-**0. Dry run** — see what would be processed (no compute):
-```bash
-python -m ops_model.post_process.combination.pca_optimization \
-    --cell-dino --phase-only \
-    --experiments ops0100,ops0105,ops0117,ops0119,ops0120 \
-    --dry-run
-```
 
 **1. Local run** (no SLURM) — small/quick combine, fixed PCA threshold:
 ```bash

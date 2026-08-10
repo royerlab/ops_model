@@ -1888,54 +1888,6 @@ class AnndataValidator:
             return str(dtype)
 
 
-def create_validation_issue(
-    level: IssueLevel,
-    component: str,
-    message: str,
-    field: Optional[str] = None,
-    expected: Optional[str] = None,
-    found: Optional[str] = None,
-    suggestion: Optional[str] = None,
-    **context,
-) -> ValidationIssue:
-    """Factory function to create a validation issue.
-
-    Parameters
-    ----------
-    level : IssueLevel
-        Severity level
-    component : str
-        Component with the issue
-    message : str
-        Brief description
-    field : Optional[str]
-        Specific field name if applicable
-    expected : Optional[str]
-        What was expected
-    found : Optional[str]
-        What was found
-    suggestion : Optional[str]
-        How to fix
-    **context
-        Additional context as keyword arguments
-
-    Returns
-    -------
-    ValidationIssue
-        Constructed validation issue
-    """
-    return ValidationIssue(
-        level=level,
-        component=component,
-        field=field,
-        message=message,
-        expected=expected,
-        found=found,
-        suggestion=suggestion,
-        context=context,
-    )
-
-
 def validate_anndata(
     adata: ad.AnnData,
     level: Union[str, SchemaLevel],

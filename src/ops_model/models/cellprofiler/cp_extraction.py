@@ -1,8 +1,8 @@
 """
 Core CellProfiler feature extraction functions.
 
-This module contains the fundamental feature extraction logic for single object,
-colocalization, and neighbor measurements, independent of distributed execution.
+This module contains the fundamental feature extraction logic for single-object
+and colocalization measurements, independent of distributed execution.
 """
 
 import ast
@@ -70,7 +70,7 @@ def _generate_feature_names_with_nan(
     Args:
         measurements: Dictionary of measurement functions
         prefix: Prefix for feature names
-        measurement_type: Type of measurement ('single_object', 'colocalization', or 'neighbor')
+        measurement_type: Type of measurement ('single_object' or 'colocalization')
 
     Returns:
         Dictionary with feature names as keys and np.nan as values
@@ -114,19 +114,6 @@ def _generate_feature_names_with_nan(
                 elif measurement_type == "colocalization":
                     dummy_img2 = np.random.rand(5, 5).astype(np.float32) * 2 - 1
                     dummy_features = fn(dummy_img, dummy_img2, dummy_mask)
-                elif measurement_type == "neighbor":
-                    dummy_mask2 = np.array(
-                        [
-                            [0, 0, 0, 0, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 2, 2, 2, 0],
-                            [0, 0, 0, 0, 0],
-                        ],
-                        dtype=np.uint16,
-                    )
-                    dummy_mask_uint = dummy_mask.astype(np.uint16)
-                    dummy_features = fn(dummy_mask_uint, dummy_mask2)
                 else:
                     continue
 
@@ -238,45 +225,6 @@ def colocalization_features(
     except (ValueError, IndexError):
         # Mask is empty or invalid - generate NaN features
         return _generate_feature_names_with_nan(measurements, prefix, "colocalization")
-
-    return results
-
-
-def neighbor_features(
-    mask1: np.ndarray,
-    mask2: np.ndarray,
-    measurements: dict = None,
-    prefix: str = "",
-):
-    """
-    Extract neighbor features from two masks.
-
-    Args:
-        mask1: First mask array (H, W)
-        mask2: Second mask array (H, W)
-        measurements: Dictionary of measurement functions
-        prefix: Prefix for feature names
-
-    Returns:
-        Dictionary of features with prefixed names
-    """
-    mask1 = np.squeeze(mask1).astype(np.uint16)
-    mask2 = np.squeeze(mask2).astype(np.uint16)
-
-    results = {}
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            for name, fn in measurements.items():
-                features = fn(mask1, mask2)
-                features_prefixed = {
-                    f"{prefix}_{feat_name}": v for feat_name, v in features.items()
-                }
-                results.update(features_prefixed)
-    except (ValueError, IndexError):
-        # Mask is empty or invalid - generate NaN features
-        return _generate_feature_names_with_nan(measurements, prefix, "neighbor")
 
     return results
 

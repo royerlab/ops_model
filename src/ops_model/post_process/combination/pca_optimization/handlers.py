@@ -163,10 +163,6 @@ def _handle_external(args, output_dir):
     for sig, pairs in signal_groups.items():
         print(f"  {sig}: {len(pairs)} file(s)")
 
-    if getattr(args, "dry_run", False):
-        print("\n--dry-run: not processing.")
-        return
-
     # External files are user-provided; default to keeping all cells unless the
     # user opts into downsampling (--target-cells / --downsampled).
     target_n_cells = int(getattr(args, "target_cells", 0) or 0) or 10_000_000

@@ -447,10 +447,6 @@ class ContrastiveDataset(BaseDataset):
         return batch
 
 
-class RandomCropDataset(BaseDataset):
-    pass
-
-
 class CellProfileDataset(BaseDataset):
     def __init__(self, stores: dict, labels_df: pd.DataFrame, **kwargs):
         super().__init__(stores, labels_df, **kwargs)
