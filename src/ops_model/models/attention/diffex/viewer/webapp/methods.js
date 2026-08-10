@@ -203,7 +203,7 @@ const METHODS_SLIDES = [
       ["Inversion (encoding)", "running DDIM backwards to recover the exact noise seed of a specific real cell, so a traversal can begin from it (guided inversion → α = 0 reconstructs it, r ≈ 0.99)."]]
   },
   {
-    nav: "Traversal", kicker: "COUNTERFACTUAL", title: "\"What if this gene were knocked out?\"",
+    nav: "Traversal", kicker: "COUNTERFACTUAL", title: "\"How would this cell look if we applied a given perturbation?\"",
     svg: () => `<svg viewBox="0 0 420 200" class="mth">
       <g class="mth-morph">${_cellBlob(210, 86, 42, MTH_C.acc)}</g>
       <line x1="70" y1="158" x2="350" y2="158" stroke="#30363d" stroke-width="4"/>
