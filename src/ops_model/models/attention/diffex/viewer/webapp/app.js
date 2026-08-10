@@ -17,6 +17,7 @@ const IS_PUBLIC_DEPLOY = (() => {
   return PUBLIC_HOSTS.includes(location.hostname);
 })();
 const PUBLIC_HIDDEN_TABS = new Set(["montage", "pc", "attn"]);   // hidden in public; Top cells/Traversal/How-it-works stay
+const PUBLIC_HIDDEN_GRAINS = new Set(["minibinder", "pc"]);       // hidden from the Type selector in public
 const isPublic = () => IS_PUBLIC_DEPLOY || state.publicPreview;   // publicPreview = staging-only manual toggle
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
   const bar = $("sidebar");
@@ -52,6 +53,12 @@ function applyFeatureGate() {
   const pub = isPublic();
   document.querySelectorAll("#tabbar .tab, .about-tabdesc").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_TABS.has(b.dataset.tab)));
+  const grain = $("grain");   // hide minibinder + PC from the Type selector in public
+  if (grain && grain._seg) grain._seg.querySelectorAll("button").forEach(b =>
+    b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_GRAINS.has(b.dataset.value)));
+  if (grain && pub && PUBLIC_HIDDEN_GRAINS.has(grain.value)) {   // currently on a hidden type → fall back to geneKO
+    grain.value = "geneKO"; grain.dispatchEvent(new Event("change", { bubbles: true }));
+  }
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
     const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();
   } else if (state.view === "methods") renderMethods();   // re-trim the deck in place
@@ -87,6 +94,17 @@ const PALETTE = ["#26c6ff", "#ff5252", "#f0a020", "#7ee787", "#c586ff", "#ff9edb
 // traversal frames/scores/anchor can switch NTC anchor pool (v5 only): accuracy = 25 hand-picked (_v5acc/), attention = v5 build (BASE). __to__ alt-anchors have no accpool → stay on BASE.
 function travBase(dir) { return BASE; }   // v5 attention+accuracy cells are consolidated into one dir under BASE
 const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag) score modes → row-header chip
+// adaptive score-overlay legend caption per mode (see #scoremode); shown only on Traversal when scoreMode != none
+const SCORE_LEGEND = {
+  linear: "per-cell classifier score (NTC → knockout): 0 → 1",
+  ptarget: "P(target) for the whole set (bag): 0 → 100%",
+  rank: "target rank within the set: ≥100 → rank 1",
+};
+function updateScoreLegend() {
+  const show = state.scoreMode !== "none" && (!state.view || state.view === "traversal");
+  $("score-legend").style.display = show ? "flex" : "none";
+  if (show) $("score-legend-txt").innerHTML = "score overlay (white → red) — " + (SCORE_LEGEND[state.scoreMode] || "");
+}
 function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode at α-index i, or null. Both modes use the one white→red heat.
   if (!sv || !SET_MODES.includes(state.scoreMode)) return null;
   if (state.scoreMode === "rank") {
@@ -135,7 +153,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (s.cols != null) { $("colslayout").checked = s.cols; $("grid").classList.toggle("cols-layout", s.cols); }
   if (s.tcCols != null) { $("tc-cols").checked = s.tcCols; $("tc-view").classList.toggle("cols-layout", s.tcCols); }
   if (s.altAnchor != null) { $("altanchor").checked = s.altAnchor; state.altAnchorsOnly = s.altAnchor; }
-  if (s.scoreMode) { state.scoreMode = s.scoreMode; $("scoremode").value = s.scoreMode; $("score-legend").style.display = s.scoreMode !== "none" ? "flex" : "none"; }
+  if (s.scoreMode) { state.scoreMode = s.scoreMode; $("scoremode").value = s.scoreMode; updateScoreLegend(); }
   if (s.showReal != null) { $("showreal").checked = s.showReal; state.showReal = s.showReal; }
   if (s.sidePanel) setSidePanel(s.sidePanel, true);
   if (s.cellCount) { state.cellCount = s.cellCount; $("cellcount").value = s.cellCount; }
@@ -194,7 +212,7 @@ async function boot() {
   $("play").onclick = togglePlay;
   $("scoremode").onchange = () => {
     state.scoreMode = $("scoremode").value;
-    $("score-legend").style.display = state.scoreMode !== "none" ? "flex" : "none";
+    updateScoreLegend();
     saveState(); showIdx(state.idx);
   };
   $("speed").onchange = () => { state.frameMs = +$("speed").value; };
@@ -245,7 +263,7 @@ async function boot() {
     $("stage").classList.toggle("pc-active", view === "pc");
     $("stage").classList.toggle("top-active", view === "top");
     $("stage").classList.toggle("methods-active", view === "methods");
-    $("score-legend").style.display = (view === "traversal" && state.scoreMode !== "none") ? "flex" : "none";   // score legend is traversal-only; its inline display would otherwise leak onto every tab
+    updateScoreLegend();   // score legend is traversal-only + adaptive to the selected overlay mode
     if (view === "montage") { updateVsUI(); if (mont.renderMode === "live") liveLoad(); else { ensureMontage(); focusMontageOnSelection(); } }
     if (view === "attn") renderAttn();
     if (view === "pc") loadPC();
@@ -341,6 +359,7 @@ async function boot() {
   if (IS_PUBLIC_DEPLOY) $("envtoggle").style.display = "none";   // the manual toggle is a staging-only preview aid
   else $("envtoggle").onclick = () => { state.publicPreview = !state.publicPreview; applyFeatureGate(); };
   applyFeatureGate();
+  updateScoreLegend();   // init the adaptive score-overlay legend (fresh loads default to ptarget)
   requestAnimationFrame(() => $("loading").classList.add("gone"));   // reveal the app only after first full render (no traversal flash)
 }
 // Turn a checkbox into an [off | <feature>] segmented switch (like Ontology/Features). The native checkbox
@@ -367,7 +386,7 @@ function segmentize(sel) {
   const sync = () => [...g.children].forEach((b, i) => b.classList.toggle("active", opts[i].value === sel.value));
   opts.forEach(o => {
     const b = document.createElement("button");
-    b.type = "button"; b.className = "seg"; b.textContent = o.textContent; b.title = o.title || o.textContent;
+    b.type = "button"; b.className = "seg"; b.textContent = o.textContent; b.title = o.title || o.textContent; b.dataset.value = o.value;
     b.onclick = () => { if (sel.value === o.value) return; sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); sync(); };
     g.appendChild(b);
   });
