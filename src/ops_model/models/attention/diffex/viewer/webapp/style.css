@@ -475,3 +475,9 @@ button:hover{border-color:var(--accent)}
 #loading .load-t{font:700 20px ui-sans-serif,system-ui,sans-serif;color:var(--fg);letter-spacing:.06em}
 #loading .load-s{font:400 12px ui-sans-serif,system-ui,sans-serif;color:var(--mut);letter-spacing:.08em}
 @keyframes loadpulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.09)}}
+
+/* universal image clim — display-time levels stretch applied to every panel's images/canvases */
+#stage img, #stage canvas { filter: url(#img-levels); }
+#imgclim-field { min-width: 150px; }
+#imgclim-field .dual { align-self: center; }
+#imgclim-field #i-climreset { padding: 2px 7px; }

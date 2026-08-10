@@ -23,6 +23,14 @@ const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON 
 const PAD = (i) => String(i).padStart(2, "0");
 const $ = (id) => document.getElementById(id);
 
+// universal image levels: rewindow all page images/canvases to [lo,hi] via the #img-levels SVG filter.
+// output = clamp((in - lo)/(hi - lo)); lo=0,hi=1 → identity (no-op). Display-time RGB stretch, not raw-data.
+function updateImgLevels() {
+  const lo = state.imgClimLo, hi = state.imgClimHi, d = Math.max(1e-3, hi - lo);
+  const slope = (1 / d).toFixed(4), icpt = (-lo / d).toFixed(4);
+  for (const id of ["lvlR", "lvlG", "lvlB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
+}
+
 const state = {
   manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", sidePanel: "info",
   cellCount: 8, page: 0, pinned: [], panels: [], alphas: [],
@@ -37,6 +45,7 @@ const state = {
   attnIndex: null, attnHeadsCache: {}, attnImgCache: {},   // attention-head assets
   attnHead: "all", attnNorm: "map",     // default: show ALL heads per cell; per-cell (per-tile max) normalization
   attnClimLo: 0, attnClimHi: 1, attnAlpha: 0.6, attnImgOpacity: 1,   // clim [vmin,vmax] + constant overlay alpha (Ritvik uses 0.6) + cell-image dimming
+  imgClimLo: 0, imgClimHi: 1,   // universal display-time levels stretch on all page images/canvases (0–1 = no-op)
   attnPinned: [],   // extra perturbations (geneKO) pinned for side-by-side comparison, like traversal
 };
 
@@ -185,6 +194,17 @@ async function boot() {
     if (r && !state.attnPinned.some(p => sameRef(p, r))) { state.attnPinned.push(r); renderAttnPinned(); renderAttn(); }
   };
   $("a-pinclear").onclick = () => { state.attnPinned = []; renderAttnPinned(); renderAttn(); };
+  $("i-climlo").oninput = () => {   // universal image clim (dual-handle; keep lo ≤ hi)
+    let lo = +$("i-climlo").value; if (lo > state.imgClimHi) { lo = state.imgClimHi; $("i-climlo").value = lo; }
+    state.imgClimLo = lo; updateImgLevels();
+  };
+  $("i-climhi").oninput = () => {
+    let hi = +$("i-climhi").value; if (hi < state.imgClimLo) { hi = state.imgClimLo; $("i-climhi").value = hi; }
+    state.imgClimHi = hi; updateImgLevels();
+  };
+  $("i-climreset").onclick = () => {
+    state.imgClimLo = 0; state.imgClimHi = 1; $("i-climlo").value = 0; $("i-climhi").value = 1; updateImgLevels();
+  };
   document.querySelectorAll(".tab").forEach(b => b.onclick = () => {   // view switcher (all views share the browse selection)
     const view = b.dataset.tab; state.view = view;
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
