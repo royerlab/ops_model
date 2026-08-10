@@ -206,7 +206,7 @@ const METHODS_SLIDES = [
         <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
         ${_pixnoise(185, 69, 50, 42, 12, 10, 7, 0.95)}
         ${_lbl(210, 146, "its exact seed x_T")}
-        ${_cellBlob(350, 90, 32, MTH_C.acc)}${_lbl(350, 146, "same cell (r≈0.99)")}
+        ${_cellBlob(350, 90, 32, MTH_C.acc)}${_lbl(350, 146, "generated cell (r≈0.99)")}
         <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 60, "invert ↩", MTH_C.pur, 10)}</g>
         <g class="mth-cycB">${_arrow(244, 310, 78, MTH_C.acc)}${_lbl(277, 60, "generate →", MTH_C.acc, 10)}</g>
       </svg>` }
@@ -242,7 +242,7 @@ const METHODS_SLIDES = [
       ${_cellBlob(70, 92, 34, MTH_C.acc)}${_lbl(70, 150, "real cell")}
       <g class="mth-collapse">${Array.from({ length: 22 }, (_, i) => `<circle cx="${185 + (i * 37) % 60 - 30}" cy="${92 + (i * 53) % 60 - 30}" r="2" fill="#8b949e"/>`).join("")}</g>
       ${_lbl(210, 150, "its exact seed x_T")}
-      ${_cellBlob(350, 92, 34, MTH_C.acc)}${_lbl(350, 150, "same cell (r≈0.99)")}
+      ${_cellBlob(350, 92, 34, MTH_C.acc)}${_lbl(350, 150, "generated cell (r≈0.99)")}
       <g class="mth-cycA">${_arrow(110, 178, 78, MTH_C.pur)}${_lbl(144, 68, "invert ↩", MTH_C.pur, 10)}</g>
       <g class="mth-cycB">${_arrow(242, 312, 78, MTH_C.acc)}${_lbl(277, 68, "generate →", MTH_C.acc, 10)}</g>
     </svg>`,
@@ -276,12 +276,17 @@ const METHODS_SLIDES = [
     nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       // each arm = a different phenotype axis: 0 acc grows · 1 ko elongates · 2 grn (bottom) shrinks · 3 pur nucleus grows
-      const mcell = (x, y, b, i, col, t, ang) => { const hue = _mix(MTH_C.ntc, col, t), dark = _mix(col, "#000000", .3);
-        if (b === 1) { const rx = 6 + i * 0.85, ry = Math.max(4.2, 6.4 - i * 0.4); return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${hue}" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/><ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${(rx * 0.4).toFixed(1)}" ry="${(ry * 0.55).toFixed(1)}" fill="rgba(0,0,0,.5)" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; }
-        let s, nr; if (b === 0) { s = 5 + i * 1.2; nr = s * 0.34; } else if (b === 3) { s = 9; nr = 1.6 + i * 1.15; } else { s = Math.max(4, 11 - i * 1.4); nr = s * 0.34; }
-        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.toFixed(1)}" fill="${hue}"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(nr, s * 0.82).toFixed(1)}" fill="rgba(0,0,0,.55)"/><ellipse cx="${(x + s * 0.32).toFixed(1)}" cy="${(y + s * 0.3).toFixed(1)}" rx="${(s * 0.3).toFixed(1)}" ry="${(s * 0.13).toFixed(1)}" fill="${dark}" opacity=".4" transform="rotate(${ang} ${(x + s * 0.32).toFixed(1)} ${(y + s * 0.3).toFixed(1)})"/>`; };
+      // tt = 0 at the first cell (≈ the original NTC cell) → 1 at the arm tip (full phenotype); gradual divergence
+      const mcell = (x, y, b, i, col, ang) => { const tt = (i - 1) / 4, lp = (a, z) => a + (z - a) * tt, hue = _mix(MTH_C.ntc, col, tt), dark = _mix(col, "#000000", .3);
+        let rx, ry, nr;
+        if (b === 0) { rx = ry = lp(11, 19); nr = rx * 0.3; }              // acc — grows
+        else if (b === 1) { rx = lp(11, 15.5); ry = lp(11, 7); nr = ry * 0.34; }  // ko — elongates (never smaller)
+        else if (b === 3) { rx = ry = 11; nr = lp(3.2, 8.6); }            // pur — nucleus grows
+        else { rx = ry = lp(11, 5); nr = rx * 0.3; }                       // grn (bottom) — shrinks
+        const ox = x + rx * 0.32, oy = y + ry * 0.3;
+        return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${hue}" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(nr, Math.min(rx, ry) * 0.85).toFixed(1)}" fill="rgba(0,0,0,.52)"/><ellipse cx="${ox.toFixed(1)}" cy="${oy.toFixed(1)}" rx="${(rx * 0.22).toFixed(1)}" ry="${(rx * 0.1).toFixed(1)}" fill="${dark}" opacity="${(0.15 + 0.3 * tt).toFixed(2)}" transform="rotate(${ang} ${ox.toFixed(1)} ${oy.toFixed(1)})"/>`; };
       let out = "";
-      B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${mcell(x, y, b, i, col, t, (a * 57).toFixed(0))}</g>`; } });
+      B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${mcell(x, y, b, i, col, (a * 57).toFixed(0))}</g>`; } });
       return `<svg viewBox="0 -16 460 216" class="mth">
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
