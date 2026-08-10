@@ -84,6 +84,7 @@ def _plot_curve(ax, sub, col, label, color, style_key):
 
 def _finalize_panel(ax, x_label, y_label, title, legend_loc="best"):
     ax.set_xscale("log")
+    ax.set_ylim(0, 1.0)   # mAP is bounded [0, 1] — force full range so 1.0 is visible
     ax.tick_params(width=1.4, length=6)
     if x_label is not None:
         ax.set_xlabel(x_label)
@@ -153,7 +154,7 @@ def _plot_overlay(df, heads, head_labels, colors, metrics, metric_labels,
         if baseline is not None and pd.notna(baseline.get(metric)):
             ax.axhline(baseline[metric], color="red", linestyle="--", linewidth=2)
         _finalize_panel(
-            ax, "K cells / gene", None, m_label,
+            ax, "K cells / gene", m_label, None,
             legend_loc="upper left",
         )
         # Legend outside the panel to avoid crowding curves

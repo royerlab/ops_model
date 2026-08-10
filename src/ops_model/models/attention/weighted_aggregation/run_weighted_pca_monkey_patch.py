@@ -99,10 +99,29 @@ V5_SIDECAR_EBIFB = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
     "per_experiment_v5_ebifb.parquet"
 )
+# v5-multibag: rankings from the multi-bag SHAP screen (v5/multi_rank/*).
+# Same 3 heads (gko/ebionly/ebifb) as v5, just re-scored with multi-bag SHAP
+# instead of single-bag set-accuracy. Same checkpoints; only ranking differs.
+V5M_SIDECAR_GKO = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_multibag_gko.parquet"
+)
+V5M_SIDECAR_EBIONLY = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_multibag_ebionly.parquet"
+)
+V5M_SIDECAR_EBIFB = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_multibag_ebifb.parquet"
+)
 V5_STRATEGIES = {
     "v5_gko", "v5_ebionly", "v5_ebifb",
     "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
     "v5_ebifb_cutoff_15k",
+    # multi-bag SHAP-ranked variants (same checkpoints, new ranking method)
+    "v5m_gko", "v5m_ebionly", "v5m_ebifb",
+    "v5m_gko_cutoff_20k", "v5m_ebionly_cutoff_20k", "v5m_ebifb_cutoff_20k",
+    "v5m_gko_cutoff_10k", "v5m_ebionly_cutoff_10k", "v5m_ebifb_cutoff_10k",
 }
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
@@ -237,6 +256,25 @@ def _resolve_strategy(name: str) -> dict:
         return {"op": "column", "col": "v5_ebifb_cutoff_20k"}
     if name == "v5_ebifb_cutoff_15k":
         return {"op": "column", "col": "v5_ebifb_cutoff_15k"}
+    # ---- v5 multi-bag SHAP variants (same 3 heads, new ranking) --------
+    if name == "v5m_gko":
+        return {"op": "column", "col": "v5m_gko"}
+    if name == "v5m_ebionly":
+        return {"op": "column", "col": "v5m_ebionly"}
+    if name == "v5m_ebifb":
+        return {"op": "column", "col": "v5m_ebifb"}
+    if name == "v5m_gko_cutoff_20k":
+        return {"op": "column", "col": "v5m_gko_cutoff_20k"}
+    if name == "v5m_ebionly_cutoff_20k":
+        return {"op": "column", "col": "v5m_ebionly_cutoff_20k"}
+    if name == "v5m_ebifb_cutoff_20k":
+        return {"op": "column", "col": "v5m_ebifb_cutoff_20k"}
+    if name == "v5m_gko_cutoff_10k":
+        return {"op": "column", "col": "v5m_gko_cutoff_10k"}
+    if name == "v5m_ebionly_cutoff_10k":
+        return {"op": "column", "col": "v5m_ebionly_cutoff_10k"}
+    if name == "v5m_ebifb_cutoff_10k":
+        return {"op": "column", "col": "v5m_ebifb_cutoff_10k"}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -378,6 +416,10 @@ STRATEGIES = [
     "v5_gko", "v5_ebionly", "v5_ebifb",
     "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
     "v5_ebifb_cutoff_15k",
+    # v5 multi-bag SHAP variants
+    "v5m_gko", "v5m_ebionly", "v5m_ebifb",
+    "v5m_gko_cutoff_20k", "v5m_ebionly_cutoff_20k", "v5m_ebifb_cutoff_20k",
+    "v5m_gko_cutoff_10k", "v5m_ebionly_cutoff_10k", "v5m_ebifb_cutoff_10k",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -446,6 +488,12 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
         phase_sidecar = V5_SIDECAR_EBIONLY
     elif strategy_name in ("v5_ebifb", "v5_ebifb_cutoff_20k", "v5_ebifb_cutoff_15k"):
         phase_sidecar = V5_SIDECAR_EBIFB
+    elif strategy_name in ("v5m_gko", "v5m_gko_cutoff_20k", "v5m_gko_cutoff_10k"):
+        phase_sidecar = V5M_SIDECAR_GKO
+    elif strategy_name in ("v5m_ebionly", "v5m_ebionly_cutoff_20k", "v5m_ebionly_cutoff_10k"):
+        phase_sidecar = V5M_SIDECAR_EBIONLY
+    elif strategy_name in ("v5m_ebifb", "v5m_ebifb_cutoff_20k", "v5m_ebifb_cutoff_10k"):
+        phase_sidecar = V5M_SIDECAR_EBIFB
     else:
         phase_sidecar = ATTN_SIDECAR
 
@@ -506,6 +554,14 @@ def main() -> int:
                         "are more likely to be spread across separate nodes)")
     p.add_argument("--aggregate-only", action="store_true")
     p.add_argument("--fixed-threshold", type=float, default=0.80)
+    p.add_argument("--slurm-memory", default=None,
+                   help="SLURM memory per OP signal job (e.g. '500GB'); "
+                        "passed through to pca_optimization when set.")
+    p.add_argument("--phase-memory", default=None,
+                   help="SLURM memory for the Phase-1 signal job (default 600GB "
+                        "in pca_optimization). Needed when peak vstack allocation "
+                        "exceeds the default (65M cells × 1024 float32 ≈ 247 GiB, "
+                        "which doubles during np.vstack + concatenate).")
     p.add_argument("--signal-set", default="auto",
                    choices=["auto", "phase_only", "no_phase", "all_livecell"],
                    help="Which signal set to feed v3 pca_optimization. "
@@ -578,6 +634,10 @@ def main() -> int:
         # that fails loudly if this flag ever gets removed.
         "--apply-iss-sidecar",
     ]
+    if args.slurm_memory:
+        pca_argv += ["--slurm-memory", args.slurm_memory]
+    if args.phase_memory:
+        pca_argv += ["--phase-memory", args.phase_memory]
     if signal_set == "phase_only":
         pca_argv.append("--phase-only")
         # 2nd-pass PCA consensus is a no-op with only 1 channel; skip.
