@@ -173,12 +173,12 @@ const METHODS_SLIDES = [
       { cap: "1 · Decode — paint the cell a CellDINO vector describes",
         text: "We <b>condition</b> a diffusion model on a cell's <b>CellDINO vector</b> (the same fingerprint from the Embedding tab). Starting from noise it removes a little at each step, steered by that vector, until it produces the exact cell the vector describes — so the model becomes a <b>decoder</b> for CellDINO space.",
         svg: () => `<svg viewBox="0 0 470 150" class="mth">
+        <defs><filter id="mthn1" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="0.5 0 0 0 0.12  0.5 0 0 0 0.12  0.5 0 0 0 0.12  0 0 0 0 1"/></filter></defs>
         <g>${_bars(10, 80, [22, 11, 30, 15, 24, 13], 7, 3, MTH_C.pur, "mth-jit")}</g>
         <text x="40" y="98" fill="${MTH_C.pur}" font-size="11" text-anchor="middle">CellDINO z</text>
         ${_arrow(76, 96, 56, MTH_C.pur)}
         ${[0, 1, 2, 3].map(i => { const x = 98 + i * 90, op = i / 3;
-          const noise = Array.from({ length: (3 - i) * 7 + 2 }, (_, j) => `<circle cx="${x + 8 + (j * 13) % 50}" cy="${34 + (j * 17) % 50}" r="1.6" fill="#8b949e" opacity="${1 - op * 0.85}"/>`).join("");
-          return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="rgba(0,0,0,.25)" stroke="#30363d"/>${noise}<g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
+          return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="rgba(0,0,0,.35)" stroke="#30363d"/><rect x="${x + 4}" y="30" width="58" height="58" rx="3" filter="url(#mthn1)" opacity="${(1 - op * 0.92).toFixed(2)}"/><g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
         <rect x="98" y="26" width="66" height="66" rx="6" fill="none" stroke="#fff" stroke-width="2" class="mth-sweep" style="--sw:270px"/>
         ${_lbl(268, 16, "z conditions the denoising — z paints its cell →", MTH_C.acc, 10)}
         ${_lbl(131, 108, "noise")}${_lbl(401, 108, "the cell z describes")}
@@ -186,9 +186,10 @@ const METHODS_SLIDES = [
       { cap: "2 · DDIM inversion — run it backwards to anchor a real cell",
         text: "<b>DDIM = Denoising Diffusion Implicit Models.</b> \"Implicit\" means it denoises along one <b>fixed, deterministic path</b> (an ODE) instead of a random walk — so the same seed always gives the same cell. Being deterministic, it can also run in <b>reverse</b>: from a real cell's pixels it recovers the exact noise seed that regenerates it, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
         svg: () => `<svg viewBox="0 0 420 165" class="mth">
+        <defs><filter id="mthn2" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="0.5 0 0 0 0.12  0.5 0 0 0 0.12  0.5 0 0 0 0.12  0 0 0 0 1"/></filter></defs>
         ${_cellBlob(70, 90, 32, MTH_C.grn)}${_lbl(70, 146, "real cell")}
         <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
-        ${Array.from({ length: 20 }, (_, i) => `<circle cx="${188 + (i * 13) % 44}" cy="${72 + (i * 17) % 36}" r="1.6" fill="#8b949e"/>`).join("")}
+        <rect x="185" y="69" width="50" height="42" rx="3" filter="url(#mthn2)" opacity=".9"/>
         ${_lbl(210, 146, "its exact seed x_T")}
         ${_cellBlob(350, 90, 32, MTH_C.grn)}${_lbl(350, 146, "same cell (r≈0.99)")}
         <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 60, "invert ↩", MTH_C.pur, 10)}</g>
