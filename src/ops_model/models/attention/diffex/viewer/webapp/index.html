@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=133"/>
+<link rel="stylesheet" href="style.css?v=134"/>
 </head>
 <body>
 <header>
@@ -15,6 +15,7 @@
       <button id="side-info" class="verbtn active" onclick="setSidePanel('info')">ⓘ Info</button>
       <button id="side-about" class="verbtn" onclick="setSidePanel('about')">About</button>
     </div>
+    <a class="czb-logo" href="https://www.czbiohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub">CZ&nbsp;Biohub</a>
   </div>
 </header>
 
@@ -66,11 +67,11 @@
 <div id="app">
   <aside id="controls">
     <div class="tabs">
+      <button class="tab" data-tab="top">Top cells</button>
       <button class="tab active" data-tab="traversal">Traversal</button>
       <button class="tab" data-tab="montage">Montage</button>
-      <button class="tab" data-tab="attn">Attn heads</button>
       <button class="tab" data-tab="pc">PCs</button>
-      <button class="tab" data-tab="top">Top cells</button>
+      <button class="tab" data-tab="attn">Attn heads</button>
       <button class="tab" data-tab="methods">How it works</button>
     </div>
     <div class="tabpane hidden" id="tab-methods"></div>
@@ -326,6 +327,6 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="app.js?v=173"></script>
-<script src="methods.js?v=9"></script>
+<script src="methods.js?v=10"></script>
 </body>
 </html>

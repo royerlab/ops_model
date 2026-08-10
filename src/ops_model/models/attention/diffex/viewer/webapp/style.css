@@ -383,7 +383,7 @@ button:hover{border-color:var(--accent)}
 .mth-defs dl>div{margin-bottom:7px}
 .mth-defs dt{font-size:12.5px;font-weight:600;color:var(--fg)}
 .mth-defs dd{margin:1px 0 0;font-size:12.5px;line-height:1.5;color:var(--mut)}
-@keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(304px);opacity:.9}100%{transform:translateX(304px);opacity:0}}
+@keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(var(--sw,300px));opacity:.9}100%{transform:translateX(var(--sw,300px));opacity:0}}
 .mth-sweep{animation:mthSweep 4s ease-in-out infinite}
 /* methods tab — larger text + wider layout + Learn-more dropdown (feedback) */
 #methods-view{max-width:1180px}
@@ -418,8 +418,13 @@ button:hover{border-color:var(--accent)}
 @keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
 .mth-soft{animation:mthSoft 3.6s ease-in-out infinite}
 @keyframes mthBranch{0%,100%{opacity:.42}50%{opacity:1}}
-.mth-branch{animation:mthBranch 4.4s ease-in-out infinite}
+.mth-branch{animation:mthBranch 4.4s ease-in-out infinite both}
 @keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
 .mth-cyc{transform-origin:center;animation:mthCyc 5s ease-in-out infinite}
 @keyframes mthCycIn{0%,10%{opacity:0}17%,25%{opacity:.95}33%,100%{opacity:0}}
 .mth-cycin{animation:mthCycIn 5s ease-in-out infinite both}
+
+@keyframes mthGrow{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+.mth-grow{transform-box:fill-box;transform-origin:bottom;animation:mthGrow 3s ease-in-out infinite}
+.czb-logo{font-weight:700;font-size:13px;color:var(--mut);text-decoration:none;letter-spacing:.02em;white-space:nowrap;padding-left:6px;border-left:1px solid var(--line);margin-left:2px}
+.czb-logo:hover{color:var(--accent)}

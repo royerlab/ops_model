@@ -113,19 +113,19 @@ const METHODS_SLIDES = [
       const set = (col, by, hl) => `<g class="${hl ? "mth-hi" : ""}" ${hl ? 'style="animation-delay:.2s"' : 'opacity=".5"'}>${[[16, by], [30, by], [16, by + 14], [30, by + 14]].map(c => _cellBlob(c[0], c[1], 5.5, col)).join("")}</g>`;
       return `<svg viewBox="0 0 470 200" class="mth">
         ${[MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur].map((col, s) => set(col, 30 + s * 40, col === MTH_C.acc)).join("")}
-        ${_lbl(26, 190, "sets (one per gene)")}
+        ${_lbl(26, 184, "CellDINO vectors")}${_lbl(26, 195, "(sets, one per gene)")}
         ${_arrow(46, 108, 100, MTH_C.acc)}
         ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${LH.map(a => OY.map(b => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28"/>`).join("")).join("")}
         ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
-        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".5" class="mth-sweep"/>
+        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".5" class="mth-sweep" style="--sw:280px"/>
         ${_lbl(200, 26, "cells attend + pool", "#8b949e", 8)}
         ${_lbl(392, 196, "class scores (genes)")}
         <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
       </svg>`; },
-    body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once and ask it to name the gene. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 genes</b> (or 99 protein complexes). The architecture is a <b>SetTransformer</b> — the how is below.",
+    body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once — each as its <b>CellDINO feature vector</b> (from the Embedding tab), not the raw image — and ask it to name the gene. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 genes</b> (or 99 protein complexes). The architecture is a <b>SetTransformer</b> — the how is below.",
     why: "Trained on random bags of 100 cells yet able to score any bag size (10–5,000), it reads the population phenotype and is invariant to how the cells are ordered.",
     defs: [["Multiple-instance learning", "classify a whole bag from one shared label, without labeling individual cells."],
       ["Bag / permutation-invariant", "an unordered set of a perturbation's cells; shuffling them can't change the prediction."],
@@ -146,7 +146,7 @@ const METHODS_SLIDES = [
       ${[64, 100, 136].map(y => `<circle cx="192" cy="${y}" r="6" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
       ${_lbl(171, 28, "classifier", "#8b949e", 8)}
       ${_arrow(204, 240, 100)}
-      <text x="292" y="42" fill="#e6e8ec" font-size="9" text-anchor="middle">P(gene X)</text>
+      <text x="292" y="34" fill="#e6e8ec" font-size="9" text-anchor="middle">accuracy score</text><text x="292" y="46" fill="#8b949e" font-size="8" text-anchor="middle">= P(gene X)</text>
       <rect x="250" y="60" width="26" height="80" rx="3" fill="rgba(255,255,255,.06)"/>
       <rect x="250" y="60" width="26" height="80" rx="3" fill="${MTH_C.acc}" opacity=".85"/>
       ${_lbl(263, 154, "with x")}
@@ -178,7 +178,7 @@ const METHODS_SLIDES = [
         ${[0, 1, 2, 3].map(i => { const x = 98 + i * 90, op = i / 3;
           const noise = Array.from({ length: (3 - i) * 7 + 2 }, (_, j) => `<circle cx="${x + 8 + (j * 13) % 50}" cy="${34 + (j * 17) % 50}" r="1.6" fill="#8b949e" opacity="${1 - op * 0.85}"/>`).join("");
           return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="rgba(0,0,0,.25)" stroke="#30363d"/>${noise}<g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
-        <rect x="98" y="26" width="66" height="66" rx="6" fill="none" stroke="#fff" stroke-width="2" class="mth-sweep"/>
+        <rect x="98" y="26" width="66" height="66" rx="6" fill="none" stroke="#fff" stroke-width="2" class="mth-sweep" style="--sw:270px"/>
         ${_lbl(268, 16, "z conditions the denoising — z paints its cell →", MTH_C.acc, 10)}
         ${_lbl(131, 108, "noise")}${_lbl(401, 108, "the cell z describes")}
       </svg>` },
@@ -259,7 +259,7 @@ const METHODS_SLIDES = [
     nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       let out = "";
-      B.forEach(([col, a0], b) => { let arm = ""; for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; arm += _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${(a * 57).toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; } out += `<g class="mth-branch" style="animation-delay:${(b * 1.5).toFixed(1)}s">${arm}</g>`; });
+      B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; const cell = _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${(a * 57).toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${cell}</g>`; } });
       return `<svg viewBox="0 0 460 200" class="mth">
         ${out}
         <g class="mth-pulse">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
@@ -274,14 +274,14 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Virtual staining", kicker: "CROSS-CHANNEL", title: "Predicting fluorescent stains from phase",
-    svg: () => { const M = [["mito", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lyso", MTH_C.yel]];
-      const comp = (cx, cy, col, kind, s) => kind === "mito" ? [0, 1, 2].map(k => `<ellipse cx="${cx - 3 * s + k * 3 * s}" cy="${cy - 3 * s + k * 4 * s}" rx="${8 * s}" ry="${2.2 * s}" fill="${col}" transform="rotate(${30 + 30 * k} ${cx - 3 * s + k * 3 * s} ${cy - 3 * s + k * 4 * s})"/>`).join("")
+    svg: () => { const M = [["mitochondria", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lysosome", MTH_C.yel]];
+      const comp = (cx, cy, col, kind, s) => kind === "mitochondria" ? [0, 1, 2].map(k => `<ellipse cx="${cx - 3 * s + k * 3 * s}" cy="${cy - 3 * s + k * 4 * s}" rx="${8 * s}" ry="${2.2 * s}" fill="${col}" transform="rotate(${30 + 30 * k} ${cx - 3 * s + k * 3 * s} ${cy - 3 * s + k * 4 * s})"/>`).join("")
         : kind === "ER" ? [0, 1, 2, 3].map(k => `<circle cx="${cx - 6 * s + k * 4 * s}" cy="${cy + (k % 2) * 5 * s - 2 * s}" r="${3.4 * s}" fill="none" stroke="${col}" stroke-width="${(1.2 * s).toFixed(1)}"/>`).join("")
         : kind === "nucleus" ? `<circle cx="${cx}" cy="${cy}" r="${8 * s}" fill="${col}"/>`
         : kind === "actin" ? [0, 1, 2].map(k => `<line x1="${cx - 9 * s}" y1="${cy - 6 * s + k * 6 * s}" x2="${cx + 9 * s}" y2="${cy - 4 * s + k * 6 * s}" stroke="${col}" stroke-width="${(1.4 * s).toFixed(1)}"/>`).join("")
         : [0, 1, 2, 3, 4].map(k => `<circle cx="${cx + ((k * 5) % 16 - 8) * s}" cy="${cy + ((k * 7) % 14 - 6) * s}" r="${1.8 * s}" fill="${col}"/>`).join("");
       return `<svg viewBox="0 0 470 200" class="mth">
-        ${_cellBlob(42, 100, 28, MTH_C.ntc, "mth-breathe")}
+        ${_cellBlob(42, 100, 28, MTH_C.ntc)}
         ${M.map((m, i) => `<g class="mth-cycin" style="animation-delay:${(i * 1.0).toFixed(1)}s">${comp(42, 100, m[1], m[0], 1.5)}</g>`).join("")}
         ${_lbl(42, 146, "phase cell")}
         ${_arrow(78, 130, 100)}
@@ -304,17 +304,22 @@ const METHODS_SLIDES = [
   },
   {
     nav: "What's next", kicker: "THE NEXT DIRECTION", title: "From transcription to morphology",
-    svg: () => `<svg viewBox="0 0 420 200" class="mth">
-      <g>${_bars(46, 150, [40, 78, 25, 62, 90, 35], 16, 7, MTH_C.grn)}</g>${_lbl(95, 172, "CROP-seq (mRNA)")}
-      ${_arrow(190, 262, 100)}
-      <g class="mth-morph">${_cellBlob(320, 95, 44, MTH_C.acc)}</g>${_lbl(320, 160, "morphology")}
+    svg: () => `<svg viewBox="0 0 460 200" class="mth">
+      <text x="66" y="42" fill="${MTH_C.grn}" font-size="10" text-anchor="middle">interleukin mRNA \u2191</text>
+      <rect x="52" y="58" width="24" height="96" rx="3" fill="rgba(255,255,255,.05)" stroke="#30363d"/>
+      <rect x="52" y="58" width="24" height="96" rx="3" fill="${MTH_C.grn}" class="mth-grow"/>
+      ${_lbl(64, 172, "expression")}
+      ${_arrow(98, 250, 100)}
+      ${_lbl(176, 86, "predict", "#8b949e", 9)}
+      <g class="mth-morph">${_cellBlob(348, 100, 42, MTH_C.acc)}</g>
+      ${_lbl(348, 164, "morphology follows")}
     </svg>`,
-    body: "The same library was also profiled by <b>CROP-seq</b> (single-cell RNA), so each gene has a <b>transcriptional signature</b> too. Next we condition the diffusion decoder on <b>transcriptional</b> change instead of a morphological direction — either by mapping a gene's expression shift onto a CellDINO direction (reusing this decoder), or by conditioning the model on the transcriptome directly (CPA-style). Then we ask how a cell's shape should follow its gene-expression state.",
+    body: "The same library was also profiled by <b>CROP-seq</b> (single-cell RNA), so each gene has a <b>transcriptional signature</b> too. Next we condition the diffusion decoder on <b>transcriptional</b> change instead of a morphological direction — either by mapping a gene's expression shift onto a CellDINO direction (reusing this decoder), or by feeding the transcriptome straight into the model as a <b>learned perturbation vector</b> added in its latent space. Then we ask how a cell's shape should follow its gene-expression state \u2014 e.g. as <b>interleukin</b> expression rises, watch the morphology change.",
     why: "Bridging transcriptome and image lets us see which genes <i>decouple</i> the two (loud in RNA, silent in shape — or the reverse) — the core question of the transcriptional project.",
     defs: [["CROP-seq", "a pooled CRISPR screen read out by single-cell RNA sequencing (the transcriptome), on the same knockout library."],
       ["Transcriptional signature", "a gene's pseudobulk mRNA shift vs NTC (or a learned scRNA latent, or pathway module scores) — the vector that stands in for the CellDINO direction."],
       ["Reuse map (light design)", "fit transcriptional-shift → CellDINO-shift (linear, then a small MLP), then feed that predicted direction into the existing diffusion decoder — no retraining; its R² measures how predictable morphology is from transcriptome."],
-      ["CPA-style conditioning (full design)", "a shared per-perturbation embedding drives both a transcriptome decoder (reconstructing CROP-seq) and the image decoder, tying the two modalities through one latent so any transcriptional state can be rendered."]]
+      ["Learned perturbation vector", "represent each perturbation\u2019s effect as a vector added in the model\u2019s latent space; a transcriptome decoder and the image decoder share it, so any transcriptional state can be rendered. (This is the idea behind a \u201ccompositional perturbation autoencoder,\u201d CPA.)"]]
   },
 ];
 
@@ -327,6 +332,7 @@ let _mthIdx = 0;
 function renderMethods() {
   const rail = document.getElementById("tab-methods");
   if (rail && !rail.querySelector(".mth-rail")) {
+    const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < MTH_DECK.length) _mthIdx = sv;   // restore last-viewed section across reloads
     rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
       <div class="mth-rail">${MTH_DECK.map((s, i) =>
         `<button class="mth-railitem" onclick="methodsGo(${i})"><span class="mth-num">${i + 1}</span>${s.nav}</button>`).join("")}</div>`;
@@ -352,7 +358,7 @@ function renderMethods() {
   document.querySelectorAll(".mth-railitem").forEach((b, i) => b.classList.toggle("on", i === _mthIdx));
   const st = document.getElementById("stage"); if (st) st.scrollTop = 0;   // new slide → back to top (don't inherit the previous slide's scroll)
 }
-function methodsGo(i) { _mthIdx = Math.max(0, Math.min(MTH_DECK.length - 1, i)); renderMethods(); }
+function methodsGo(i) { _mthIdx = Math.max(0, Math.min(MTH_DECK.length - 1, i)); try { localStorage.setItem("opsin.mth", _mthIdx); } catch (e) { } renderMethods(); }
 function methodsStep(d) { methodsGo(_mthIdx + d); }
 document.addEventListener("keydown", (e) => {
   const active = document.querySelector(".tab.active");
