@@ -19,7 +19,7 @@ from ops_model.models.attention.diffex.classifier.config import slugify
 from _setacc_common import _materialize, seg_crop, composite, CROP_SIZE
 
 MR = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/multi_rank/shap_screen/shap_screen_fluor_all.compact.parquet"
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_shap_fluor_montages"
+OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_shap_montages"
 PQ = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor_multirank/geneKO"
 plt.rcParams["pdf.fonttype"] = 42
 
