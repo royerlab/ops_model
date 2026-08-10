@@ -62,16 +62,13 @@ const MTH_MORE = {
 const METHODS_SLIDES = [
   {
     nav: "The screen", kicker: "THE QUESTION", title: "Thousands of knockouts, mixed in one noisy dish",
-    svg: () => { const COL = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel], LIFT = [0, .18, .09, .24, .13];
-      // cell = membrane blob + a clear central nucleus + a small subtle organelle accent (de-emphasized)
-      const scell = (x, y, r, col, rot) => `${_cellBlob(x, y, r, col)}<ellipse cx="${(x + r * 0.34).toFixed(1)}" cy="${(y + r * 0.3).toFixed(1)}" rx="${(r * 0.36).toFixed(1)}" ry="${(r * 0.15).toFixed(1)}" fill="${_mix(col, "#000000", .18)}" opacity=".45" transform="rotate(${rot} ${(x + r * 0.34).toFixed(1)} ${(y + r * 0.3).toFixed(1)})"/><circle cx="${(x - r * 0.28).toFixed(1)}" cy="${(y - r * 0.2).toFixed(1)}" r="${(r * 0.34).toFixed(1)}" fill="rgba(0,0,0,.58)"/>`;
-      const cells = [];
+    svg: () => { const COL = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel]; const cells = [];
       for (let r = 0; r < 6; r++) for (let c = 0; c < 5; c++) { const x = 30 + c * 30 + ((r * 37) % 9 - 4), y = 40 + r * 24 + ((c * 53) % 9 - 4);
         if (((x - 92) / 74) ** 2 + ((y - 100) / 80) ** 2 <= 0.92) cells.push([x, y, (r * 2 + c) % 5]); }
       return `<svg viewBox="0 0 484 200" class="mth">
         <ellipse cx="92" cy="100" rx="80" ry="86" fill="rgba(255,255,255,.03)" stroke="#30363d" stroke-width="2"/>
-        ${cells.map(([x, y, ci], idx) => { const hue = _mix(COL[ci], MTH_C.fg, LIFT[idx % 5]), r = ci === 1 ? 8.75 : 7;
-          return `<g class="${ci === 1 ? "mth-hi" : "mth-soft"}" style="animation-delay:${((x + y) / 90).toFixed(2)}s">${scell(x, y, r, hue, (idx * 47) % 180)}</g>`; }).join("")}
+        ${cells.map(([x, y, ci]) => { const r = ci === 1 ? 8.75 : 7;
+          return `<g class="${ci === 1 ? "mth-hi" : "mth-soft"}" style="animation-delay:${((x + y) / 90).toFixed(2)}s">${_cellBlob(x, y, r, COL[ci])}</g>`; }).join("")}
         ${_lbl(92, 194, "well — pooled knockouts, all mixed")}
         ${_arrow(176, 200, 100)}
         ${[0, 1, 2, 3, 4, 5, 6].map(i => `<rect x="${208 + i * 4}" y="88" width="${1.5 + (i % 2) * 2}" height="24" fill="#e6e8ec"/>`).join("")}
@@ -269,7 +266,7 @@ const METHODS_SLIDES = [
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       // each arm = a different phenotype axis: 0 acc grows · 1 ko elongates · 2 grn (bottom) shrinks · 3 pur nucleus grows
       const mcell = (x, y, b, i, col, t, ang) => { const hue = _mix(MTH_C.ntc, col, t), dark = _mix(col, "#000000", .3);
-        if (b === 1) { const rx = 6 + i * 1.4, ry = Math.max(2.6, 6 - i * 0.6); return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${hue}" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/><ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${(rx * 0.4).toFixed(1)}" ry="${(ry * 0.55).toFixed(1)}" fill="rgba(0,0,0,.5)" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; }
+        if (b === 1) { const rx = 6 + i * 0.85, ry = Math.max(4.2, 6.4 - i * 0.4); return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${hue}" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/><ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${(rx * 0.4).toFixed(1)}" ry="${(ry * 0.55).toFixed(1)}" fill="rgba(0,0,0,.5)" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; }
         let s, nr; if (b === 0) { s = 5 + i * 1.2; nr = s * 0.34; } else if (b === 3) { s = 9; nr = 1.6 + i * 1.15; } else { s = Math.max(4, 11 - i * 1.4); nr = s * 0.34; }
         return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.toFixed(1)}" fill="${hue}"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(nr, s * 0.82).toFixed(1)}" fill="rgba(0,0,0,.55)"/><ellipse cx="${(x + s * 0.32).toFixed(1)}" cy="${(y + s * 0.3).toFixed(1)}" rx="${(s * 0.3).toFixed(1)}" ry="${(s * 0.13).toFixed(1)}" fill="${dark}" opacity=".4" transform="rotate(${ang} ${(x + s * 0.32).toFixed(1)} ${(y + s * 0.3).toFixed(1)})"/>`; };
       let out = "";

@@ -434,7 +434,7 @@ button:hover{border-color:var(--accent)}
 .mth-drop{transform-box:fill-box;transform-origin:bottom;animation:mthDrop 3s ease-in-out infinite}
 @keyframes mthRemove{0%,100%{opacity:1}50%{opacity:.12}}
 .mth-remove{animation:mthRemove 3s ease-in-out infinite}
-@keyframes mthShrink{0%,100%{transform:scale(1)}50%{transform:scale(.45)}}
+@keyframes mthShrink{0%,100%{transform:scale(1)}50%{transform:scale(.75)}}
 .mth-shrink{transform-box:fill-box;transform-origin:center;animation:mthShrink 3s ease-in-out infinite}
 @keyframes mthFlowEdge{0%{opacity:.2}10%{opacity:.95}26%{opacity:.2}100%{opacity:.2}}
 .mth-flow-edge{animation:mthFlowEdge 3s ease-in-out infinite}
