@@ -33,6 +33,17 @@ const MTH_PHENO = [
 ];
 const _pheno = (cx, cy, s, p, fill) => `<ellipse cx="${cx}" cy="${cy}" rx="${(s * Math.sqrt(p.ar)).toFixed(1)}" ry="${(s / Math.sqrt(p.ar)).toFixed(1)}" fill="${fill}"/><circle cx="${cx}" cy="${cy}" r="${(s * p.nf).toFixed(1)}" fill="rgba(0,0,0,.45)"/>`
   + p.org.map(o => { const ox = cx + o[0] * s, oy = cy + o[1] * s; return `<ellipse cx="${ox.toFixed(1)}" cy="${oy.toFixed(1)}" rx="${(s * 0.16).toFixed(1)}" ry="${(s * 0.07).toFixed(1)}" fill="rgba(0,0,0,.4)" transform="rotate(30 ${ox.toFixed(1)} ${oy.toFixed(1)})"/>`; }).join("");
+// universal vector cell (BioRender-referenced): membrane+cytoplasm, nucleus(+nucleolus/envelope), mitochondria (cristae),
+// ER tubules, lysosomes. Reused across every panel; opts manipulate it → {aspect,nucScale,mem,rot,detail(0..2)}.
+const _ORG = { mem: MTH_C.acc, nuc: MTH_C.pur, mito: MTH_C.ko, er: "#2ca089", lyso: MTH_C.grn };
+const _mito = (x, y, L, w, rot, col) => `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rot})"><rect x="${(-L / 2).toFixed(1)}" y="${(-w / 2).toFixed(1)}" width="${L.toFixed(1)}" height="${w.toFixed(1)}" rx="${(w / 2).toFixed(1)}" fill="${col}"/><path d="M ${(-L / 2 + w * 0.5).toFixed(1)} 0 q ${(w * 0.55).toFixed(1)} ${(-w * 0.5).toFixed(1)} ${(w * 1.1).toFixed(1)} 0 q ${(w * 0.55).toFixed(1)} ${(w * 0.5).toFixed(1)} ${(w * 1.1).toFixed(1)} 0" fill="none" stroke="${_mix(col, "#ffffff", .5)}" stroke-width="${Math.max(0.6, w * 0.16).toFixed(1)}" opacity=".85"/></g>`;
+const _cell = (cx, cy, s, o = {}) => { const asp = o.aspect ?? 1, rx = s * Math.sqrt(asp), ry = s / Math.sqrt(asp), mem = o.mem ?? _ORG.mem, ang = o.rot ?? 0, nr = s * (o.nucScale ?? 0.4), det = o.detail ?? 2;
+  let g = `<g transform="rotate(${ang} ${cx} ${cy})"><ellipse cx="${cx}" cy="${cy}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${_mix(mem, "#0a0f14", .78)}" stroke="${mem}" stroke-width="${Math.max(1, s * 0.06).toFixed(1)}"/>`;
+  if (det >= 2) g += `<g fill="none" stroke="${_ORG.er}" stroke-width="${Math.max(0.8, s * 0.05).toFixed(1)}" opacity=".8"><path d="M ${(cx + s * 0.12).toFixed(1)} ${(cy - s * 0.55).toFixed(1)} q ${(s * 0.4).toFixed(1)} ${(s * 0.1).toFixed(1)} ${(s * 0.16).toFixed(1)} ${(s * 0.45).toFixed(1)}"/><path d="M ${(cx + s * 0.34).toFixed(1)} ${(cy - s * 0.5).toFixed(1)} q ${(s * 0.42).toFixed(1)} ${(s * 0.14).toFixed(1)} ${(s * 0.14).toFixed(1)} ${(s * 0.5).toFixed(1)}"/></g>`;
+  if (det >= 1) { g += _mito(cx - s * 0.5, cy - s * 0.32, s * 0.72, s * 0.26, 25, _ORG.mito) + _mito(cx + s * 0.44, cy + s * 0.5, s * 0.6, s * 0.24, -35, _ORG.mito);
+    g += `<circle cx="${(cx - s * 0.55).toFixed(1)}" cy="${(cy + s * 0.34).toFixed(1)}" r="${(s * 0.12).toFixed(1)}" fill="${_ORG.lyso}"/><circle cx="${(cx + s * 0.6).toFixed(1)}" cy="${(cy - s * 0.12).toFixed(1)}" r="${(s * 0.09).toFixed(1)}" fill="${_ORG.lyso}"/>`; }
+  g += `<circle cx="${cx}" cy="${cy}" r="${nr.toFixed(1)}" fill="${_ORG.nuc}"/><circle cx="${cx}" cy="${cy}" r="${nr.toFixed(1)}" fill="none" stroke="${_mix(_ORG.nuc, "#ffffff", .35)}" stroke-width="${Math.max(0.8, s * 0.04).toFixed(1)}" opacity=".7"/><circle cx="${(cx - nr * 0.28).toFixed(1)}" cy="${(cy - nr * 0.2).toFixed(1)}" r="${(nr * 0.34).toFixed(1)}" fill="${_mix(_ORG.nuc, "#000000", .45)}"/></g>`;
+  return g; };
 // low-res black&white "static" — a grid of grayscale pixels (deterministic per seed), like the paper schematic
 const _pixnoise = (x, y, w, h, cols, rows, seed, alpha) => { const cw = w / cols, ch = h / rows; let s = "";
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const k = r * cols + c, v = Math.abs(Math.sin((k + 1) * 12.9898 + seed * 78.233)) * 43758.5453, g = Math.floor((v - Math.floor(v)) * 255);
@@ -77,7 +88,7 @@ const METHODS_SLIDES = [
       return `<svg viewBox="0 0 484 200" class="mth">
         <ellipse cx="92" cy="100" rx="80" ry="86" fill="rgba(255,255,255,.03)" stroke="#30363d" stroke-width="2"/>
         ${cells.map(([x, y, ci]) => { const r = ci === 1 ? 8.75 : 7;
-          return `<g class="${ci === 1 ? "mth-hi" : "mth-soft"}" style="animation-delay:${((x + y) / 90).toFixed(2)}s">${_cellBlob(x, y, r, COL[ci])}</g>`; }).join("")}
+          return `<g class="${ci === 1 ? "mth-hi" : "mth-soft"}" style="animation-delay:${((x + y) / 90).toFixed(2)}s">${_cell(x, y, r, { mem: COL[ci], detail: 0 })}</g>`; }).join("")}
         ${_lbl(92, 194, "well — pooled knockouts, all mixed")}
         ${_arrow(176, 200, 100)}
         ${[0, 1, 2, 3, 4, 5, 6].map(i => `<rect x="${208 + i * 4}" y="88" width="${1.5 + (i % 2) * 2}" height="24" fill="#e6e8ec"/>`).join("")}
@@ -85,7 +96,7 @@ const METHODS_SLIDES = [
         ${_arrow(242, 270, 100)}
         <rect x="278" y="42" width="120" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
-        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_pheno(p[0], p[1], 15, MTH_PHENO[i], MTH_C.acc)}</g>`).join("")}
+        ${[[308, 88, 1, 0.38, 0], [370, 88, 1.35, 0.42, 20], [308, 126, 0.8, 0.55, -10], [370, 126, 1.1, 0.3, 35]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_cell(p[0], p[1], 15, { mem: _ORG.mem, aspect: p[2], nucScale: p[3], rot: p[4], detail: 2 })}</g>`).join("")}
         <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of gene knockouts are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the gene knocked out inside it. This yields millions of (gene, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation.",
