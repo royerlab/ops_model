@@ -418,7 +418,7 @@ button:hover{border-color:var(--accent)}
 .mth-jit{transform-origin:bottom;animation:mthJit 2.6s ease-in-out infinite}
 
 @keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
-.mth-soft{animation:mthSoft 3.6s ease-in-out infinite}
+.mth-soft{animation:mthSoft 3.6s ease-in-out infinite backwards}
 @keyframes mthBranch{0%,100%{opacity:.42}50%{opacity:1}}
 .mth-branch{animation:mthBranch 4.4s ease-in-out infinite both}
 @keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
