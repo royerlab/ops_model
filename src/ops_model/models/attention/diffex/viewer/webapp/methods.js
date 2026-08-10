@@ -242,7 +242,7 @@ const METHODS_SLIDES = [
     svg: () => { const cell = (cx, hot, lbl) => `
       <circle cx="${cx}" cy="98" r="56" fill="rgba(38,198,255,.08)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
       <circle cx="${cx - 12}" cy="92" r="21" fill="rgba(188,140,255,.4)"/>
-      <circle cx="${cx - 17}" cy="88" r="4" fill="#3a2a5a"/><circle cx="${cx - 8}" cy="96" r="3" fill="#3a2a5a"/>
+      <circle cx="${cx - 17}" cy="88" r="4" fill="#ffffff"/><circle cx="${cx - 8}" cy="96" r="3" fill="#ffffff"/>
       ${[[cx + 16, 80, 25, "M -11 0 q 5 -8 10 -1 q 6 7 12 -1"], [cx + 24, 100, -40, "M -10 1 q 6 -7 11 0 q 4 6 10 -3"], [cx + 16, 116, 60, "M -12 -1 q 4 7 9 1 q 6 -6 12 1"], [cx + 30, 120, -12, "M -9 0 q 7 -6 12 1 q 3 6 9 -2"]].map(([x, y, rot, d]) => `<path d="${d}" fill="none" stroke="${MTH_C.ko}" stroke-width="3.2" stroke-linecap="round" opacity=".82" transform="translate(${x} ${y}) rotate(${rot})"/>`).join("")}
       ${_patchGrid(cx - 42, 56, 14, 6, hot)}
       ${_lbl(cx, 186, lbl)}`;
@@ -265,9 +265,9 @@ const METHODS_SLIDES = [
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
         ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
-        ${_lbl(332, 101, "→ gene A", MTH_C.ko, 10)}${_lbl(224, 176, "→ gene B", MTH_C.grn, 10)}
-        ${_lbl(384, 30, "each arm = one perturbation", "#8b949e", 9)}${_lbl(384, 42, "· same control cell throughout", "#8b949e", 9)}
-        ${_lbl(230, 194, "direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
+        ${_lbl(238, 172, "→ gene A", MTH_C.grn, 10)}${_lbl(332, 101, "→ gene B", MTH_C.ko, 10)}
+        ${_lbl(380, 30, "each tile = a different perturbation", "#8b949e", 9)}${_lbl(380, 42, "of the same control cell", "#8b949e", 9)}
+        ${_lbl(230, 194, "nearby tiles = similar phenotypes; distance = how different", "#8b949e", 10)}
       </svg>`; },
     body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
     why: "It turns 1,000 separate what-ifs into a single navigable landscape — genes with similar phenotypes cluster together, visible at a glance.",
