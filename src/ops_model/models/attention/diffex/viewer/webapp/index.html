@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=150"/>
+<link rel="stylesheet" href="style.css?v=151"/>
 </head>
 <body>
 <header>
@@ -64,16 +64,17 @@
   </div>
 </div>
 
+<nav class="tabs" id="tabbar">
+  <button class="tab" data-tab="top">Top cells</button>
+  <button class="tab active" data-tab="traversal">Traversal</button>
+  <button class="tab" data-tab="montage">Montage</button>
+  <button class="tab" data-tab="pc">PCs</button>
+  <button class="tab" data-tab="attn">Attn heads</button>
+  <button class="tab" data-tab="methods">How it works</button>
+</nav>
+
 <div id="app">
   <aside id="controls">
-    <div class="tabs">
-      <button class="tab" data-tab="top">Top cells</button>
-      <button class="tab active" data-tab="traversal">Traversal</button>
-      <button class="tab" data-tab="montage">Montage</button>
-      <button class="tab" data-tab="pc">PCs</button>
-      <button class="tab" data-tab="attn">Attn heads</button>
-      <button class="tab" data-tab="methods">How it works</button>
-    </div>
     <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">

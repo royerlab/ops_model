@@ -57,10 +57,16 @@ header .sub{color:var(--mut);font-size:12px}
 .combo-empty{padding:8px 9px;color:var(--mut);font-style:italic;font-size:12px}
 #controls{width:290px;padding:16px;border-right:1px solid var(--line);
           display:flex;flex-direction:column;gap:14px;overflow:hidden}   /* pane scrolls, tabs stay put */
-.tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);flex:none}
-.tabs .tab{background:none;border:none;border-bottom:2px solid transparent;border-radius:0;
-           color:var(--mut);padding:6px 7px;font-size:12px;white-space:nowrap;cursor:pointer}
-.tabs .tab.active{color:var(--fg);border-bottom-color:var(--accent)}
+/* full-width glassy view-tab bar under the marker/perturbation crossbar */
+#tabbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:none;padding:9px 20px;
+        background:rgba(22,27,34,.5);backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);
+        border-bottom:1px solid rgba(255,255,255,.08);box-shadow:0 3px 16px rgba(0,0,0,.3);position:relative;z-index:6}
+#tabbar .tab{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:11px;
+             color:var(--mut);padding:8px 18px;font:600 13.5px ui-sans-serif,system-ui,sans-serif;white-space:nowrap;cursor:pointer;
+             transition:background .15s,color .15s,border-color .15s,box-shadow .15s}
+#tabbar .tab:hover{background:rgba(255,255,255,.09);color:var(--fg);border-color:rgba(255,255,255,.2)}
+#tabbar .tab.active{background:linear-gradient(180deg,rgba(38,198,255,.3),rgba(38,198,255,.13));color:#eaf7ff;
+                    border-color:rgba(38,198,255,.55);box-shadow:0 2px 14px rgba(38,198,255,.28),inset 0 1px 0 rgba(255,255,255,.14)}
 .tabpane{display:flex;flex-direction:column;gap:14px;flex:1;min-height:0;overflow-y:auto;padding-right:4px}
 .tabpane.hidden{display:none}
 #controls label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut);
