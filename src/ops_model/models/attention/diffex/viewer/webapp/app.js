@@ -31,7 +31,7 @@ const state = {
 
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
   rangeLo: 0, rangeHi: 0, alphaLimit: 5,   // autoplay sweeps only within ±alphaLimit (scrub stays full)
-  targetSort: "map",                       // perturbation list order: "map" (distinctiveness, default) | "alpha"
+  targetSort: "setacc",                    // perturbation list order default: "setacc" (SetTransformer set-accuracy) | "map" | "alpha"
   altAnchorsOnly: false,                    // filter perturbation list to those with a non-NTC (A→B) anchor
   view: "traversal",                       // active view: traversal | montage | attn (all driven by browse selection)
   attnIndex: null, attnHeadsCache: {}, attnImgCache: {},   // attention-head assets
@@ -124,6 +124,7 @@ async function boot() {
   state.realAcc20 = await fetch(`${BASE}real_acc20.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // real-cell top1_acc@bag20 by asset_dir (feasibility ceiling)
   state.attnIndex = await fetch(`${BASE}attention_heads/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
+  ensureSetacc(() => {});   // preload set-accuracy so the default "by SET ACC" ordering is ready
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
   wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
   $("tprev").onclick = () => stepTarget(-1);   // step through perturbations quickly
@@ -286,6 +287,7 @@ async function boot() {
   }
   document.querySelectorAll("select[data-seg]").forEach(segmentize);   // small dropdowns → segmented pills
   document.querySelectorAll("label.chk").forEach(toggleize);           // checkboxes → off/on segmented switches
+  requestAnimationFrame(() => $("loading").classList.add("gone"));   // reveal the app only after first full render (no traversal flash)
 }
 // Turn a checkbox into an [off | <feature>] segmented switch (like Ontology/Features). The native checkbox
 // stays in the DOM (hidden) so existing .checked/.onchange logic is untouched; buttons mirror + drive it.
@@ -1248,9 +1250,15 @@ function renderInfo(t) {
   };
   const gc = (g) => `<a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${encodeURIComponent(g)}" target="_blank" rel="noopener">${g}</a>`;
   const s = t.desc;
-  if (s.startsWith("Members")) {   // complex: members link out to GeneCards
-    const mem = s.replace(/^Members \(\d+\):\s*/, "").split(", ").map(x => gc(x.trim())).join(", ");
-    sec("Complex members", mem);
+  if (s.startsWith("Members")) {   // complex info page: portal link + each member gene with its function
+    const members = s.replace(/^Members \(\d+\):\s*/, "").split(", ").map(x => x.trim()).filter(Boolean);
+    sec("Links", `<a href="https://www.ebi.ac.uk/complexportal/complex/search?query=${encodeURIComponent(t.target)}" target="_blank" rel="noopener">EBI Complex Portal ↗</a>`);
+    const rows = members.map(mg => {
+      const gd = (state.geneDesc || {})[mg];
+      const fn = gd ? gd.split(" || ")[0].replace(/^GO biological process:\s*/i, "") : "";
+      return `<div style="margin:5px 0;line-height:1.4">${gc(mg)}${fn ? ` — <span style="color:var(--mut)">${fn}</span>` : ""}</div>`;
+    }).join("");
+    sec(`Complex members (${members.length})`, rows);
     return;
   }
   const g = encodeURIComponent(t.target);

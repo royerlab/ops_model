@@ -467,3 +467,11 @@ button:hover{border-color:var(--accent)}
 .biohub-logo{display:inline-flex;align-items:center;padding-left:10px;border-left:1px solid var(--line);margin-left:2px;opacity:.9;transition:opacity .15s}
 .biohub-logo img{height:26px;width:auto;display:block}
 .biohub-logo:hover{opacity:1}
+/* full-screen loading veil — hides the initial traversal flash until first render */
+#loading{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:var(--bg);transition:opacity .4s ease}
+#loading.gone{opacity:0;pointer-events:none}
+#loading .load-box{display:flex;flex-direction:column;align-items:center;gap:12px}
+#loading .load-box img{width:56px;height:56px;animation:loadpulse 1.3s ease-in-out infinite}
+#loading .load-t{font:700 20px ui-sans-serif,system-ui,sans-serif;color:var(--fg);letter-spacing:.06em}
+#loading .load-s{font:400 12px ui-sans-serif,system-ui,sans-serif;color:var(--mut);letter-spacing:.08em}
+@keyframes loadpulse{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.09)}}
