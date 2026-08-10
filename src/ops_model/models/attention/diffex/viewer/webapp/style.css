@@ -366,7 +366,7 @@ button:hover{border-color:var(--accent)}
 @keyframes mthSlide{0%,100%{transform:translateX(0)}50%{transform:translateX(280px)}}
 .mth-slide{animation:mthSlide 3.2s ease-in-out infinite}
 @keyframes mthGlow{0%,100%{transform:scale(.7);opacity:.35}50%{transform:scale(1.15);opacity:.9}}
-.mth-glow{transform-origin:center;animation:mthGlow 3.6s ease-in-out infinite}
+.mth-glow{transform-origin:center;animation:mthGlow 2.8s ease-in-out infinite}
 @keyframes mthCycA{0%,100%{opacity:1}50%{opacity:.12}}
 .mth-cycA{animation:mthCycA 3s ease-in-out infinite}
 @keyframes mthCycB{0%,100%{opacity:.12}50%{opacity:1}}
@@ -384,7 +384,7 @@ button:hover{border-color:var(--accent)}
 .mth-defs dt{font-size:12.5px;font-weight:600;color:var(--fg)}
 .mth-defs dd{margin:1px 0 0;font-size:12.5px;line-height:1.5;color:var(--mut)}
 @keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(304px);opacity:.9}100%{transform:translateX(304px);opacity:0}}
-.mth-sweep{animation:mthSweep 5.5s ease-in-out infinite}
+.mth-sweep{animation:mthSweep 4s ease-in-out infinite}
 /* methods tab — larger text + wider layout + Learn-more dropdown (feedback) */
 #methods-view{max-width:1180px}
 #stage.methods-active{padding:16px 30px}
@@ -411,15 +411,15 @@ button:hover{border-color:var(--accent)}
 .mth-sec .mth-stage svg.mth{max-width:620px}
 .mth-sectext{font-size:14px;line-height:1.5;color:var(--fg);text-align:center;max-width:640px;margin:2px auto 6px}
 @keyframes mthHi{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.16);opacity:1}}
-.mth-hi{transform-origin:center;animation:mthHi 4.5s ease-in-out infinite}
+.mth-hi{transform-origin:center;animation:mthHi 3.2s ease-in-out infinite}
 @keyframes mthJit{0%,100%{transform:scaleY(.9)}50%{transform:scaleY(1.05)}}
-.mth-jit{transform-origin:bottom;animation:mthJit 3.4s ease-in-out infinite}
+.mth-jit{transform-origin:bottom;animation:mthJit 2.6s ease-in-out infinite}
 
 @keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
-.mth-soft{animation:mthSoft 4.8s ease-in-out infinite}
+.mth-soft{animation:mthSoft 3.6s ease-in-out infinite}
 @keyframes mthBranch{0%,100%{opacity:.42}50%{opacity:1}}
-.mth-branch{animation:mthBranch 6s ease-in-out infinite}
+.mth-branch{animation:mthBranch 4.4s ease-in-out infinite}
 @keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
-.mth-cyc{transform-origin:center;animation:mthCyc 6s ease-in-out infinite}
+.mth-cyc{transform-origin:center;animation:mthCyc 5s ease-in-out infinite}
 @keyframes mthCycIn{0%,10%{opacity:0}17%,25%{opacity:.95}33%,100%{opacity:0}}
-.mth-cycin{animation:mthCycIn 6s ease-in-out infinite}
+.mth-cycin{animation:mthCycIn 5s ease-in-out infinite both}
