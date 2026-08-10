@@ -279,7 +279,7 @@ const METHODS_SLIDES = [
       // tt = 0 at the first cell (≈ the original NTC cell) → 1 at the arm tip (full phenotype); gradual divergence
       const mcell = (x, y, b, i, col, ang) => { const tt = (i - 1) / 4, lp = (a, z) => a + (z - a) * tt, hue = _mix(MTH_C.ntc, col, tt), dark = _mix(col, "#000000", .3);
         let rx, ry, nr;
-        if (b === 0) { rx = ry = lp(11, 19); nr = rx * 0.3; }              // acc — grows
+        if (b === 0) { rx = ry = 5 + i * 1.2; nr = rx * 0.3; }              // acc — grows (tuned to arm spacing so cells don't overlap)
         else if (b === 1) { rx = lp(11, 15.5); ry = lp(11, 7); nr = ry * 0.34; }  // ko — elongates (never smaller)
         else if (b === 3) { rx = ry = 11; nr = lp(3.2, 8.6); }            // pur — nucleus grows
         else { rx = ry = lp(11, 5); nr = rx * 0.3; }                       // grn (bottom) — shrinks
