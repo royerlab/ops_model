@@ -5,7 +5,7 @@ const ASSET_PREFIX = "";                // app is served from inside the v5 asse
 const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
-  if (!init && state.sidePanel === m) { $("sidebar").classList.toggle("hidden"); return; }
+  if (!init && state.sidePanel === m) { const hidden = $("sidebar").classList.toggle("hidden"); $("side-" + m).classList.toggle("active", !hidden); return; }
   state.sidePanel = m;
   $("side-info").classList.toggle("active", m === "info");
   $("side-about").classList.toggle("active", m === "about");
