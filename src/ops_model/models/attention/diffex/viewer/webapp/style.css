@@ -416,11 +416,13 @@ button:hover{border-color:var(--accent)}
 .mth-hi{transform-origin:center;animation:mthHi 3.2s ease-in-out infinite}
 @keyframes mthJit{0%,100%{transform:scaleY(.9)}50%{transform:scaleY(1.05)}}
 .mth-jit{transform-origin:bottom;animation:mthJit 2.6s ease-in-out infinite}
+@keyframes mthJit2{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.45)}}
+.mth-jit2{transform-box:fill-box;transform-origin:bottom;animation:mthJit2 2.4s ease-in-out infinite}
 
 @keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
 .mth-soft{animation:mthSoft 3.6s ease-in-out infinite backwards}
-@keyframes mthBranch{0%,100%{opacity:1}50%{opacity:.45}}
-.mth-branch{animation:mthBranch 4.4s ease-in-out infinite both}
+@keyframes mthBranch{0%,100%{opacity:1}50%{opacity:.22}}
+.mth-branch{animation:mthBranch 3.4s ease-in-out infinite both}
 @keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
 .mth-cyc{transform-origin:center;animation:mthCyc 5s ease-in-out infinite}
 @keyframes mthCycIn{0%,10%{opacity:0}17%,25%{opacity:.95}33%,100%{opacity:0}}
