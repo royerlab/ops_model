@@ -436,6 +436,12 @@ button:hover{border-color:var(--accent)}
 .mth-remove{animation:mthRemove 3s ease-in-out infinite}
 @keyframes mthShrink{0%,100%{transform:scale(1)}50%{transform:scale(.75)}}
 .mth-shrink{transform-box:fill-box;transform-origin:center;animation:mthShrink 3s ease-in-out infinite}
+/* Embedding: 3 discrete states switch in lockstep (synchronized) with snappy transitions (stochastic, not a wave) */
+@keyframes mthSt0{0%,28%{opacity:1}34%,94%{opacity:0}100%{opacity:1}}
+@keyframes mthSt1{0%,28%{opacity:0}34%,61%{opacity:1}67%,100%{opacity:0}}
+@keyframes mthSt2{0%,61%{opacity:0}67%,94%{opacity:1}100%{opacity:0}}
+.mth-st0,.mth-st1,.mth-st2{animation-duration:4.2s;animation-timing-function:ease;animation-iteration-count:infinite}
+.mth-st0{animation-name:mthSt0}.mth-st1{animation-name:mthSt1}.mth-st2{animation-name:mthSt2}
 @keyframes mthFlowEdge{0%{opacity:.2}10%{opacity:.95}26%{opacity:.2}100%{opacity:.2}}
 .mth-flow-edge{animation:mthFlowEdge 3s ease-in-out infinite}
 @keyframes mthFlowNode{0%,100%{transform:scale(1)}10%{transform:scale(1.4)}28%{transform:scale(1)}}

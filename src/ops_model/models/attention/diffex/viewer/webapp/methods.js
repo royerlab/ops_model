@@ -91,20 +91,28 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Embedding", kicker: "REPRESENT", title: "Turning a cell image into numbers (a ViT)",
-    svg: () => `<svg viewBox="0 0 468 200" class="mth">
-      ${_cellBlob(44, 100, 32, MTH_C.acc)}
-      ${_patchGrid(14, 72, 15, 4, [])}
+    svg: () => { const A = MTH_C.acc, P = MTH_C.pur, gx = 14, gy = 72, gs = 15, gn = 4;
+      // three discrete phenotype states — cell, active patches, tokens, and the 1024-d vector all switch together
+      const CELL = [{ rx: 30, ry: 30, nr: 7, org: [[36, 90]] }, { rx: 33, ry: 26, nr: 11, org: [[52, 110]] }, { rx: 27, ry: 33, nr: 15, org: [[52, 88], [36, 112]] }];
+      const HOTC = [[2, 5, 9], [1, 6, 10, 13], [0, 4, 7, 11, 14]];
+      const HOTT = [[0, 2, 4], [1, 4, 5], [0, 3, 4]];
+      const VEC = [[58, 26, 72, 40, 54, 20, 66, 34], [30, 64, 20, 80, 44, 60, 28, 72], [70, 18, 50, 34, 78, 26, 42, 60]];
+      const lattice = Array.from({ length: gn + 1 }, (_, k) => `<line x1="${gx + k * gs}" y1="${gy}" x2="${gx + k * gs}" y2="${gy + gn * gs}" stroke="rgba(255,255,255,.28)" stroke-width=".6"/><line x1="${gx}" y1="${gy + k * gs}" x2="${gx + gn * gs}" y2="${gy + k * gs}" stroke="rgba(255,255,255,.28)" stroke-width=".6"/>`).join("");
+      const cell = c => `<ellipse cx="44" cy="100" rx="${c.rx}" ry="${c.ry}" fill="${A}"/><circle cx="44" cy="100" r="${c.nr}" fill="rgba(0,0,0,.45)"/>${c.org.map(o => `<ellipse cx="${o[0]}" cy="${o[1]}" rx="4.5" ry="2" fill="rgba(0,0,0,.4)" transform="rotate(30 ${o[0]} ${o[1]})"/>`).join("")}`;
+      const hotC = hot => hot.map(i => `<rect x="${gx + (i % gn) * gs}" y="${gy + Math.floor(i / gn) * gs}" width="${gs}" height="${gs}" fill="${A}" opacity=".45"/>`).join("");
+      const tokens = hot => [0, 1, 2, 3, 4, 5].map(i => `<rect x="134" y="${42 + i * 20}" width="18" height="16" rx="3" fill="${hot.includes(i) ? "rgba(38,198,255,.6)" : "rgba(38,198,255,.12)"}" stroke="${A}"/>`).join("");
+      const stateG = s => `<g class="mth-st${s}">${cell(CELL[s])}${hotC(HOTC[s])}${lattice}${tokens(HOTT[s])}${_bars(352, 136, VEC[s], 11, 4, P, "")}</g>`;
+      return `<svg viewBox="0 0 468 200" class="mth">
+      ${[0, 1, 2].map(stateG).join("")}
       ${_lbl(44, 150, "image crop")}
       <text x="106" y="80" fill="#8b949e" font-size="8" text-anchor="middle">patchify</text>
       ${_arrow(82, 128, 100)}
-      ${[0, 1, 2, 3, 4, 5].map(i => `<rect x="134" y="${42 + i * 20}" width="18" height="16" rx="3" fill="rgba(38,198,255,.15)" stroke="${MTH_C.acc}" class="mth-glow" style="animation-delay:${i * 0.18}s"/>`).join("")}
       ${_lbl(143, 178, "patch tokens")}
       ${_arrow(158, 200, 100)}
       ${_box(204, 74, 98, 52, "Transformer", "self-attention")}
       ${_arrow(306, 346, 100)}
-      <g>${_bars(352, 136, [58, 26, 72, 40, 54, 20, 66, 34], 11, 4, MTH_C.pur, "mth-jit")}</g>
       ${_lbl(400, 156, "1024-d feature")}
-    </svg>`,
+    </svg>`; },
     body: "A <b>vision transformer</b> (CellDINO) cuts the image into a grid of <b>patches</b>, turns each into a token, and lets them <b>attend</b> to one another; the tokens are pooled into one <b>1,024-d feature vector</b> — a compact fingerprint of the cell's morphology. It's trained <b>self-supervised</b> (no labels), so similar cells get similar vectors.",
     why: "Turning each cell into a comparable vector is what makes morphology <i>measurable</i> — the basis for clustering, ranking, and steering the generative model.",
     defs: [["Patch / token", "the small square pieces the image is cut into; each becomes one input token to the transformer."],
