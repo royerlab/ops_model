@@ -434,6 +434,8 @@ button:hover{border-color:var(--accent)}
 .mth-flow-edge{animation:mthFlowEdge 3s ease-in-out infinite}
 @keyframes mthFlowNode{0%,100%{transform:scale(1)}10%{transform:scale(1.4)}28%{transform:scale(1)}}
 .mth-flow-node{transform-box:fill-box;transform-origin:center;animation:mthFlowNode 3s ease-in-out infinite}
+.brand{display:flex;align-items:center;gap:9px}
+.opsin-eyes{height:28px;width:auto;display:block}
 .biohub-logo{display:inline-flex;align-items:center;padding-left:10px;border-left:1px solid var(--line);margin-left:2px;opacity:.9;transition:opacity .15s}
 .biohub-logo img{height:26px;width:auto;display:block}
 .biohub-logo:hover{opacity:1}
