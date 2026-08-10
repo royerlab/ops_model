@@ -308,11 +308,10 @@ const METHODS_SLIDES = [
       const sx = 12, sw = 84, n = bases.length, step = sw / (n - 1), sy = 52;
       const pos = bases.map((b, i) => [sx + i * step, sy + (i % 2 ? -8 : 8)]);
       const backbone = "M " + pos.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" L ");
-      const beads = bases.map((b, i) => `<g class="mth-branch" style="animation-delay:${(i * 0.18).toFixed(2)}s"><circle cx="${pos[i][0].toFixed(1)}" cy="${pos[i][1].toFixed(1)}" r="5" fill="${bcol[b]}"/><text x="${pos[i][0].toFixed(1)}" y="${(pos[i][1] + 2.8).toFixed(1)}" font-size="6" fill="#0d0f13" text-anchor="middle" font-weight="700">${b}</text></g>`).join("");
+      const beads = bases.map((b, i) => `<g><circle cx="${pos[i][0].toFixed(1)}" cy="${pos[i][1].toFixed(1)}" r="5" fill="${bcol[b]}"/><text x="${pos[i][0].toFixed(1)}" y="${(pos[i][1] + 2.8).toFixed(1)}" font-size="6" fill="#0d0f13" text-anchor="middle" font-weight="700">${b}</text></g>`).join("");
       return `<svg viewBox="0 0 460 200" class="mth">
       <text x="54" y="26" fill="${MTH_C.grn}" font-size="10" text-anchor="middle">interleukin mRNA \u2191</text>
-      <path d="${backbone}" fill="none" stroke="#8b949e" stroke-width="1.6" opacity=".7"/>
-      ${beads}
+      <g class="mth-express"><path d="${backbone}" fill="none" stroke="#8b949e" stroke-width="1.6" opacity=".7"/>${beads}</g>
       <rect x="42" y="78" width="24" height="76" rx="3" fill="rgba(255,255,255,.05)" stroke="#30363d"/>
       <rect x="42" y="78" width="24" height="76" rx="3" fill="${MTH_C.grn}" class="mth-grow"/>
       ${_lbl(54, 170, "expression")}
