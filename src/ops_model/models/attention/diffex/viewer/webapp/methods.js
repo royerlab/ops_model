@@ -68,14 +68,14 @@ const METHODS_SLIDES = [
         ${[0, 1, 2, 3, 4, 5, 6].map(i => `<rect x="${208 + i * 4}" y="88" width="${1.5 + (i % 2) * 2}" height="24" fill="#e6e8ec"/>`).join("")}
         <text x="224" y="80" fill="#8b949e" font-size="8" text-anchor="middle">debarcode</text>
         ${_arrow(242, 270, 100)}
-        <rect x="278" y="42" width="120" height="116" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
+        <rect x="278" y="42" width="120" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
         ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
           i === 0 ? `<ellipse cx="${p[0]}" cy="${p[1]}" rx="9" ry="3" fill="rgba(0,0,0,.45)"/>`
             : i === 1 ? `<circle cx="${p[0] + 3}" cy="${p[1] - 2}" r="5" fill="rgba(0,0,0,.45)"/>`
               : i === 2 ? Array.from({ length: 4 }, (_, j) => `<circle cx="${p[0] - 6 + j * 4}" cy="${p[1] + 4}" r="1.6" fill="rgba(0,0,0,.45)"/>`).join("")
                 : `<rect x="${p[0] - 7}" y="${p[1] - 2}" width="14" height="3.5" rx="1" fill="rgba(0,0,0,.45)"/>`}</g>`).join("")}
-        <text x="338" y="152" fill="#8b949e" font-size="8.5" text-anchor="middle">many phenotypes — which is real?</text>
+        <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of gene knockouts are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the gene knocked out inside it. This yields millions of (gene, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation.",
     why: "The core question this whole viewer answers: for each perturbation, <b>which change in the cell captures its true phenotype</b> — separated from the noise of the technique's scale and heterogeneity? Everything that follows is one answer.",
