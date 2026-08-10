@@ -126,6 +126,8 @@ async function boot() {
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
   wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
+  $("tprev").onclick = () => stepTarget(-1);   // step through perturbations quickly
+  $("tnext").onclick = () => stepTarget(1);
   $("target-sort").onchange = () => { state.targetSort = $("target-sort").value;
     const show = () => { renderTargetList(); $("target-list").classList.remove("hidden"); };
     state.targetSort === "setacc" ? ensureSetacc(show) : show(); };
@@ -863,7 +865,9 @@ function wireHover() {
 // (~10-row) filtered list, typing narrows it, blur restores the selection label.
 function wireCombo(inputId, listId, renderList, currentLabel) {
   const inp = $(inputId), list = $(listId);
-  inp.onfocus = () => { inp.value = ""; renderList(); list.classList.remove("hidden"); };
+  inp.onfocus = () => { inp.value = ""; renderList(); list.classList.remove("hidden");
+    const sel = list.querySelector(".sel");   // open scrolled to the current selection (context above/below), not the top
+    if (sel) list.scrollTop = Math.max(0, sel.offsetTop - list.clientHeight / 2 + sel.offsetHeight / 2); };
   inp.oninput = () => { renderList(); list.classList.remove("hidden"); };
   inp.onblur = () => setTimeout(() => { list.classList.add("hidden"); inp.value = currentLabel(); }, 150);
 }
@@ -929,12 +933,21 @@ function saAcc(markerKey, pert, bin) {   // set-accuracy for a perturbation at a
   const v = r.acc[pert][bi]; return v == null ? null : v;
 }
 function targetAcc(t) { const v = saAcc(attnModality(), t.target, 100); return v == null ? -1 : v; }   // ordering: set-accuracy @100 (nearest); -1 if unknown
+function sortedTargets() {   // current list order: mAP-desc (manifest) | A–Z | set-accuracy — shared by the list + the ◀/▶ stepper
+  return state.targetSort === "alpha" ? [...state.targets].sort((a, b) => a.target.localeCompare(b.target))
+    : state.targetSort === "setacc" ? [...state.targets].sort((a, b) => targetAcc(b) - targetAcc(a))
+    : state.targets;
+}
+function stepTarget(d) {   // move to the previous/next perturbation in the current sorted order
+  const arr = sortedTargets(); if (!arr.length) return;
+  let i = state.target ? arr.findIndex(t => t.slug === state.target.slug) : -1;
+  i = Math.max(0, Math.min(arr.length - 1, (i < 0 ? 0 : i + d)));
+  const t = arr[i]; if (!t) return;
+  $("filter").value = targetLabel(t); selectTarget(t.slug);
+}
 function renderTargetList() {
   const q = $("filter").value.trim().toLowerCase(), list = $("target-list"); list.innerHTML = ""; let n = 0;
-  const arr = state.targetSort === "alpha"          // manifest order is mAP-desc; alpha re-sorts by name
-    ? [...state.targets].sort((a, b) => a.target.localeCompare(b.target))
-    : state.targetSort === "setacc"                 // selected marker's set-accuracy (higher first)
-    ? [...state.targets].sort((a, b) => targetAcc(b) - targetAcc(a)) : state.targets;
+  const arr = sortedTargets();
   arr.forEach(t => {
     if (q && !t.target.toLowerCase().includes(q)) return;
     const d = document.createElement("div"); d.className = "combo-item" + (state.target && t.slug === state.target.slug ? " sel" : "");

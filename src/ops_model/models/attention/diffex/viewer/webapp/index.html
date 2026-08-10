@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=152"/>
+<link rel="stylesheet" href="style.css?v=153"/>
 </head>
 <body>
 <header>
@@ -45,9 +45,13 @@
         <option value="setacc" title="Selected marker's SetTransformer set-accuracy (top1 @ 100 cells; phase for Phase) — higher = more distinctive">by SET ACC</option>
       </select>
     </label>
-    <div class="combo">
-      <input id="filter" type="text" placeholder="search perturbations…" autocomplete="off"/>
-      <div class="combo-list hidden" id="target-list"></div>
+    <div class="row">
+      <div class="combo">
+        <input id="filter" type="text" placeholder="search perturbations…" autocomplete="off"/>
+        <div class="combo-list hidden" id="target-list"></div>
+      </div>
+      <button id="tprev" title="previous perturbation">◀</button>
+      <button id="tnext" title="next perturbation">▶</button>
     </div>
   </div>
   <div class="tb-field">
@@ -332,7 +336,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=176"></script>
+<script src="app.js?v=177"></script>
 <script src="methods.js?v=46"></script>
 </body>
 </html>

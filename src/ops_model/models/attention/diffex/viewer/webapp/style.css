@@ -44,6 +44,7 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar .row{display:flex;gap:6px;align-items:center}
 #topbar .row #cellcount{width:56px}
 #topbar .row button{flex:none;padding:7px 11px}
+#topbar .row .combo{flex:1;min-width:0}
 /* combobox: input shows the selection; focus reveals a scrollable (~10-row) filtered list */
 .combo{position:relative}
 .combo-list{position:absolute;top:100%;left:0;right:0;z-index:60;margin-top:2px;
