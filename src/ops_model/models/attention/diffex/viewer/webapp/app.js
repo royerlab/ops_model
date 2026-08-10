@@ -50,7 +50,7 @@ function updateImgLevels() {
 // independently trims the deck to steps 1–6 when isPublic().
 function applyFeatureGate() {
   const pub = isPublic();
-  document.querySelectorAll("#tabbar .tab").forEach(b =>
+  document.querySelectorAll("#tabbar .tab, .about-tabdesc").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_TABS.has(b.dataset.tab)));
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
     const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();

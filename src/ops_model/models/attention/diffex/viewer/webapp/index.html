@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=158"/>
+<link rel="stylesheet" href="style.css?v=159"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -330,25 +330,30 @@
       <div id="info-body"></div>
     </div>
     <div id="side-about-view" style="display:none">
-      <div class="side-hd">About OPSin</div>
-      <div class="grp">
-        <span class="lbl">OPSin — OPS interpretability viewer</span>
-        <div class="hint">OPSin is a <b>phenotype hunter</b> — it makes cell state visible to the human eye. In a pooled microscopy screen, switching off a gene reshapes cells in ways too subtle to see. A <b>generative diffusion model</b>, trained on millions of real cell images, renders a healthy cell to reveal each gene or complex's phenotype.</div>
+      <div class="about-hero">
+        <img class="about-eyes" src="opsin-eyes.svg" alt=""/>
+        <div class="about-name">OPSin</div>
+        <div class="about-tag">Optical Pooled Screening Interpretability Viewer</div>
       </div>
-      <div class="grp">
-        <span class="lbl">The tabs</span>
-        <div class="hint"><b>Top cells</b> — the real cells that show each phenotype most clearly.</div>
-        <div class="hint"><b>Traversal</b> — a healthy cell rendered to show the selected phenotype; the <b>α</b> slider sets the strength (5 = exaggerated).</div>
-        <div class="hint"><b>Montage</b> — every gene's model-rendered cell on a map, so similar effects sit together.</div>
-        <div class="hint"><b>PCs</b> — real cells sorted along the model's main axes of variation, with the biology each captures.</div>
-        <div class="hint"><b>Attention</b> — where the model looked on the real cells (brighter = more informative).</div>
-        <div class="hint"><b>How it works</b> — a visual, step-by-step tour of the methods behind the viewer.</div>
+      <div class="about-lead">A <b>phenotype hunter</b>. In a pooled CRISPR microscopy screen, switching off a gene reshapes cells too subtly to see — a <b>generative diffusion model</b>, trained on millions of real cell images, re-renders a healthy cell to reveal each gene or complex's phenotype.</div>
+      <div class="about-sec">
+        <div class="about-cap">The tabs</div>
+        <ul class="about-tabs">
+          <li><b>Top cells</b> — the real cells that show each phenotype most clearly.</li>
+          <li><b>Traversal</b> — a healthy cell re-rendered toward the selected phenotype; <b>α</b> sets the strength.</li>
+          <li class="about-tabdesc" data-tab="montage"><b>Montage</b> — every gene's rendered cell on a map, so similar effects sit together.</li>
+          <li class="about-tabdesc" data-tab="pc"><b>PCs</b> — real cells sorted along the model's main axes of variation.</li>
+          <li class="about-tabdesc" data-tab="attn"><b>Attention</b> — where the model looked (brighter = more informative).</li>
+          <li><b>How it works</b> — a visual, step-by-step tour of the method.</li>
+        </ul>
       </div>
-      <div class="grp">
-        <span class="lbl">Contributors</span>
+      <div class="about-sec">
+        <div class="about-cap">Team</div>
         <div class="hint">Alex Hillsley · Alex Lin · Chad Liu · Gav Sturm · Kyle Awayan · Kyle Harrington · Ritvik Vasan · Trang Le</div>
-        <div class="hint">Biohub SF | CellXState Team</div>
-        <div class="hint">Source: <a href="https://github.com/czbiohub-sf/diffex-viewer" target="_blank" rel="noopener" style="color:#26c6ff">github.com/czbiohub-sf/diffex-viewer</a></div>
+      </div>
+      <div class="about-foot">
+        <a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a>
+        <span>Chan Zuckerberg Biohub SF · CellXState</span>
       </div>
     </div>
   </aside>
@@ -358,7 +363,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=183"></script>
+<script src="app.js?v=184"></script>
 <script src="methods.js?v=48"></script>
 </body>
 </html>

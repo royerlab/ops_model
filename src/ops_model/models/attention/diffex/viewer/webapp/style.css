@@ -501,3 +501,19 @@ button:hover{border-color:var(--accent)}
 .envtoggle{margin-right:12px;border-color:#d29922;color:#e3b341}
 .envtoggle:hover{border-color:#e3b341}
 .envtoggle.pub-on{background:rgba(210,153,34,.18);border-color:#e3b341;color:#f2cc60}
+
+/* About panel — branded hero + tighter, styled sections */
+.about-hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:3px;padding:4px 0 14px}
+.about-hero .about-eyes{width:54px;height:54px;margin-bottom:2px}
+.about-name{font:700 22px ui-sans-serif,system-ui,sans-serif;letter-spacing:.07em;color:var(--fg)}
+.about-tag{font-size:10.5px;color:var(--mut);letter-spacing:.03em;max-width:210px;line-height:1.35}
+.about-lead{font-size:12.5px;line-height:1.55;color:var(--mut);padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.about-lead b{color:var(--fg)}
+.about-sec{margin-bottom:15px}
+.about-cap{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:7px}
+.about-tabs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.about-tabs li{font-size:12px;line-height:1.45;color:var(--mut);padding-left:10px;border-left:2px solid var(--line)}
+.about-tabs li b{color:var(--fg)}
+.about-foot{display:flex;align-items:center;gap:10px;padding-top:13px;border-top:1px solid var(--line)}
+.about-foot img{height:20px;opacity:.92}
+.about-foot span{font-size:11px;color:var(--mut);line-height:1.35}
