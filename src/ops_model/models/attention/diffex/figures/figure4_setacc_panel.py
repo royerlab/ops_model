@@ -22,7 +22,8 @@ plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
 
 
-def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, bottom_caption=None):
+def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, bottom_caption=None,
+               title_in=0.55):
     cols = []
     for c in columns:
         try:
@@ -35,25 +36,30 @@ def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, 
         return
     n = len(cols)
 
-    fig = plt.figure(figsize=(n * tile + 0.7, 2 * tile + 1.1), facecolor="white")
-    gs = fig.add_gridspec(2, n, hspace=0.04, wspace=0.04, left=0.06, right=0.995, top=0.86, bottom=0.11)
+    left, right = 0.05, 0.997
+    bot_in = 0.40 if bottom_caption else 0.10          # inches reserved for the marker/caption row
+    W = n * tile / (right - left)
+    H = 2 * tile + title_in + bot_in                   # square cells (tile x tile) → images tile tight
+    fig = plt.figure(figsize=(W, H), facecolor="white")
+    gs = fig.add_gridspec(2, n, hspace=0.02, wspace=0.02, left=left, right=right,
+                          top=1 - title_in / H, bottom=bot_in / H)
     for j, (c, ko_im, ntc_im, kc, nc) in enumerate(cols):
-        for i, im in enumerate((ko_im, ntc_im)):
+        for i, im in enumerate((ntc_im, ko_im)):            # NTC on top, KO on bottom
             ax = fig.add_subplot(gs[i, j])
             ax.imshow(im)
             ax.set_xticks([]); ax.set_yticks([])
             for s in ax.spines.values():
                 s.set_edgecolor("#888"); s.set_linewidth(0.5)
             if i == 0:
-                ax.set_title(c["top_label"], fontsize=11, fontweight="bold", pad=4)
+                ax.set_title(c.get("marker_label") or c["top_label"], fontsize=11, fontweight="bold", pad=4)   # marker on top
             elif c.get("marker_label"):
-                ax.set_xlabel(c["marker_label"], fontsize=8.5)
+                ax.set_xlabel(c["top_label"], fontsize=11, fontweight="bold")                                  # KO/gene name on bottom
             if j == 0:
-                ax.set_ylabel("KO" if i == 0 else "NTC", fontsize=11, fontweight="bold", rotation=0,
+                ax.set_ylabel("NTC" if i == 0 else "KO", fontsize=11, fontweight="bold", rotation=0,
                               labelpad=14, va="center")
-    fig.suptitle(panel_title, fontsize=13, fontweight="bold", x=0.06, ha="left", y=0.965)
+    fig.suptitle(panel_title, fontsize=13, fontweight="bold", x=left, ha="left", va="top", y=0.995)
     if bottom_caption:
-        fig.text(0.5, 0.045, bottom_caption, fontsize=11, ha="center", style="italic")
+        fig.text(0.5, 0.4 * bot_in / H, bottom_caption, fontsize=11, ha="center", style="italic")
     os.makedirs(OUT, exist_ok=True)
     for ext in ("png", "svg"):
         fig.savefig(f"{OUT}/{out_stem}.{ext}", dpi=220, bbox_inches="tight", facecolor="white")
@@ -64,5 +70,5 @@ def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, 
 
 
 if __name__ == "__main__":
-    make_panel(GENE_COLS, "Gene KO  top set-accuracy cells (fluorescence)", "panelC_geneKO_setacc")
-    make_panel(COMPLEX_COLS, "Protein complex  top set-accuracy cells (fluorescence)", "panelD_complex_setacc")
+    make_panel(GENE_COLS, "Gene KO  top-predictive cells (fluorescence)", "panelC_geneKO_setacc", title_in=0.66)
+    make_panel(COMPLEX_COLS, "Protein complex  top-predictive cells (fluorescence)", "panelD_complex_setacc", title_in=0.66)

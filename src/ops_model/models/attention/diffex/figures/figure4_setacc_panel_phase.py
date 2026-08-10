@@ -5,5 +5,6 @@ from figure4_setacc_panel import make_panel
 from _setacc_phase import COLS_PHASE, column_tiles_phase
 
 if __name__ == "__main__":
-    make_panel(COLS_PHASE, "Top set-accuracy cells (phase)", "panelE_phase_setacc",
-               tiles_fn=column_tiles_phase, bottom_caption="Label-free 2D Phase")
+    make_panel(COLS_PHASE, "Top-predictive cells (phase)", "panelE_phase_setacc",
+               tiles_fn=column_tiles_phase, bottom_caption="Label-free 2D Phase",
+               title_in=0.66)   # room for 2-line column titles + suptitle, snug

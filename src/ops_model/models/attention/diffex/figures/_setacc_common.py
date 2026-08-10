@@ -17,7 +17,7 @@ from ops_model.models.attention.diffex.viewer._fluor_topcells import _overlay_rg
 from ops_model.models.attention.diffex.viewer.build_pc_crops_masked import BASE, CROP_SIZE, _crop, _zarr_patch
 
 OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_setacc_panel"
-RANK_BASE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor"
+RANK_BASE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor_shap"
 
 TIM23 = "TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
 COPI = "COPI vesicle coat complex, COPG1-COPZ1 variant"
@@ -27,30 +27,30 @@ COPI = "COPI vesicle coat complex, COPG1-COPZ1 variant"
 GENE_COLS = [
     dict(slug="Mitochondria_TOMM20", mc="Mitochondria_TOMM20", ch="CP1_mitochondria_TOMM20",
          block="genes", key="TOMM20", top_label="TOMM20", marker_label="Mitochondria\n(TOMM20)",
-         ko_rank=10, ntc_rank=17),
+         ko_rank=1, ntc_rank=18),
     dict(slug="nucleolus_GC_NPM3", mc="nucleolus-GC_NPM3", ch="GFP",
          block="genes", key="ZNRD1", top_label="POLR1H", marker_label="Nucleoli\n(NPM3-GFP)",
-         ko_rank=5, ntc_rank=10),
+         ko_rank=1, ntc_rank=5),
     dict(slug="5xUPRE", mc="5xUPRE", ch="GFP",
          block="genes", key="HSPA5", top_label="HSPA5", marker_label="UPR\n(5xUPRE)",
-         ko_rank=72, ntc_rank=10),
+         ko_rank=100, ntc_rank=3),
     dict(slug="ER_Golgi_COP_II_SEC23A", mc="ER/Golgi COP-II_SEC23A", ch="GFP",
          block="genes", key="GBF1", top_label="GBF1", marker_label="ER-Golgi\n(GFP-SEC23A)",
-         ko_rank=4, ntc_rank=11),
+         ko_rank=7, ntc_rank=2),
 ]
 COMPLEX_COLS = [
     dict(slug="mitochondria_ChromaLIVE_561_excitation", mc="mitochondria_ChromaLIVE 561 excitation",
          ch="mCherry", block="complexes", key=TIM23, top_label="TIM23",
-         marker_label="Mitochondria\n(ChromaLIVE 561)", ko_rank=1, ntc_rank=1),
+         marker_label="Mitochondria\n(ChromaLIVE 561)", ko_rank=27, ntc_rank=1),
     dict(slug="cell_proliferation_marker_MKI67", mc="cell proliferation marker_MKI67", ch="GFP",
          block="complexes", key="DNA polymerase alpha:primase complex", top_label="DNA Pol α",
-         marker_label="Proliferation\n(GFP-MKI67)", ko_rank=7, ntc_rank=2),
+         marker_label="Proliferation\n(GFP-MKI67)", ko_rank=2, ntc_rank=2),
     dict(slug="actin_filament_FastAct_SPY555_Live_Cell_Dye", mc="actin filament_FastAct_SPY555 Live Cell Dye",
          ch="mCherry", block="complexes", key="Chaperonin-containing T-complex", top_label="CCT",
-         marker_label="Actin\n(FastAct SPY555)", ko_rank=15, ntc_rank=3),
+         marker_label="Actin\n(FastAct SPY555)", ko_rank=4, ntc_rank=13),
     dict(slug="lysosome_LysoTracker_live_cell_dye", mc="lysosome_LysoTracker live-cell dye", ch="GFP",
          block="complexes", key="mTORC1 complex", top_label="mTORC1", marker_label="Lysosome\n(LysoTracker)",
-         ko_rank=1, ntc_rank=2),   # Rab-GGTase slot -> mTORC1 · Lysosome
+         ko_rank=18, ntc_rank=2),   # Rab-GGTase slot -> mTORC1 · Lysosome
 ]
 
 
@@ -148,7 +148,7 @@ def column_tiles(col):
     rank value) with a shared marker-global (KO+NTC) 1-99 pct window. Returns
     (ko_rgb, ntc_rgb, ko_conf, ntc_conf)."""
     ko_raw, ko_recs, ko_pos = crop_pick(col["mc"], col["ch"], col["block"], col["key"], col["ko_rank"])
-    ntc_raw, ntc_recs, ntc_pos = crop_pick(col["mc"], col["ch"], col["block"], "NTC", col["ntc_rank"])
+    ntc_raw, ntc_recs, ntc_pos = crop_pick(col["mc"], col["ch"], "genes", "NTC", col["ntc_rank"])   # NTC always from the marker's geneKO ranking (complex parquet has no NTC)
     lo, hi = np.percentile(np.concatenate([ko_raw.ravel(), ntc_raw.ravel()]), (1, 99))
     if hi - lo < 1e-6:
         hi = lo + 1
