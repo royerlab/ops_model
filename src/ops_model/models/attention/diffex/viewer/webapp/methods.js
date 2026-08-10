@@ -36,7 +36,7 @@ const MTH_REFS = {
   "Attention heads": [["DINO attention · Caron 2021", "https://arxiv.org/abs/2104.14294"], ["Attention is all you need · Vaswani 2017", "https://arxiv.org/abs/1706.03762"]],
   "Montage": [["UMAP · McInnes 2018", "https://arxiv.org/abs/1802.03426"], ["PHATE · Moon 2019", "https://doi.org/10.1038/s41587-019-0336-3"]],
   "Virtual staining": [["In silico labeling · Christiansen 2018", "https://doi.org/10.1016/j.cell.2018.03.040"], ["Diffusion autoencoders · Preechakul 2022", "https://arxiv.org/abs/2111.15640"]],
-  "What's next": [["CROP-seq · Datlinger 2017", "https://doi.org/10.1038/nmeth.4177"], ["Perturbation autoencoder (CPA) · Lotfollahi 2023", "https://doi.org/10.15252/msb.202211517"]],
+  "mRNA phenotypes": [["CROP-seq · Datlinger 2017", "https://doi.org/10.1038/nmeth.4177"], ["Perturbation autoencoder (CPA) · Lotfollahi 2023", "https://doi.org/10.15252/msb.202211517"]],
 };
 
 // longer "Learn more" paragraph per slide (keyed by nav) — unpacks the concept for readers who want depth
@@ -51,7 +51,7 @@ const MTH_MORE = {
   "Attention heads": "The vision transformer doesn't read pixels one at a time — it breaks the image into a grid of patches and, in each attention \"head\", decides how much every patch should influence its summary of the cell. Reading those weights back out gives a heat-map showing where the model concentrated. Different heads specialize on different structures, and the viewer lets you step through them and compare a perturbation against its control. The payoff is interpretability: instead of only telling you that a gene has a distinctive phenotype, the map shows you where the model is looking — e.g. a head that consistently lights up mitochondria for a mitochondrial gene — which you can check against the biology.",
   "Montage": "A single traversal shows one gene's effect; the Montage tab shows all of them at once — and controls for cell-to-cell variation by using the same anchor cell throughout. We morph that one cell toward each of the ~1,000 knockouts, giving 1,000 counterfactual images of the same starting cell. Each image is then positioned by its gene's coordinates on a UMAP or PHATE embedding of the gene-level phenotype space, so knockouts that produce similar morphologies land near one another. LatentLens stitches the crops into a continuous, zoomable atlas — pan and zoom to compare neighborhoods, spot phenotype clusters, and see where a gene of interest falls relative to the whole library.",
   "Virtual staining": "Fluorescent markers reveal specific structures but cost extra dyes, channels, and imaging, and you can only stain a few at once. Label-free phase imaging is cheap and gentle but hard to read. Virtual staining bridges them: we reuse the diffusion autoencoder and condition it on a phase image in two complementary ways. The semantic path sends the phase image through a frozen Cell-DINO ViT to a pooled code that, together with a learned marker id, globally modulates the U-Net (FiLM) — telling it what to draw. The spatial path concatenates the raw phase image as an extra U-Net input channel, so generation keeps the input's pixel layout and the predicted marker stays registered to the real cell (this is what lifts fidelity from ~0.13 to ~0.78 Pearson). One model, trained on paired (phase, marker) crops, covers all 42 live markers; switching the marker id renders any channel, and applied to a traversal it gives a full multi-channel phenotype for every perturbation from a single grayscale image.",
-  "What's next": "So far every direction has been morphological — defined in the CellDINO image-fingerprint space. But the same knockout library was also profiled by CROP-seq, which reads each cell's transcriptome (its gene-expression profile) instead of its picture, giving every gene a transcriptional signature (its pseudobulk expression shift versus NTC). How would we drive the diffusion decoder from that? Two designs. The <b>light one</b> reuses everything: fit a map — linear first, then a small MLP — from a gene's transcriptional shift to its shift in CellDINO space, then feed that predicted CellDINO direction into the existing decoder. No retraining, and the map's R² directly measures how much of morphology is even predictable from transcriptome. The <b>full one</b> conditions the diffusion model on the transcriptome directly, in the style of a compositional perturbation autoencoder (CPA): a single per-perturbation embedding drives both a transcriptome decoder (reconstructing the CROP-seq profile) and the image decoder, so the two modalities are tied through one shared latent and any transcriptional state — even an unseen combination — can be rendered. Either way the payoff is the same: a transcriptome↔morphology divergence map that flags the genes that reshape the transcriptome but barely change the image, or vice versa — decoupling that is invisible to either assay alone.",
+  "mRNA phenotypes": "So far every direction has been morphological — defined in the CellDINO image-fingerprint space. But the same knockout library was also profiled by CROP-seq, which reads each cell's transcriptome (its gene-expression profile) instead of its picture, giving every gene a transcriptional signature (its pseudobulk expression shift versus NTC). How would we drive the diffusion decoder from that? Two designs. The <b>light one</b> reuses everything: fit a map — linear first, then a small MLP — from a gene's transcriptional shift to its shift in CellDINO space, then feed that predicted CellDINO direction into the existing decoder. No retraining, and the map's R² directly measures how much of morphology is even predictable from transcriptome. The <b>full one</b> conditions the diffusion model on the transcriptome directly, in the style of a compositional perturbation autoencoder (CPA): a single per-perturbation embedding drives both a transcriptome decoder (reconstructing the CROP-seq profile) and the image decoder, so the two modalities are tied through one shared latent and any transcriptional state — even an unseen combination — can be rendered. Either way the payoff is the same: a transcriptome↔morphology divergence map that flags the genes that reshape the transcriptome but barely change the image, or vice versa — decoupling that is invisible to either assay alone.",
 };
 
 const METHODS_SLIDES = [
@@ -303,7 +303,7 @@ const METHODS_SLIDES = [
       ["Marker id", "a learned token selecting which of the 42 fluorescent channels to render from the same phase cell."]]
   },
   {
-    nav: "What's next", kicker: "THE NEXT DIRECTION", title: "From transcription to morphology",
+    nav: "mRNA phenotypes", kicker: "THE NEXT DIRECTION", title: "From transcription to morphology",
     svg: () => { const bases = ["A", "U", "G", "C", "A", "G", "U", "C"], bcol = { A: MTH_C.grn, U: MTH_C.yel, G: MTH_C.acc, C: MTH_C.pur };
       const sx = 12, sw = 84, n = bases.length, step = sw / (n - 1), sy = 52;
       const pos = bases.map((b, i) => [sx + i * step, sy + (i % 2 ? -8 : 8)]);
@@ -331,9 +331,12 @@ const METHODS_SLIDES = [
 ];
 
 // display order (narrative arc): data → represent → classify+interpret → generate+arrange → cross-channel → next
-const MTH_ORDER = ["The screen", "Embedding", "Classifier", "Top cells", "Attention heads",
-  "Diffusion", "Traversal", "Montage", "Virtual staining", "What's next"];   // DDIM folded into the Diffusion slide as a 2nd section
+// core methods (numbered 1..N, count stops at Montage) then "Extra" add-on slides (unnumbered)
+const MTH_ORDER = ["The screen", "Embedding", "Classifier", "Top cells", "Diffusion", "Traversal", "Montage",
+  "Attention heads", "Virtual staining", "mRNA phenotypes"];   // last 3 are Extras; DDIM folded into Diffusion
+const MTH_EXTRA = new Set(["Attention heads", "Virtual staining", "mRNA phenotypes"]);
 const MTH_DECK = MTH_ORDER.map(n => METHODS_SLIDES.find(s => s.nav === n)).filter(Boolean);
+const MTH_CORE_N = MTH_DECK.filter(s => !MTH_EXTRA.has(s.nav)).length;   // numbered slides (core methods, up to Montage)
 
 let _mthIdx = 0;
 function renderMethods() {
@@ -341,14 +344,14 @@ function renderMethods() {
   if (rail && !rail.querySelector(".mth-rail")) {
     const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < MTH_DECK.length) _mthIdx = sv;   // restore last-viewed section across reloads
     rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
-      <div class="mth-rail">${MTH_DECK.map((s, i) =>
-        `<button class="mth-railitem" onclick="methodsGo(${i})"><span class="mth-num">${i + 1}</span>${s.nav}</button>`).join("")}</div>`;
+      <div class="mth-rail">${MTH_DECK.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
+        return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>`;
   }
   const s = MTH_DECK[_mthIdx], view = document.getElementById("methods-view");
   if (!view) return;
   const refs = MTH_REFS[s.nav] || [];
   view.innerHTML = `<div class="mth-card">
-    <div class="mth-kicker">${s.kicker} · ${_mthIdx + 1} / ${MTH_DECK.length}</div>
+    <div class="mth-kicker">${s.kicker} · ${MTH_EXTRA.has(s.nav) ? "Extra" : (_mthIdx + 1) + " / " + MTH_CORE_N}</div>
     <h2 class="mth-title">${s.title}</h2>
     ${s.sections ? s.sections.map(sec => `<div class="mth-sec"><div class="mth-seccap">${sec.cap}</div><div class="mth-stage">${sec.svg()}</div>${sec.text ? `<div class="mth-sectext">${sec.text}</div>` : ""}</div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
     <div class="mth-body">${s.body}</div>
