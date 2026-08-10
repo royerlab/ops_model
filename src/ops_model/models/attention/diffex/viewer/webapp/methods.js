@@ -122,7 +122,7 @@ const METHODS_SLIDES = [
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
         ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
-        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".5" class="mth-sweep" style="--sw:280px"/>
+        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".22" class="mth-sweep" style="--sw:280px"/>
         ${_lbl(200, 26, "cells attend + pool", "#8b949e", 8)}
         ${_lbl(392, 196, "class scores (genes)")}
         <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
