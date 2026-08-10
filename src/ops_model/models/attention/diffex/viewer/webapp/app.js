@@ -51,6 +51,7 @@ function updateImgLevels() {
 // independently trims the deck to steps 1–6 when isPublic().
 function applyFeatureGate() {
   const pub = isPublic();
+  document.body.classList.toggle("public-mode", pub);   // lets CSS shrink the now-2-option Type selector, etc.
   document.querySelectorAll("#tabbar .tab, .about-tabdesc").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_TABS.has(b.dataset.tab)));
   const grain = $("grain");   // hide minibinder + PC from the Type selector in public

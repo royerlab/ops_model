@@ -36,6 +36,8 @@ header .sub{color:var(--mut);font-size:12px}
 .tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
 .tb-field:has(#markerfilter){min-width:240px;max-width:320px}   /* Marker search: ~50% wider than default, capped so it doesn't squish the rest */
 .tb-field:has(#grain){min-width:380px}          /* Type: all/geneKO/complex/minibinder/PC segmented — needs room */
+body.public-mode .tb-field:has(#grain){min-width:0}                 /* public: only geneKO/complex remain → size to content */
+body.public-mode .tb-field:has(#grain) .seg{flex:0 0 auto}          /* pills hug their text instead of stretching to fill */
 .tb-field.tb-grow{flex:0.6;min-width:170px;max-width:340px}
 .tb-field>label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .tb-field .hint{text-transform:none;letter-spacing:0;font-size:11px;opacity:.7}
