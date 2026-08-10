@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=159"/>
+<link rel="stylesheet" href="style.css?v=160"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -275,10 +275,12 @@
 
   <main id="stage">
     <div id="heatbar">
-      <div id="heat-grad"></div>
-      <div id="heat-real"><span>α=1 · true centroid</span></div>
-      <div id="heat-tick"></div>
-      <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (α=0)</span><span class="pos">phenotype</span></div>
+      <div id="heat-track">
+        <div id="heat-grad"></div>
+        <div id="heat-real"><span>α=1 · true centroid</span></div>
+        <div id="heat-tick"></div>
+        <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (α=0)</span><span class="pos">phenotype</span></div>
+      </div>
     </div>
     <div id="scrub">
       <button id="play">▶</button>
@@ -322,7 +324,7 @@
     <div id="methods-view"></div>
   </main>
 
-  <aside id="sidebar" class="hidden">
+  <aside id="sidebar">
     <div id="side-info-view">
       <div class="side-hd">Perturbation info</div>
       <div id="info-title"></div>
