@@ -138,8 +138,8 @@
       <label>Normalization
         <select id="a-norm" data-seg>
           <option value="map" title="brightest per tile" selected>per-cell</option>
-          <option value="gene" title="compare cells/heads">per-gene</option>
-          <option value="fixed" title="compare across genes">fixed</option>
+          <option value="gene" title="compare cells/heads">per-perturbation</option>
+          <option value="fixed" title="compare across perturbations">fixed</option>
         </select>
       </label>
       <label>Heatmap clim <span class="hint">(min–max window; narrower = brighter)</span></label>
@@ -159,8 +159,8 @@
     </div>
 
     <div class="tabpane hidden" id="tab-pc">
-      <div class="hint">Cells binned <b>low→high</b> along each CellDINO PC. Click a cell to <b>pop out</b>, a gene chip for its top PCs, or use the <b>search</b> to jump to a gene.</div>
-      <label class="chk"><input type="checkbox" id="pc-tfidf" data-on="tf-idf"/> tf-idf (downweight genes shared across PCs)</label>
+      <div class="hint">Cells binned <b>low→high</b> along each CellDINO PC. Click a cell to <b>pop out</b>, a perturbation chip for its top PCs, or use the <b>search</b> to jump to a perturbation.</div>
+      <label class="chk"><input type="checkbox" id="pc-tfidf" data-on="tf-idf"/> tf-idf (downweight perturbations shared across PCs)</label>
       <div class="pc-mode"><button id="pc-mode-onto" class="seg active" title="gene-set ontology enrichment">Ontology</button><button id="pc-mode-feat" class="seg" title="classical morphological feature enrichment (phase)">Features</button></div>
       <div id="pc-feat-opts" style="display:none">
         <label class="chk"><input type="checkbox" id="pc-dedup" data-on="dedup features" checked/> deduplicate features (collapse variants to one mean, e.g. all AngularSecondMoment)</label>
@@ -193,7 +193,7 @@
     </div>
 
     <div class="tabpane hidden" id="tab-montage">
-      <div class="hint">One NTC cell morphed toward <b>every gene</b>, each tile placed at that gene's embedding position — for the <b>selected marker</b> (phase by default). Scroll to zoom, drag to pan; hover a cell to see its gene.</div>
+      <div class="hint">One NTC cell morphed toward <b>every perturbation</b>, each tile placed at that perturbation's embedding position — for the <b>selected marker</b> (phase by default). Scroll to zoom, drag to pan; hover a cell to see its perturbation.</div>
       <label>Renderer
         <select id="m-render" data-seg>
           <option value="tiles" title="precomputed, multiscale" selected>Montage</option>
@@ -337,13 +337,13 @@
         <div class="about-name">OPSin</div>
         <div class="about-tag">Optical Pooled Screening Interpretability Viewer</div>
       </div>
-      <div class="about-lead">A <b>phenotype hunter</b>. In a pooled CRISPR microscopy screen, switching off a gene reshapes cells too subtly to see — a <b>generative diffusion model</b>, trained on millions of real cell images, re-renders a healthy cell to reveal each gene or complex's phenotype.</div>
+      <div class="about-lead">A <b>phenotype hunter</b>. In a pooled CRISPR microscopy screen, a geneKO reshapes cells too subtly to see — a <b>generative diffusion model</b>, trained on millions of real cell images, re-renders a healthy cell to reveal each geneKO or complex's phenotype.</div>
       <div class="about-sec">
         <div class="about-cap">The tabs</div>
         <ul class="about-tabs">
           <li><b>Top cells</b> — the real cells that show each phenotype most clearly.</li>
           <li><b>Traversal</b> — a healthy cell re-rendered toward the selected phenotype; <b>α</b> sets the strength.</li>
-          <li class="about-tabdesc" data-tab="montage"><b>Montage</b> — every gene's rendered cell on a map, so similar effects sit together.</li>
+          <li class="about-tabdesc" data-tab="montage"><b>Montage</b> — every perturbation's rendered cell on a map, so similar effects sit together.</li>
           <li class="about-tabdesc" data-tab="pc"><b>PCs</b> — real cells sorted along the model's main axes of variation.</li>
           <li class="about-tabdesc" data-tab="attn"><b>Attention</b> — where the model looked (brighter = more informative).</li>
           <li><b>How it works</b> — a visual, step-by-step tour of the method.</li>
@@ -365,7 +365,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=184"></script>
-<script src="methods.js?v=50"></script>
+<script src="app.js?v=185"></script>
+<script src="methods.js?v=51"></script>
 </body>
 </html>

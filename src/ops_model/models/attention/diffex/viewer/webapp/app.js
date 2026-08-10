@@ -538,7 +538,7 @@ async function loadMontage() {
   }
   layers.push({ tileSource: osdSrc(base, tj), opacity: overlayActive() ? mont.ovlAlpha : mont.imgAlpha });   // top = stained overlay (low α so phase shows) / single montage
   $("m-status").textContent = `${overlayActive() ? (phaseHidden() ? "" : "phase + ") + overlaySel().replace("__allmarkers__", "all markers") + " · " : ""}${base.split("/").pop()} · ${tj.width}×${tj.height}, ${tj.levels.length} levels`;
-  $("m-embed").textContent = `Embedding: ${tj.embedding || "gene UMAP"}`;
+  $("m-embed").textContent = `Embedding: ${tj.embedding || "perturbation UMAP"}`;
   mont.W = tj.width;
   const dimKey = `${tj.width}x${tj.height}`;
   if (mont.osd && mont.dimKey && mont.dimKey !== dimKey) { mont.osd.destroy(); mont.osd = null; }  // aspect change (umap↔phate) → full reset, no residue
@@ -1653,8 +1653,8 @@ function renderPC(d) {
   const belowH = feat ? pcFeatHtml(d.pc, "high") : pcEnrichHtml(enH);
   const belowL = feat ? pcFeatHtml(d.pc, "low") : pcEnrichHtml(enL);
   h += '<div class="pc-genes">' +
-    `<div><div class="sec-lbl">High-loading genes (positive)</div><div class="chips">${pcRank(d.high_genes).map(g => chip(g, "pos", "+")).join("")}</div>${belowH}</div>` +
-    `<div><div class="sec-lbl">Low-loading genes (negative)</div><div class="chips">${pcRank(d.low_genes).map(g => chip(g, "neg", "")).join("")}</div>${belowL}</div>` +
+    `<div><div class="sec-lbl">High-loading perturbations (positive)</div><div class="chips">${pcRank(d.high_genes).map(g => chip(g, "pos", "+")).join("")}</div>${belowH}</div>` +
+    `<div><div class="sec-lbl">Low-loading perturbations (negative)</div><div class="chips">${pcRank(d.low_genes).map(g => chip(g, "neg", "")).join("")}</div>${belowL}</div>` +
     "</div>";
   if (feat) h += pcCompHtml(d.pc);
   view.innerHTML = h;
