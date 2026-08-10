@@ -79,7 +79,11 @@ const METHODS_SLIDES = [
         ${_arrow(242, 270, 100)}
         <rect x="278" y="42" width="120" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
-        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${scell(p[0], p[1], 15, _mix(MTH_C.acc, MTH_C.fg, [0, .16, .08, .22][i]), 30 + 50 * i)}</g>`).join("")}
+        ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_cellBlob(p[0], p[1], 15, MTH_C.acc)}${
+          i === 0 ? `<ellipse cx="${p[0]}" cy="${p[1]}" rx="9" ry="3" fill="rgba(0,0,0,.45)"/>`
+            : i === 1 ? `<circle cx="${p[0] + 3}" cy="${p[1] - 2}" r="5" fill="rgba(0,0,0,.45)"/>`
+              : i === 2 ? Array.from({ length: 4 }, (_, j) => `<circle cx="${p[0] - 6 + j * 4}" cy="${p[1] + 4}" r="1.6" fill="rgba(0,0,0,.45)"/>`).join("")
+                : `<rect x="${p[0] - 7}" y="${p[1] - 2}" width="14" height="3.5" rx="1" fill="rgba(0,0,0,.45)"/>`}</g>`).join("")}
         <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of gene knockouts are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the gene knocked out inside it. This yields millions of (gene, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation.",
@@ -146,7 +150,7 @@ const METHODS_SLIDES = [
     svg: () => `<svg viewBox="0 0 468 200" class="mth">
       <rect x="14" y="46" width="66" height="108" rx="8" fill="rgba(255,255,255,.04)" stroke="#30363d"/>
       ${_cellBlob(34, 82, 9, MTH_C.acc)}${_cellBlob(58, 82, 9, MTH_C.acc)}${_cellBlob(34, 116, 9, MTH_C.acc)}
-      <g class="mth-pulse">${_cellBlob(58, 116, 12.5, MTH_C.ko)}</g>
+      <g class="mth-remove">${_cellBlob(58, 116, 12.5, MTH_C.ko)}</g>
       ${_lbl(47, 170, "bag · cell x")}
       ${_arrow(84, 140, 100)}
       ${[64, 100, 136].flatMap(a => [64, 100, 136].map(b => `<line x1="150" y1="${a}" x2="192" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".6" opacity=".3"/>`)).join("")}
@@ -162,7 +166,7 @@ const METHODS_SLIDES = [
       <text x="260" y="79" fill="${MTH_C.ko}" font-size="9" text-anchor="end">Δ = score(x)</text>
       ${_lbl(285, 48, "with x", MTH_C.ko, 9)}${_lbl(285, 156, "without x", "#8b949e", 9)}
       ${_arrow(334, 368, 100)}
-      ${(() => { let cx = 372; return [0, 1, 2, 3, 4].map(i => { const top = i === 4; const r = 4.5 + i * 1.1; if (i > 0) cx += (4.5 + (i - 1) * 1.1) + r + 5; return `<g ${top ? 'class="mth-hi" style="animation-delay:.1s"' : ""}><circle cx="${cx.toFixed(1)}" cy="100" r="${r}" fill="${top ? MTH_C.ko : MTH_C.acc}" opacity="${(0.55 + i * 0.11).toFixed(2)}"/></g>`; }).join(""); })()}
+      ${(() => { let cx = 372; return [0, 1, 2, 3, 4].map(i => { const top = i === 4; const r = 4.5 + i * 1.1; if (i > 0) cx += (4.5 + (i - 1) * 1.1) + r + 5; return `<g ${top ? 'class="mth-shrink"' : ""}><circle cx="${cx.toFixed(1)}" cy="100" r="${r}" fill="${top ? MTH_C.ko : MTH_C.acc}" opacity="${(0.55 + i * 0.11).toFixed(2)}"/></g>`; }).join(""); })()}
       ${_lbl(404, 128, "higher rank →")}
     </svg>`,
     body: "To find a perturbation's most telling cells, we score each cell by how much it <b>helps the classifier</b>: the drop in predicted probability when the cell is <b>removed</b> from a bag (\"explaining by removing\"), averaged over many bag sizes and random partners. The top-scoring <b>top-predictive cells</b> carry the phenotypic signature — the cells the viewer anchors its traversals to and shows in Top Cells. Re-weighting the gene-level <b>mAP</b> by these cells sharpens the distinctiveness ranking.",
@@ -263,10 +267,10 @@ const METHODS_SLIDES = [
   {
     nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
     svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
-      // each arm = a different phenotype axis: 0 acc grows · 1 ko elongates · 2 grn nucleus grows · 3 pur shrinks
+      // each arm = a different phenotype axis: 0 acc grows · 1 ko elongates · 2 grn (bottom) shrinks · 3 pur nucleus grows
       const mcell = (x, y, b, i, col, t, ang) => { const hue = _mix(MTH_C.ntc, col, t), dark = _mix(col, "#000000", .3);
         if (b === 1) { const rx = 6 + i * 1.4, ry = Math.max(2.6, 6 - i * 0.6); return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${hue}" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/><ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${(rx * 0.4).toFixed(1)}" ry="${(ry * 0.55).toFixed(1)}" fill="rgba(0,0,0,.5)" transform="rotate(${ang} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; }
-        let s, nr; if (b === 0) { s = 5 + i * 1.2; nr = s * 0.34; } else if (b === 2) { s = 9; nr = 1.6 + i * 1.15; } else { s = Math.max(4, 11 - i * 1.4); nr = s * 0.34; }
+        let s, nr; if (b === 0) { s = 5 + i * 1.2; nr = s * 0.34; } else if (b === 3) { s = 9; nr = 1.6 + i * 1.15; } else { s = Math.max(4, 11 - i * 1.4); nr = s * 0.34; }
         return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.toFixed(1)}" fill="${hue}"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(nr, s * 0.82).toFixed(1)}" fill="rgba(0,0,0,.55)"/><ellipse cx="${(x + s * 0.32).toFixed(1)}" cy="${(y + s * 0.3).toFixed(1)}" rx="${(s * 0.3).toFixed(1)}" ry="${(s * 0.13).toFixed(1)}" fill="${dark}" opacity=".4" transform="rotate(${ang} ${(x + s * 0.32).toFixed(1)} ${(y + s * 0.3).toFixed(1)})"/>`; };
       let out = "";
       B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${mcell(x, y, b, i, col, t, (a * 57).toFixed(0))}</g>`; } });

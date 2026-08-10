@@ -5,13 +5,17 @@ const ASSET_PREFIX = "";                // app is served from inside the v5 asse
 const MANIFEST_URL = window.MANIFEST_URL || (ASSET_PREFIX + "manifest.json");
 const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
 function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation) | 'about' (viewer overview). Re-click active → hide.
-  if (!init && state.sidePanel === m) { const hidden = $("sidebar").classList.toggle("hidden"); $("side-" + m).classList.toggle("active", !hidden); return; }
-  state.sidePanel = m;
-  $("side-info").classList.toggle("active", m === "info");
-  $("side-about").classList.toggle("active", m === "about");
-  $("side-info-view").style.display = m === "info" ? "" : "none";
-  $("side-about-view").style.display = m === "about" ? "" : "none";
-  if (!init) $("sidebar").classList.remove("hidden");   // init only sets the active panel; sidebar stays collapsed until clicked
+  const bar = $("sidebar");
+  if (!init && state.sidePanel === m) { bar.classList.toggle("hidden"); }   // re-click toggles visibility
+  else {
+    state.sidePanel = m;
+    $("side-info-view").style.display = m === "info" ? "" : "none";
+    $("side-about-view").style.display = m === "about" ? "" : "none";
+    if (!init) bar.classList.remove("hidden");
+  }
+  const vis = !bar.classList.contains("hidden");   // a button is blue ONLY when its panel is actually showing
+  $("side-info").classList.toggle("active", vis && state.sidePanel === "info");
+  $("side-about").classList.toggle("active", vis && state.sidePanel === "about");
   if (!init && typeof saveState === "function") saveState();
 }
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
