@@ -304,16 +304,23 @@ const METHODS_SLIDES = [
   },
   {
     nav: "What's next", kicker: "THE NEXT DIRECTION", title: "From transcription to morphology",
-    svg: () => `<svg viewBox="0 0 460 200" class="mth">
-      <text x="66" y="42" fill="${MTH_C.grn}" font-size="10" text-anchor="middle">interleukin mRNA \u2191</text>
-      <rect x="52" y="58" width="24" height="96" rx="3" fill="rgba(255,255,255,.05)" stroke="#30363d"/>
-      <rect x="52" y="58" width="24" height="96" rx="3" fill="${MTH_C.grn}" class="mth-grow"/>
-      ${_lbl(64, 172, "expression")}
+    svg: () => { const bases = ["A", "U", "G", "C", "A", "G", "U", "C"], bcol = { A: MTH_C.grn, U: MTH_C.yel, G: MTH_C.acc, C: MTH_C.pur };
+      const sx = 12, sw = 84, n = bases.length, step = sw / (n - 1), sy = 52;
+      const pos = bases.map((b, i) => [sx + i * step, sy + (i % 2 ? -8 : 8)]);
+      const backbone = "M " + pos.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" L ");
+      const beads = bases.map((b, i) => `<g class="mth-branch" style="animation-delay:${(i * 0.18).toFixed(2)}s"><circle cx="${pos[i][0].toFixed(1)}" cy="${pos[i][1].toFixed(1)}" r="5" fill="${bcol[b]}"/><text x="${pos[i][0].toFixed(1)}" y="${(pos[i][1] + 2.8).toFixed(1)}" font-size="6" fill="#0d0f13" text-anchor="middle" font-weight="700">${b}</text></g>`).join("");
+      return `<svg viewBox="0 0 460 200" class="mth">
+      <text x="54" y="26" fill="${MTH_C.grn}" font-size="10" text-anchor="middle">interleukin mRNA \u2191</text>
+      <path d="${backbone}" fill="none" stroke="#8b949e" stroke-width="1.6" opacity=".7"/>
+      ${beads}
+      <rect x="42" y="78" width="24" height="76" rx="3" fill="rgba(255,255,255,.05)" stroke="#30363d"/>
+      <rect x="42" y="78" width="24" height="76" rx="3" fill="${MTH_C.grn}" class="mth-grow"/>
+      ${_lbl(54, 170, "expression")}
       ${_arrow(98, 250, 100)}
       ${_lbl(176, 86, "predict", "#8b949e", 9)}
       <g class="mth-morph">${_cellBlob(348, 100, 42, MTH_C.acc)}</g>
       ${_lbl(348, 164, "morphology follows")}
-    </svg>`,
+    </svg>`; },
     body: "The same library was also profiled by <b>CROP-seq</b> (single-cell RNA), so each gene has a <b>transcriptional signature</b> too. Next we condition the diffusion decoder on <b>transcriptional</b> change instead of a morphological direction — either by mapping a gene's expression shift onto a CellDINO direction (reusing this decoder), or by feeding the transcriptome straight into the model as a <b>learned perturbation vector</b> added in its latent space. Then we ask how a cell's shape should follow its gene-expression state \u2014 e.g. as <b>interleukin</b> expression rises, watch the morphology change.",
     why: "Bridging transcriptome and image lets us see which genes <i>decouple</i> the two (loud in RNA, silent in shape — or the reverse) — the core question of the transcriptional project.",
     defs: [["CROP-seq", "a pooled CRISPR screen read out by single-cell RNA sequencing (the transcriptome), on the same knockout library."],
