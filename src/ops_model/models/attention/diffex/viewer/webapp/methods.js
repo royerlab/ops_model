@@ -248,7 +248,7 @@ const METHODS_SLIDES = [
       ${_lbl(cx, 186, lbl)}`;
       return `<svg viewBox="0 0 440 200" class="mth">
         ${cell(112, [16, 17, 22, 23], "head A — tubules")}
-        ${cell(330, [7, 8, 13], "head B — nucleoli")}
+        ${cell(330, [7, 8, 13, 14], "head B — nucleoli")}
       </svg>`; },
     body: "The vision transformer splits the cell into <b>patches</b>, and each <b>attention head</b> weights which patches it focuses on. Drawn as a heat-map, a head shows <i>which structures</i> the model attends to for a given cell — for example one that concentrates on mitochondria.",
     why: "It makes the model's focus visible and checkable against known biology, rather than leaving the phenotype call as a black box.",
