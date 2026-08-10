@@ -129,7 +129,7 @@ const METHODS_SLIDES = [
       const set = (col, by, hl) => `<g class="${hl ? "mth-hi" : ""}" ${hl ? 'style="animation-delay:.2s"' : 'opacity=".5"'}>${[[16, by], [30, by], [16, by + 14], [30, by + 14]].map(c => _cellBlob(c[0], c[1], 5.5, col)).join("")}</g>`;
       return `<svg viewBox="0 0 470 200" class="mth">
         ${[MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur].map((col, s) => set(col, 30 + s * 40, col === MTH_C.acc)).join("")}
-        <text x="6" y="182" fill="#8b949e" font-size="10">CellDINO vectors</text><text x="6" y="194" fill="#8b949e" font-size="10">(one per cell; a set = one gene)</text>
+        <text x="6" y="182" fill="#8b949e" font-size="10">CellDINO vectors</text><text x="6" y="194" fill="#8b949e" font-size="10">(one per cell; a set = one perturbation)</text>
         ${_arrow(46, 108, 100, MTH_C.acc)}
         ${edges(X[0], L0, X[1], LH, 0.25)}${edges(X[1], LH, X[2], LH, 0.75)}${LH.map(a => OY.map((b, j) => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28" ${j === 1 ? 'class="mth-flow-edge" style="animation-delay:1.25s"' : ""}/>`).join("")).join("")}
         ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}" class="mth-flow-node"/>`).join("")}
