@@ -40,6 +40,25 @@ ties the modalities through one latent. Any transcriptional state → `e_g` → 
 1. pseudobulk logFC vs NTC (per gene); 2. learned scRNA latent (scVI/PCA) mean per gene; 3. pathway/program
 module scores (most interpretable "dials"). Start with (1)/(2) for the direction, expose (3) as the control.
 
+## Concrete CROP-seq source — Duo's sVAE+ gene-program embeddings (June 2025)
+Duo Peng built the CROP-seq embeddings we should use as option (2)/(3). This is a **sparse VAE (sVAE+)** — Lopez
+et al. 2023, *Learning Causal Representations of Single Cells via Sparse Mechanism Shift Modeling* — so the latent
+axes are interpretable **gene programs**, which is exactly the "dial a pathway" control we wanted.
+- Confluence: [sVAE approach to gene programs v3](https://czbiohub.atlassian.net/wiki/spaces/dashboard/pages/5199986706/sVAE+approach+to+gene+programs+v3)
+  — the **purple "sVAE embeddings" section** has the embeddings file.
+- **Run the encoder to embed new expression profiles** — point setup at the parent results folder:
+  `/hpc/projects/data.science/duo.peng/sVAEplus/sVAEplus/6000HVG/svaeplus_results_2_256_1_200_0.5/`
+  - trained encoder: `best_model/model.pt`; params `best_params.json` (n_layers=2, n_hidden=256,
+    sparse_mask_penalty=1.0, kl_warmup=200, dropout=0.05); code root `.../sVAEplus/sVAEplus/sVAE-main` + `ops_utils`, `install.sh`.
+  - expression values (normalized, sVAE+-compat, filtered, 6000 HVG):
+    `.../svaeplus_results_2_256_1_200_0.5/CropSeq_June2025_filtered_normalized_compat_forsvaeplus_filtered.h5ad`
+- ⚠️ **`gene_loadings.csv` (gene → gene-program activity) is a post-hoc *linear* summary — do NOT use it as the
+  mapping.** The real expression → program mapping is **non-linear**; get it by running the encoder on expression
+  values, not by the loadings matrix.
+- Fit for the plan: these program embeddings are the transcriptional vector for **Path B** (`Δprogram_g →
+  ΔCellDINO_g`) and the shared-latent seed / conditioning signal for **Path A**. Per-gene means over the encoder
+  output give Δt_g; NTC cells in the same h5ad define the control baseline.
+
 ## The novel payoff: transcriptome↔morphology divergence map
 Plot every gene by (transcriptional effect size, morphological effect size). The DiffAE then lets you *see*:
 - **transcriptionally loud, morphologically silent** → counterfactual "what it would look like if it manifested"
@@ -52,7 +71,9 @@ Plot every gene by (transcriptional effect size, morphological effect size). The
 existing CellDINO-driven morph (agreement = validation, divergence = biology). Reuses traversal/montage render.
 
 ## To scope
-1. CROP-seq path/format (h5ad? per-cell w/ guide calls or pseudobulked); gene-overlap with the imaging 1000-lib.
+1. ~~CROP-seq path/format~~ → **resolved**: Duo's sVAE+ h5ad + trained encoder (see section above). Still TBD:
+   gene-overlap of the CROP-seq library with the imaging 1000-lib; whether to embed with the encoder or use
+   Duo's precomputed embeddings from the purple Confluence section.
 2. per-gene vs per-guide signatures.
 3. matched NTC/control in CROP-seq to define Δ.
 4. payoff emphasis: generator vs divergence-map.
