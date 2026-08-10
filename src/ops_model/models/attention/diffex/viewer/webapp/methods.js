@@ -172,9 +172,9 @@ const METHODS_SLIDES = [
       { cap: "1 · Decode — paint the cell a CellDINO vector describes",
         text: "We <b>condition</b> a diffusion model on a cell's <b>CellDINO vector</b> (the same fingerprint from the Embedding tab). Starting from noise it removes a little at each step, steered by that vector, until it produces the exact cell the vector describes — so the model becomes a <b>decoder</b> for CellDINO space.",
         svg: () => `<svg viewBox="0 0 470 150" class="mth">
-        <g>${_bars(12, 74, [10, 5, 14, 7, 11, 6], 5, 2, MTH_C.pur, "mth-jit")}</g>
-        <text x="32" y="90" fill="${MTH_C.pur}" font-size="8.5" text-anchor="middle">CellDINO z</text>
-        ${_arrow(54, 90, 56, MTH_C.pur)}
+        <g>${_bars(10, 80, [22, 11, 30, 15, 24, 13], 7, 3, MTH_C.pur, "mth-jit")}</g>
+        <text x="40" y="98" fill="${MTH_C.pur}" font-size="11" text-anchor="middle">CellDINO z</text>
+        ${_arrow(76, 96, 56, MTH_C.pur)}
         ${[0, 1, 2, 3].map(i => { const x = 98 + i * 90, op = i / 3;
           const noise = Array.from({ length: (3 - i) * 7 + 2 }, (_, j) => `<circle cx="${x + 8 + (j * 13) % 50}" cy="${34 + (j * 17) % 50}" r="1.6" fill="#8b949e" opacity="${1 - op * 0.85}"/>`).join("");
           return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="rgba(0,0,0,.25)" stroke="#30363d"/>${noise}<g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
@@ -262,8 +262,8 @@ const METHODS_SLIDES = [
       B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; const cell = _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${(a * 57).toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${cell}</g>`; } });
       return `<svg viewBox="0 0 460 200" class="mth">
         ${out}
-        <g class="mth-pulse">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
-        ${_lbl(cx, cy + 28, "NTC")}
+        <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
+        ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
         ${_lbl(230, 194, "each direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
       </svg>`; },
     body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
