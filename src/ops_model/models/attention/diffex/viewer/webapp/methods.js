@@ -265,7 +265,7 @@ const METHODS_SLIDES = [
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
         ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
-        ${_lbl(332, 101, "→ gene A", MTH_C.ko, 10)}${_lbl(250, 170, "→ gene B", MTH_C.grn, 10)}
+        ${_lbl(332, 101, "→ gene A", MTH_C.ko, 10)}${_lbl(224, 176, "→ gene B", MTH_C.grn, 10)}
         ${_lbl(384, 30, "each arm = one perturbation", "#8b949e", 9)}${_lbl(384, 42, "· same control cell throughout", "#8b949e", 9)}
         ${_lbl(230, 194, "direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
       </svg>`; },
