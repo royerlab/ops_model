@@ -34,7 +34,7 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar{display:flex;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);
         background:var(--panel);align-items:flex-start;flex-wrap:wrap;flex:none}
 .tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
-.tb-field:has(#markerfilter){flex:1.4;min-width:320px;max-width:620px}   /* Marker search: grow into the free space on the right, shifting the rest over */
+.tb-field:has(#markerfilter){min-width:240px;max-width:320px}   /* Marker search: ~50% wider than default, capped so it doesn't squish the rest */
 .tb-field:has(#grain){min-width:380px}          /* Type: all/geneKO/complex/minibinder/PC segmented — needs room */
 .tb-field.tb-grow{flex:0.6;min-width:170px;max-width:340px}
 .tb-field>label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
@@ -350,7 +350,7 @@ button:hover{border-color:var(--accent)}
 .mth-dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.2);cursor:pointer}
 .mth-dot.on{background:var(--accent)}
 /* SVG animations (group transforms + opacity; per-class transform-origin) */
-svg.mth *{transform-box:fill-box}
+.mth-pulse,.mth-breathe,.mth-rise,.mth-collapse,.mth-morph,.mth-slide,.mth-glow,.mth-sweep,.mth-hi,.mth-jit,.mth-soft,.mth-branch,.mth-cyc{transform-box:fill-box}
 @keyframes mthPulse{0%,100%{opacity:.35}50%{opacity:1}}
 .mth-pulse{transform-origin:center;animation:mthPulse 2.6s ease-in-out infinite}
 @keyframes mthBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
@@ -366,7 +366,7 @@ svg.mth *{transform-box:fill-box}
 @keyframes mthSlide{0%,100%{transform:translateX(0)}50%{transform:translateX(280px)}}
 .mth-slide{animation:mthSlide 3.2s ease-in-out infinite}
 @keyframes mthGlow{0%,100%{transform:scale(.7);opacity:.35}50%{transform:scale(1.15);opacity:.9}}
-.mth-glow{transform-origin:center;animation:mthGlow 2.2s ease-in-out infinite}
+.mth-glow{transform-origin:center;animation:mthGlow 3.6s ease-in-out infinite}
 @keyframes mthCycA{0%,100%{opacity:1}50%{opacity:.12}}
 .mth-cycA{animation:mthCycA 3s ease-in-out infinite}
 @keyframes mthCycB{0%,100%{opacity:.12}50%{opacity:1}}
@@ -384,7 +384,7 @@ svg.mth *{transform-box:fill-box}
 .mth-defs dt{font-size:12.5px;font-weight:600;color:var(--fg)}
 .mth-defs dd{margin:1px 0 0;font-size:12.5px;line-height:1.5;color:var(--mut)}
 @keyframes mthSweep{0%{transform:translateX(0);opacity:0}12%{opacity:.9}88%{transform:translateX(304px);opacity:.9}100%{transform:translateX(304px);opacity:0}}
-.mth-sweep{animation:mthSweep 3.4s ease-in-out infinite}
+.mth-sweep{animation:mthSweep 5.5s ease-in-out infinite}
 /* methods tab — larger text + wider layout + Learn-more dropdown (feedback) */
 #methods-view{max-width:1180px}
 #stage.methods-active{padding:16px 30px}
@@ -410,7 +410,16 @@ svg.mth *{transform-box:fill-box}
 .mth-sec .mth-stage{padding:4px 0 8px}
 .mth-sec .mth-stage svg.mth{max-width:620px}
 .mth-sectext{font-size:14px;line-height:1.5;color:var(--fg);text-align:center;max-width:640px;margin:2px auto 6px}
-@keyframes mthHi{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.3);opacity:1}}
-.mth-hi{transform-origin:center;animation:mthHi 2.4s ease-in-out infinite}
-@keyframes mthJit{0%,100%{transform:scaleY(.82)}50%{transform:scaleY(1.06)}}
-.mth-jit{transform-origin:bottom;animation:mthJit 1.9s ease-in-out infinite}
+@keyframes mthHi{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.16);opacity:1}}
+.mth-hi{transform-origin:center;animation:mthHi 4.5s ease-in-out infinite}
+@keyframes mthJit{0%,100%{transform:scaleY(.9)}50%{transform:scaleY(1.05)}}
+.mth-jit{transform-origin:bottom;animation:mthJit 3.4s ease-in-out infinite}
+
+@keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
+.mth-soft{animation:mthSoft 4.8s ease-in-out infinite}
+@keyframes mthBranch{0%,100%{opacity:.42}50%{opacity:1}}
+.mth-branch{animation:mthBranch 6s ease-in-out infinite}
+@keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
+.mth-cyc{transform-origin:center;animation:mthCyc 6s ease-in-out infinite}
+@keyframes mthCycIn{0%,10%{opacity:0}17%,25%{opacity:.95}33%,100%{opacity:0}}
+.mth-cycin{animation:mthCycIn 6s ease-in-out infinite}
