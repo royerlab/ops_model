@@ -117,11 +117,11 @@ const METHODS_SLIDES = [
         ${[MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur].map((col, s) => set(col, 30 + s * 40, col === MTH_C.acc)).join("")}
         <text x="6" y="182" fill="#8b949e" font-size="10">CellDINO vectors</text><text x="6" y="194" fill="#8b949e" font-size="10">(one per cell; a set = one gene)</text>
         ${_arrow(46, 108, 100, MTH_C.acc)}
-        ${edges(X[0], L0, X[1], LH, 0.25)}${edges(X[1], LH, X[2], LH, 0.75)}${edges(X[2], LH, X[3], OY, 1.25)}
+        ${edges(X[0], L0, X[1], LH, 0.25)}${edges(X[1], LH, X[2], LH, 0.75)}${LH.map(a => OY.map((b, j) => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28" ${j === 1 ? 'class="mth-flow-edge" style="animation-delay:1.25s"' : ""}/>`).join("")).join("")}
         ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}" class="mth-flow-node"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:.5s"/>`).join("")}
         ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:1s"/>`).join("")}
-        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : 'class="mth-flow-node" style="animation-delay:1.5s"'}/>`).join("")}
+        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
         ${_lbl(200, 26, "cells attend + pool", "#8b949e", 8)}
         ${_lbl(392, 196, "class scores (genes)")}
         <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
@@ -278,7 +278,7 @@ const METHODS_SLIDES = [
   {
     nav: "Virtual staining", kicker: "CROSS-CHANNEL", title: "Predicting fluorescent stains from phase",
     svg: () => { const M = [["mitochondria", MTH_C.ko], ["ER", "#2ca089"], ["nucleus", MTH_C.acc], ["actin", MTH_C.pur], ["lysosome", MTH_C.yel]];
-      const comp = (cx, cy, col, kind, s) => kind === "mitochondria" ? [0, 1, 2].map(k => `<ellipse cx="${cx - 3 * s + k * 3 * s}" cy="${cy - 3 * s + k * 4 * s}" rx="${8 * s}" ry="${2.2 * s}" fill="${col}" transform="rotate(${30 + 30 * k} ${cx - 3 * s + k * 3 * s} ${cy - 3 * s + k * 4 * s})"/>`).join("")
+      const comp = (cx, cy, col, kind, s) => kind === "mitochondria" ? [["M -7 0 q 3 -5 6 -1 q 4 5 8 -1", -3, -3, 25], ["M -6 1 q 4 -5 7 0 q 3 4 7 -2", 2, 1, -40], ["M -8 -1 q 3 5 6 1 q 4 -4 8 1", -1, 4, 60]].map(([d, dx, dy, rot]) => `<path d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linecap="round" opacity=".85" transform="translate(${(cx + dx * s).toFixed(1)} ${(cy + dy * s).toFixed(1)}) rotate(${rot}) scale(${s})"/>`).join("")
         : kind === "ER" ? [0, 1, 2, 3].map(k => `<circle cx="${cx - 6 * s + k * 4 * s}" cy="${cy + (k % 2) * 5 * s - 2 * s}" r="${3.4 * s}" fill="none" stroke="${col}" stroke-width="${(1.2 * s).toFixed(1)}"/>`).join("")
         : kind === "nucleus" ? `<circle cx="${cx}" cy="${cy}" r="${8 * s}" fill="${col}"/>`
         : kind === "actin" ? [0, 1, 2].map(k => `<line x1="${cx - 9 * s}" y1="${cy - 6 * s + k * 6 * s}" x2="${cx + 9 * s}" y2="${cy - 4 * s + k * 6 * s}" stroke="${col}" stroke-width="${(1.4 * s).toFixed(1)}"/>`).join("")
