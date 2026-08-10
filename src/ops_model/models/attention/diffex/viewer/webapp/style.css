@@ -426,5 +426,6 @@ button:hover{border-color:var(--accent)}
 
 @keyframes mthGrow{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
 .mth-grow{transform-box:fill-box;transform-origin:bottom;animation:mthGrow 3s ease-in-out infinite}
-.czb-logo{font-weight:700;font-size:13px;color:var(--mut);text-decoration:none;letter-spacing:.02em;white-space:nowrap;padding-left:6px;border-left:1px solid var(--line);margin-left:2px}
-.czb-logo:hover{color:var(--accent)}
+.biohub-logo{display:inline-flex;align-items:center;padding-left:10px;border-left:1px solid var(--line);margin-left:2px;opacity:.9;transition:opacity .15s}
+.biohub-logo img{height:26px;width:auto;display:block}
+.biohub-logo:hover{opacity:1}

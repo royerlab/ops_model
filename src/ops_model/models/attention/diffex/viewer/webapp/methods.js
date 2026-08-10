@@ -146,7 +146,7 @@ const METHODS_SLIDES = [
       ${[64, 100, 136].map(y => `<circle cx="192" cy="${y}" r="6" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
       ${_lbl(171, 28, "classifier", "#8b949e", 8)}
       ${_arrow(204, 240, 100)}
-      <text x="292" y="34" fill="#e6e8ec" font-size="9" text-anchor="middle">accuracy score</text><text x="292" y="46" fill="#8b949e" font-size="8" text-anchor="middle">= P(gene X)</text>
+      <text x="288" y="30" fill="#e6e8ec" font-size="9" text-anchor="middle">accuracy score = P(gene X)</text>
       <rect x="250" y="60" width="26" height="80" rx="3" fill="rgba(255,255,255,.06)"/>
       <rect x="250" y="60" width="26" height="80" rx="3" fill="${MTH_C.acc}" opacity=".85"/>
       ${_lbl(263, 154, "with x")}
@@ -156,7 +156,7 @@ const METHODS_SLIDES = [
       <line x1="276" y1="62" x2="298" y2="96" stroke="${MTH_C.ko}" stroke-width="1.4" stroke-dasharray="3 2"/>
       <text x="288" y="52" fill="${MTH_C.ko}" font-size="9" text-anchor="middle">Δ = score(x)</text>
       ${_arrow(334, 368, 100)}
-      ${[0, 1, 2, 3, 4].map(i => { const top = i === 4; return `<g ${top ? 'class="mth-hi" style="animation-delay:.1s"' : ""}><circle cx="${378 + i * 13}" cy="100" r="${4.5 + i * 1.1}" fill="${top ? MTH_C.ko : MTH_C.acc}" opacity="${(0.55 + i * 0.11).toFixed(2)}"/></g>`; }).join("")}
+      ${(() => { let cx = 372; return [0, 1, 2, 3, 4].map(i => { const top = i === 4; const r = 4.5 + i * 1.1; if (i > 0) cx += (4.5 + (i - 1) * 1.1) + r + 5; return `<g ${top ? 'class="mth-hi" style="animation-delay:.1s"' : ""}><circle cx="${cx.toFixed(1)}" cy="100" r="${r}" fill="${top ? MTH_C.ko : MTH_C.acc}" opacity="${(0.55 + i * 0.11).toFixed(2)}"/></g>`; }).join(""); })()}
       ${_lbl(404, 128, "higher rank →")}
     </svg>`,
     body: "To find a perturbation's most telling cells, we score each cell by how much it <b>helps the classifier</b>: the drop in predicted probability when the cell is <b>removed</b> from a bag (\"explaining by removing\"), averaged over many bag sizes and random partners. The top-scoring <b>top-predictive cells</b> carry the phenotypic signature — the cells the viewer anchors its traversals to and shows in Top Cells. Re-weighting the gene-level <b>mAP</b> by these cells sharpens the distinctiveness ranking.",
