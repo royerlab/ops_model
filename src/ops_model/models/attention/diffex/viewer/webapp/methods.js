@@ -227,7 +227,7 @@ const METHODS_SLIDES = [
       <circle cx="70" cy="158" r="5" fill="${MTH_C.ntc}"/><circle cx="350" cy="158" r="5" fill="${MTH_C.ko}"/>
       <circle cx="70" cy="158" r="8" fill="#fff" class="mth-slide"/>
       ${_lbl(70, 180, "NTC · α0")}${_lbl(350, 180, "knockout · α+", MTH_C.ko)}
-      ${(() => { const zA = [8, 4, 12, 6, 10, 5], zB = [14, 11, 5, 13, 4, 12]; return "<g>" + zA.map((a, i) => `<rect x="${190 + i * 7}" y="${26 - a}" width="5" height="${a}" rx="1.5" fill="${MTH_C.pur}" class="mth-zmorph" style="--sy:${(zB[i] / a).toFixed(2)}"/>`).join("") + "</g>"; })()}${_lbl(211, 40, "z (CellDINO vector)", MTH_C.pur, 9)}
+      ${(() => { const zA = [8, 4, 12, 6, 10, 5], zB = [11, 7, 8, 9, 7, 8]; return "<g>" + zA.map((a, i) => `<rect x="${190 + i * 7}" y="${26 - a}" width="5" height="${a}" rx="1.5" fill="${MTH_C.pur}" class="mth-zmorph" style="--sy:${(zB[i] / a).toFixed(2)}"/>`).join("") + "</g>"; })()}${_lbl(211, 40, "z (CellDINO vector)", MTH_C.pur, 9)}
     </svg>`,
     body: "We take the cell's <b>semantic code</b> and slide it along the <b>NTC → knockout direction</b> (the average difference between control and knockout codes), decoding each step. α = 0 is the start; α = 1 applies the full knockout shift; beyond exaggerates it.",
     why: "It renders the phenotype a perturbation induces as a smooth, watchable transformation of one cell.",
