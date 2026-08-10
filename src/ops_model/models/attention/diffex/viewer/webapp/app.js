@@ -1289,11 +1289,12 @@ function renderInfo(t) {
   const narr = (state.geneNarr || {})[t.target];   // affinage mechanistic narrative (long prose, PMID-cited) — collapsible
   if (narr) {
     const LIM = 320;
-    if (narr.length <= LIM) sec("Mechanistic narrative", `<div class="narr">${pmidLink(narr)}</div>`);
+    const narrLbl = `<a href="https://affinage.wi.mit.edu/gene/${g}" target="_blank" rel="noopener">Affinage mechanistic narrative ↗</a>`;
+    if (narr.length <= LIM) sec(narrLbl, `<div class="narr">${pmidLink(narr)}</div>`);
     else {
       let cut = narr.lastIndexOf(" ", LIM); if (cut < 0) cut = LIM;
       const head = narr.slice(0, cut).replace(/[\s\[(]*PMID:\d*$/i, "").trim();   // drop any dangling partial citation
-      sec("Mechanistic narrative",
+      sec(narrLbl,
         `<div class="narr"><span class="narr-short">${pmidLink(head)}… </span>` +
         `<span class="narr-full" hidden>${pmidLink(narr)}</span>` +
         `<button class="narr-more" onclick="toggleNarr(this)">continue reading ▾</button></div>`);
