@@ -22,7 +22,7 @@ const _lbl = (x, y, t, col = "#8b949e", sz = 11) => `<text x="${x}" y="${y}" fil
 const _mix = (a, b, t) => { const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); const A = p(a), B = p(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(",")})`; };   // hex→hex lerp
 const _patchGrid = (x, y, s, n, hot) => Array.from({ length: n * n }, (_, i) => {
   const gx = x + (i % n) * s, gy = y + Math.floor(i / n) * s, on = hot.includes(i);
-  return `<rect x="${gx}" y="${gy}" width="${s - 1}" height="${s - 1}" fill="${on ? MTH_C.ko : "rgba(255,255,255,.04)"}" stroke="rgba(255,255,255,.08)" ${on ? 'class="mth-glow" style="animation-delay:' + (i % 5) * 0.2 + 's"' : ""}/>`;
+  return `<rect x="${gx}" y="${gy}" width="${s - 1}" height="${s - 1}" fill="${on ? MTH_C.acc : "rgba(255,255,255,.04)"}" stroke="rgba(255,255,255,.08)" ${on ? 'class="mth-glow" style="animation-delay:' + (i % 5) * 0.2 + 's"' : ""}/>`;
 }).join("");
 
 const MTH_REFS = {
@@ -111,18 +111,17 @@ const METHODS_SLIDES = [
   {
     nav: "Classifier", kicker: "THE MODEL", title: "A classifier that reads a whole group of cells",
     svg: () => { const X = [118, 205, 290, 392], L0 = [46, 82, 118, 154], LH = [64, 100, 136], OY = [38, 72, 106, 140, 174], OC = [MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur, MTH_C.yel];
-      const edges = (xa, ya, xb, yb) => ya.map(a => yb.map(b => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28"/>`).join("")).join("");
+      const edges = (xa, ya, xb, yb, d) => ya.map(a => yb.map(b => `<line x1="${xa}" y1="${a}" x2="${xb}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28" class="mth-flow-edge" style="animation-delay:${d}s"/>`).join("")).join("");
       const set = (col, by, hl) => `<g class="${hl ? "mth-hi" : ""}" ${hl ? 'style="animation-delay:.2s"' : 'opacity=".5"'}>${[[16, by], [30, by], [16, by + 14], [30, by + 14]].map(c => _cellBlob(c[0], c[1], 5.5, col)).join("")}</g>`;
       return `<svg viewBox="0 0 470 200" class="mth">
         ${[MTH_C.grn, MTH_C.acc, MTH_C.ko, MTH_C.pur].map((col, s) => set(col, 30 + s * 40, col === MTH_C.acc)).join("")}
         <text x="6" y="182" fill="#8b949e" font-size="10">CellDINO vectors</text><text x="6" y="194" fill="#8b949e" font-size="10">(one per cell; a set = one gene)</text>
         ${_arrow(46, 108, 100, MTH_C.acc)}
-        ${edges(X[0], L0, X[1], LH)}${edges(X[1], LH, X[2], LH)}${LH.map(a => OY.map(b => `<line x1="${X[2]}" y1="${a}" x2="${X[3]}" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".7" opacity=".28"/>`).join("")).join("")}
-        ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}"/>`).join("")}
-        ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
-        ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}"/>`).join("")}
-        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : ""}/>`).join("")}
-        <rect x="112" y="30" width="6" height="140" rx="3" fill="${MTH_C.acc}" opacity=".22" class="mth-sweep" style="--sw:280px"/>
+        ${edges(X[0], L0, X[1], LH, 0.25)}${edges(X[1], LH, X[2], LH, 0.75)}${edges(X[2], LH, X[3], OY, 1.25)}
+        ${L0.map(y => `<circle cx="${X[0]}" cy="${y}" r="7" fill="${MTH_C.acc}" class="mth-flow-node"/>`).join("")}
+        ${LH.map(y => `<circle cx="${X[1]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:.5s"/>`).join("")}
+        ${LH.map(y => `<circle cx="${X[2]}" cy="${y}" r="7" fill="rgba(38,198,255,.2)" stroke="${MTH_C.acc}" class="mth-flow-node" style="animation-delay:1s"/>`).join("")}
+        ${OY.map((y, i) => `<circle cx="${X[3]}" cy="${y}" r="8" fill="${i === 1 ? OC[i] : "rgba(255,255,255,.06)"}" stroke="${OC[i]}" ${i === 1 ? 'class="mth-glow"' : 'class="mth-flow-node" style="animation-delay:1.5s"'}/>`).join("")}
         ${_lbl(200, 26, "cells attend + pool", "#8b949e", 8)}
         ${_lbl(392, 196, "class scores (genes)")}
         <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
@@ -139,8 +138,8 @@ const METHODS_SLIDES = [
     nav: "Top cells", kicker: "EXPLAINING BY REMOVING", title: "Which cells carry the phenotype?",
     svg: () => `<svg viewBox="0 0 468 200" class="mth">
       <rect x="14" y="46" width="66" height="108" rx="8" fill="rgba(255,255,255,.04)" stroke="#30363d"/>
-      ${_cellBlob(36, 68, 9, MTH_C.acc)}${_cellBlob(58, 90, 9, MTH_C.acc)}${_cellBlob(34, 116, 9, MTH_C.acc)}
-      <g class="mth-pulse">${_cellBlob(58, 134, 11, MTH_C.ko)}</g>
+      ${_cellBlob(34, 82, 9, MTH_C.acc)}${_cellBlob(58, 82, 9, MTH_C.acc)}${_cellBlob(34, 116, 9, MTH_C.acc)}
+      <g class="mth-pulse">${_cellBlob(58, 116, 12.5, MTH_C.ko)}</g>
       ${_lbl(47, 170, "bag · cell x")}
       ${_arrow(84, 140, 100)}
       ${[64, 100, 136].flatMap(a => [64, 100, 136].map(b => `<line x1="150" y1="${a}" x2="192" y2="${b}" stroke="${MTH_C.acc}" stroke-width=".6" opacity=".3"/>`)).join("")}
@@ -244,7 +243,7 @@ const METHODS_SLIDES = [
       <circle cx="${cx}" cy="98" r="56" fill="rgba(38,198,255,.08)" stroke="${MTH_C.acc}" stroke-width="1.5"/>
       <circle cx="${cx - 12}" cy="92" r="21" fill="rgba(188,140,255,.4)"/>
       <circle cx="${cx - 17}" cy="88" r="4" fill="#3a2a5a"/><circle cx="${cx - 8}" cy="96" r="3" fill="#3a2a5a"/>
-      ${[0, 1, 2, 3].map(k => `<ellipse cx="${cx + 10 + (k % 2) * 7}" cy="${90 + k * 9}" rx="13" ry="3.4" fill="${MTH_C.ko}" opacity=".75" transform="rotate(${30 + 25 * k} ${cx + 10 + (k % 2) * 7} ${90 + k * 9})"/>`).join("")}
+      ${[[cx + 16, 80, 25, "M -11 0 q 5 -8 10 -1 q 6 7 12 -1"], [cx + 24, 100, -40, "M -10 1 q 6 -7 11 0 q 4 6 10 -3"], [cx + 16, 116, 60, "M -12 -1 q 4 7 9 1 q 6 -6 12 1"], [cx + 30, 120, -12, "M -9 0 q 7 -6 12 1 q 3 6 9 -2"]].map(([x, y, rot, d]) => `<path d="${d}" fill="none" stroke="${MTH_C.ko}" stroke-width="3.2" stroke-linecap="round" opacity=".82" transform="translate(${x} ${y}) rotate(${rot})"/>`).join("")}
       ${_patchGrid(cx - 42, 56, 14, 6, hot)}
       ${_lbl(cx, 186, lbl)}`;
       return `<svg viewBox="0 0 440 200" class="mth">
@@ -266,7 +265,9 @@ const METHODS_SLIDES = [
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
         ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
-        ${_lbl(230, 194, "each direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
+        ${_lbl(332, 101, "→ gene A", MTH_C.ko, 10)}${_lbl(250, 170, "→ gene B", MTH_C.grn, 10)}
+        ${_lbl(384, 30, "each arm = one perturbation", "#8b949e", 9)}${_lbl(384, 42, "· same control cell throughout", "#8b949e", 9)}
+        ${_lbl(230, 194, "direction = a different phenotype; neighbors look alike; distance = how different", "#8b949e", 10)}
       </svg>`; },
     body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
     why: "It turns 1,000 separate what-ifs into a single navigable landscape — genes with similar phenotypes cluster together, visible at a glance.",

@@ -430,6 +430,10 @@ button:hover{border-color:var(--accent)}
 .mth-grow{transform-box:fill-box;transform-origin:bottom;animation:mthGrow 3s ease-in-out infinite}
 @keyframes mthExpress{0%,100%{opacity:.15}50%{opacity:1}}
 .mth-express{animation:mthExpress 3s ease-in-out infinite}
+@keyframes mthFlowEdge{0%{opacity:.2}10%{opacity:.95}26%{opacity:.2}100%{opacity:.2}}
+.mth-flow-edge{animation:mthFlowEdge 3s ease-in-out infinite}
+@keyframes mthFlowNode{0%,100%{transform:scale(1)}10%{transform:scale(1.4)}28%{transform:scale(1)}}
+.mth-flow-node{transform-box:fill-box;transform-origin:center;animation:mthFlowNode 3s ease-in-out infinite}
 .biohub-logo{display:inline-flex;align-items:center;padding-left:10px;border-left:1px solid var(--line);margin-left:2px;opacity:.9;transition:opacity .15s}
 .biohub-logo img{height:26px;width:auto;display:block}
 .biohub-logo:hover{opacity:1}
