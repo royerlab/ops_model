@@ -364,7 +364,10 @@ button:hover{border-color:var(--accent)}
 @keyframes mthEmerge{0%,45%{opacity:0}72%,100%{opacity:1}}
 .mth-emerge{animation:mthEmerge 3.6s ease-out infinite}
 @keyframes mthMorph{0%,100%{transform:scale(1,1)}50%{transform:scale(1.28,.74)}}
-.mth-morph{transform-origin:center;animation:mthMorph 3s ease-in-out infinite}
+.mth-morph{transform-origin:center;animation:mthMorph 3.2s ease-in-out infinite}
+/* Traversal: z-bars morph A(NTC)→B(knockout)→A in lockstep with the α dot + cell (all 3.2s) */
+@keyframes mthZmorph{0%,100%{transform:scaleY(1)}50%{transform:scaleY(var(--sy,1))}}
+.mth-zmorph{transform-box:fill-box;transform-origin:bottom;animation:mthZmorph 3.2s ease-in-out infinite}
 @keyframes mthSlide{0%,100%{transform:translateX(0)}50%{transform:translateX(280px)}}
 .mth-slide{animation:mthSlide 3.2s ease-in-out infinite}
 @keyframes mthGlow{0%,100%{transform:scale(.7);opacity:.35}50%{transform:scale(1.15);opacity:.9}}
@@ -416,13 +419,11 @@ button:hover{border-color:var(--accent)}
 .mth-hi{transform-origin:center;animation:mthHi 3.2s ease-in-out infinite}
 @keyframes mthJit{0%,100%{transform:scaleY(.9)}50%{transform:scaleY(1.05)}}
 .mth-jit{transform-origin:bottom;animation:mthJit 2.6s ease-in-out infinite}
-@keyframes mthJit2{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.45)}}
-.mth-jit2{transform-box:fill-box;transform-origin:bottom;animation:mthJit2 2.4s ease-in-out infinite}
 
 @keyframes mthSoft{0%,100%{opacity:.5}50%{opacity:.78}}
 .mth-soft{animation:mthSoft 3.6s ease-in-out infinite backwards}
-@keyframes mthBranch{0%,100%{opacity:1}50%{opacity:.22}}
-.mth-branch{animation:mthBranch 3.4s ease-in-out infinite both}
+@keyframes mthBranch{0%,100%{opacity:1}50%{opacity:.4}}
+.mth-branch{animation:mthBranch 3.7s ease-in-out infinite both}
 @keyframes mthCyc{0%,10%{transform:scale(1);opacity:.55}16%,24%{transform:scale(1.18);opacity:1}32%,100%{transform:scale(1);opacity:.55}}
 .mth-cyc{transform-origin:center;animation:mthCyc 5s ease-in-out infinite}
 @keyframes mthCycIn{0%,10%{opacity:0}17%,25%{opacity:.95}33%,100%{opacity:0}}
