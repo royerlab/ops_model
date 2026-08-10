@@ -192,11 +192,11 @@ const METHODS_SLIDES = [
       { cap: "2 · DDIM inversion — run it backwards to anchor a real cell",
         text: "<b>DDIM = Denoising Diffusion Implicit Models.</b> \"Implicit\" means it denoises along one <b>fixed, deterministic path</b> (an ODE) instead of a random walk — so the same seed always gives the same cell. Being deterministic, it can also run in <b>reverse</b>: from a real cell's pixels it recovers the exact noise seed that regenerates it, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
         svg: () => `<svg viewBox="0 0 420 165" class="mth">
-        ${_cellBlob(70, 90, 32, MTH_C.grn)}${_lbl(70, 146, "real cell")}
+        ${_cellBlob(70, 90, 32, MTH_C.acc)}${_lbl(70, 146, "real cell")}
         <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
         ${_pixnoise(185, 69, 50, 42, 12, 10, 7, 0.95)}
         ${_lbl(210, 146, "its exact seed x_T")}
-        ${_cellBlob(350, 90, 32, MTH_C.grn)}${_lbl(350, 146, "same cell (r≈0.99)")}
+        ${_cellBlob(350, 90, 32, MTH_C.acc)}${_lbl(350, 146, "same cell (r≈0.99)")}
         <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 60, "invert ↩", MTH_C.pur, 10)}</g>
         <g class="mth-cycB">${_arrow(244, 310, 78, MTH_C.acc)}${_lbl(277, 60, "generate →", MTH_C.acc, 10)}</g>
       </svg>` }
