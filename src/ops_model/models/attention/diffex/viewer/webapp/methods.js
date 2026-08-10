@@ -103,6 +103,8 @@ const METHODS_SLIDES = [
     why: "Turning each cell into a comparable vector is what makes morphology <i>measurable</i> — the basis for clustering, ranking, and steering the generative model.",
     defs: [["Patch / token", "the small square pieces the image is cut into; each becomes one input token to the transformer."],
       ["Vision transformer (ViT)", "a network that relates all patch-tokens with attention, rather than scanning with convolutions."],
+      ["Attention", "a weighted lookup between tokens: each patch emits a query and a key, their match sets a weight, and the patch is updated as a weighted sum of the others' values. High weight = \"this patch is relevant to me,\" so the update pulls in information from wherever in the cell matters most."],
+      ["Self-attention", "attention run within one image — queries, keys, and values all come from the same set of patch-tokens, so every patch is refined by the whole cell's context at once. That lets the ViT link distant structures (e.g. a nucleus and a far-off organelle) in a single step, which convolutions can't do locally."],
       ["Self-supervised (DINO)", "trained on images alone — no gene labels — so it learns general-purpose morphology features."],
       ["Feature vector / embedding", "the pooled 1,024 numbers summarizing the cell; distances between vectors track visual similarity."]]
   },
