@@ -24,6 +24,11 @@ const _patchGrid = (x, y, s, n, hot) => Array.from({ length: n * n }, (_, i) => 
   const gx = x + (i % n) * s, gy = y + Math.floor(i / n) * s, on = hot.includes(i);
   return `<rect x="${gx}" y="${gy}" width="${s - 1}" height="${s - 1}" fill="${on ? MTH_C.acc : "rgba(255,255,255,.04)"}" stroke="rgba(255,255,255,.08)" ${on ? 'class="mth-glow" style="animation-delay:' + (i % 5) * 0.2 + 's"' : ""}/>`;
 }).join("");
+// low-res black&white "static" — a grid of grayscale pixels (deterministic per seed), like the paper schematic
+const _pixnoise = (x, y, w, h, cols, rows, seed, alpha) => { const cw = w / cols, ch = h / rows; let s = "";
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const k = r * cols + c, v = Math.abs(Math.sin((k + 1) * 12.9898 + seed * 78.233)) * 43758.5453, g = Math.floor((v - Math.floor(v)) * 255);
+    s += `<rect x="${(x + c * cw).toFixed(1)}" y="${(y + r * ch).toFixed(1)}" width="${cw.toFixed(2)}" height="${ch.toFixed(2)}" fill="rgb(${g},${g},${g})" opacity="${alpha}"/>`; }
+  return s; };
 
 const MTH_REFS = {
   "The screen": [["Optical pooled screens · Feldman 2019", "https://doi.org/10.1016/j.cell.2019.09.016"], ["Funk et al. · Cell 2022", "https://www.sciencedirect.com/science/article/pii/S0092867422013599"], ["Chad et al. · bioRxiv 2026", "https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1"]],
@@ -173,12 +178,11 @@ const METHODS_SLIDES = [
       { cap: "1 · Decode — paint the cell a CellDINO vector describes",
         text: "We <b>condition</b> a diffusion model on a cell's <b>CellDINO vector</b> (the same fingerprint from the Embedding tab). Starting from noise it removes a little at each step, steered by that vector, until it produces the exact cell the vector describes — so the model becomes a <b>decoder</b> for CellDINO space.",
         svg: () => `<svg viewBox="0 0 470 150" class="mth">
-        <defs><filter id="mthn1" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="0.5 0 0 0 0.12  0.5 0 0 0 0.12  0.5 0 0 0 0.12  0 0 0 0 1"/></filter></defs>
         <g>${_bars(10, 80, [22, 11, 30, 15, 24, 13], 7, 3, MTH_C.pur, "mth-jit")}</g>
         <text x="40" y="98" fill="${MTH_C.pur}" font-size="11" text-anchor="middle">CellDINO z</text>
         ${_arrow(76, 96, 56, MTH_C.pur)}
         ${[0, 1, 2, 3].map(i => { const x = 98 + i * 90, op = i / 3;
-          return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="rgba(0,0,0,.35)" stroke="#30363d"/><rect x="${x + 4}" y="30" width="58" height="58" rx="3" filter="url(#mthn1)" opacity="${(1 - op * 0.92).toFixed(2)}"/><g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
+          return `<rect x="${x}" y="26" width="66" height="66" rx="6" fill="#0d0f13" stroke="#30363d"/>${_pixnoise(x + 4, 30, 58, 58, 12, 12, i + 1, (1 - op * 0.92).toFixed(2))}<g opacity="${op}">${_cellBlob(x + 33, 59, 21, MTH_C.acc)}</g>`; }).join("")}
         <rect x="98" y="26" width="66" height="66" rx="6" fill="none" stroke="#fff" stroke-width="2" class="mth-sweep" style="--sw:270px"/>
         ${_lbl(268, 16, "z conditions the denoising — z paints its cell →", MTH_C.acc, 10)}
         ${_lbl(131, 108, "noise")}${_lbl(401, 108, "the cell z describes")}
@@ -186,10 +190,9 @@ const METHODS_SLIDES = [
       { cap: "2 · DDIM inversion — run it backwards to anchor a real cell",
         text: "<b>DDIM = Denoising Diffusion Implicit Models.</b> \"Implicit\" means it denoises along one <b>fixed, deterministic path</b> (an ODE) instead of a random walk — so the same seed always gives the same cell. Being deterministic, it can also run in <b>reverse</b>: from a real cell's pixels it recovers the exact noise seed that regenerates it, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
         svg: () => `<svg viewBox="0 0 420 165" class="mth">
-        <defs><filter id="mthn2" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="0.5 0 0 0 0.12  0.5 0 0 0 0.12  0.5 0 0 0 0.12  0 0 0 0 1"/></filter></defs>
         ${_cellBlob(70, 90, 32, MTH_C.grn)}${_lbl(70, 146, "real cell")}
         <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
-        <rect x="185" y="69" width="50" height="42" rx="3" filter="url(#mthn2)" opacity=".9"/>
+        ${_pixnoise(185, 69, 50, 42, 12, 10, 7, 0.95)}
         ${_lbl(210, 146, "its exact seed x_T")}
         ${_cellBlob(350, 90, 32, MTH_C.grn)}${_lbl(350, 146, "same cell (r≈0.99)")}
         <g class="mth-cycA">${_arrow(112, 176, 78, MTH_C.pur)}${_lbl(144, 60, "invert ↩", MTH_C.pur, 10)}</g>
@@ -259,22 +262,17 @@ const METHODS_SLIDES = [
   },
   {
     nav: "Montage", kicker: "THE MAP", title: "Every knockout, from one cell, on one map",
-    svg: () => { const cx = 150, cy = 98;
-      // each CLUSTER = a neighborhood of phenotypically-similar (but distinct) perturbations; different clusters sit apart
-      const CL = [[MTH_C.grn, 232, 150], [MTH_C.ko, 288, 66], [MTH_C.acc, 150, 16], [MTH_C.pur, 58, 140]];
-      const off = [[0, 0], [17, -9], [-15, 7], [9, 15], [-11, -13]], lift = [0, .18, .09, .24, .13];
+    svg: () => { const cx = 150, cy = 98, B = [[MTH_C.acc, -2.35], [MTH_C.ko, -0.75], [MTH_C.grn, 0.55], [MTH_C.pur, 2.0]];
       let out = "";
-      CL.forEach(([col, gx, gy], c) => { out += `<ellipse cx="${gx}" cy="${gy}" rx="30" ry="24" fill="${col}" opacity=".07"/>`;
-        off.forEach(([dx, dy], k) => { const x = gx + dx, y = gy + dy, hue = _mix(col, MTH_C.fg, lift[k]);
-          const cell = _cellBlob(x, y, 7, hue) + `<ellipse cx="${x}" cy="${y}" rx="4.2" ry="2" fill="${_mix(col, "#000000", .28)}" transform="rotate(${40 + 55 * k} ${x} ${y})"/>`;
-          out += `<g class="mth-branch" style="animation-delay:${(c * 0.5 + k * 0.22).toFixed(2)}s">${cell}</g>`; }); });
+      B.forEach(([col, a0], b) => { for (let i = 1; i < 6; i++) { const r = 14 + i * 26, a = a0 + i * 0.15, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a) * 0.66, t = i / 5; const cell = _cellBlob(x, y, 5.5 + i * 0.9, _mix(MTH_C.ntc, col, t)) + `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${2 + i * 1.1}" ry="${1.4 + i * 0.5}" fill="${_mix(MTH_C.ntc, col, Math.min(1, t + 0.35))}" transform="rotate(${(a * 57).toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`; out += `<g class="mth-branch" style="animation-delay:${(b * 1.1 + i * 0.28).toFixed(2)}s">${cell}</g>`; } });
       return `<svg viewBox="0 -16 460 216" class="mth">
         ${out}
         <g class="mth-branch">${_cellBlob(cx, cy, 11, MTH_C.ntc)}</g>
         ${_lbl(cx, cy + 26, "Single")}${_lbl(cx, cy + 38, "Control")}${_lbl(cx, cy + 50, "Cell")}
-        ${_lbl(232, 184, "→ gene A", MTH_C.grn, 10)}${_lbl(288, 34, "→ gene B", MTH_C.ko, 10)}
-        ${_lbl(384, 30, "each tile = a different perturbation", "#8b949e", 9)}${_lbl(384, 42, "· similar ones cluster together", "#8b949e", 9)}
-        ${_lbl(230, 194, "nearby tiles = similar phenotypes; distance = how different", "#8b949e", 10)}
+        ${_lbl(96, 14, "Cluster A", MTH_C.acc, 10)}${_lbl(332, 100, "Cluster B", MTH_C.ko, 10)}
+        <line x1="358" y1="44" x2="274" y2="85" stroke="#8b949e" stroke-width="1" opacity=".6"/>
+        ${_lbl(392, 36, "each tile = a gene-KO", "#8b949e", 9)}
+        ${_lbl(230, 194, "color = a cluster of similar phenotypes; distance = how different", "#8b949e", 10)}
       </svg>`; },
     body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that gene's spot on a <b>gene-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
     why: "It turns 1,000 separate what-ifs into a single navigable landscape — genes with similar phenotypes cluster together, visible at a glance.",
