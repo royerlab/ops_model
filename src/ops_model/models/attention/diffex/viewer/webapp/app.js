@@ -130,6 +130,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
 async function boot() {
   state.manifest = await (await fetch(MANIFEST_URL + NOCACHE)).json();
   state.geneDesc = await fetch(`${BASE}gene_desc.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // desc for ALL genes (incl un-cached)
+  state.geneNarr = await fetch(`${BASE}gene_narrative.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // affinage mechanistic narratives (gene → prose), pre-fetched
   state.realAcc20 = await fetch(`${BASE}real_acc20.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // real-cell top1_acc@bag20 by asset_dir (feasibility ceiling)
   state.attnIndex = await fetch(`${BASE}attention_heads/index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);  // {global_max, assets:{modality:{grain:[keys]}}}
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
@@ -1282,10 +1283,30 @@ function renderInfo(t) {
     return;
   }
   const g = encodeURIComponent(t.target);
-  sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${g}" target="_blank" rel="noopener">GeneCards ↗</a>`);
+  sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${g}" target="_blank" rel="noopener">GeneCards ↗</a> · <a href="https://affinage.wi.mit.edu/gene/${g}" target="_blank" rel="noopener">Affinage ↗</a>`);
   const parts = s.split(" || ");   // "<function> || GO biological process: … || Reactome: … || CORUM complex: …"
   sec("Function", parts[0]);
+  const narr = (state.geneNarr || {})[t.target];   // affinage mechanistic narrative (long prose, PMID-cited) — collapsible
+  if (narr) {
+    const LIM = 320;
+    if (narr.length <= LIM) sec("Mechanistic narrative", `<div class="narr">${pmidLink(narr)}</div>`);
+    else {
+      let cut = narr.lastIndexOf(" ", LIM); if (cut < 0) cut = LIM;
+      const head = narr.slice(0, cut).replace(/[\s\[(]*PMID:\d*$/i, "").trim();   // drop any dangling partial citation
+      sec("Mechanistic narrative",
+        `<div class="narr"><span class="narr-short">${pmidLink(head)}… </span>` +
+        `<span class="narr-full" hidden>${pmidLink(narr)}</span>` +
+        `<button class="narr-more" onclick="toggleNarr(this)">continue reading ▾</button></div>`);
+    }
+  }
   parts.slice(1).forEach(p => { const i = p.indexOf(": "); if (i > 0) sec(p.slice(0, i), p.slice(i + 2)); });
+}
+const pmidLink = (s) => s.replace(/PMID:(\d+)/g, '<a href="https://pubmed.ncbi.nlm.nih.gov/$1" target="_blank" rel="noopener">PMID:$1</a>');
+function toggleNarr(btn) {   // expand/collapse the affinage narrative
+  const w = btn.closest(".narr"), sh = w.querySelector(".narr-short"), fu = w.querySelector(".narr-full");
+  const open = fu.hidden;
+  fu.hidden = !open; sh.hidden = open;
+  btn.textContent = open ? "show less ▴" : "continue reading ▾";
 }
 
 // clickable α tick marks under the slider; click toggles an autoplay pause there.

@@ -481,3 +481,9 @@ button:hover{border-color:var(--accent)}
 #imgclim-field { min-width: 150px; }
 #imgclim-field .dual { align-self: center; }
 #imgclim-field #i-climreset { padding: 2px 7px; }
+
+/* affinage mechanistic narrative — collapsible prose in the Info panel */
+#info-body .narr{color:var(--fg);line-height:1.55}
+#info-body .narr-more{display:block;margin-top:6px;background:none;border:none;padding:0;
+  color:var(--accent);font:inherit;font-size:12px;cursor:pointer}
+#info-body .narr-more:hover{text-decoration:underline}
