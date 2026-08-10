@@ -223,6 +223,7 @@ button:hover{border-color:var(--accent)}
 .tc-row{margin-bottom:18px}
 .tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;align-items:center;gap:8px}
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
+.tc-hd .tc-acc{font:700 11px ui-monospace,monospace;padding:1px 6px;border-radius:6px}
 .tc-strip{gap:4px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
 #stage.top-active>#tc-view.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;gap:12px;overflow-x:auto}   /* perturbations side-by-side; selector must out-specify the '#stage.top-active>#tc-view{display:block}' show rule */
 #tc-view.cols-layout .tc-row{flex:0 0 auto;margin-bottom:0;width:calc(var(--tcpx,150px) + 18px)}   /* fixed-width column (cell + strip padding) so long titles can't stretch it */

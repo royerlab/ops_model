@@ -250,6 +250,8 @@ async function boot() {
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
   $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
+  $("tc-acc").onchange = () => { tc.showAcc = $("tc-acc").checked; ensureSetacc(renderTop); saveState(); };   // per-group set-accuracy chip
+  $("tc-accbin").onchange = () => { tc.accBin = +$("tc-accbin").value; renderTop(); saveState(); };   // classifier bag size the accuracy is measured at
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
   const onSetacc = () => {   // off / geneKO / complex × P(target)|rank — per-tile v5 set-score at the montage α (v5 cache only)
     mont.setaccMode = $("m-setacc").value;
@@ -908,15 +910,25 @@ function refreshTargets() {   // marker or grain changed → recompute candidate
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
   else { state.target = null; $("filter").value = ""; rebuild(); }
 }
-let accByMarker = null;   // {markerSlug|"phase": {perturbation: top1_acc@100}} — SetTransformer real-cell set-accuracy per marker
+let accBins = null;   // {markerSlug|"phase": {bins:[...], acc:{perturbation:[acc@bin...]}}} — SetTransformer real-cell set-accuracy across bag sizes
 function ensureSetacc(cb) {
-  if (accByMarker) return cb();
-  fetch(`${BASE}_montage/setacc_bymarker.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).then(j => { accByMarker = j; cb(); }).catch(() => { accByMarker = {}; cb(); });
+  if (accBins) return cb();
+  fetch(`${BASE}_montage/setacc_bins_bymarker.json${NOCACHE}`).then(r => r.ok ? r.json() : null).then(j => {
+    if (j) { accBins = j; return cb(); }
+    // fallback: legacy single-bin (@100) file → wrap in the bins form so the rest of the code is uniform
+    return fetch(`${BASE}_montage/setacc_bymarker.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).then(old => {
+      accBins = {}; for (const mk in old) accBins[mk] = { bins: [100], acc: Object.fromEntries(Object.entries(old[mk]).map(([p, v]) => [p, [v]])) }; cb();
+    });
+  }).catch(() => { accBins = {}; cb(); });
 }
-function targetAcc(t) {   // selected marker's set-accuracy for this perturbation (higher = more distinctive); -1 if unknown
-  const m = accByMarker && accByMarker[attnModality()];
-  return m && m[t.target] != null ? m[t.target] : -1;
+const saBins = markerKey => { const r = accBins && accBins[markerKey]; return r ? r.bins : []; };   // available bag sizes for a marker (adaptive)
+function saAcc(markerKey, pert, bin) {   // set-accuracy for a perturbation at a bag size (nearest available); null if unknown
+  const r = accBins && accBins[markerKey]; if (!r || !r.acc[pert]) return null;
+  let bi = r.bins.indexOf(bin);
+  if (bi < 0) bi = r.bins.reduce((best, b, i) => Math.abs(b - bin) < Math.abs(r.bins[best] - bin) ? i : best, 0);
+  const v = r.acc[pert][bi]; return v == null ? null : v;
 }
+function targetAcc(t) { const v = saAcc(attnModality(), t.target, 100); return v == null ? -1 : v; }   // ordering: set-accuracy @100 (nearest); -1 if unknown
 function renderTargetList() {
   const q = $("filter").value.trim().toLowerCase(), list = $("target-list"); list.innerHTML = ""; let n = 0;
   const arr = state.targetSort === "alpha"          // manifest order is mAP-desc; alpha re-sorts by name
@@ -1656,7 +1668,7 @@ function pcCloseOverlay() { const o = $("pc-overlay"); if (o) o.remove(); }
 
 // ---- Top Cells tab: per-gene top phenotype cells by attention or accuracy (phase), masked like the PC tab ----
 const TC_CROP_V = "?m=3";
-const tc = { data: null, marker: undefined, mode: "accuracy", mask: true, inorm: true, pinned: [{ gene: "NTC", mode: "accuracy" }] };   // inorm: marker-global intensity (fluor only); default on
+const tc = { data: null, marker: undefined, mode: "accuracy", mask: true, inorm: true, showAcc: true, accBin: 100, pinned: [{ gene: "NTC", mode: "accuracy" }] };   // inorm: marker-global intensity (fluor only); showAcc: per-group set-acc chip (default on) @accBin
 function tcBase() {   // per-marker top-cells for fluor (marker channel crops), shared phase otherwise
   const m = state.marker && state.marker.marker_channel;
   return (!m || /^phase/i.test(m)) ? "top_cells/" : `top_cells/markers/${jsSlug(m)}/`;
@@ -1668,7 +1680,7 @@ async function loadTop() {
     tc.data = await fetch(`${BASE}${slug}index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
   }
   if (!tc.data) { $("tc-view").innerHTML = '<div class="empty">No top-cell assets for this marker yet.</div>'; return; }
-  renderTopPins(); renderTop();
+  ensureSetacc(() => { renderTopPins(); renderTop(); });   // load set-accuracy (bins) for the accuracy chip + adaptive bin dropdown
 }
 function tcData(name) {   // resolve a perturbation name → its ranking entry (genes, or complexes by base name)
   if (!tc.data) return null;
@@ -1689,12 +1701,21 @@ function renderTop() {
   const cap = tc.data.top_n || 20;
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
+  const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
+  if (sel) {
+    if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
+    if (sel.dataset.bins !== bins.join(",")) { sel.innerHTML = bins.map(b => `<option value="${b}">${b} cells</option>`).join(""); sel.dataset.bins = bins.join(","); }
+    sel.value = tc.accBin;
+    const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (tc.showAcc && bins.length > 1) ? "" : "none";
+  }
   let h = "", ci = 0;
   for (const e of tcEntries()) {
     const gd = tcData(e.gene), cells = gd ? (gd[e.mode] || []).slice(lo, lo + n) : [];
     const sk = e.mode === "attention" ? "attn" : "conf";
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}">${e.gene}<span class="tc-n">${cells.length}</span></div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
+    const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? `rgba(38,198,255,${(0.16 + 0.84 * av).toFixed(2)})` : "rgba(255,255,255,.06)"};color:${av != null && av > 0.5 ? "#04222e" : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}">${e.gene}<span class="tc-n">${cells.length}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)

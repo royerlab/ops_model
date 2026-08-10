@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=148"/>
+<link rel="stylesheet" href="style.css?v=149"/>
 </head>
 <body>
 <header>
@@ -152,6 +152,10 @@
       <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="mask on"/> mask (blue tint outside the cell)</label>
       <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> marker-normalized intensity (fluor; comparable across cells)</label>
       <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
+      <label class="chk"><input type="checkbox" id="tc-acc" checked data-on="accuracy on"/> show classification accuracy <span class="hint">(SetTransformer set-acc per row)</span></label>
+      <label id="tc-accbin-wrap">Accuracy bag size <span class="hint">(cells the classifier sees; bins adapt to marker)</span>
+        <select id="tc-accbin" data-seg></select>
+      </label>
       <label>Image scale <span class="hint">(cell size)</span> <input type="range" id="tc-scale" min="80" max="300" step="10" value="150"/></label>
       <div class="grp">
         <span class="lbl">Pin perturbations <span class="hint">(compare; current always shown)</span></span>
@@ -327,7 +331,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=175"></script>
+<script src="app.js?v=176"></script>
 <script src="methods.js?v=45"></script>
 </body>
 </html>
