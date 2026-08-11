@@ -187,8 +187,7 @@ const METHODS_SLIDES = [
   {
     nav: "Diffusion", kicker: "DECODE & INVERT", title: "Turning a CellDINO vector back into a cell",
     sections: [
-      { cap: "1 · Decode — paint the cell a CellDINO vector describes",
-        text: "We <b>condition</b> a diffusion model on a cell's <b>CellDINO vector</b> (the same fingerprint from the Embedding tab). Starting from noise it removes a little at each step, steered by that vector, until it produces the exact cell the vector describes — so the model becomes a <b>decoder</b> for CellDINO space.",
+      { text: "We <b>condition</b> a diffusion model on a cell's <b>CellDINO vector</b> (the same fingerprint from the Embedding tab). Starting from noise it removes a little at each step, steered by that vector, until it produces the exact cell the vector describes — so the model becomes a <b>decoder</b> for CellDINO space.",
         svg: () => `<svg viewBox="0 0 470 150" class="mth">
         <g>${_bars(10, 80, [22, 11, 30, 15, 24, 13], 7, 3, MTH_C.pur, "mth-jit")}</g>
         <text x="40" y="98" fill="${MTH_C.pur}" font-size="11" text-anchor="middle">CellDINO z</text>
@@ -199,8 +198,7 @@ const METHODS_SLIDES = [
         ${_lbl(268, 16, "z conditions the denoising — z paints its cell →", MTH_C.acc, 10)}
         ${_lbl(131, 108, "noise")}${_lbl(401, 108, "the cell z describes")}
       </svg>` },
-      { cap: "2 · DDIM inversion — run it backwards to anchor a real cell",
-        text: "<b>DDIM = Denoising Diffusion Implicit Models.</b> \"Implicit\" means it denoises along one <b>fixed, deterministic path</b> (an ODE) instead of a random walk — so the same seed always gives the same cell. Being deterministic, it can also run in <b>reverse</b>: from a real cell's pixels it recovers the exact noise seed that regenerates it, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
+      { text: "<b>DDIM = Denoising Diffusion Implicit Models.</b> \"Implicit\" means it denoises along one <b>fixed, deterministic path</b> (an ODE) instead of a random walk — so the same seed always gives the same cell. Being deterministic, it can also run in <b>reverse</b>: from a real cell's pixels it recovers the exact noise seed that regenerates it, so decoding at α = 0 reproduces that cell (r ≈ 0.99).",
         svg: () => `<svg viewBox="0 0 420 165" class="mth">
         ${_cellBlob(70, 90, 32, MTH_C.acc)}${_lbl(70, 146, "real cell")}
         <rect x="182" y="66" width="56" height="48" rx="5" fill="#0d0f13" stroke="#30363d"/>
@@ -385,7 +383,7 @@ function renderMethods() {
   view.innerHTML = `<div class="mth-card">
     <div class="mth-kicker">${s.kicker} · ${MTH_EXTRA.has(s.nav) ? "Extra" : (_mthIdx + 1) + " / " + coreN}</div>
     <h2 class="mth-title">${s.title}</h2>
-    ${s.sections ? s.sections.map(sec => `<div class="mth-sec"><div class="mth-seccap">${sec.cap}</div><div class="mth-stage">${sec.svg()}</div>${sec.text ? `<div class="mth-sectext">${sec.text}</div>` : ""}</div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
+    ${s.sections ? s.sections.map(sec => `<div class="mth-sec">${sec.cap ? `<div class="mth-seccap">${sec.cap}</div>` : ""}<div class="mth-stage">${sec.svg()}</div>${sec.text ? `<div class="mth-sectext">${sec.text}</div>` : ""}</div>`).join("") : `<div class="mth-stage">${s.svg()}</div>`}
     <div class="mth-body">${s.body}</div>
     ${MTH_MORE[s.nav] ? `<details class="mth-more"><summary>Learn more</summary><p>${MTH_MORE[s.nav]}</p></details>` : ""}
     <div class="mth-why"><b>Why it matters —</b> ${s.why}</div>
