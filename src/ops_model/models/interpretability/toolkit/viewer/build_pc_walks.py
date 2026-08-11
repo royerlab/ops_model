@@ -8,8 +8,8 @@ for each PC p decode z0 + (α·σ_p)·(v_p ⊙ sd) across α ∈ [−n_std, +n_s
 the PC score std; v_p is the (z-scored) eigenvector, mapped back to raw CellDINO space by the mean per-exp
 sd. Output: one composite figure per marker (rows = PCs, cols = α).
 
-  python -m ops_model.models.interpretability._internal.viewer.build_pc_walks --markers "Mitochondria_TOMM20"
-  python -m ops_model.models.interpretability._internal.viewer.build_pc_walks --all          # SLURM, every marker
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pc_walks --markers "Mitochondria_TOMM20"
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pc_walks --all          # SLURM, every marker
 """
 from __future__ import annotations
 

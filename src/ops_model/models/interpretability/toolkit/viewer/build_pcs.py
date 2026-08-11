@@ -9,8 +9,8 @@ Source = the self-contained `pc_explorer_static.html` (the assembled data + crop
 the raw artifacts dir is gone). If Kyle regenerates artifacts, re-run his build_static_explorer.py
 then point --html at the fresh output.
 
-  python -m ops_model.models.interpretability._internal.viewer.build_pcs
-  python -m ops_model.models.interpretability._internal.viewer.build_pcs --html /path/to/pc_explorer_static.html
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pcs
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pcs --html /path/to/pc_explorer_static.html
 """
 from __future__ import annotations
 

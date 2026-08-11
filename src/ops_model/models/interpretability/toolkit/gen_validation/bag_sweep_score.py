@@ -16,8 +16,8 @@ BAGS = [20, 50, 100, 200, 400]
 
 def score_shard(genes):
     import torch
-    from ops_model.models.interpretability._internal.viewer.score_generated import score_embs_v5
-    from ops_model.models.interpretability._internal.viewer.set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
+    from ops_model.models.interpretability.toolkit.viewer.score_generated import score_embs_v5
+    from ops_model.models.interpretability.toolkit.viewer.set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
     os.makedirs(OUT, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     from ops_model.models.interpretability.diffae.classifier.config import slugify

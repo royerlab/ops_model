@@ -85,8 +85,8 @@ source = "vcs"
 only-include = ["src"]
 sources = ["src"]
 # not-for-release: internal analysis/paper tooling (atlas, shap, titration, embedding,
-# weighted_aggregation, viewer, kyle_pcs, gen_validation) lives under interpretability/_internal
-exclude = ["src/ops_model/models/interpretability/_internal/**"]
+# weighted_aggregation, viewer, kyle_pcs, gen_validation) lives under interpretability/toolkit
+exclude = ["src/ops_model/models/interpretability/toolkit/**"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

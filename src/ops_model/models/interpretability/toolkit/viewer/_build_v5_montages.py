@@ -5,7 +5,7 @@ on ITS OWN gene embedding (marker_leaves.embedding_h5ad → paper_v2/markers/<le
 phase embedding. Reads the merged inverted frames from viewer_assets_v5/<slug>/geneKO and writes tiles to
 viewer_assets_v5/_montage/. Only builds markers whose geneKO is 100% present in viewer_assets_v5.
 
-    python -m ops_model.models.interpretability._internal.viewer._build_v5_montages
+    python -m ops_model.models.interpretability.toolkit.viewer._build_v5_montages
 """
 import glob
 import os

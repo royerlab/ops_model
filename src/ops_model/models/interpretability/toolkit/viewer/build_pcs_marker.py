@@ -9,7 +9,7 @@ Output is ADDITIVE and isolated (does not touch the phase pcs/ cache that is syn
     viewer_assets/pcs/markers/<slug>/index.json   (same schema as the phase pcs/index.json)
     viewer_assets/pcs/markers/<slug>/crops/pc###_bin##_row#.png
 
-  python -m ops_model.models.interpretability._internal.viewer.build_pcs_marker --marker "autophagosome_MAP1LC3B"
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pcs_marker --marker "autophagosome_MAP1LC3B"
 """
 from __future__ import annotations
 

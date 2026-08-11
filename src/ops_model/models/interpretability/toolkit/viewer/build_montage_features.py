@@ -7,7 +7,7 @@ pct) for the colormap, and writes a compact lookup the montage colors points by.
   viewer_assets/montage_features.json
     {"features": [base names], "range": {feat: [lo, hi]}, "values": {gene: [0..1 per feature | null]}}
 
-  python -m ops_model.models.interpretability._internal.viewer.build_montage_features
+  python -m ops_model.models.interpretability.toolkit.viewer.build_montage_features
 """
 from __future__ import annotations
 

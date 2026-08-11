@@ -9,7 +9,7 @@ COVERAGE: phase gets all 1000 geneKO + 98 complex; each fluor marker gets only t
 complex) whose per-cell rankings exist. That is Alex Lin's top1_acc>0.5@100-cell distinctiveness filter (see
 _fluor_v5_build.py) — NOT missing data (cells exist for all 1000×55). Lower-acc combos need Alex to gen more.
 
-    python -m ops_model.models.interpretability._internal.viewer._build_v5_inverted markers
+    python -m ops_model.models.interpretability.toolkit.viewer._build_v5_inverted markers
 """
 import json
 import os

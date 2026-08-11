@@ -5,7 +5,7 @@
 Each panel: the same PHATE scatter (grey), that panel's groups colored + leader-labelled with the
 single-cell generated morph (NTC cell1 → group, alpha=+5). NTC original shown top-left of panel E.
 
-  python -m ops_model.models.interpretability._internal.viewer.build_phate_figure
+  python -m ops_model.models.interpretability.toolkit.viewer.build_phate_figure
 """
 from __future__ import annotations
 

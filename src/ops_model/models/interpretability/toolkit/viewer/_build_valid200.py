@@ -8,9 +8,9 @@ Output: {C.OUT}/viewer_assets_valid200/phase/geneKO/<slug>/cell<c>/frame_<i>.web
 Reuses the v5 per-class directions (d_vec + gap are the PRODUCTION values we are validating) via a symlinked
 _directions tree, so no direction re-fit — only the 200-anchor inversion + 200×7 decodes per target.
 
-  python -m ops_model.models.interpretability._internal.viewer._build_valid200 anchor    # 1 GPU: build the 200-cell NTC anchor
-  python -m ops_model.models.interpretability._internal.viewer._build_valid200 submit     # shard all 1000 geneKO (after anchor)
-  python -m ops_model.models.interpretability._internal.viewer._build_valid200 all        # anchor job -> shards (afterok dep)
+  python -m ops_model.models.interpretability.toolkit.viewer._build_valid200 anchor    # 1 GPU: build the 200-cell NTC anchor
+  python -m ops_model.models.interpretability.toolkit.viewer._build_valid200 submit     # shard all 1000 geneKO (after anchor)
+  python -m ops_model.models.interpretability.toolkit.viewer._build_valid200 all        # anchor job -> shards (afterok dep)
 """
 import os
 import sys

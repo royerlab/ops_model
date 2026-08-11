@@ -6,8 +6,8 @@ production pma_v5_phase_* are left in place) so we can validate before repointin
                                              pma_attention, rank, rank_type)
   complex → pma_shap_phase_complex.parquet  (adds predicted_class=complex, gene=member gene; EBI-pooled)
 
-  python -m ops_model.models.interpretability._internal.viewer.build_phase_shap_rankings --geneko  --submit
-  python -m ops_model.models.interpretability._internal.viewer.build_phase_shap_rankings --complex --submit
+  python -m ops_model.models.interpretability.toolkit.viewer.build_phase_shap_rankings --geneko  --submit
+  python -m ops_model.models.interpretability.toolkit.viewer.build_phase_shap_rankings --complex --submit
 """
 from __future__ import annotations
 

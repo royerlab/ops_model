@@ -1,10 +1,10 @@
 """Build the DiffEx viewer cache — reproducible, version-controlled entrypoint (replaces the
 one-off scratchpad drivers). All target selection comes from `catalog.py`.
 
-  python -m ops_model.models.interpretability._internal.viewer.submit seed              # per-marker NTC traversals
-  python -m ops_model.models.interpretability._internal.viewer.submit anchors --k 5     # A→B anchor pairs
-  python -m ops_model.models.interpretability._internal.viewer.submit manifest          # rebuild manifest.json (local)
-  python -m ops_model.models.interpretability._internal.viewer.submit montage --cell 0 --alpha 2   # harvest cache -> UMAP montage zarr
+  python -m ops_model.models.interpretability.toolkit.viewer.submit seed              # per-marker NTC traversals
+  python -m ops_model.models.interpretability.toolkit.viewer.submit anchors --k 5     # A→B anchor pairs
+  python -m ops_model.models.interpretability.toolkit.viewer.submit manifest          # rebuild manifest.json (local)
+  python -m ops_model.models.interpretability.toolkit.viewer.submit montage --cell 0 --alpha 2   # harvest cache -> UMAP montage zarr
 """
 from __future__ import annotations
 

@@ -18,10 +18,10 @@ inferno LUT + clim + alpha live. Output (uniform, addressable by the viewer's ma
     {AH}/index.json  {global_max, assets:{<modality>:{<grain>:[keys]}}}
 where modality = "phase" | slugify(marker_channel), grain = geneKO|complex, key = gene | complex-slug.
 
-  python -m ops_model.models.interpretability._internal.viewer.build_attention_heads render            # SLURM (all trees)
-  python -m ops_model.models.interpretability._internal.viewer.build_attention_heads render --local    # serial, no SLURM
-  python -m ops_model.models.interpretability._internal.viewer.build_attention_heads render --dry-run
-  python -m ops_model.models.interpretability._internal.viewer.build_attention_heads index             # (re)aggregate index.json
+  python -m ops_model.models.interpretability.toolkit.viewer.build_attention_heads render            # SLURM (all trees)
+  python -m ops_model.models.interpretability.toolkit.viewer.build_attention_heads render --local    # serial, no SLURM
+  python -m ops_model.models.interpretability.toolkit.viewer.build_attention_heads render --dry-run
+  python -m ops_model.models.interpretability.toolkit.viewer.build_attention_heads index             # (re)aggregate index.json
 """
 from __future__ import annotations
 

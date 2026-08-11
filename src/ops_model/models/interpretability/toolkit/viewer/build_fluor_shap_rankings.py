@@ -5,8 +5,8 @@ SAME schema as the old qualifying rankings so build_marker is a drop-in.
   new CSV cols:  gene, channel_name, rank, shap, ..., experiment, well, x_pheno, y_pheno, segmentation_id
   old schema:    channel_name, gene, rank, pma_attention, experiment, well, x_pheno, y_pheno, segmentation, rank_type
 
-  python -m ops_model.models.interpretability._internal.viewer.build_fluor_shap_rankings          # local (needs ~64GB)
-  python -m ops_model.models.interpretability._internal.viewer.build_fluor_shap_rankings --submit # SLURM cpu, mem 96
+  python -m ops_model.models.interpretability.toolkit.viewer.build_fluor_shap_rankings          # local (needs ~64GB)
+  python -m ops_model.models.interpretability.toolkit.viewer.build_fluor_shap_rankings --submit # SLURM cpu, mem 96
 """
 from __future__ import annotations
 

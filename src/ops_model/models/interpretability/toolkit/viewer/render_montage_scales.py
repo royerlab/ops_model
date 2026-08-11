@@ -2,7 +2,7 @@
 embedding legend (leiden_r4, big dots, NTC as a dark labelled circle). The montage image and its
 baked viewer-style gene names come straight from the built tiles — finer levels give crisper text.
 
-  python -m ops_model.models.interpretability._internal.viewer.render_montage_scales --alphas 1-5 --levels 3,4
+  python -m ops_model.models.interpretability.toolkit.viewer.render_montage_scales --alphas 1-5 --levels 3,4
 
 Each level of `_montage/phase_geneKO_phate_cell1_a<A>_tiles/L<lvl>/` is a level-of-detail montage
 (coarse levels show a decimated non-overlapping subset; finer levels fill in more cells at higher res).

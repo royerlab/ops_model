@@ -11,7 +11,7 @@ POOLS = ["viewer_assets_v5", "viewer_assets_v5_accpool"]
 
 def _retarget(assets):
     """Point the score module at `assets` and return the module (V5_BASE is read at call time)."""
-    import ops_model.models.interpretability._internal.viewer.score_generated as SG
+    import ops_model.models.interpretability.toolkit.viewer.score_generated as SG
     SG.V5_BASE = f"{BASE}/{assets}/phase"
     return SG
 

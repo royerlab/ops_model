@@ -7,8 +7,8 @@ the SAME 150px + blue negative cell-mask overlay as the PC tab (reuses build_pc_
   viewer_assets_v5/top_cells/index.json          {"top_n", "genes"|"complexes": {CLASS: {"accuracy": [rec...]}}}
   viewer_assets_v5/top_cells/crops/<pos>.png
 
-  python -m ops_model.models.interpretability._internal.viewer.build_top_cells geneKO    # SLURM crop shards + finalize
-  python -m ops_model.models.interpretability._internal.viewer.build_top_cells complex --finalize   # rebuild index only
+  python -m ops_model.models.interpretability.toolkit.viewer.build_top_cells geneKO    # SLURM crop shards + finalize
+  python -m ops_model.models.interpretability.toolkit.viewer.build_top_cells complex --finalize   # rebuild index only
 """
 from __future__ import annotations
 

@@ -14,7 +14,7 @@ to a per-PC sign flip, so we flip each PC's r by sign(pearson(kyle_score, P_corr
 to make "+corr features" line up with the strip's high bins. Compositions are
 unsigned (|r| / tf-idf) so they need no flip.
 
-  python -m ops_model.models.interpretability._internal.viewer.build_pc_features
+  python -m ops_model.models.interpretability.toolkit.viewer.build_pc_features
 """
 from __future__ import annotations
 
