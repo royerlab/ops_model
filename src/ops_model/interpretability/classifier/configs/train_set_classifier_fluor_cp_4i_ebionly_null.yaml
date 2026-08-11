@@ -1,0 +1,69 @@
+# Config for train_set_classifier.py
+# fluor set-classifier with EBI complex labels
+# (EBI only; non-EBI genes dropped).
+# Reuses the pre-dumped dataset (no reprocessing).
+
+name: "celldino-fluor-cp-4i-ebi-only-null"
+
+seed: 42
+device: "cuda"  # auto-detect
+
+# ---- Data ----
+data:
+  parquet_entries:
+    - path: /path/to/embeddings/celldino_paper_phenotyping_v2_160.parquet
+    - path: /path/to/embeddings/celldino_paper_v2_cp_160.parquet
+    - path: /path/to/embeddings/celldino_paper_v2_4i_160.parquet
+  max_row_groups: null
+  max_cells_per_group: null
+  max_genes: null
+  max_channels: null
+  exclude_channel_names: ["Phase2D", "no label_no label"]
+  min_cells_per_group: null
+  min_cells_drop_val: false
+  z_standardize_control_only: true
+  cell_stratify: true
+  # EBI complex labels: genes in the map -> their complex; NTC -> NTC.
+  label_map_path: /path/to/ebi_complexes.csv
+  label_map_gene_col: gene_name
+  label_map_label_col: pathway
+  label_map_fallback_to_gene: false  # non-EBI genes are dropped
+
+# ---- Training ----
+n_cells_per_set: 100
+channels_per_set: null
+train_n_cell_sets_per_gene: 32
+val_n_cell_sets_per_gene: 5
+channel_drop_fraction: 0.0
+mixed_channels_mode: true
+val_n_cells_per_set: [500, 200]
+phase2d_val: false
+eval_every: 1
+batch_size: 64
+num_epochs: 100
+learning_rate: 1e-4
+weight_decay: 0.0
+max_grad_norm: null
+warmup_epochs: 20
+val_fraction: 0.2
+num_workers: 4
+save_path: best_set_classifier_fluor_cp_4i_ebionly_null.pt
+# Reuse the pre-dumped dataset (skip parquet processing).
+load_train_dir: /path/to/dumps/paper_v2_fluor_cp_4i_cellstrat/train
+load_val_dir: /path/to/dumps/paper_v2_fluor_cp_4i_cellstrat/val
+
+# ---- Model ----
+model:
+  d_model: 512
+  n_heads: 4
+  d_ff: null        # null = 4 * d_model
+  dropout: 0.0
+  n_layers_cell: 2
+  n_inducing_cell: 32
+  channel_conditioning: "concat"
+  cosine_classifier: True
+  n_layers_channel: 2
+
+# ---- Logging ----
+wandb_project: cellstate-set-classifier
+wandb_entity: ai_imaging
