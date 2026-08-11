@@ -51,7 +51,6 @@ function updateImgLevels() {
 // independently trims the deck to steps 1–6 when isPublic().
 function applyFeatureGate() {
   const pub = isPublic();
-  document.body.classList.toggle("public-mode", pub);   // lets CSS shrink the now-2-option Type selector, etc.
   document.querySelectorAll("#tabbar .tab, .about-tabdesc").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_TABS.has(b.dataset.tab)));
   const grain = $("grain");   // hide minibinder + PC from the Type selector in public
@@ -60,6 +59,7 @@ function applyFeatureGate() {
   if (grain && pub && PUBLIC_HIDDEN_GRAINS.has(grain.value)) {   // currently on a hidden type → fall back to geneKO
     grain.value = "geneKO"; grain.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  if (state.manifest) updateBagUI();   // public hides the anchor-bag selector (forces multi_bag); reflect on toggle too
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
     const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();
   } else if (state.view === "methods") renderMethods();   // re-trim the deck in place
@@ -511,6 +511,11 @@ function bagAvailable(bagId) {   // multi_bag was built ONLY for geneKO + comple
 }
 function updateBagUI() {   // bag is phase-only; grey out + auto-switch away from a bag the current grain lacks so the user never sees blank tiles
   const f = $("bag-field"), sel = $("m-bag"); if (!f) return false;
+  if (isPublic()) {   // public: no bag selector — always multi_bag (built for geneKO + complex, the only public grains)
+    f.style.display = "none";
+    if (sel && state.manifest.bags && sel.value !== "multi_bag" && bagAvailable("multi_bag")) { sel.value = "multi_bag"; return true; }
+    return false;
+  }
   const show = state.manifest.bags && attnModality() === "phase";
   f.style.display = show ? "" : "none";
   if (!show || !sel) return false;
