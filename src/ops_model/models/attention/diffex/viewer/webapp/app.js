@@ -1312,6 +1312,18 @@ function showIdx(i) {
   $("heat-tick").style.left = `calc(${(i / (n - 1)) * 100}% - 1.5px)`;
 }
 
+// complex "Members (N): …" desc is the same for every marker but only stored on markers that have it
+// (phase). Build a name→desc map once so non-phase complex targets still show the member links.
+function complexDescOf(name) {
+  if (!state._cxDesc) {
+    state._cxDesc = {};
+    for (const m of (state.manifest?.markers || []))
+      for (const e of (m.targets || []))
+        if (e.grain === "complex" && e.desc && e.desc.startsWith("Members") && !state._cxDesc[e.target]) state._cxDesc[e.target] = e.desc;
+  }
+  return state._cxDesc[name] || null;
+}
+
 // info sidebar (wiki-style): perturbation name + grain/mAP + function/pathways or complex members.
 function renderInfo(t) {
   $("info-title").textContent = t ? t.target : "";
@@ -1320,7 +1332,8 @@ function renderInfo(t) {
       ? `minibinder · ${t.phenotype || "39S"} cell-score ${(t.cell_score ?? t.dist_map ?? 0).toFixed(3)} · binder prob ${(t.binder_prob || 0).toFixed(3)} · target ${t.gene_target || ""}`
       : `${t.grain}` + (t.dist_map != null ? ` · ${t.grain === "complex" ? "EBI" : "distinctiveness"} mAP ${t.dist_map.toFixed(3)}` : "");
   const body = $("info-body"); body.innerHTML = "";
-  if (!t || !t.desc) { body.innerHTML = '<div class="empty">no annotation for this perturbation</div>'; return; }
+  const s = t && (t.desc || (t.grain === "complex" ? complexDescOf(t.target) : null));   // complex members are marker-independent → fall back across markers (non-phase targets lack desc)
+  if (!t || !s) { body.innerHTML = '<div class="empty">no annotation for this perturbation</div>'; return; }
   const sec = (lbl, txt) => {
     if (!txt) return;
     const d = document.createElement("div"); d.className = "sec";
@@ -1328,7 +1341,6 @@ function renderInfo(t) {
     body.appendChild(d);
   };
   const gc = (g) => `<a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${encodeURIComponent(g)}" target="_blank" rel="noopener">${g}</a>`;
-  const s = t.desc;
   if (s.startsWith("Members")) {   // complex info page: portal link + each member gene with its function
     const members = s.replace(/^Members \(\d+\):\s*/, "").split(", ").map(x => x.trim()).filter(Boolean);
     sec("Links", `<a href="https://www.ebi.ac.uk/complexportal/complex/search?query=${encodeURIComponent(t.target)}" target="_blank" rel="noopener">EBI Complex Portal ↗</a>`);
