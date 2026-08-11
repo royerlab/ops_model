@@ -13,7 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from ops_model.models.interpretability.diffae.viewer import catalog as C
+from ops_model.models.interpretability.diffae.traversal import catalog as C
 from ops_model.models.interpretability.diffae.classifier.config import slugify
 
 ASSETS = "viewer_assets_v5"
@@ -81,7 +81,7 @@ def _clear_anchor(modality):
 
 def rebuild_marker(modality):
     os.environ["OPS_DIFFEX_ASSETS"] = ASSETS
-    from ops_model.models.interpretability.diffae.viewer import precompute as P
+    from ops_model.models.interpretability.diffae.traversal import precompute as P
     P._ASSETS = ASSETS
     _clear_anchor(modality)
     tg = TARGETS[modality]
@@ -105,7 +105,7 @@ def rebuild_marker(modality):
 def gen_phase(targets):
     """Generate specific phase geneKO targets at n=100 (reuses the existing 100-cell phase anchor cache)."""
     os.environ["OPS_DIFFEX_ASSETS"] = ASSETS
-    from ops_model.models.interpretability.diffae.viewer import precompute as P
+    from ops_model.models.interpretability.diffae.traversal import precompute as P
     P._ASSETS = ASSETS
     _clear_anchor("phase")                                   # idempotent: keeps the 100-cell cache
     P.precompute_marker(grain="geneKO", targets=targets, ckpt=PHASE_CK, out_root=C.OUT,
@@ -115,7 +115,7 @@ def gen_phase(targets):
 def gen_phase_complex(targets):
     """Generate phase COMPLEX targets at n=100 (full complex names; reuses the 100-cell phase anchor cache)."""
     os.environ["OPS_DIFFEX_ASSETS"] = ASSETS
-    from ops_model.models.interpretability.diffae.viewer import precompute as P
+    from ops_model.models.interpretability.diffae.traversal import precompute as P
     P._ASSETS = ASSETS
     _clear_anchor("phase")
     P.precompute_marker(grain="complex", targets=targets, ckpt=PHASE_CK, out_root=C.OUT,
@@ -139,7 +139,7 @@ def gen_phase_chunk(targets, cell_range):
     cached direction (both ckpt-independent), each writing its own cell{c} dirs → parallelizes the per-cell
     DDIM inversion across GPUs instead of one long serial job. v5 scoring skipped (whole-target only)."""
     os.environ["OPS_DIFFEX_ASSETS"] = ASSETS
-    from ops_model.models.interpretability.diffae.viewer import precompute as P
+    from ops_model.models.interpretability.diffae.traversal import precompute as P
     P._ASSETS = ASSETS
     _clear_anchor("phase")                                   # idempotent: 100-anchor cache kept
     P.precompute_marker(grain="geneKO", targets=targets, ckpt=PHASE_CK, out_root=C.OUT,

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from figure4_morpho_traversal import FIGURES, VA, image_panels, render_images
-from ops_model.models.interpretability.diffae.viewer.morpho_pipeline import MORPHO_TARGETS, real_percell
+from ops_model.models.interpretability.diffae.traversal.morpho_pipeline import MORPHO_TARGETS, real_percell
 from ops_model.models.interpretability.diffae.classifier.config import slugify
 
 plt.rcParams["pdf.fonttype"] = 42

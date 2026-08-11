@@ -20,7 +20,7 @@ def _drop42():
 
 def run():
     import pandas as pd
-    from ops_model.models.interpretability.diffae.viewer.precompute import _gather_class
+    from ops_model.models.interpretability.diffae.traversal.precompute import _gather_class
     from ops_model.models.interpretability.diffae.directions.config import DirConfig
     from ops_model.models.interpretability.diffae.classifier.config import slugify
     genes = _drop42()

@@ -13,8 +13,8 @@ import zarr
 from ops_model.models.interpretability.diffae.classifier.config import slugify
 from ops_model.models.interpretability.diffae.classifier.data import make_labels_df, materialize_crops
 from ops_model.models.interpretability.diffae.directions.config import DirConfig
-from ops_model.models.interpretability.diffae.viewer._fluor_topcells import _overlay_rgba
-from ops_model.models.interpretability.diffae.viewer.build_pc_crops_masked import BASE, CROP_SIZE, _crop, _zarr_patch
+from ops_model.models.interpretability.diffae.traversal._fluor_topcells import _overlay_rgba
+from ops_model.models.interpretability.diffae.traversal.build_pc_crops_masked import BASE, CROP_SIZE, _crop, _zarr_patch
 
 OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_setacc_panel"
 RANK_BASE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor_shap"

@@ -8,7 +8,7 @@ B = "/hpc/projects/icd.fast.ops/models/diffex"
 
 
 def check(gene="AACS", ai=6):
-    from ops_model.models.interpretability.diffae.viewer.score_generated import _emb_frames
+    from ops_model.models.interpretability._internal.viewer.score_generated import _emb_frames
     from ops_model.models.interpretability.diffae.classifier.celldino_features import embed_crops
     from ops_model.models.interpretability.diffae.directions.config import DirConfig
     trav = f"{B}/viewer_assets_valid200/phase/geneKO/{gene}"

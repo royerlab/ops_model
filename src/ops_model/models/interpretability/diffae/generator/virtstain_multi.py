@@ -33,7 +33,7 @@ def markers_list():
     CP1_/CP2_/4i_R*) are stained AFTER the live phase acquisition, so their cells have moved/changed and
     the phase→marker registration is broken — that misalignment poisons the spatial conditioning, so they
     are excluded. Live channels (GFP/mCherry/Cy5/farred) are imaged concurrently with phase → registered."""
-    from ..viewer import catalog as C
+    from ..traversal import catalog as C
     seen, out = set(), []
     for d, mc, ch in C.complete_markers():
         if ch.startswith(("CP", "4i")):

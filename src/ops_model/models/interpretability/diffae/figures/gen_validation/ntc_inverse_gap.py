@@ -124,7 +124,7 @@ def webp_ab():
     import torch, tempfile  # noqa
     from ops_model.models.interpretability.diffae.classifier.celldino_features import embed_crops
     from ops_model.models.interpretability.diffae.directions.config import DirConfig
-    from ops_model.models.interpretability.diffae.viewer.precompute import _save_webp
+    from ops_model.models.interpretability.diffae.traversal.precompute import _save_webp
     os.makedirs(OUT, exist_ok=True)
     d = np.load(CTRL, allow_pickle=True)
     imgs = d["anchor_imgs"].astype(np.float32)                          # (45,1,160,160) float [-1,1]

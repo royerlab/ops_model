@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("OPS_DIFFEX_ASSETS", "viewer_assets_v5")
-from ops_model.models.interpretability.diffae.viewer.morpho_pipeline import MORPHO_TARGETS
+from ops_model.models.interpretability.diffae.traversal.morpho_pipeline import MORPHO_TARGETS
 from ops_model.models.interpretability.diffae.classifier.config import slugify
 
 VA = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_morphometrics"

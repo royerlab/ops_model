@@ -62,7 +62,7 @@ def _direction(cfg, gene, modality, ctrl_embs, mu_ctrl, gather, dev):
 
 @torch.no_grad()
 def run(specs, n_cells=4, alphas=(0, 1, 2, 3, 4, 5), ws=(1.0, 1.5, 2.0, 3.0), out_name="ddim_anchors", device="cuda"):
-    from ..viewer.precompute import _gather_class      # gather NTC anchors (imgs + CellDINO embs)
+    from ..traversal.precompute import _gather_class      # gather NTC anchors (imgs + CellDINO embs)
     dev = torch.device(device if torch.cuda.is_available() else "cpu")
     out = Path(ANALYSIS) / out_name; out.mkdir(parents=True, exist_ok=True)
     import matplotlib

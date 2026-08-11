@@ -41,7 +41,7 @@ import zarr
 
 from figure_ebi_morpho_violin import draw_violin
 from figure_multirank_ebi_grid import CACHE, OUT, ebi_rows, top_rows
-from ops_model.models.interpretability.diffae.viewer.build_pc_crops_masked import BASE, _crop, _zarr_patch
+from ops_model.models.interpretability.diffae.traversal.build_pc_crops_masked import BASE, _crop, _zarr_patch
 
 from organelle_profiler.feature_extraction.localization_features import compute_localization_features
 
