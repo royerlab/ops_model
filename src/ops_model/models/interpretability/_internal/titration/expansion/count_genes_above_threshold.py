@@ -17,10 +17,10 @@ the aggregate mAP curves in the rest of the expansion sweep.
 Usage::
 
     # Submit one SLURM task per K (9 tasks; ~5 min wall once they land)
-    uv run python -m ops_model.models.interpretability.titration.expansion.count_genes_above_threshold --slurm
+    uv run python -m ops_model.models.interpretability._internal.titration.expansion.count_genes_above_threshold --slurm
 
     # Replot from cached per-gene CSVs (no SLURM)
-    uv run python -m ops_model.models.interpretability.titration.expansion.count_genes_above_threshold --replot
+    uv run python -m ops_model.models.interpretability._internal.titration.expansion.count_genes_above_threshold --replot
 """
 from __future__ import annotations
 
