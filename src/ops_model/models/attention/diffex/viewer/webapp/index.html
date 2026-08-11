@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=164"/>
+<link rel="stylesheet" href="style.css?v=165"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -79,7 +79,7 @@
     <select id="m-bag" title="single_bag = attention/accuracy anchors (disk cells 0-199); multi_bag = multirank anchors (disk cells 200-399). Phase only."></select>
   </div>
   <div class="tb-field" id="imgclim-field">
-    <label>Image clim <span class="hint">(brightness window, all panels)</span></label>
+    <label>Image brightness</label>
     <div class="row">
       <div class="dual" style="flex:1;min-width:88px">
         <input id="i-climlo" type="range" min="0" max="1" step="0.02" value="0" title="black point"/>
@@ -350,8 +350,12 @@
         </ul>
       </div>
       <div class="about-sec">
-        <div class="about-cap">Team</div>
-        <div class="hint">Alex Hillsley · Alex Lin · Chad Liu · Gav Sturm · Kyle Awayan · Kyle Harrington · Ritvik Vasan · Trang Le</div>
+        <div class="about-cap">The name</div>
+        <div class="hint"><b>OPSin</b> = <b>OPS</b> (optical pooled screening) + <b>in</b>terpretability — and a nod to the <b>opsins</b>, the light-sensing proteins behind vision. Fitting, since the whole point is to <i>see</i> what a perturbation does to a cell.</div>
+      </div>
+      <div class="about-sec">
+        <div class="about-cap">Paper</div>
+        <div class="hint"><a href="https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1" target="_blank" rel="noopener">Liu et al., bioRxiv 2026 ↗</a> — full method &amp; author list.</div>
       </div>
       <div class="about-foot">
         <a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a>

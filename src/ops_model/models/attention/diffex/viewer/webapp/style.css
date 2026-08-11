@@ -513,6 +513,8 @@ button:hover{border-color:var(--accent)}
 .about-lead b{color:var(--fg)}
 .about-sec{margin-bottom:15px}
 .about-cap{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:7px}
+#side-about-view a{color:var(--accent);text-decoration:none}
+#side-about-view a:hover{text-decoration:underline}
 .about-tabs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
 .about-tabs li{font-size:12px;line-height:1.45;color:var(--mut);padding-left:10px;border-left:2px solid var(--line)}
 .about-tabs li b{color:var(--fg)}
