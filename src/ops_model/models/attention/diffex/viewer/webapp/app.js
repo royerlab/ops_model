@@ -1849,10 +1849,11 @@ function renderTop() {
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
   const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
   if (sel) {
-    if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
+    if (isPublic()) tc.accBin = (bins.length && bins.includes(100)) ? 100 : (bins[bins.length - 1] || 100);   // public: fixed 100-cell bag, no selector
+    else if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
     if (sel.dataset.bins !== bins.join(",")) { sel.innerHTML = bins.map(b => `<option value="${b}">${b} cells</option>`).join(""); sel.dataset.bins = bins.join(","); }
     sel.value = tc.accBin;
-    const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (tc.showAcc && bins.length > 1) ? "" : "none";
+    const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (!isPublic() && tc.showAcc && bins.length > 1) ? "" : "none";
   }
   let h = "", ci = 0;
   for (const e of tcEntries()) {
