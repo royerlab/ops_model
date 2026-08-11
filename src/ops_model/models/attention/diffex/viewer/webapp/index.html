@@ -104,10 +104,10 @@
     <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">
-      <label>Anchor <span class="hint">(the α=0 center)</span>
+      <label class="feat-internal">Anchor <span class="hint">(the α=0 center)</span>
         <select id="anchor"></select>
       </label>
-      <div class="hint">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
+      <div class="hint feat-internal">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
       <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
         <label>Classifier score overlay
@@ -119,7 +119,7 @@
           </select>
         </label>
         <label class="chk"><input type="checkbox" id="showreal" data-on="show real cells"/> show real cell row (vs generated)</label>
-        <label class="chk"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
+        <label class="chk feat-internal"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
         <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       </div>
       <div class="grp">
@@ -365,7 +365,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=190"></script>
+<script src="app.js?v=191"></script>
 <script src="methods.js?v=52"></script>
 </body>
 </html>

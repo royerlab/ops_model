@@ -60,6 +60,16 @@ function applyFeatureGate() {
     grain.value = "geneKO"; grain.dispatchEvent(new Event("change", { bubbles: true }));
   }
   if (state.manifest) updateBagUI();   // public hides the anchor-bag selector (forces multi_bag); reflect on toggle too
+  document.querySelectorAll(".feat-internal").forEach(el => {   // internal-only controls (e.g. alt-anchor picker) — hide their generated toggle too
+    el.classList.toggle("feat-hidden", pub);
+    const cb = el.querySelector("input[type=checkbox]"); if (cb && cb._tog) cb._tog.classList.toggle("feat-hidden", pub);
+  });
+  if (pub) {   // public: traversals anchor on NTC only — drop the alt-anchor filter + reset any non-NTC anchor
+    let changed = false;
+    if (state.altAnchorsOnly) { state.altAnchorsOnly = false; $("altanchor").checked = false; $("altanchor")._togSync?.(); changed = true; }
+    if (state.anchor !== "NTC") { state.anchor = "NTC"; changed = true; }
+    if (changed && state.marker && state.target) refreshTargets();
+  }
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
     const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();
   } else if (state.view === "methods") renderMethods();   // re-trim the deck in place
@@ -1058,7 +1068,8 @@ function selectTarget(slug) {
 
 // anchors = NTC + any class that has a precomputed A→this-target traversal in this marker.
 function populateAnchors(name) {
-  const anchors = ["NTC", ...new Set(state.marker.targets.filter(e => e.target === name && e.control).map(e => e.control))];
+  const anchors = isPublic() ? ["NTC"]   // public: traversals anchor on NTC only (no alternative-anchor A→B pairs)
+    : ["NTC", ...new Set(state.marker.targets.filter(e => e.target === name && e.control).map(e => e.control))];
   const sel = $("anchor"); sel.innerHTML = "";
   anchors.forEach(a => {
     const o = document.createElement("option"); o.value = a;
