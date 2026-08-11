@@ -2,8 +2,8 @@
 CFL1 (actin FastAct), mTOR (LysoTracker). NTC top / KO bottom, per-column KO+NTC intensity window.
 
 Run: python figure4_setacc_panel_fluorB.py"""
-from figure4_setacc_panel import make_panel
-from _setacc_common import column_tiles
+from ops_model.models.interpretability.diffae.figures.setacc.figure4_setacc_panel import make_panel
+from ops_model.models.interpretability.diffae.figures._setacc_common import column_tiles
 
 COLS = [
     dict(slug="Mitochondria_TOMM20", mc="Mitochondria_TOMM20", ch="CP1_mitochondria_TOMM20",

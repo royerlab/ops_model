@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from _setacc_common import COMPLEX_COLS, GENE_COLS, OUT, column_tiles
+from ops_model.models.interpretability.diffae.figures._setacc_common import COMPLEX_COLS, GENE_COLS, OUT, column_tiles
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"

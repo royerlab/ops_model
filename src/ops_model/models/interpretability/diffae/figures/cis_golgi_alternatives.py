@@ -1,6 +1,6 @@
 """Candidate strip for the panel-D Rab-slot (alternatives to COPI·cis-Golgi) — KO vs NTC at rank 1
 (most distinctive) for a few trafficking/organelle complex+marker pairs, to pick the most obvious."""
-from figure4_setacc_panel import make_panel
+from ops_model.models.interpretability.diffae.figures.setacc.figure4_setacc_panel import make_panel
 
 CANDS = [
     dict(slug="cis_Golgi_mStayGold_CENPRaltORF", mc="cis-Golgi_mStayGold-CENPRaltORF", ch="GFP",

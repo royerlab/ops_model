@@ -5,7 +5,7 @@ cropping/compositing from _setacc_common."""
 import numpy as np
 import pandas as pd
 
-from _setacc_common import crop_pick_from_df, tile_at
+from ops_model.models.interpretability.diffae.figures._setacc_common import crop_pick_from_df, tile_at
 
 RANKS = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
 PHASE_CH = "Phase2D"

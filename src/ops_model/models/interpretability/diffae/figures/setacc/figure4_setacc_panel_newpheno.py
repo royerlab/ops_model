@@ -9,8 +9,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-from _setacc_common import crop_pick_from_df, tile_at
-from figure4_setacc_panel import make_panel
+from ops_model.models.interpretability.diffae.figures._setacc_common import crop_pick_from_df, tile_at
+from ops_model.models.interpretability.diffae.figures.setacc.figure4_setacc_panel import make_panel
 
 RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"
 PHASE_CH = "Phase2D"
