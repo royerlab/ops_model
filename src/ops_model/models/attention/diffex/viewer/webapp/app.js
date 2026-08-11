@@ -1348,7 +1348,7 @@ function renderInfo(t) {
       const gd = (state.geneDesc || {})[mg];
       const fn = gd ? gd.split(" || ")[0].replace(/^GO biological process:\s*/i, "") : "";
       const nar = (state.geneNarr || {})[mg];   // collapsed-by-default affinage narrative per member
-      const det = nar ? `<details class="cx-narr"><summary>Affinage mechanistic narrative</summary><div class="narr">${pmidLink(nar)}</div></details>` : "";
+      const det = nar ? `<details class="cx-narr"><summary><a href="https://affinage.wi.mit.edu/gene/${encodeURIComponent(mg)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Affinage mechanistic narrative ↗</a></summary><div class="narr">${pmidLink(nar)}</div></details>` : "";
       return `<div style="margin:5px 0;line-height:1.4">${gc(mg)}${fn ? ` — <span style="color:var(--mut)">${fn}</span>` : ""}${det}</div>`;
     }).join("");
     sec(`Complex members (${members.length})`, rows);
