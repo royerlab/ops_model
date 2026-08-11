@@ -26,7 +26,7 @@ pip install -e ".[classifier]"   # adds hydra-core, omegaconf, wandb, pyarrow, t
 | `gene_name` | perturbation / gene knockout (empty ⇒ treated as `NTC` control) |
 | `experiment` | experiment id (used for z-standardization and stratified splits) |
 | `name`, `channel_type`, `channel_index` | channel identity; `biological_annotation.organelle` + `biological_annotation.marker` form the marker/channel name |
-| `well`, `x_pheno`, `y_pheno`, `segmentation_id`, `index` | per-cell coordinates/id (needed only to write SHAP dumps + rankings) |
+| `well`, `x_pheno`, `y_pheno`, `segmentation_id`, `index` | per-cell coordinates/id (needed only to write score dumps + rankings) |
 
 Multiple parquet files can be listed; each entry accepts optional `exclude_experiments`,
 `exclude_fluorescent_experiments`, and `column_remap`.
@@ -58,7 +58,7 @@ Writes the best-val checkpoint to `save_path` (stores `gene_to_idx`, `channel_to
 — for label-mapped runs — `label_to_idx` / `label_remap`). W&B is **off by default**
 (`wandb_mode: disabled`); set `wandb_mode=online` (+ `wandb_project`/`wandb_entity`) to log.
 
-To later compute SHAP, also set `dump_train_dir` / `dump_val_dir` so training caches per-gene
+To later compute cell scores, also set `dump_train_dir` / `dump_val_dir` so training caches per-gene
 `.pt` dumps (embeddings + cell metadata) alongside the checkpoint.
 
 ## 2. Evaluate
@@ -78,27 +78,27 @@ python -m ops_model.interpretability.classifier.eval \
 The val set can come from a pre-dumped `val_dump_dir` (fast) or directly from
 `data.parquet_entries` (per-channel mode).
 
-## 3. SHAP (per-cell attribution)
+## 3. Score (per-cell attribution)
 
-Ranks each cell by its SHAP value — the leave-one-out marginal
+Ranks each cell by its score — the leave-one-out marginal
 `P(class | bag) − P(class | bag∖cell)`, averaged over random bag partitions and over bag
 sizes. Consumes the per-gene `.pt` **dumps** produced by training (step 1 with `dump_*_dir`
 set). Plain argparse:
 
 ```bash
-python -m ops_model.interpretability.classifier.shap \
+python -m ops_model.interpretability.classifier.score \
     --checkpoint set_classifier.pt \
     --dump_dir /path/to/dumps/train /path/to/dumps/val \
     --channel Phase2D \
     --genes KIF23 HSPA5 AURKB \
     --bag_sizes 1 2 5 10 20 50 100 200 500 \
-    --out_csv shap_ranking.csv
+    --out_csv score_ranking.csv
 ```
 
 Reps are tapered from `--reps` (anchor, smallest bag) down to `--min_reps` as bag size grows
 (the per-cell marginal variance collapses with bag size); use `--flat_reps` for a constant
 rep count or `--reps_schedule` for explicit per-bag reps. Large pools (e.g. the NTC control)
-are subsampled to `--max_cells`. Output is a CSV with one row per cell: SHAP value, per-bag
+are subsampled to `--max_cells`. Output is a CSV with one row per cell: score, per-bag
 marginals, and the cell's coordinates (so downstream montages can render straight from it).
 
 ## Configs
@@ -124,4 +124,4 @@ Point `CONFIG_PATH` at another directory to load configs from elsewhere.
 - `train.py` — model architecture (`MixedChannelClassifier`, set-transformer blocks), the
   parquet/dump datasets + label-map logic, the training loop, and `build_model` (checkpoint → model).
 - `eval.py` — accuracy-vs-`n_cells` sweep.
-- `shap.py` — per-cell SHAP ranking.
+- `score.py` — per-cell score ranking.

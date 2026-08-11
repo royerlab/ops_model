@@ -2975,7 +2975,7 @@ def run(cfg: DictConfig) -> None:
 def build_model(ckpt: dict, device: torch.device) -> MixedChannelClassifier:
     """Reconstruct a trained ``MixedChannelClassifier`` from a checkpoint dict.
 
-    Used by ``eval.py`` and ``shap.py``. Infers ``emb_dim`` / ``n_classes`` /
+    Used by ``eval.py`` and ``score.py``. Infers ``emb_dim`` / ``n_classes`` /
     ``n_channels`` from the saved state dict so no separate metadata is required.
     """
     config = ckpt["config"]

@@ -1,28 +1,23 @@
 #!/usr/bin/env python
-r"""Rank cells of (gene, marker) pairs by a SHAP-like attribution from the set classifier.
+r"""Rank cells of (gene, marker) pairs by a per-cell *score* from the set classifier.
 
-For each cell the attribution is the leave-one-out marginal contribution to
-``P(true class)`` — ``P(class | bag) - P(class | bag without the cell)`` — averaged over
-random bags and then averaged uniformly over a grid of bag sizes (the uniform-coalition-size
-Shapley value). Bag size 1 is the deterministic single-cell probability ``P(class | cell)``.
+For each cell the score is its leave-one-out marginal contribution to ``P(true class)`` —
+``P(class | bag) - P(class | bag without the cell)`` — averaged over random bags and then
+averaged uniformly over a grid of bag sizes. Bag size 1 is the deterministic single-cell
+probability ``P(class | cell)``.
 
-This complements the existing rankings:
-  - ``rank_gene_marker.py`` scores by class_prob (mean P(class) over bags) — an *aggregate*.
-  - ``export_pma_attention.py`` scores by the PMA attention weight.
-  - this script scores by each cell's *marginal* contribution across bag sizes.
-
-Bags are single-channel (all cells of one marker). One CSV row per cell carries the SHAP
-value, the per-bag-size marginals, and the cell's coordinates (so montages/viewers can render
+Bags are single-channel (all cells of one marker). One CSV row per cell carries the score,
+the per-bag-size marginals, and the cell's coordinates (so montages/viewers can render
 straight from the ranking without a lossy re-merge to the dump).
 
 Example:
 -------
-    python shap_rank.py \\
-        --checkpoint best_set_classifier_paper_v2_phase_e200.pt \\
-        --dump_dir .../paper_v2_phase/train .../paper_v2_phase/val \\
+    python -m ops_model.interpretability.classifier.score \\
+        --checkpoint set_classifier.pt \\
+        --dump_dir /path/to/dumps/train /path/to/dumps/val \\
         --channel Phase2D --genes KIF23 HSPA5 AURKB \\
         --bag_sizes 1 2 5 10 20 50 100 200 500 --reps 50 \\
-        --out_csv shap_phase.csv
+        --out_csv score_phase.csv
 """
 
 import argparse
@@ -187,7 +182,7 @@ def main() -> None:
         type=int,
         default=65000,
         help="subsample a (gene, channel) pool larger than this (fixed seed); the "
-        "full leave-one-out SHAP is infeasible for huge pools like the NTC control",
+        "full leave-one-out score is infeasible for huge pools like the NTC control",
     )
     ap.add_argument("--out_csv", required=True)
     ap.add_argument(
@@ -229,7 +224,7 @@ def main() -> None:
     with open(args.out_csv, "w", newline="") as fo:
         w = csv.writer(fo)
         w.writerow(
-            ["gene", "channel_name", "rank", "shap", "bag1"]
+            ["gene", "channel_name", "rank", "score", "bag1"]
             + [f"marg_{b}" for b in bags]
             + [
                 "split",
@@ -302,13 +297,13 @@ def main() -> None:
                 )
                 for b in bags
             }
-            shap = np.mean(np.stack([margs[b] for b in bags], 0), 0)
+            score = np.mean(np.stack([margs[b] for b in bags], 0), 0)
             bag1 = margs[1] if 1 in margs else np.full(n, np.nan)
-            order = np.argsort(-shap)
+            order = np.argsort(-score)
             for rk, ci in enumerate(order):
                 gi = int(keep[ci])
                 w.writerow(
-                    [gene, args.channel, rk + 1, f"{shap[ci]:.6f}", f"{bag1[ci]:.6f}"]
+                    [gene, args.channel, rk + 1, f"{score[ci]:.6f}", f"{bag1[ci]:.6f}"]
                     + [f"{margs[b][ci]:.6f}" for b in bags]
                     + [
                         splits[ci],
@@ -322,7 +317,7 @@ def main() -> None:
                     ]
                 )
             print(
-                f"{gene} x {args.channel}: n={n} ranked (shap mean={shap.mean():+.5f})",
+                f"{gene} x {args.channel}: n={n} ranked (score mean={score.mean():+.5f})",
                 flush=True,
             )
     print(f"done -> {args.out_csv}", flush=True)
