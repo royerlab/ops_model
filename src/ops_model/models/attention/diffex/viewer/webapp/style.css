@@ -77,6 +77,7 @@ header .sub{color:var(--mut);font-size:12px}
 #controls label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut);
                 text-transform:uppercase;letter-spacing:.04em}
 #controls .hint{text-transform:none;letter-spacing:0;font-size:11px;opacity:.7}
+#controls .tabpane > .hint:first-child{font-size:14px;opacity:.85;line-height:1.5}   /* leading tab description ~25% bigger */
 .desc{font-size:11px;line-height:1.45;color:var(--mut);background:var(--panel);
       border:1px solid var(--line);border-radius:6px;padding:8px;max-height:150px;overflow:auto}
 .desc:empty{display:none}
@@ -235,8 +236,7 @@ button:hover{border-color:var(--accent)}
 #stage.top-active>#tc-view{display:block}
 .tc-row{margin-bottom:18px}
 .tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
-.tc-hd .gh-title{flex-basis:100%}              /* name takes the whole first line so the score wraps below */
-.tc-hd .tc-acc{flex:0 0 auto;margin-top:2px}   /* accuracy chip on its own row at natural width (like the traversal cols score) */
+.tc-hd .tc-acc{flex:0 0 auto;margin-left:auto}   /* rows: score chip on the same line, right-aligned */
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
 .tc-hd .tc-acc{font:700 13px ui-monospace,monospace;padding:2px 8px;border-radius:6px}
 .tc-strip{gap:4px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
@@ -244,6 +244,8 @@ button:hover{border-color:var(--accent)}
 #tc-view.cols-layout .tc-row{flex:0 0 auto;margin-bottom:0;width:calc(var(--tcpx,150px) + 18px)}   /* fixed-width column (cell + strip padding) so long titles can't stretch it */
 #tc-view.cols-layout .tc-strip{flex-direction:column;flex-wrap:nowrap}
 #tc-view.cols-layout .tc-hd{white-space:normal;text-align:center;justify-content:center;word-break:break-word;flex-wrap:wrap}
+#tc-view.cols-layout .tc-hd .gh-title{flex-basis:100%}                       /* columns: name takes the whole line */
+#tc-view.cols-layout .tc-hd .tc-acc{margin-left:0;margin-top:3px}             /* columns: score drops to its own line */
 .tc-cell{position:relative;flex:none}
 #tc-view .pc-cell{width:var(--tcpx,150px);height:var(--tcpx,150px)}   /* Image-scale slider (--tcpx) drives top-cell size; scoped so the PC tab stays 150px */
 .tc-rank{position:absolute;top:3px;left:3px;font:700 11px ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.6);border-radius:4px;padding:0 5px}

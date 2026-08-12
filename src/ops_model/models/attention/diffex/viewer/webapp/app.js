@@ -1914,7 +1914,7 @@ function renderTop() {
     const sk = e.mode === "attention" ? "attn" : "conf";
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
     const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
-    const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? `rgba(38,198,255,${(0.16 + 0.84 * av).toFixed(2)})` : "rgba(255,255,255,.06)"};color:${av != null && av > 0.5 ? "#04222e" : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
+    const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
     h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" title="${e.gene}">${e.gene}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
