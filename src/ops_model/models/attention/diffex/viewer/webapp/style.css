@@ -414,20 +414,20 @@ button:hover{border-color:var(--accent)}
 .mth-title{font-size:30px}
 .mth-kicker{font-size:14px}
 .mth-body{font-size:19px;max-width:940px}
-.mth-why{font-size:17px}
-.mth-refs{font-size:15px}
+.mth-why{font-size:21px}
+.mth-refs{font-size:18px}
 .mth-stage svg.mth{max-width:680px}
-.mth-defs>summary{font-size:15px}
-.mth-defs dt{font-size:15.5px}
-.mth-defs dd{font-size:15.5px}
-.mth-navbar button{font-size:16px}
+.mth-defs>summary{font-size:19px}
+.mth-defs dt{font-size:19px}
+.mth-defs dd{font-size:19px}
+.mth-navbar button{font-size:20px;padding:10px 20px}
 .mth-railitem{font-size:14px}
 .mth-more{margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
-.mth-more>summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:15px;list-style:none}
+.mth-more>summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:19px;list-style:none}
 .mth-more>summary::-webkit-details-marker{display:none}
 .mth-more>summary::before{content:"▸ ";color:var(--mut)}
 .mth-more[open]>summary::before{content:"▾ "}
-.mth-more p{margin:8px 0 0;font-size:16px;line-height:1.65;color:var(--fg)}
+.mth-more p{margin:8px 0 0;font-size:20px;line-height:1.65;color:var(--fg)}
 .mth-sec{margin-bottom:4px}
 .mth-seccap{font-size:16px;color:var(--fg);font-weight:700;margin:10px 0 4px;text-align:center}   /* match deck typography (not the bright accent-blue) */
 .mth-sec .mth-stage{padding:4px 0 8px}
@@ -527,7 +527,7 @@ button:hover{border-color:var(--accent)}
 .about-tabs li b{color:var(--fg)}
 .about-foot{display:flex;align-items:center;gap:10px;padding-top:13px;border-top:1px solid var(--line)}
 .about-foot img{height:20px;opacity:.92}
-.about-foot span{font-size:11px;color:var(--mut);line-height:1.35}
+.about-foot span{font-size:14px;color:var(--mut);line-height:1.35}
 
 /* About as the first How-it-works section — mimic the other slides' width + typography */
 .mth-about{max-width:940px;margin:0 auto}
@@ -535,6 +535,6 @@ button:hover{border-color:var(--accent)}
 .mth-about .about-lead{font-size:18px;line-height:1.65;color:var(--fg);border-bottom:none;padding-bottom:6px;margin-bottom:18px}
 .mth-about .about-lead b{color:var(--accent)}
 .mth-about .about-cap{font-size:13px}
-.mth-about .about-tabs li{font-size:15px;line-height:1.55}
+.mth-about .about-tabs li{font-size:18px;line-height:1.55}
 .mth-about .about-name{font-size:30px}
 .mth-about .about-tag{font-size:13px;max-width:none}
