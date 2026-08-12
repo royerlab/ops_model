@@ -66,13 +66,20 @@ function applyFeatureGate() {
     el.classList.toggle("feat-hidden", pub);
     const cb = el.querySelector("input[type=checkbox]"); if (cb && cb._tog) cb._tog.classList.toggle("feat-hidden", pub);
   });
+  document.querySelectorAll(".feat-public").forEach(el => {   // public-only controls (e.g. the classification-rank overlay toggle)
+    el.classList.toggle("feat-hidden", !pub);
+    const cb = el.querySelector("input[type=checkbox]"); if (cb && cb._tog) cb._tog.classList.toggle("feat-hidden", !pub);
+  });
   if (pub) {   // public: traversals anchor on NTC only — drop the alt-anchor filter + reset any non-NTC anchor
     let changed = false;
     if (state.altAnchorsOnly) { state.altAnchorsOnly = false; $("altanchor").checked = false; $("altanchor")._togSync?.(); changed = true; }
     if (state.anchor !== "NTC") { state.anchor = "NTC"; changed = true; }
-    if (state.scoreMode !== "ptarget") { state.scoreMode = "ptarget"; $("scoremode").value = "ptarget"; $("scoremode")._segSync?.(); updateScoreLegend(); changed = true; }   // public: P(target) overlay always on, no selector
+    const sm = $("pub-scoreoverlay") && $("pub-scoreoverlay").checked ? "rank" : "none";   // public overlay: off, or classification rank
+    if (state.scoreMode !== sm) { state.scoreMode = sm; updateScoreLegend(); changed = true; }
     if (state.targetSort !== "setacc" && ts) { state.targetSort = "setacc"; ts.value = "setacc"; ts._segSync?.(); ensureSetacc(() => renderTargetList()); }   // public: always sort by SET ACC
     if (changed && state.marker && state.target) refreshTargets();
+  } else if ($("scoremode") && $("scoremode").value !== state.scoreMode) {   // internal: keep the full selector in sync (e.g. after a preview round-trip)
+    $("scoremode").value = state.scoreMode; $("scoremode")._segSync?.();
   }
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
     const t = document.querySelector('#tabbar .tab[data-tab="traversal"]'); if (t) t.click();
@@ -113,7 +120,7 @@ const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag
 const SCORE_LEGEND = {
   linear: "per-cell classifier score (NTC → knockout): 0 → 1",
   ptarget: "P(target) for the whole set (bag): 0 → 100%",
-  rank: "target rank within the set: ≥100 → rank 1",
+  rank: "classification rank within the set: ≥100 → rank 1",
 };
 function updateScoreLegend() {
   const show = state.scoreMode !== "none" && (!state.view || state.view === "traversal");
@@ -227,6 +234,11 @@ async function boot() {
   $("play").onclick = togglePlay;
   $("scoremode").onchange = () => {
     state.scoreMode = $("scoremode").value;
+    updateScoreLegend();
+    saveState(); showIdx(state.idx);
+  };
+  $("pub-scoreoverlay").onchange = () => {   // public: off ↔ classification-rank overlay
+    state.scoreMode = $("pub-scoreoverlay").checked ? "rank" : "none";
     updateScoreLegend();
     saveState(); showIdx(state.idx);
   };

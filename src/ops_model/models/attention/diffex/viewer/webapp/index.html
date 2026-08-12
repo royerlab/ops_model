@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=167"/>
+<link rel="stylesheet" href="style.css?v=168"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -68,8 +68,8 @@
   </div>
   <div class="tb-field">
     <label>Cells per page <span id="cellrange" class="hint"></span></label>
-    <input id="cellcount" type="number" min="1" max="20" value="8"/>
-    <div class="row pager">
+    <div class="row">
+      <input id="cellcount" type="number" min="1" max="20" value="8"/>
       <button id="cprev" title="previous page">◀</button>
       <span id="pagenum" class="hint">Page 1</span>
       <button id="cnext" title="next page">▶</button>
@@ -119,6 +119,7 @@
             <option value="rank">target rank — set (bag)</option>
           </select>
         </label>
+        <label class="chk feat-public"><input type="checkbox" id="pub-scoreoverlay" data-on="classification rank"/> classification rank overlay</label>
         <label class="chk"><input type="checkbox" id="showreal" data-on="show real cells"/> show real cell row (vs generated)</label>
         <label class="chk feat-internal"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
         <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
@@ -366,7 +367,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=197"></script>
+<script src="app.js?v=198"></script>
 <script src="methods.js?v=53"></script>
 </body>
 </html>
