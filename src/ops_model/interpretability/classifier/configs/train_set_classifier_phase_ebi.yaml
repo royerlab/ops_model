@@ -65,6 +65,5 @@ model:
   cosine_classifier: True       # use cosine-similarity head with learned temperature
 
   # Cross-channel set transformer (full attention, pools channel vectors → 1 final vector)
-  n_layers_channel: 2
 
 # ---- Logging ----

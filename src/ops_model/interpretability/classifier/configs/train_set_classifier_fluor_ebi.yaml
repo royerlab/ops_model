@@ -62,6 +62,5 @@ model:
   n_inducing_cell: 32
   channel_conditioning: "concat"
   cosine_classifier: True
-  n_layers_channel: 2
 
 # ---- Logging ----
