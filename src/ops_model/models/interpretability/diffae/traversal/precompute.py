@@ -462,16 +462,10 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
     dist_map: optional {(modality, grain, slug): mAP} to attach for sorting targets.
     desc_map: optional {target_name: description} (gene function / complex members)."""
     root = Path(out_root) / _ASSETS
-    try:
-        mb = json.loads((root / "_minibinder_meta.json").read_text())   # per-binder cell_score/binder_prob/gene_target
-    except Exception:
-        mb = {}
     markers = {}
     for mj in sorted(root.glob("*/*/*/meta.json")):
         m = json.loads(mj.read_text())
         mod = m["modality"]
-        if mod == "phase_minibinder":                          # orphan from a cancelled mis-structured run (couldn't rm on shared FS); minibinders live under phase/minibinder
-            continue
         label = m["marker_channel"] or "Phase"                 # phase = canonical (accuracy-selected as of 2026-07-12 swap)
         mk = markers.setdefault(mod, {"modality": mod, "marker_channel": m["marker_channel"],
                                       "label": label, "channel": m["channel"], "targets": []})
@@ -485,10 +479,7 @@ def build_manifest(out_root, dist_map=None, desc_map=None):
                               "n_cells": m["n_cells"], "asset_dir": adir, "alphas": m["alphas"],
                               "dist_map": (dist_map or {}).get(key),
                               "explained_variance": m.get("explained_variance"),   # PC grain: % variance
-                              "desc": (desc_map or {}).get(m["target"]),
-                              **({"binder_prob": mb[m["slug"]]["binder_prob"], "gene_target": mb[m["slug"]]["gene_target"],
-                                  "phenotype": mb[m["slug"]]["phenotype"], "cell_score": mb[m["slug"]]["cell_score"]}
-                                 if m["grain"] == "minibinder" and m["slug"] in mb else {})})
+                              "desc": (desc_map or {}).get(m["target"])})
     for mk in markers.values():
         mk["targets"].sort(key=lambda t: (-(t["dist_map"] or -1), t["target"]))
     manifest = {"alphas": list(VIEWER_ALPHAS), "w": 2.0,

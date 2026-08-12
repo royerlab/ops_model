@@ -1,7 +1,7 @@
 """Tests for configurable guide_col in anndata_utils aggregation paths.
 
 Covers PR3 of the refactor — replacing hardcoded "sgRNA" with the
-adata.uns["guide_col"] lookup so minibinder-style experiments aggregate
+adata.uns["guide_col"] lookup so custom-guide-style experiments aggregate
 correctly without aliasing peptide identifiers onto an "sgRNA" column.
 """
 
@@ -66,18 +66,18 @@ def test_guide_col_helper_default():
 
 def test_guide_col_helper_reads_uns():
     adata = ad.AnnData(X=np.zeros((1, 1), dtype=np.float32))
-    adata.uns["guide_col"] = "minibinder_perturbation"
-    assert _guide_col(adata) == "minibinder_perturbation"
+    adata.uns["guide_col"] = "custom_perturbation"
+    assert _guide_col(adata) == "custom_perturbation"
 
 
-def test_aggregate_cell_to_guide_minibinder():
-    """Cell→guide aggregation uses the minibinder column, not sgRNA."""
-    adata = _make_cell_adata("minibinder_perturbation", set_uns_guide_col=True)
+def test_aggregate_cell_to_guide_custom_guide():
+    """Cell→guide aggregation uses the custom_guide column, not sgRNA."""
+    adata = _make_cell_adata("custom_perturbation", set_uns_guide_col=True)
     adata_guide = aggregate_to_level(adata, level="guide")
-    assert "minibinder_perturbation" in adata_guide.obs.columns
+    assert "custom_perturbation" in adata_guide.obs.columns
     assert "sgRNA" not in adata_guide.obs.columns
-    assert adata_guide.uns["guide_col"] == "minibinder_perturbation"
-    assert sorted(adata_guide.obs["minibinder_perturbation"].unique()) == [
+    assert adata_guide.uns["guide_col"] == "custom_perturbation"
+    assert sorted(adata_guide.obs["custom_perturbation"].unique()) == [
         "CDC5L_g0",
         "CDC5L_g1",
         "POLR2C_g0",
@@ -86,13 +86,13 @@ def test_aggregate_cell_to_guide_minibinder():
     ]
 
 
-def test_aggregate_cell_to_gene_minibinder_no_nan_bug():
+def test_aggregate_cell_to_gene_custom_guide_no_nan_bug():
     """The original NaN bug: gene-level aggregation must not choke on the
     neg_ctrl 'no-peptide' group when guide_col is properly configured."""
-    adata = _make_cell_adata("minibinder_perturbation", set_uns_guide_col=True)
+    adata = _make_cell_adata("custom_perturbation", set_uns_guide_col=True)
     adata_gene = aggregate_to_level(adata, level="gene")
     assert "guides" in adata_gene.obs.columns
-    assert adata_gene.uns["guide_col"] == "minibinder_perturbation"
+    assert adata_gene.uns["guide_col"] == "custom_perturbation"
     # The negative-control row contains the literal "no-peptide" string,
     # not a NaN, so pipe-joining works.
     neg_row = adata_gene.obs[adata_gene.obs["perturbation"] == "NEG_CTRL"].iloc[0]
@@ -109,18 +109,18 @@ def test_aggregate_cell_to_gene_crispr_default():
     assert (adata_gene.obs["perturbation"] == "NEG_CTRL").any()
 
 
-def test_aggregate_guide_to_gene_minibinder():
+def test_aggregate_guide_to_gene_custom_guide():
     """Guide → gene aggregation also threads guide_col through."""
-    adata_cell = _make_cell_adata("minibinder_perturbation", set_uns_guide_col=True)
+    adata_cell = _make_cell_adata("custom_perturbation", set_uns_guide_col=True)
     adata_guide = aggregate_to_level(adata_cell, level="guide")
     adata_gene = aggregate_to_level(adata_guide, level="gene")
-    assert adata_gene.uns["guide_col"] == "minibinder_perturbation"
+    assert adata_gene.uns["guide_col"] == "custom_perturbation"
     assert "guides" in adata_gene.obs.columns
 
 
 def test_hconcat_by_perturbation_uses_guide_col():
     """Horizontal-concat join key follows adata.uns['guide_col']."""
-    a = _make_cell_adata("minibinder_perturbation", set_uns_guide_col=True)
+    a = _make_cell_adata("custom_perturbation", set_uns_guide_col=True)
     a_guide = aggregate_to_level(a, level="guide")
     # Build a second block with a different feature set but same guides
     b_guide = a_guide.copy()
@@ -129,4 +129,4 @@ def test_hconcat_by_perturbation_uses_guide_col():
     merged = hconcat_by_perturbation([a_guide, b_guide], level="guide")
     # 5 unique guides aligned, 10 stacked features
     assert merged.shape == (5, 10)
-    assert "minibinder_perturbation" in merged.obs.columns
+    assert "custom_perturbation" in merged.obs.columns
