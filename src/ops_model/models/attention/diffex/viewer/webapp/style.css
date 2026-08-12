@@ -345,6 +345,9 @@ button:hover{border-color:var(--accent)}
 #stage.methods-active>*{display:none}
 #stage.methods-active>#methods-view{display:block}
 .mth-rail{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+.mth-rail-foot{margin-top:auto;display:flex;align-items:center;gap:9px;padding-top:14px;border-top:1px solid var(--line)}
+.mth-rail-foot img{height:20px;opacity:.92}
+.mth-rail-foot span{font-size:14px;color:var(--mut)}
 .mth-railitem{display:flex;align-items:center;gap:9px;text-align:left;background:none;border:none;color:var(--mut);
   padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px;border-left:3px solid transparent;width:100%}
 .mth-railitem:hover{background:rgba(255,255,255,.05);color:var(--fg)}

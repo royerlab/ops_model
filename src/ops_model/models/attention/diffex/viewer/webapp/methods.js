@@ -375,7 +375,8 @@ function renderMethods() {
     if (!rail.dataset.inited) { const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < deck.length) _mthIdx = sv; rail.dataset.inited = "1"; }   // restore last-viewed once
     rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
       <div class="mth-rail">${deck.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
-        return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>`;
+        return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>
+      <div class="mth-rail-foot"><a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a><span>Biohub | CellXState</span></div>`;
   }
   const s = deck[_mthIdx], view = document.getElementById("methods-view");
   if (!view) return;
