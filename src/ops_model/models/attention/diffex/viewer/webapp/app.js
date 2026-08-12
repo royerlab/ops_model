@@ -46,6 +46,19 @@ function updateImgLevels() {
   for (const id of ["lvlR", "lvlG", "lvlB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
 }
 
+// the single Image-brightness control lives in the active tab's left panel — under its Image-scale
+// slider when present (Traversal/Top cells), else at the top of that tab's controls (hidden in How-it-works).
+function placeImgClim() {
+  const el = $("imgclim-field"); if (!el) return;
+  const view = state.view || "traversal";
+  if (view === "methods") { el.style.display = "none"; return; }
+  el.style.display = "";
+  const pane = $("tab-" + view); if (!pane) return;
+  const scale = pane.querySelector('input[type="range"][id$="-scale"]');   // #tile-scale / #tc-scale
+  if (scale) (scale.closest("label") || scale).after(el);
+  else pane.insertBefore(el, pane.firstChild);
+}
+
 // show/hide features for the current mode (internal vs public). Cosmetic gate — the real
 // protection is that the hidden tabs' data isn't in the public S3 bucket. renderMethods()
 // independently trims the deck to steps 1–6 when isPublic().
@@ -285,6 +298,7 @@ async function boot() {
     const view = b.dataset.tab; state.view = view;
     document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === b));
     document.querySelectorAll(".tabpane").forEach(p => p.classList.toggle("hidden", p.id !== "tab-" + view));
+    placeImgClim();   // move the brightness control into this tab's controls
     $("stage").classList.toggle("montage-active", view === "montage");
     $("stage").classList.toggle("attn-active", view === "attn");
     $("stage").classList.toggle("pc-active", view === "pc");
@@ -385,6 +399,7 @@ async function boot() {
   if (IS_PUBLIC_DEPLOY) $("envtoggle").style.display = "none";   // the manual toggle is a staging-only preview aid
   else $("envtoggle").onclick = () => { state.publicPreview = !state.publicPreview; applyFeatureGate(); };
   applyFeatureGate();
+  placeImgClim();        // position the brightness control in the default tab's controls
   updateScoreLegend();   // init the adaptive score-overlay legend (fresh loads default to ptarget)
   requestAnimationFrame(() => $("loading").classList.add("gone"));   // reveal the app only after first full render (no traversal flash)
 }
@@ -1289,9 +1304,6 @@ function rebuild() {
     state.pausePoints = new Set([0, Math.floor(n / 2), n - 1]); state.pauseN = n;
   }
   renderTicks();
-  const iP = state.alphas.indexOf(1.0), hr = $("heat-real");   // mark α=1 (true centroid) on the colorbar
-  if (iP >= 0) { hr.style.left = `${(iP / (n - 1)) * 100}%`; hr.style.display = "block"; }
-  else hr.style.display = "none";
   computeRange();
   const mid = Math.floor(n / 2);
   let keep = (state.idx != null && state.idx >= 0 && state.idx < n) ? state.idx : mid;   // hold α across perturbation/cell-page changes; reset only on load / α-count change

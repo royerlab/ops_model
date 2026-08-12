@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=172"/>
+<link rel="stylesheet" href="style.css?v=173"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -79,16 +79,6 @@
     <label>Anchor bag</label>
     <select id="m-bag" title="single_bag = attention/accuracy anchors (disk cells 0-199); multi_bag = multirank anchors (disk cells 200-399). Phase only."></select>
   </div>
-  <div class="tb-field" id="imgclim-field">
-    <label>Image brightness</label>
-    <div class="row">
-      <div class="dual" style="flex:1;min-width:88px">
-        <input id="i-climlo" type="range" min="0" max="1" step="0.02" value="0" title="black point"/>
-        <input id="i-climhi" type="range" min="0" max="1" step="0.02" value="1" title="white point"/>
-      </div>
-      <button id="i-climreset" title="reset image brightness">↺</button>
-    </div>
-  </div>
 </div>
 
 <nav class="tabs" id="tabbar">
@@ -102,6 +92,16 @@
 
 <div id="app">
   <aside id="controls">
+    <div id="imgclim-field">
+      <span class="ic-lbl">Image brightness</span>
+      <div class="row">
+        <div class="dual" style="flex:1;min-width:88px">
+          <input id="i-climlo" type="range" min="0" max="1" step="0.02" value="0" title="black point"/>
+          <input id="i-climhi" type="range" min="0" max="1" step="0.02" value="1" title="white point"/>
+        </div>
+        <button id="i-climreset" title="reset image brightness">↺</button>
+      </div>
+    </div>
     <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">
@@ -284,7 +284,6 @@
     <div id="heatbar">
       <div id="heat-track">
         <div id="heat-grad"></div>
-        <div id="heat-real"><span>α=1 · true centroid</span></div>
         <div id="heat-tick"></div>
         <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (α=0)</span><span class="pos">phenotype</span></div>
       </div>
@@ -344,7 +343,7 @@
         <div class="about-name">OPSin</div>
         <div class="about-tag">Optical Pooled Screening<br>Interpretability Viewer</div>
       </div>
-      <div class="about-lead">An <b>opsin</b> is the light-sensing protein in your eye's rods and cones — it's what turns light into vision. <b>OPSin</b> does the same for a microscopy screen, turning raw images into a phenotype you can actually see. In a pooled optical CRISPR screen, thousands of perturbations are imaged together in one dish, and each nudges cell morphology so slightly — and so far beneath the noise of everyday cell-to-cell variation — that the effect is nearly invisible to the eye. OPSin distills every cell into a compact <b>fingerprint</b>, finds the ones that carry a real signal, and uses a <b>generative model</b> to re-render a healthy cell and reveal the phenotype each perturbation produces.</div>
+      <div class="about-lead">An <b>opsin</b> is the light-sensing protein in your eye's rods and cones — it's what turns light into vision. <b>OPSin</b> does the same for a microscopy screen, turning raw images into a phenotype you can actually see. In a pooled optical CRISPR screen, thousands of perturbations are imaged together in one dish, and each nudges cell morphology so slightly — and so far beneath the noise of everyday cell-to-cell variation — that the effect is nearly invisible to the eye. OPSin distills every cell into a compact <b>fingerprint</b>, finds the cells that carry a real signal, and uses a <b>generative model</b> to re-render a healthy cell and reveal the phenotype each perturbation produces.</div>
       <div class="about-sec">
         <div class="about-cap">The tabs</div>
         <ul class="about-tabs">
@@ -373,7 +372,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=201"></script>
+<script src="app.js?v=202"></script>
 <script src="methods.js?v=55"></script>
 </body>
 </html>
