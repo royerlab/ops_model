@@ -131,13 +131,13 @@ const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag
 // adaptive score-overlay legend caption per mode (see #scoremode); shown only on Traversal when scoreMode != none
 const SCORE_LEGEND = {
   linear: "per-cell classifier score (NTC → knockout): 0 → 1",
-  ptarget: "set accuracy for the whole bag: 0 → 100%",
-  rank: "classification rank within the set: ≥100 → rank 1",
+  ptarget: "classifier confidence · 0 → 100%",
+  rank: "classifier rank · 100th → 1st (best)",
 };
 function updateScoreLegend() {
   const show = state.scoreMode !== "none" && (!state.view || state.view === "traversal");
   $("score-legend").style.display = show ? "flex" : "none";
-  if (show) $("score-legend-txt").innerHTML = "score overlay (white → red) — " + (SCORE_LEGEND[state.scoreMode] || "");
+  if (show) $("score-legend-txt").innerHTML = "white → red · " + (SCORE_LEGEND[state.scoreMode] || "");
 }
 function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode at α-index i, or null. Both modes use the one white→red heat.
   if (!sv || !SET_MODES.includes(state.scoreMode)) return null;
