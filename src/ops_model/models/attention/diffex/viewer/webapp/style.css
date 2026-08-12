@@ -129,7 +129,7 @@ button:hover{border-color:var(--accent)}
 #grid.cols-layout .group-cells{grid-template-columns:var(--tilepx,170px)}                      /* one vertical column of cells */
 #grid.cols-layout .group-hd{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word}   /* same font as rows layout; wrap+center within the column */
 #grid.cols-layout .setacc{display:block;margin:3px auto 0}   /* score chip drops below the title so it can't stretch the narrow column */
-.group{display:flex;flex-direction:column;gap:8px}
+.group{display:flex;flex-direction:column;gap:8px;max-width:calc(var(--cols,5) * (var(--tilepx,170px) + 10px) + 15px)}   /* cap to the cell box so long names ellipsize at its edge, not the page */
 .group-hd{font:650 20px ui-monospace,Menlo,monospace;display:flex;align-items:center;gap:10px}   /* single header per group, ~2× old caption */
 .group-hd .gh-title,.tc-hd .gh-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .group-hd .setacc{margin-left:auto}   /* score chip pushed to the right (like Top Cells) */

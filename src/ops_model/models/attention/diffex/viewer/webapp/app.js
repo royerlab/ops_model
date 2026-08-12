@@ -359,6 +359,7 @@ async function boot() {
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
   $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
+  $("tc-acc").onchange = () => { tc.showAcc = $("tc-acc").checked; ensureSetacc(renderTop); saveState(); };   // per-group classification-accuracy chip on/off
   $("tc-accbin").onchange = () => { tc.accBin = +$("tc-accbin").value; renderTop(); saveState(); };   // classifier bag size the accuracy is measured at
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
   const onSetacc = () => {   // off / geneKO / complex × P(target)|rank — per-tile v5 set-score at the montage α (v5 cache only)
@@ -1285,7 +1286,7 @@ function rebuild() {
   set.forEach((p, gi) => {                          // one group (row) per perturbation
     const color = PALETTE[gi % PALETTE.length];
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
-    const group = document.createElement("div"); group.className = "group";
+    const group = document.createElement("div"); group.className = "group"; group.style.setProperty("--cols", Math.min(N, 5));   // cap header/box to the actual cell columns
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
     hd.appendChild(tt); hd.title = tt.textContent;   // title in its own span so the score chip can right-align; full text on hover
