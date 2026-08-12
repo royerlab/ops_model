@@ -146,7 +146,7 @@ const METHODS_SLIDES = [
         <text x="406" y="76" fill="${MTH_C.acc}" font-size="9">← predicted</text>
       </svg>`; },
     body: "Because single cells are noisy, we show the model a whole <b>group</b> of a perturbation's cells at once — each as its <b>CellDINO feature vector</b> (from the Embedding tab), not the raw image — and ask it to name the perturbation. It weighs the cells against each other, pools them into one verdict, and outputs a probability over the <b>1,000 perturbations</b> (or 99 protein complexes). The architecture is a <b>SetTransformer</b> — the how is below.",
-    why: "Trained on random bags of 100 cells yet able to score any bag size (10–5,000), it reads the population phenotype and is invariant to how the cells are ordered.",
+    why: "A single cell is too noisy to pin down a subtle perturbation. Scoring a whole group lets the shared signal add up while random cell-to-cell variation cancels — so an effect invisible in any one cell becomes unmistakable in the population.",
     defs: [["Multiple-instance learning", "classify a whole bag from one shared label, without labeling individual cells."],
       ["Bag / permutation-invariant", "an unordered set of a perturbation's cells; shuffling them can't change the prediction."],
       ["ISAB (inducing-point attention)", "self-attention routed through 32 learned reference points, so cost grows linearly and scales to tens of thousands of cells."],
