@@ -982,6 +982,7 @@ function wireCombo(inputId, listId, renderList, currentLabel) {
 const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || state.manifest.markers[i].marker_channel || "Phase");
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
+  $("markerfilter").title = markerLabel(i);   // hover shows the full marker name when truncated in the input
   refreshTargets();
   updateBagUI();        // anchor-bag selector is phase-only (before fillCellDropdown: montageCells depends on bag)
   fillCellDropdown();   // phase → 45/50 cells (bag), markers → 20 (reflect what was built)
@@ -1075,6 +1076,7 @@ function pickTarget(slug) { selectTarget(slug); const t = state.targets.find(x =
 function selectTarget(slug) {
   state.target = state.targets.find(t => t.slug === slug);
   if (!state.target) return;
+  $("filter").title = targetLabel(state.target);   // hover shows the full name (long complex names get truncated in the input)
   populateAnchors(state.target.target);
   state.page = 0; rebuild();
   if (state.view === "attn") renderAttn();          // selection drives the attention-head view
