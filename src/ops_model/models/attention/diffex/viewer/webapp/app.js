@@ -56,6 +56,8 @@ function applyFeatureGate() {
   const grain = $("grain");   // hide minibinder + PC from the Type selector in public
   if (grain && grain._seg) grain._seg.querySelectorAll("button").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_GRAINS.has(b.dataset.value)));
+  const ts = $("target-sort");   // public: perturbation list always sorted by SET ACC, no selector
+  if (ts && ts._seg) ts._seg.classList.toggle("feat-hidden", pub);
   if (grain && pub && PUBLIC_HIDDEN_GRAINS.has(grain.value)) {   // currently on a hidden type → fall back to geneKO
     grain.value = "geneKO"; grain.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -69,6 +71,7 @@ function applyFeatureGate() {
     if (state.altAnchorsOnly) { state.altAnchorsOnly = false; $("altanchor").checked = false; $("altanchor")._togSync?.(); changed = true; }
     if (state.anchor !== "NTC") { state.anchor = "NTC"; changed = true; }
     if (state.scoreMode !== "ptarget") { state.scoreMode = "ptarget"; $("scoremode").value = "ptarget"; $("scoremode")._segSync?.(); updateScoreLegend(); changed = true; }   // public: P(target) overlay always on, no selector
+    if (state.targetSort !== "setacc" && ts) { state.targetSort = "setacc"; ts.value = "setacc"; ts._segSync?.(); ensureSetacc(() => renderTargetList()); }   // public: always sort by SET ACC
     if (changed && state.marker && state.target) refreshTargets();
   }
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
