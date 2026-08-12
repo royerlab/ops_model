@@ -523,3 +523,8 @@ button:hover{border-color:var(--accent)}
 .about-foot{display:flex;align-items:center;gap:10px;padding-top:13px;border-top:1px solid var(--line)}
 .about-foot img{height:20px;opacity:.92}
 .about-foot span{font-size:11px;color:var(--mut);line-height:1.35}
+
+/* titled on/off toggles (Top cells): "Title ........ [off|on]" */
+.tc-tog{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0}
+.tc-tog-t{font-size:13px;color:var(--fg)}
+.tc-tog .seg-group.tog{margin:0;flex:0 0 auto}

@@ -504,7 +504,7 @@ function renderOverlayList() {
   const q = $("m-ovsel").value.trim().toLowerCase(), list = $("m-ovsel-list"); list.innerHTML = "";
   ovlItems.filter(o => !q || o.label.toLowerCase().includes(q)).slice(0, 60).forEach(o => {
     const d = document.createElement("div"); d.className = "combo-item" + (o.value === ovlSel ? " sel" : "");
-    d.textContent = o.label; d.onmousedown = (e) => { e.preventDefault(); pickOverlay(o.value); }; list.appendChild(d);
+    d.textContent = o.label; d.title = o.label; d.onmousedown = (e) => { e.preventDefault(); pickOverlay(o.value); }; list.appendChild(d);
   });
 }
 function pickOverlay(value) {
@@ -758,6 +758,7 @@ function renderColorList() {
   const item = (value, label, sub) => {
     const d = document.createElement("div"); d.className = "combo-item" + (value === mont.field ? " sel" : "");
     d.innerHTML = label + (sub ? ` <span class="ci-sub">${sub}</span>` : "");
+    d.title = sub ? `${label} · ${sub}` : label;
     d.onmousedown = (e) => { e.preventDefault(); pickColor(value); }; list.appendChild(d);
   };
   const hd = t => { const d = document.createElement("div"); d.className = "combo-hd"; d.textContent = t; list.appendChild(d); };
@@ -994,7 +995,7 @@ function renderMarkerList() {
     const name = m.label || m.marker_channel || "Phase";
     if (q && !name.toLowerCase().includes(q)) return;
     const d = document.createElement("div"); d.className = "combo-item" + (i === state.markerIdx ? " sel" : "");
-    d.textContent = name; d.onmousedown = (e) => { e.preventDefault(); pickMarker(i); }; list.appendChild(d); n++;
+    d.textContent = name; d.title = name; d.onmousedown = (e) => { e.preventDefault(); pickMarker(i); }; list.appendChild(d); n++;
   });
   if (!n) list.innerHTML = '<div class="combo-empty">no markers</div>';
 }
@@ -1057,6 +1058,7 @@ function renderTargetList() {
   arr.forEach(t => {
     if (q && !t.target.toLowerCase().includes(q)) return;
     const d = document.createElement("div"); d.className = "combo-item" + (state.target && t.slug === state.target.slug ? " sel" : "");
+    d.title = t.target;   // hover shows the full name (protein-complex names get ellipsis-truncated)
     if (state.targetSort === "setacc") {   // show the set-score % (P(target) @ α=1), not the mAP
       const a = targetAcc(t), suffix = t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : "";
       d.textContent = `${t.target}${suffix}`;
@@ -1864,6 +1866,7 @@ function renderTop() {
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
   const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
+  const inf = $("tc-inorm-field"); if (inf) inf.style.display = mk === "phase" ? "none" : "";   // marker-intensity normalization is fluor-only — confusing for phase
   if (sel) {
     if (isPublic()) tc.accBin = (bins.length && bins.includes(100)) ? 100 : (bins[bins.length - 1] || 100);   // public: fixed 100-cell bag, no selector
     else if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];

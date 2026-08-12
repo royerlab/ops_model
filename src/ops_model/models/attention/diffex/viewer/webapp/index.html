@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=168"/>
+<link rel="stylesheet" href="style.css?v=169"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -176,10 +176,16 @@
     </div>
 
     <div class="tabpane hidden" id="tab-top">
-      <div class="hint">Top real phenotype cells for the selected perturbation, ranked by classifier <b>accuracy</b>. Follows the marker × perturbation selection; pin perturbations to compare (NTC pinned by default).</div>
+      <div class="hint">Top real phenotype cells for the selected perturbation, ranked by how well the classifier can distinguish them from other perturbations.</div>
       <div class="hint">Count set by <b>Cells per page</b> above.</div>
-      <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="mask on"/> mask (blue tint outside the cell)</label>
-      <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> marker-normalized intensity (fluor; comparable across cells)</label>
+      <div class="tc-tog">
+        <span class="tc-tog-t">Cell segmentation mask</span>
+        <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="on"/> Cell segmentation mask</label>
+      </div>
+      <div class="tc-tog" id="tc-inorm-field">
+        <span class="tc-tog-t">Normalize to marker intensity?</span>
+        <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="on"/> Normalize to marker intensity?</label>
+      </div>
       <label id="tc-accbin-wrap">Accuracy bag size
         <select id="tc-accbin"></select>
       </label>
@@ -367,7 +373,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=198"></script>
+<script src="app.js?v=199"></script>
 <script src="methods.js?v=54"></script>
 </body>
 </html>
