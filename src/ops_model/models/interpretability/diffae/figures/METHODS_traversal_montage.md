@@ -106,7 +106,7 @@ cluster to convey the local phenotypic neighborhood, with individual complex mem
 ribo40S, ribo60S). The result is a single view in which each region of the phenotypic embedding is
 illustrated by a representative generated cell.
 
-The montage was assembled with the open-source latent-lens package
-(https://github.com/czi-ai/latent-lens; multiscale montages of image crops laid out by an embedding),
+The montage was assembled by grid-based, density-prioritized decimation and
+multiscale tiling of the image crops laid out by an embedding,
 which performs the grid-based, density-prioritized decimation and the multiscale tiling.
 

@@ -250,11 +250,8 @@ def eval_only(cap=2500, batch=48, device="cuda", subdir="eval"):
     st = torch.load(Path(OUT) / "train_state.pt", map_location=dev)
     ema.load_state_dict(st["ema"]); print(f"[eval-only] loaded EMA @ epoch {st['epoch']}")
     loss = st.get("loss")
-    if loss is None or (isinstance(loss, float) and loss != loss):   # missing/NaN → read latest from the train log
-        import glob, os, re
-        for f in sorted(glob.glob("/hpc/mydata/gav.sturm/ops_mono/slurm_logs/diffae/*/*.out"), key=os.path.getmtime)[::-1][:8]:
-            m = re.findall(r"epoch \d+: loss=([\d.]+)", open(f).read())
-            if m: loss = float(m[-1]); break
+    if loss is not None and isinstance(loss, float) and loss != loss:   # NaN → unknown
+        loss = None
     (Path(OUT) / "markers.json").write_text(json.dumps([mc for _, mc, _ in kept], indent=2))
     eval_multi(ema, X, E, P, M, kept, cfg, OUT, dev, epoch=st["epoch"], loss=loss, n_train=int(len(X)), eval_name=subdir)
     return {"epoch": st["epoch"], "n_markers": len(kept)}
