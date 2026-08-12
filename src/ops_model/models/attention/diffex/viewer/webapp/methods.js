@@ -401,7 +401,7 @@ function renderMethods() {
       ${MTH_MORE[s.nav] ? `<details class="mth-more"><summary>Learn more</summary><p>${MTH_MORE[s.nav]}</p></details>` : ""}
       <div class="mth-why"><b>Why it matters —</b> ${s.why}</div>
       ${refs.length ? `<div class="mth-refs">📄 ${refs.map(r => `<a href="${r[1]}" target="_blank" rel="noopener">${r[0]}</a>`).join(" &nbsp;·&nbsp; ")}</div>` : ""}
-      ${(s.defs || []).length ? `<details class="mth-defs" open><summary>Key terms</summary><dl>${s.defs.map(d => `<div><dt>${d[0]}</dt><dd>${d[1]}</dd></div>`).join("")}</dl></details>` : ""}
+      ${(s.defs || []).length ? `<details class="mth-defs"><summary>Key terms</summary><dl>${s.defs.map(d => `<div><dt>${d[0]}</dt><dd>${d[1]}</dd></div>`).join("")}</dl></details>` : ""}
       ${nav}
     </div>`;
   }
