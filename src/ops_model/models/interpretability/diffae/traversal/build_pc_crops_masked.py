@@ -23,7 +23,7 @@ import numpy as np
 
 from . import catalog as C
 
-BASE = "/hpc/projects/intracellular_dashboard/fast_ops"
+BASE = "/hpc/projects/icd.fast.ops"
 PCS_OUT = f"{C.OUT}/viewer_assets/pcs"
 CROP_SIZE = 160                      # native px re-crop (was 96); crisper at the 150px display + shows surround
 PHASE_CHANNEL = 0

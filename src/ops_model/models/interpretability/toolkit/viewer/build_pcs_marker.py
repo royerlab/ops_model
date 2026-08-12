@@ -24,7 +24,7 @@ from . import catalog as C
 from . import marker_leaves as ML
 from ops_model.models.interpretability.diffae.traversal.build_pc_crops_masked import CROP_SIZE, _crop, _is_blank, _render, _zarr_patch
 
-FOPS = "/hpc/projects/intracellular_dashboard/fast_ops"
+FOPS = "/hpc/projects/icd.fast.ops"
 PCS_OUT = f"{C.OUT}/viewer_assets/pcs/markers"
 N_PCS, N_BINS, N_ROWS = 40, 15, 3          # PCs shown; strip bins; cells per bin
 FIT_N, SEL_N = 120_000, 300_000            # cells subsampled per experiment for PCA fit / representative selection

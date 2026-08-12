@@ -385,7 +385,7 @@ class TestEdgeCases:
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not Path("/hpc/projects/intracellular_dashboard/ops").exists(),
+    not Path("/hpc/projects/icd.fast.ops").exists(),
     reason="Requires access to HPC data",
 )
 class TestIntegration:

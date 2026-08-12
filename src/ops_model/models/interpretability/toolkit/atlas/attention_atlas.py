@@ -2161,7 +2161,7 @@ def _parse_ops_channel_maps_yaml(yaml_path=None):
             yaml_path = Path(OpsDataset(resolve_experiment_name("ops0107_20251208")).channel_maps)
         except Exception:
             yaml_path = Path(
-                "/hpc/projects/intracellular_dashboard/fast_ops/configs/ops_channel_maps.yaml"
+                "/hpc/projects/icd.fast.ops/configs/ops_channel_maps.yaml"
             )
     try:
         with open(yaml_path) as f:

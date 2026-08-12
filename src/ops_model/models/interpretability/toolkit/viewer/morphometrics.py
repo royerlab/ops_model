@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import yaml
 
-ORG_SEG_YAML = "/hpc/projects/intracellular_dashboard/fast_ops/configs/org_seg_params.yaml"
+ORG_SEG_YAML = "/hpc/projects/icd.fast.ops/configs/org_seg_params.yaml"
 CACHE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets"
 PIXEL_UM = 0.325                                   # phenotype native pixel size
 
