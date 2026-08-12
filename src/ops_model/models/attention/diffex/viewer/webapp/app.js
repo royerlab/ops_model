@@ -1272,7 +1272,7 @@ function rebuild() {
     const group = document.createElement("div"); group.className = "group"; group.style.setProperty("--cols", Math.min(N, 5));   // cap header/box to the actual cell columns
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
-    hd.appendChild(tt); hd.title = tt.title = tt.textContent;   // title on the visible name span (+ header) so hover shows the full name
+    hd.appendChild(tt); tt.dataset.tip = tt.textContent;   // instant hover tooltip (data-tip) with the full name
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
     state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
@@ -1304,7 +1304,7 @@ function rebuild() {
       const rgroup = document.createElement("div"); rgroup.className = "group"; rgroup.style.setProperty("--cols", Math.min(N, 5));
       const rhd = document.createElement("div"); rhd.className = "group-hd"; rhd.style.color = "#9aa0a6";
       const rtt = document.createElement("span"); rtt.className = "gh-title"; rtt.textContent = "Reference cells (NTC)";
-      rhd.appendChild(rtt); rhd.title = rtt.title = rtt.textContent;
+      rhd.appendChild(rtt); rtt.dataset.tip = rtt.textContent;
       const rsa = document.createElement("span"); rsa.className = "setacc"; rsa.style.display = "none"; rhd.appendChild(rsa);   // blank placeholder → keeps column pairing when scores show
       state.groups.push({ real: true, sa: rsa });
       const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.borderLeft = "4px solid #9aa0a6"; rr.style.setProperty("--cols", Math.min(N, 5));
@@ -1457,6 +1457,10 @@ const _tip = () => $("ticktip");
 function showTip(e, txt) { const tp = _tip(); tp.textContent = txt; tp.style.display = "block"; moveTip(e); }
 function moveTip(e) { const tp = _tip(); tp.style.left = `${e.clientX + 10}px`; tp.style.top = `${e.clientY - 28}px`; }
 function hideTip() { _tip().style.display = "none"; }
+// instant hover tooltip for [data-tip] elements (native title is ~1s-delayed; this is immediate)
+document.addEventListener("mouseover", e => { const t = e.target.closest && e.target.closest("[data-tip]"); if (t) showTip(e, t.getAttribute("data-tip")); });
+document.addEventListener("mousemove", e => { if (e.target.closest && e.target.closest("[data-tip]")) moveTip(e); });
+document.addEventListener("mouseout", e => { if (e.target.closest && e.target.closest("[data-tip]")) hideTip(); });
 
 function renderTicks() {
   const n = state.alphas.length, tk = $("ticks"); tk.innerHTML = "";
@@ -1922,7 +1926,7 @@ function renderTop() {
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
     const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
     const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" title="${e.gene}">${e.gene}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene}">${e.gene}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
