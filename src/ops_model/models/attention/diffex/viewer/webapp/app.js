@@ -55,8 +55,9 @@ function placeImgClim() {
   el.style.display = "";
   const pane = $("tab-" + view); if (!pane) return;
   const scale = pane.querySelector('input[type="range"][id$="-scale"]');   // #tile-scale / #tc-scale
-  if (scale) (scale.closest("label") || scale).after(el);
-  else pane.insertBefore(el, pane.firstChild);
+  if (scale) { (scale.closest("label") || scale).after(el); return; }
+  const lead = [...pane.children].find(c => c.classList && c.classList.contains("hint"));   // else: below the description text, as the first control
+  if (lead) lead.after(el); else pane.insertBefore(el, pane.firstChild);
 }
 
 // show/hide features for the current mode (internal vs public). Cosmetic gate — the real
@@ -1270,7 +1271,8 @@ function rebuild() {
     const group = document.createElement("div"); group.className = "group";
     group.style.borderLeft = `4px solid ${color}`; group.style.paddingLeft = "12px";   // color bar down the left of the whole row (matches Top Cells)
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
-    hd.textContent = `${apfx}${p.target} · ${p.markerName}`; hd.title = hd.textContent;   // single header (title = full text on hover when truncated)
+    const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
+    hd.appendChild(tt); hd.title = tt.textContent;   // title in its own span so the score chip can right-align; full text on hover
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
     state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
