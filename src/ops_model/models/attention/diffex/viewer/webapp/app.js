@@ -1880,7 +1880,7 @@ function renderTop() {
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
   const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
-  const inf = $("tc-inorm-field"); if (inf) inf.style.display = mk === "phase" ? "none" : "";   // marker-intensity normalization is fluor-only — confusing for phase
+  const inw = $("tc-inorm") && $("tc-inorm")._tog; if (inw) inw.style.display = mk === "phase" ? "none" : "";   // marker-intensity normalization is fluor-only — hide its toggle for phase
   if (sel) {
     if (isPublic()) tc.accBin = (bins.length && bins.includes(100)) ? 100 : (bins[bins.length - 1] || 100);   // public: fixed 100-cell bag, no selector
     else if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
