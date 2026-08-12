@@ -24,7 +24,7 @@ data:
   z_standardize_control_only: true
   cell_stratify: true
   # EBI complex labels: genes in the map -> their complex; NTC -> NTC.
-  label_map_path: /path/to/ebi_complexes.csv
+  label_map_path: src/ops_model/interpretability/classifier/configs/20260518_EBI_complexes_v1_old_gene_names.csv
   label_map_gene_col: gene_name
   label_map_label_col: pathway
   label_map_fallback_to_gene: false  # non-EBI genes are dropped

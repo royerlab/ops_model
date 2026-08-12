@@ -2979,7 +2979,7 @@ def build_model(ckpt: dict, device: torch.device) -> MixedChannelClassifier:
 @hydra.main(
     version_base="1.3.0",
     config_path=_CONFIG_DIR,
-    config_name="train_set_classifier_phase_paper_v2",
+    config_name="train_set_classifier_phase_1K",
 )
 def main(cfg: DictConfig) -> None:
     run(cfg)

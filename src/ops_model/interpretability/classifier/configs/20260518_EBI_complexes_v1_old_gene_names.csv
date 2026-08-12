@@ -1,0 +1,312 @@
+,gene_name,pathway
+0,RAD21,"Nuclear mitotic cohesin complex, STAG1 variant"
+1,SMC1A,"Nuclear mitotic cohesin complex, STAG1 variant"
+2,SMC3,"Nuclear mitotic cohesin complex, STAG1 variant"
+3,CCT3,Chaperonin-containing T-complex
+4,CCT4,Chaperonin-containing T-complex
+5,CCT6A,Chaperonin-containing T-complex
+6,CCT7,Chaperonin-containing T-complex
+7,TCP1,Chaperonin-containing T-complex
+8,SNRPD1,Sm complex
+9,SNRPD2,Sm complex
+10,EIF3A,Eukaryotic translation initiation factor 3 complex
+11,EIF3B,Eukaryotic translation initiation factor 3 complex
+12,EIF3L,Eukaryotic translation initiation factor 3 complex
+13,EIF3M,Eukaryotic translation initiation factor 3 complex
+14,COX7B,Mitochondrial respiratory chain complex IV
+15,COX7C,Mitochondrial respiratory chain complex IV
+16,DNAJC19,"TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
+17,GRPEL1,"TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
+18,HSPA9,"TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
+19,TIMM23,"TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
+20,TIMM44,"TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
+21,TSC1,TSC1-TSC2 complex
+22,TSC2,TSC1-TSC2 complex
+23,TELO2,TTT complex
+24,TTI1,TTT complex
+25,TTI2,TTT complex
+26,ATP5F1B,Mitochondrial proton-transporting ATP synthase complex
+27,ATP5ME,Mitochondrial proton-transporting ATP synthase complex
+28,TRAPPC2L,"TRAPP II complex, TRAPPC2 variant"
+29,TRAPPC4,"TRAPP II complex, TRAPPC2 variant"
+30,RPL15,60S cytosolic large ribosomal subunit
+31,RPL18,60S cytosolic large ribosomal subunit
+32,RPL23,60S cytosolic large ribosomal subunit
+33,RPL27A,60S cytosolic large ribosomal subunit
+34,RPL30,60S cytosolic large ribosomal subunit
+35,RPL32,60S cytosolic large ribosomal subunit
+36,RPL34,60S cytosolic large ribosomal subunit
+37,RPL35,60S cytosolic large ribosomal subunit
+38,RPL37A,60S cytosolic large ribosomal subunit
+39,RPL41,60S cytosolic large ribosomal subunit
+40,RPL5,60S cytosolic large ribosomal subunit
+41,RPL9,60S cytosolic large ribosomal subunit
+42,RPLP1,60S cytosolic large ribosomal subunit
+43,RPLP2,60S cytosolic large ribosomal subunit
+44,UBA52,60S cytosolic large ribosomal subunit
+45,COPA,"COPI vesicle coat complex, COPG1-COPZ1 variant"
+46,COPB1,"COPI vesicle coat complex, COPG1-COPZ1 variant"
+47,COPB2,"COPI vesicle coat complex, COPG1-COPZ1 variant"
+48,COPZ1,"COPI vesicle coat complex, COPG1-COPZ1 variant"
+49,VPS26A,"Retromer complex, VPS26A variant"
+50,VPS29,"Retromer complex, VPS26A variant"
+51,FAU,40S cytosolic small ribosomal subunit
+52,RPS10,40S cytosolic small ribosomal subunit
+53,RPS14,40S cytosolic small ribosomal subunit
+54,RPS16,40S cytosolic small ribosomal subunit
+55,RPS25,40S cytosolic small ribosomal subunit
+56,RPS27A,40S cytosolic small ribosomal subunit
+57,RPS28,40S cytosolic small ribosomal subunit
+58,RPS29,40S cytosolic small ribosomal subunit
+59,RPS3A,40S cytosolic small ribosomal subunit
+60,RPS5,40S cytosolic small ribosomal subunit
+61,RPS6,40S cytosolic small ribosomal subunit
+62,RPS8,40S cytosolic small ribosomal subunit
+63,RPS9,40S cytosolic small ribosomal subunit
+64,RPSA,40S cytosolic small ribosomal subunit
+65,ASNA1,GET complex
+66,WRB,GET complex
+67,POLR2B,DNA-directed RNA polymerase II complex
+68,POLR2C,DNA-directed RNA polymerase II complex
+69,POLR2D,DNA-directed RNA polymerase II complex
+70,POLR2F,DNA-directed RNA polymerase II complex
+71,POLR2H,DNA-directed RNA polymerase II complex
+72,POLR2I,DNA-directed RNA polymerase II complex
+73,EXOC4,"Exocyst, EXOC6 variant"
+74,EXOC5,"Exocyst, EXOC6 variant"
+75,EXOC7,"Exocyst, EXOC6 variant"
+76,BORCS7,BORC complex
+77,BORCS8,BORC complex
+78,AP1M1,"Ubiquitous AP-1 Adaptor complex, sigma1a variant"
+79,AP1S1,"Ubiquitous AP-1 Adaptor complex, sigma1a variant"
+80,AP3M1,"Ubiquitous AP-3 Adaptor complex, sigma3a variant"
+81,AP3S1,"Ubiquitous AP-3 Adaptor complex, sigma3a variant"
+82,AP2A1,"AP-2 Adaptor complex, alpha1 variant"
+83,AP2M1,"AP-2 Adaptor complex, alpha1 variant"
+84,AP2S1,"AP-2 Adaptor complex, alpha1 variant"
+85,MRPL20,39S mitochondrial large ribosomal subunit
+86,MRPL34,39S mitochondrial large ribosomal subunit
+87,MRPL39,39S mitochondrial large ribosomal subunit
+88,MRPL40,39S mitochondrial large ribosomal subunit
+89,MRPL42,39S mitochondrial large ribosomal subunit
+90,MRPL52,39S mitochondrial large ribosomal subunit
+91,LAMTOR1,Ragulator complex
+92,LAMTOR2,Ragulator complex
+93,LAMTOR3,Ragulator complex
+94,LAMTOR4,Ragulator complex
+95,NUP214,Nuclear pore complex
+96,NUP37,Nuclear pore complex
+97,NUP54,Nuclear pore complex
+98,NUP98,Nuclear pore complex
+99,RAE1,Nuclear pore complex
+100,CHMP1A,ESCRT-III complex
+101,CHMP2A,ESCRT-III complex
+102,CHMP4B,ESCRT-III complex
+103,CHMP4C,ESCRT-III complex
+104,CHMP5,ESCRT-III complex
+105,CHMP6,ESCRT-III complex
+106,CHMP7,ESCRT-III complex
+107,DARS,Multiaminoacyl-tRNA synthetase complex
+108,LARS,Multiaminoacyl-tRNA synthetase complex
+109,MARS,Multiaminoacyl-tRNA synthetase complex
+110,QARS,Multiaminoacyl-tRNA synthetase complex
+111,RARS,Multiaminoacyl-tRNA synthetase complex
+112,ATP6V0A1,"Vacuolar proton translocating ATPase complex, ATP6V0A1 variant"
+113,ATP6V1H,"Vacuolar proton translocating ATPase complex, ATP6V0A1 variant"
+114,DDX39B,"TREX transcription-export complex, DX39B variant"
+115,THOC3,"TREX transcription-export complex, DX39B variant"
+116,THOC7,"TREX transcription-export complex, DX39B variant"
+117,ARPC2,"Actin-related protein 2/3 complex, ARPC1A-ACTR3B-ARPC5 variant"
+118,ARPC3,"Actin-related protein 2/3 complex, ARPC1A-ACTR3B-ARPC5 variant"
+119,ARPC4,"Actin-related protein 2/3 complex, ARPC1A-ACTR3B-ARPC5 variant"
+120,AATF,Small ribosomal subunit processome
+121,BMS1,Small ribosomal subunit processome
+122,NOL6,Small ribosomal subunit processome
+123,RCL1,Small ribosomal subunit processome
+124,RRP7A,Small ribosomal subunit processome
+125,UTP14A,Small ribosomal subunit processome
+126,CNOT1,"CCR4-NOT mRNA deadenylase complex, CNOT6L-CNOT7 variant"
+127,CNOT10,"CCR4-NOT mRNA deadenylase complex, CNOT6L-CNOT7 variant"
+128,CNOT11,"CCR4-NOT mRNA deadenylase complex, CNOT6L-CNOT7 variant"
+129,CNOT2,"CCR4-NOT mRNA deadenylase complex, CNOT6L-CNOT7 variant"
+130,CNOT4,"CCR4-NOT mRNA deadenylase complex, CNOT6L-CNOT7 variant"
+131,TIMELESS,Replication fork protection complex
+132,TIPIN,Replication fork protection complex
+133,DDX46,U2 small nuclear ribonucleoprotein complex
+134,SNRPB2,U2 small nuclear ribonucleoprotein complex
+135,GINS1,GINS complex
+136,GINS2,GINS complex
+137,KANSL1,NSL histone acetyltransferase complex
+138,MCRS1,NSL histone acetyltransferase complex
+139,OGT,NSL histone acetyltransferase complex
+140,MTOR,mTORC1 complex
+141,RPTOR,mTORC1 complex
+142,GTF2A1,General transcription factor complex TFIIA
+143,GTF2A2,General transcription factor complex TFIIA
+144,EXOSC3,"Nucleolar exosome complex, EXOSC10 variant"
+145,EXOSC5,"Nucleolar exosome complex, EXOSC10 variant"
+146,EXOSC6,"Nucleolar exosome complex, EXOSC10 variant"
+147,EXOSC8,"Nucleolar exosome complex, EXOSC10 variant"
+148,SRPRA,Signal recognition particle receptor complex
+149,SRPRB,Signal recognition particle receptor complex
+150,LIN37,Myb-MuvB transcriptional activation complex
+151,LIN9,Myb-MuvB transcriptional activation complex
+152,GTF3C1,General transcription factor TFIIIC complex
+153,GTF3C4,General transcription factor TFIIIC complex
+154,GTF3C6,General transcription factor TFIIIC complex
+155,CD3EAP,DNA-directed RNA polymerase I complex
+156,POLR1B,DNA-directed RNA polymerase I complex
+157,POLR1C,DNA-directed RNA polymerase I complex
+158,POLR1E,DNA-directed RNA polymerase I complex
+159,ZNRD1,DNA-directed RNA polymerase I complex
+160,SNRNP70,U1 small nuclear ribonucleoprotein complex
+161,SNRPC,U1 small nuclear ribonucleoprotein complex
+162,POLR3A,"DNA-directed RNA polymerase III complex, POLR3G variant"
+163,POLR3B,"DNA-directed RNA polymerase III complex, POLR3G variant"
+164,POLR3E,"DNA-directed RNA polymerase III complex, POLR3G variant"
+165,POLR3F,"DNA-directed RNA polymerase III complex, POLR3G variant"
+166,GTF2B,General transcription factor TFIIB-TBP complex
+167,TBP,General transcription factor TFIIB-TBP complex
+168,AURKB,"Chromosomal passenger complex, AURKB variant"
+169,INCENP,"Chromosomal passenger complex, AURKB variant"
+170,TERF1,Shelterin complex
+171,TERF2IP,Shelterin complex
+172,MED18,Core mediator complex
+173,MED21,Core mediator complex
+174,MED6,Core mediator complex
+175,SEL1L,Luminal surveillance complex
+176,SYVN1,Luminal surveillance complex
+177,FTH1,"FTH1-FTL, Ferritin complex"
+178,FTL,"FTH1-FTL, Ferritin complex"
+179,DAD1,"Oligosaccharyltransferase complex B, MAGT1 variant"
+180,DDOST,"Oligosaccharyltransferase complex B, MAGT1 variant"
+181,OST4,"Oligosaccharyltransferase complex B, MAGT1 variant"
+182,STT3B,"Oligosaccharyltransferase complex B, MAGT1 variant"
+183,COPS2,COP9 signalosome variant 1
+184,COPS3,COP9 signalosome variant 1
+185,COPS4,COP9 signalosome variant 1
+186,COPS5,COP9 signalosome variant 1
+187,COPS6,COP9 signalosome variant 1
+188,COPS8,COP9 signalosome variant 1
+189,GPS1,COP9 signalosome variant 1
+190,BLOC1S2,BLOC-1 complex
+191,BLOC1S6,BLOC-1 complex
+192,SNRPD3,U7 small nuclear ribonucleoprotein complex
+193,SNRPG,U7 small nuclear ribonucleoprotein complex
+194,FARSA,Phenylalanyl-tRNA synthetase complex
+195,FARSB,Phenylalanyl-tRNA synthetase complex
+196,COMMD4,Commander complex
+197,COMMD5,Commander complex
+198,CUL2,LRR1-Elongin C-Elongin B E3 ubiquitin ligase complex
+199,ELOC,LRR1-Elongin C-Elongin B E3 ubiquitin ligase complex
+200,SF3B3,SF3B complex
+201,SF3B5,SF3B complex
+202,SRP19,Signal recognition particle
+203,SRP54,Signal recognition particle
+204,SRP68,Signal recognition particle
+205,SRP72,Signal recognition particle
+206,EIF4A1,"Eukaryotic translation initiation factor 4F, EIF4A1 and EIF4G1 variant"
+207,EIF4G1,"Eukaryotic translation initiation factor 4F, EIF4A1 and EIF4G1 variant"
+208,TBL3,UTP-B complex
+209,WDR36,UTP-B complex
+210,CPSF2,Histone pre-RNA core cleavage complex
+211,CPSF3,Histone pre-RNA core cleavage complex
+212,HAUS4,HAUS complex
+213,HAUS5,HAUS complex
+214,HAUS6,HAUS complex
+215,SPCS2,"Signal peptidase complex, SEC11A variant"
+216,SPCS3,"Signal peptidase complex, SEC11A variant"
+217,POLA1,DNA polymerase alpha:primase complex
+218,POLA2,DNA polymerase alpha:primase complex
+219,PRIM1,DNA polymerase alpha:primase complex
+220,POLE,DNA polymerase epsilon complex
+221,POLE2,DNA polymerase epsilon complex
+222,POLE4,DNA polymerase epsilon complex
+223,MCM3,MCM complex
+224,MCM5,MCM complex
+225,MCM7,MCM complex
+226,IDH3A,Mitochondrial isocitrate dehydrogenase complex (NAD+)
+227,IDH3B,Mitochondrial isocitrate dehydrogenase complex (NAD+)
+228,CCNH,Cyclin-dependent protein kinase-activating kinase complex
+229,CDK7,Cyclin-dependent protein kinase-activating kinase complex
+230,EMC1,"Endoplasmic reticulum membrane complex, EMC8 variant"
+231,EMC2,"Endoplasmic reticulum membrane complex, EMC8 variant"
+232,EMC3,"Endoplasmic reticulum membrane complex, EMC8 variant"
+233,COQ4,CoQ biosynthetic complex
+234,COQ7,CoQ biosynthetic complex
+235,COG3,COG tethering complex
+236,COG4,COG tethering complex
+237,COG6,COG tethering complex
+238,COG7,COG tethering complex
+239,COG8,COG tethering complex
+240,FANCC,Fanconi anemia ubiquitin ligase complex
+241,FANCG,Fanconi anemia ubiquitin ligase complex
+242,CENPC,Kinetochore CCAN complex
+243,CENPH,Kinetochore CCAN complex
+244,CENPW,Kinetochore CCAN complex
+245,KRT18,Keratin-8 - Keratin-18 dimer complex
+246,KRT8,Keratin-8 - Keratin-18 dimer complex
+247,PHB,Prohibitin complex
+248,PHB2,Prohibitin complex
+249,ELP2,Elongator holoenzyme complex
+250,ELP4,Elongator holoenzyme complex
+251,INO80D,INO80 chromatin remodeling complex
+252,INO80E,INO80 chromatin remodeling complex
+253,CHD4,MBD2/NuRD nucleosome remodeling and deacetylase complex
+254,MTA2,MBD2/NuRD nucleosome remodeling and deacetylase complex
+255,CPSF6,"mRNA cleavage factor I(m) complex, CPSF6 variant"
+256,NUDT21,"mRNA cleavage factor I(m) complex, CPSF6 variant"
+257,BRD8,NuA4 histone acetyltransferase complex
+258,MBTD1,NuA4 histone acetyltransferase complex
+259,MRGBP,NuA4 histone acetyltransferase complex
+260,SMARCC1,"SWI/SNF ATP-dependent chromatin remodeling complex, ACTL6A-ARID1A-SMARCA2 variant"
+261,SMARCD1,"SWI/SNF ATP-dependent chromatin remodeling complex, ACTL6A-ARID1A-SMARCA2 variant"
+262,PPIE,Intron-binding complex
+263,XAB2,Intron-binding complex
+264,SEC61A1,"SEC61 protein-conducting channel complex, SEC1A1 variant"
+265,SEC61B,"SEC61 protein-conducting channel complex, SEC1A1 variant"
+266,SEC61G,"SEC61 protein-conducting channel complex, SEC1A1 variant"
+267,ADRM1,19S proteasome regulatory complex
+268,PSMC2,19S proteasome regulatory complex
+269,PSMC6,19S proteasome regulatory complex
+270,PSMD11,19S proteasome regulatory complex
+271,PSMD14,19S proteasome regulatory complex
+272,PSMD2,19S proteasome regulatory complex
+273,PSMD4,19S proteasome regulatory complex
+274,DCTN4,Dynactin complex
+275,DCTN5,Dynactin complex
+276,DYNC1H1,"Dynein-1 complex, variant 2"
+277,DYNC1I2,"Dynein-1 complex, variant 2"
+278,DYNC1LI1,"Dynein-1 complex, variant 2"
+279,DYNLL1,"Dynein-1 complex, variant 2"
+280,NOP56,"Box C/D snoRNA-Guided RNP methyltransferase complex, FBLL1 variant"
+281,NOP58,"Box C/D snoRNA-Guided RNP methyltransferase complex, FBLL1 variant"
+282,DENR,"DENR-MCTS1, translation reinitiation complex"
+283,MCTS1,"DENR-MCTS1, translation reinitiation complex"
+284,EFTUD2,"U5 small nuclear ribonucleoprotein complex, AAR2 variant"
+285,SNRNP200,"U5 small nuclear ribonucleoprotein complex, AAR2 variant"
+286,LSM4,LSM2-8 complex
+287,LSM5,LSM2-8 complex
+288,LSM6,LSM2-8 complex
+289,CABIN1,"HIR histone chaperone complex, UBN1 variant"
+290,UBN1,"HIR histone chaperone complex, UBN1 variant"
+291,EIF2S1,Eukaryotic translation initiation factor 2 complex
+292,EIF2S2,Eukaryotic translation initiation factor 2 complex
+293,DDRGK1,UFM1 ribosome E3 ligase complex
+294,UFL1,UFM1 ribosome E3 ligase complex
+295,EIF2B2,Eukaryotic translation initiation factor 2B complex
+296,EIF2B3,Eukaryotic translation initiation factor 2B complex
+297,EIF2B4,Eukaryotic translation initiation factor 2B complex
+298,EIF2B5,Eukaryotic translation initiation factor 2B complex
+299,INTS1,Integrator core complex
+300,INTS10,Integrator core complex
+301,INTS11,Integrator core complex
+302,INTS2,Integrator core complex
+303,INTS5,Integrator core complex
+304,INTS7,Integrator core complex
+305,CD2BP2,U5 small nuclear ribonucleoprotein complete complex
+306,PRPF6,U5 small nuclear ribonucleoprotein complete complex
+307,SNRNP40,U5 small nuclear ribonucleoprotein complete complex
+308,BUD31,"Intron Lariat Spliceosome, type 1 complex"
+309,RBM22,"Intron Lariat Spliceosome, type 1 complex"
+310,NTC,NTC
