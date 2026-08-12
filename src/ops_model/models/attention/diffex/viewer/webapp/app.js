@@ -68,6 +68,7 @@ function applyFeatureGate() {
     let changed = false;
     if (state.altAnchorsOnly) { state.altAnchorsOnly = false; $("altanchor").checked = false; $("altanchor")._togSync?.(); changed = true; }
     if (state.anchor !== "NTC") { state.anchor = "NTC"; changed = true; }
+    if (state.scoreMode !== "ptarget") { state.scoreMode = "ptarget"; $("scoremode").value = "ptarget"; $("scoremode")._segSync?.(); updateScoreLegend(); changed = true; }   // public: P(target) overlay always on, no selector
     if (changed && state.marker && state.target) refreshTargets();
   }
   if (pub && PUBLIC_HIDDEN_TABS.has(state.view)) {   // current view just got hidden → fall back to Traversal
@@ -1341,7 +1342,7 @@ function renderInfo(t) {
   $("info-sub").textContent = !t ? "" :
     t.grain === "minibinder"
       ? `minibinder · ${t.phenotype || "39S"} cell-score ${(t.cell_score ?? t.dist_map ?? 0).toFixed(3)} · binder prob ${(t.binder_prob || 0).toFixed(3)} · target ${t.gene_target || ""}`
-      : `${t.grain}` + (t.dist_map != null ? ` · ${t.grain === "complex" ? "EBI" : "distinctiveness"} mAP ${t.dist_map.toFixed(3)}` : "");
+      : `${t.grain}` + (t.dist_map != null ? ` · ${t.grain === "complex" ? "EBI" : "geneKO"} mAP ${t.dist_map.toFixed(3)}` : "");
   const body = $("info-body"); body.innerHTML = "";
   const s = t && (t.desc || (t.grain === "complex" ? complexDescOf(t.target) : null));   // complex members are marker-independent → fall back across markers (non-phase targets lack desc)
   if (!t || !s) { body.innerHTML = '<div class="empty">no annotation for this perturbation</div>'; return; }

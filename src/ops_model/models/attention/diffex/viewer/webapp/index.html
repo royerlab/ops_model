@@ -53,7 +53,7 @@
     <label>Perturbation
       <select id="target-sort" data-seg class="mini" title="list order">
         <option value="setacc" selected title="Selected marker's SetTransformer set-accuracy (top1 @ 100 cells; phase for Phase) — higher = more distinctive">by SET ACC</option>
-        <option value="map" title="gene-KO mAP (distinctiveness), highest first">by mAP</option>
+        <option value="map" title="mAP (geneKO or EBI, by Type), highest first">by mAP</option>
         <option value="alpha">A–Z</option>
       </select>
     </label>
@@ -110,7 +110,7 @@
       <div class="hint feat-internal">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
       <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
-        <label>Classifier score overlay
+        <label class="feat-internal">Classifier score overlay
           <select id="scoremode" data-seg>
             <option value="none">none</option>
             <option value="linear">per-cell linear (NTC vs KO)</option>
@@ -365,7 +365,7 @@
 <div id="m-tip"></div>
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
-<script src="app.js?v=192"></script>
+<script src="app.js?v=193"></script>
 <script src="methods.js?v=52"></script>
 </body>
 </html>
