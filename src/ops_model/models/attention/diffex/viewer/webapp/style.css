@@ -525,6 +525,7 @@ button:hover{border-color:var(--accent)}
 .about-foot span{font-size:11px;color:var(--mut);line-height:1.35}
 
 /* titled on/off toggles (Top cells): "Title ........ [off|on]" */
-.tc-tog{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0}
-.tc-tog-t{font-size:13px;color:var(--fg)}
+.tc-tog{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:6px 0}
+.tc-tog-t{font-size:13px;color:var(--fg);flex:0 1 auto}
 .tc-tog .seg-group.tog{margin:0;flex:0 0 auto}
+.tc-tog .seg{flex:0 0 auto;padding:4px 16px}   /* pills hug off/on text (don't collapse in the shrink-to-fit group) */
