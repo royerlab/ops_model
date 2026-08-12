@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=171"/>
+<link rel="stylesheet" href="style.css?v=172"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -105,12 +105,12 @@
     <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">
-      <div class="hint">A healthy cell morphed toward the selected perturbation's phenotype — the destination is the average of its <b>top cells</b>. The <b>α</b> slider dials the change from the real cell (α=0) to exaggerated, altering only the phenotype while the cell's identity (size, texture, context) stays fixed.</div>
+      <div class="hint">Move the <b>α</b> slider to morph a healthy cell toward the selected perturbation — α=0 is the real cell, higher exaggerates its phenotype.</div>
       <label class="feat-internal">Anchor <span class="hint">(the α=0 center)</span>
         <select id="anchor"></select>
       </label>
       <div class="hint feat-internal">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
-      <label>Image scale <span class="hint">(smaller = more per row + more rows)</span> <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
+      <label>Image scale <input type="range" id="tile-scale" min="60" max="260" step="10" value="170"/></label>
       <div class="grp">
         <label class="feat-internal">Classifier score overlay
           <select id="scoremode" data-seg>
@@ -126,7 +126,7 @@
         <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       </div>
       <div class="grp">
-        <span class="lbl">Compare rows <span class="hint">(current is always shown; pin more)</span></span>
+        <span class="lbl">Compare groups</span>
         <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
         <ul id="panellist"></ul>
       </div>
@@ -178,7 +178,6 @@
 
     <div class="tabpane hidden" id="tab-top">
       <div class="hint">Top real phenotype cells for the selected perturbation, ranked by how well the classifier can distinguish them from other perturbations.</div>
-      <div class="hint">Count set by <b>Cells per page</b> above.</div>
       <div class="tc-tog">
         <span class="tc-tog-t">Cell segmentation mask</span>
         <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="on"/> Cell segmentation mask</label>

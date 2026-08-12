@@ -49,7 +49,7 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar .row .combo{flex:1;min-width:0}
 /* combobox: input shows the selection; focus reveals a scrollable (~10-row) filtered list */
 .combo{position:relative}
-.combo-list{position:absolute;top:100%;left:0;right:0;z-index:60;margin-top:2px;
+.combo-list{position:absolute;top:100%;left:0;min-width:100%;width:max-content;max-width:min(440px,80vw);z-index:60;margin-top:2px;
    background:var(--panel);border:1px solid var(--accent);border-radius:6px;
    max-height:264px;overflow:auto;box-shadow:0 10px 24px rgba(0,0,0,.55)}
 .combo-list.hidden{display:none}
