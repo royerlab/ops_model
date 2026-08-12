@@ -1268,21 +1268,6 @@ function rebuild() {
   $("pagenum").textContent = `Page ${state.page + 1}${cr ? " / " + Math.max(1, Math.ceil(cr / N)) : ""}`;
   const g = $("grid"); g.innerHTML = "";
   state.panels = []; state.groups = []; let k = 0;
-  if (state.showReal) {                             // real cells shown ONCE as their own group (shared starting cells → identical across NTC-anchored perturbations)
-    const rp0 = set.find(p => p.has_real);
-    if (rp0) {
-      const rgroup = document.createElement("div"); rgroup.className = "group";
-      const rhd = document.createElement("div"); rhd.className = "group-hd"; rhd.style.color = "#9aa0a6";
-      rhd.textContent = "real cells"; rhd.title = rhd.textContent;
-      const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.setProperty("--cols", Math.min(N, 5));
-      for (let c = start; c < Math.min(start + N, rp0.n_cells); c++) {
-        const rp = document.createElement("div"); rp.className = "panel";
-        const rimg = document.createElement("img"); rimg.src = `${travBase(rp0.real_dir)}${rp0.real_dir}/cell${diskCellFor(rp0.anchor, c)}/real.webp`;
-        rp.appendChild(rimg); rr.appendChild(rp);
-      }
-      rgroup.appendChild(rhd); rgroup.appendChild(rr); g.appendChild(rgroup);
-    }
-  }
   set.forEach((p, gi) => {                          // one group (row) per perturbation
     const color = PALETTE[gi % PALETTE.length];
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
@@ -1315,6 +1300,24 @@ function rebuild() {
     group.appendChild(hd);
     group.appendChild(cells); g.appendChild(group);
   });
+  if (state.showReal) {                             // reference (NTC) cells shown ONCE at the bottom (shared across NTC-anchored perturbations)
+    const rp0 = set.find(p => p.has_real);
+    if (rp0) {
+      const rgroup = document.createElement("div"); rgroup.className = "group"; rgroup.style.setProperty("--cols", Math.min(N, 5));
+      const rhd = document.createElement("div"); rhd.className = "group-hd"; rhd.style.color = "#9aa0a6";
+      const rtt = document.createElement("span"); rtt.className = "gh-title"; rtt.textContent = "Reference cells (NTC)";
+      rhd.appendChild(rtt); rhd.title = rtt.title = rtt.textContent;
+      const rsa = document.createElement("span"); rsa.className = "setacc"; rsa.style.display = "none"; rhd.appendChild(rsa);   // blank placeholder → keeps column pairing when scores show
+      state.groups.push({ real: true, sa: rsa });
+      const rr = document.createElement("div"); rr.className = "group-cells"; rr.style.borderLeft = "4px solid #9aa0a6"; rr.style.setProperty("--cols", Math.min(N, 5));
+      for (let c = start; c < Math.min(start + N, rp0.n_cells); c++) {
+        const rp = document.createElement("div"); rp.className = "panel";
+        const rimg = document.createElement("img"); rimg.src = `${travBase(rp0.real_dir)}${rp0.real_dir}/cell${diskCellFor(rp0.anchor, c)}/real.webp`;
+        rp.appendChild(rimg); rr.appendChild(rp);
+      }
+      rgroup.appendChild(rhd); rgroup.appendChild(rr); g.appendChild(rgroup);
+    }
+  }
   state.alphas = state.panels.length ? state.panels[0].alphas : state.manifest.alphas;
   [...new Set(state.panels.map(p => p.asset_dir))].forEach(fetchScores);  // per-image classifier confidence
 
@@ -1362,6 +1365,12 @@ function showIdx(i) {
     } else bd.style.display = "none";
   });
   state.groups.forEach(gp => {   // per-traversal v5 set score chip (selected mode: P(target) heat | rank RdYlGn)
+    if (gp.real) {   // reference row: invisible placeholder chip matching the others' show/hide (keeps cols-layout rows aligned)
+      const show = SET_MODES.includes(state.scoreMode);
+      gp.sa.textContent = "—"; gp.sa.style.visibility = "hidden";
+      gp.sa.style.display = show ? "inline-block" : "none";
+      return;
+    }
     const sch = setChip(state.scoresV5[gp.dir], i);
     if (sch) {
       const rl = sch.showReal && state.realAcc20 ? state.realAcc20[gp.dir] : null;   // real-cell ceiling (P(target) only)
