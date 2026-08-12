@@ -517,14 +517,19 @@ button:hover{border-color:var(--accent)}
 .about-tag{font-size:12px;color:var(--mut);letter-spacing:.03em;max-width:230px;line-height:1.4}
 .about-lead{font-size:14.5px;line-height:1.6;color:var(--mut);padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:15px}
 .about-lead b{color:var(--fg)}
-#side-about-view .hint{font-size:13.5px;line-height:1.5}
+#side-about-view .hint,.mth-about .hint{font-size:13.5px;line-height:1.5}
 .about-sec{margin-bottom:15px}
 .about-cap{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:7px}
-#side-about-view a{color:var(--accent);text-decoration:none}
-#side-about-view a:hover{text-decoration:underline}
+#side-about-view a,.mth-about a{color:var(--accent);text-decoration:none}
+#side-about-view a:hover,.mth-about a:hover{text-decoration:underline}
 .about-tabs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
 .about-tabs li{font-size:13.5px;line-height:1.5;color:var(--mut);padding-left:10px;border-left:2px solid var(--line)}
 .about-tabs li b{color:var(--fg)}
 .about-foot{display:flex;align-items:center;gap:10px;padding-top:13px;border-top:1px solid var(--line)}
 .about-foot img{height:20px;opacity:.92}
 .about-foot span{font-size:11px;color:var(--mut);line-height:1.35}
+
+/* About as the first How-it-works section */
+.mth-about{max-width:680px}
+.mth-about .about-hero{padding-top:0}
+.mth-about .about-lead{font-size:16px}

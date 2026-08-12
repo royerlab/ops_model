@@ -25,12 +25,10 @@ function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation
   else {
     state.sidePanel = m;
     $("side-info-view").style.display = m === "info" ? "" : "none";
-    $("side-about-view").style.display = m === "about" ? "" : "none";
     if (!init) bar.classList.remove("hidden");
   }
   const vis = !bar.classList.contains("hidden");   // a button is blue ONLY when its panel is actually showing
   $("side-info").classList.toggle("active", vis && state.sidePanel === "info");
-  $("side-about").classList.toggle("active", vis && state.sidePanel === "about");
   if (!init && typeof saveState === "function") saveState();
 }
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
