@@ -3,8 +3,7 @@ r"""Evaluate a trained set classifier vs. number of cells per set (with resampli
 
 Loads a checkpoint (local path or W&B artifact) and validation data the same way as
 ``analysis-mixed-channel-attn.ipynb``: mixed-channel mode uses :class:`MixedChannelDataset`
-from a ``dump_val_dir`` export; optional per-channel mode uses :class:`PerturbationDataset`
-from parquet via :func:`load_data`.
+from a ``dump_val_dir`` export. Only ``mixed_channels_mode=true`` is supported.
 
 For each ``n_cells`` in ``n_cells_list``, runs ``n_repetitions`` full validation passes
 with different RNG seeds (stochastic subsampling in the dataset). Plots mean **top-1**
@@ -46,11 +45,7 @@ from tqdm import tqdm
 from .train import (
     MixedChannelClassifier,
     MixedChannelDataset,
-    PerturbationDataset,
-    SetClassifier,
     _load_label_map,
-    collate_perturbation,
-    load_data,
     load_val_dataset,
 )
 
@@ -141,66 +136,6 @@ def _evaluate_mixed_with_topk(
             "Mixed-channel eval saw zero samples (no batches). "
             "Check for an empty val dataset or val DataLoader configuration."
         )
-    return (
-        total_loss / total,
-        correct1 / total,
-        correct5 / total,
-        pc_top1,
-        pc_top5,
-        pc_n,
-    )
-
-
-@torch.no_grad()
-def _evaluate_perturbation_with_topk(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-    *,
-    n_classes: int,
-    n_track_genes: int,
-    gene_indices_in_dataset_order: torch.Tensor,
-    desc: str | None,
-    show_batches: bool,
-) -> tuple[float, float, float, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (mean_loss, top1_accuracy, top5_accuracy, per_gene_top1, per_gene_top5, per_gene_n).
-
-    Per-gene tensors are sized ``n_track_genes`` and indexed by checkpoint gene index
-    (regardless of whether the model outputs label or gene logits).
-    """
-    model.eval()
-    total_loss = 0.0
-    correct1 = 0
-    correct5 = 0
-    total = 0
-    pc_top1 = torch.zeros(n_track_genes, dtype=torch.long)
-    pc_top5 = torch.zeros(n_track_genes, dtype=torch.long)
-    pc_n = torch.zeros(n_track_genes, dtype=torch.long)
-    it = (
-        tqdm(loader, desc=desc or "val", leave=False, unit="batch")
-        if show_batches
-        else loader
-    )
-    processed = 0
-    for groups, labels in it:
-        groups = [(ch, e.to(device), m.to(device)) for ch, e, m in groups]
-        labels = labels.to(device)
-        logits = model(groups)
-        loss = F.cross_entropy(logits, labels)
-        total_loss += loss.item() * labels.size(0)
-        top1_hits, top5_hits, ones = _per_class_stats(logits, labels, n_classes)
-        correct1 += top1_hits.sum().item()
-        correct5 += top5_hits.sum().item()
-        total += labels.size(0)
-        bs = labels.size(0)
-        gene_ids = gene_indices_in_dataset_order[processed : processed + bs]
-        processed += bs
-        pc_n.scatter_add_(0, gene_ids, ones.cpu())
-        pc_top1.scatter_add_(0, gene_ids, top1_hits.long().cpu())
-        pc_top5.scatter_add_(0, gene_ids, top5_hits.long().cpu())
-
-    if total == 0:
-        raise ValueError("Per-channel eval saw zero samples (no batches).")
     return (
         total_loss / total,
         correct1 / total,
@@ -313,21 +248,6 @@ def _filter_and_remap_mixed_val(
             if vgi in ds._gene_dump_meta:
                 new_meta[cgi] = ds._gene_dump_meta[vgi]
         ds._gene_dump_meta = new_meta if new_meta else None
-
-
-class _GeneLabelRemap(Dataset):
-    """Wraps PerturbationDataset and maps gene labels to checkpoint indices."""
-
-    def __init__(self, inner: PerturbationDataset, val_to_ckpt_g: dict[int, int]):
-        self.inner = inner
-        self.val_to_ckpt_g = val_to_ckpt_g
-
-    def __len__(self) -> int:
-        return len(self.inner)
-
-    def __getitem__(self, idx: int):
-        cell_embs, masks, g_val = self.inner[idx]
-        return cell_embs, masks, self.val_to_ckpt_g[g_val]
 
 
 def _snapshot_mixed_val(
@@ -445,15 +365,7 @@ def _run_sweep(
                 assert isinstance(val_ds, MixedChannelDataset)
                 val_ds.set_n_cells(n_cells)
             else:
-                assert loader_idx_to_ch is not None and n_parquet_channels is not None
-                overrides = dict(overrides_raw) if overrides_raw else {}
-                assert isinstance(val_ds, _GeneLabelRemap)
-                inner = val_ds.inner
-                assert isinstance(inner, PerturbationDataset)
-                inner.n_cells_per_channel = {
-                    ch_idx: overrides.get(loader_idx_to_ch[ch_idx], n_cells)
-                    for ch_idx in range(n_parquet_channels)
-                }
+                raise ValueError("Only mixed_channels_mode=true is supported.")
 
             batch_desc = f"{desc_prefix}n={n_cells} rep {rep + 1}/{n_repetitions}"
             if mixed_mode:
@@ -468,18 +380,7 @@ def _run_sweep(
                     show_batches=show_batch_pbar,
                 )
             else:
-                _, acc1, acc5, pc_top1, pc_top5, pc_n = (
-                    _evaluate_perturbation_with_topk(
-                        model,
-                        loader,
-                        device,
-                        n_classes=n_classes,
-                        n_track_genes=n_active_genes,
-                        gene_indices_in_dataset_order=gene_indices_in_dataset_order,
-                        desc=batch_desc,
-                        show_batches=show_batch_pbar,
-                    )
-                )
+                raise ValueError("Only mixed_channels_mode=true is supported.")
             accs1.append(acc1)
             accs5.append(acc5)
             results[key]["top1"].append(acc1)
@@ -622,20 +523,7 @@ def run(cfg: DictConfig) -> None:
             channel_conditioning=mcfg.get("channel_conditioning", "none"),
         )
     else:
-        model = SetClassifier(
-            emb_dim=emb_dim,
-            n_channels=n_ckpt_channels,
-            n_classes=n_classes,
-            d_model=mcfg.get("d_model", 256),
-            n_heads=mcfg.get("n_heads", 4),
-            n_layers_cell=mcfg.get("n_layers_cell", 2),
-            n_layers_channel=mcfg.get("n_layers_channel", 1),
-            n_inducing_cell=mcfg.get("n_inducing_cell", 32),
-            d_ff=mcfg.get("d_ff", None),
-            dropout=mcfg.get("dropout", 0.1),
-            channel_conditioning=mcfg.get("channel_conditioning", "add"),
-            cosine_classifier=mcfg.get("cosine_classifier", False),
-        )
+        raise ValueError("Only mixed_channels_mode=true is supported.")
 
     model.load_state_dict(state_dict)
     model = model.to(device)
@@ -754,110 +642,7 @@ def run(cfg: DictConfig) -> None:
         loader_idx_to_ch: dict[int, str] | None = None
         n_parquet_channels: int | None = None
     else:
-        data_cfg = cfg.data
-        pq_entries = data_cfg.get("parquet_entries")
-        if pq_entries in (None, "", "null") or not pq_entries:
-            raise ValueError(
-                "mixed_channels_mode=false requires data.parquet_entries "
-                "(same pipeline as training)."
-            )
-        parquet_entries: list[dict] = []
-        for entry in data_cfg.parquet_entries:
-            pe: dict = {"path": entry.path}
-            exc_exp = entry.get("exclude_experiments")
-            if exc_exp is not None:
-                pe["exclude_experiments"] = list(exc_exp)
-            exc_fluor = entry.get("exclude_fluorescent_experiments")
-            if exc_fluor is not None:
-                pe["exclude_fluorescent_experiments"] = list(exc_fluor)
-            col_remap = entry.get("column_remap")
-            if col_remap is not None:
-                pe["column_remap"] = dict(col_remap)
-            parquet_entries.append(pe)
-        exclude_ch = data_cfg.get("exclude_channel_names")
-        exclude_channel_names = list(exclude_ch) if exclude_ch is not None else None
-        val_frac = float(cfg.get("val_fraction", 0.2))
-        _, val_index, emb_dim_ld, gene_to_idx_ld, channel_to_idx_ld, _, _ = load_data(
-            parquet_entries=parquet_entries,
-            max_row_groups=data_cfg.get("max_row_groups", None),
-            max_cells_per_group=data_cfg.get("max_cells_per_group", None),
-            val_fraction=val_frac,
-            seed=base_seed,
-            max_genes=data_cfg.get("max_genes", None),
-            max_channels=data_cfg.get("max_channels", None),
-            min_cells_per_group=data_cfg.get("min_cells_per_group", None),
-            min_cells_drop_val=data_cfg.get("min_cells_drop_val", False),
-            load_val_dump_metadata=False,
-            exclude_channel_names=exclude_channel_names,
-        )
-        if (
-            gene_to_idx_ld != ckpt_gene_to_idx
-            or channel_to_idx_ld != ckpt_channel_to_idx
-        ):
-            print(
-                "Warning: parquet load produced different gene/channel index maps than checkpoint. "
-                "Ensure parquet and val_fraction/seed match training."
-            )
-        unique_genes = sorted(gene_to_idx_ld.keys())
-        if gene_to_label is not None:
-            # label_map_path mode: val genes don't need to be in ckpt_gene_to_idx.
-            assert label_to_idx is not None
-            unique_genes = [g for g in unique_genes if g in gene_to_label]
-            val_to_target = {
-                gene_to_idx_ld[g]: label_to_idx[gene_to_label[g]] for g in unique_genes
-            }
-            label_remap = dict(val_to_target)
-            active_gene_to_idx: dict[str, int] = gene_to_idx_ld
-        elif label_remap is not None:
-            unique_genes = [
-                g
-                for g in unique_genes
-                if ckpt_gene_to_idx.get(g) is not None
-                and ckpt_gene_to_idx[g] in label_remap
-            ]
-            val_to_target = {
-                gene_to_idx_ld[g]: label_remap[ckpt_gene_to_idx[g]]
-                for g in unique_genes
-            }
-            active_gene_to_idx = ckpt_gene_to_idx
-        else:
-            val_to_target = {
-                gene_to_idx_ld[g]: ckpt_gene_to_idx[g] for g in unique_genes
-            }
-            active_gene_to_idx = ckpt_gene_to_idx
-
-        default_n = max(n_cells_list)
-        overrides_raw = cfg.get("n_cells_per_set_overrides", {})
-        overrides: dict[str, int] = dict(overrides_raw) if overrides_raw else {}
-        idx_to_channel = {v: k for k, v in channel_to_idx_ld.items()}
-        n_cells_per_channel: dict[int, int] = {}
-        for ch_idx in range(len(channel_to_idx_ld)):
-            ch_name = idx_to_channel[ch_idx]
-            n_cells_per_channel[ch_idx] = overrides.get(ch_name, default_n)
-
-        inner_ds = PerturbationDataset(
-            val_index,
-            emb_dim_ld,
-            gene_to_idx_ld,
-            len(channel_to_idx_ld),
-            unique_genes,
-            n_cells_per_channel,
-        )
-        val_ds = _GeneLabelRemap(inner_ds, val_to_target)
-        loader = DataLoader(
-            val_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=collate_perturbation,
-            num_workers=num_workers,
-            pin_memory=device.type == "cuda",
-        )
-        gene_indices_in_dataset_order = torch.tensor(
-            [active_gene_to_idx[name] for name in inner_ds.perturbation_list],
-            dtype=torch.long,
-        )
-        loader_idx_to_ch = {v: k for k, v in channel_to_idx_ld.items()}
-        n_parquet_channels = len(channel_to_idx_ld)
+        raise ValueError("Only mixed_channels_mode=true is supported.")
 
     # ---- Eval sweeps ----
     show_progress = bool(cfg.get("show_progress", True))
