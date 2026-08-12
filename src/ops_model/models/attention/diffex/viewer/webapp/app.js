@@ -108,7 +108,7 @@ const state = {
   scoreMode: "ptarget", showReal: false, scores: {}, scoresV5: {}, groups: [], realAcc20: null,   // scoreMode: none|linear|ptarget|rank. scores[dir]=linear per-cell; scoresV5[dir]=v5 set (bag,per-α); realAcc20[dir]=real top1@bag20
 
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
-  rangeLo: 0, rangeHi: 0, alphaLimit: 5,   // autoplay sweeps only within ±alphaLimit (scrub stays full)
+  rangeLo: 0, rangeHi: 0, alphaLimit: 5, posOnly: false,   // autoplay sweeps only within ±alphaLimit (scrub stays full); posOnly clamps to α ≥ 0
   targetSort: "setacc",                    // perturbation list order default: "setacc" (SetTransformer set-accuracy) | "map" | "alpha"
   publicPreview: false,                    // staging-only: preview the public feature subset without a real prod deploy
   altAnchorsOnly: false,                    // filter perturbation list to those with a non-NTC (A→B) anchor
@@ -176,7 +176,7 @@ function saveState() {
       target: state.target ? state.target.target : null, anchor: state.anchor,
       cellCount: state.cellCount, page: state.page, tilepx: $("tile-scale").value,
       scoreMode: state.scoreMode, showReal: state.showReal, altAnchor: state.altAnchorsOnly, sidePanel: state.sidePanel,
-      cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, view: state.view,
+      cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, posOnly: state.posOnly, view: state.view,
       bag: $("m-bag") ? $("m-bag").value : null,
       alpha: (state.alphas && state.idx != null && state.idx < state.alphas.length) ? state.alphas[state.idx] : null,   // hold α (by value) across reloads
       pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
@@ -200,6 +200,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (s.tilepx) setScale(s.tilepx);
   if (s.speed) { $("speed").value = s.speed; state.frameMs = +s.speed; }
   if (s.alphaLimit) { $("alphalimit").value = s.alphaLimit; state.alphaLimit = +s.alphaLimit; }
+  if (s.posOnly != null) { $("playpos").checked = s.posOnly; state.posOnly = s.posOnly; }
   if (s.anchor) state.anchor = s.anchor;   // populateAnchors keeps it if valid for the target, else resets to NTC
   let mi = state.manifest.markers.findIndex(m => (m.label || m.marker_channel || "Phase") === s.marker);
   if (mi < 0) mi = 0;
@@ -260,6 +261,7 @@ async function boot() {
   $("speed").onchange = () => { state.frameMs = +$("speed").value; };
   $("showreal").onchange = () => { state.showReal = $("showreal").checked; rebuild(); };
   $("alphalimit").onchange = () => { state.alphaLimit = +$("alphalimit").value; computeRange(); buildPlaySeq(state.alphas); };
+  $("playpos").onchange = () => { state.posOnly = $("playpos").checked; computeRange(); buildPlaySeq(state.alphas); saveState(); };
   setSidePanel(state.sidePanel, true);   // init the right-panel Info/About toggle
   $("a-head").onchange = () => { const v = $("a-head").value; state.attnHead = v === "all" ? "all" : +v; renderAttn(); };
   $("a-norm").onchange = () => { state.attnNorm = $("a-norm").value; renderAttn(); };
@@ -1494,6 +1496,7 @@ function renderTicks() {
 function computeRange() {
   const a = state.alphas, lim = state.alphaLimit;
   let lo = a.findIndex((x) => x >= -lim - 1e-9); if (lo < 0) lo = 0;
+  if (state.posOnly) { const z = a.findIndex((x) => x >= -1e-9); if (z >= 0) lo = Math.max(lo, z); }   // clamp autoplay start to α ≥ 0
   let hi = 0; for (let i = a.length - 1; i >= 0; i--) { if (a[i] <= lim + 1e-9) { hi = i; break; } }
   state.rangeLo = lo; state.rangeHi = Math.max(hi, lo);
 }
