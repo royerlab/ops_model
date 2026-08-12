@@ -7,8 +7,9 @@ matplotlib.use("Agg"); matplotlib.rcParams["pdf.fonttype"] = 42
 import matplotlib.pyplot as plt
 import zarr
 from ..viewer.build_pc_crops_masked import BASE, CROP_SIZE, PHASE_CHANNEL, _crop, _render_gray, _zarr_patch
+from ops_model.paths import BASE_PATH
 
-R = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
+R = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings"
 N = 50
 
 
@@ -58,6 +59,6 @@ for row, (imgs, title) in enumerate([(oi, "OLD v5-accuracy ranking — top-50 NT
     axs = [fig.add_subplot(inner[j]) for j in range(N)]
     panel(axs, imgs, title)
     fig.text(0.5, 0.905 - row * 0.485, title, ha="center", fontsize=15, fontweight="bold")
-out = "/hpc/projects/icd.fast.ops/analysis/ntc_anchor_old_vs_multirank.png"
+out = f"{BASE_PATH}/analysis/ntc_anchor_old_vs_multirank.png"
 fig.savefig(out, dpi=110, bbox_inches="tight"); plt.close(fig)
 print("wrote", out)

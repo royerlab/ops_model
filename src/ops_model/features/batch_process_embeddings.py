@@ -29,10 +29,11 @@ import yaml
 
 
 from ops_model.features.processing_common import process_features_csv
+from ops_model.paths import BASE_PATH
 
 
 # Base directory for OPS experiments
-BASE_DIR = Path("/hpc/projects/icd.fast.ops")
+BASE_DIR = Path(f"{BASE_PATH}")
 
 
 def check_csv_exists(

@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 
 from ops_model.models.interpretability.diffae.figures._setacc_common import crop_pick_from_df, tile_at
+from ops_model.paths import BASE_PATH
 
-RANKS = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
+RANKS = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings"
 PHASE_CH = "Phase2D"
 
 # panel-E groups (published: TIMM23/Arp2-3 top, TIPARP/Core Mediator bottom); ko_rank/ntc_rank picked

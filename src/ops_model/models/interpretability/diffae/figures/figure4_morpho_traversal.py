@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 from PIL import Image
+from ops_model.paths import BASE_PATH
 
 KEYLABEL = {"area": "object area (px²)", "area_filled": "filled area (px²)", "mean_int": "object intensity",
             "ecc": "eccentricity", "skel": "skeleton length", "circularity": "circularity",
@@ -33,8 +34,8 @@ plt.rcParams["svg.fonttype"] = "none"
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
 
-VA = f"/hpc/projects/icd.fast.ops/models/diffex/{os.environ.get('OPS_DIFFEX_ASSETS', 'viewer_assets')}"
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals"
+VA = f"{BASE_PATH}/models/diffex/{os.environ.get('OPS_DIFFEX_ASSETS', 'viewer_assets')}"
+OUT = f"{BASE_PATH}/analysis/figure4_traversals"
 
 
 def _objkey(feature, avail):

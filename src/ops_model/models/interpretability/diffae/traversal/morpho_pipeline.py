@@ -14,9 +14,10 @@ import json
 import os
 
 import numpy as np
+from ops_model.paths import BASE_PATH
 
-CACHE = f"/hpc/projects/icd.fast.ops/models/diffex/{os.environ.get('OPS_DIFFEX_ASSETS', 'viewer_assets')}"
-SYNTH_BASE = "/hpc/projects/icd.fast.ops/models/diffex/morpho_synth"
+CACHE = f"{BASE_PATH}/models/diffex/{os.environ.get('OPS_DIFFEX_ASSETS', 'viewer_assets')}"
+SYNTH_BASE = f"{BASE_PATH}/models/diffex/morpho_synth"
 PAD = 24
 CROP = 256
 GEN_CROP = 160   # DiffEx cfg.crop_size: the generated crops are 160 px (native) upsized to 256 — real ref crops must match this window
@@ -106,7 +107,7 @@ def _vs_h2b_nucleus_npz(marker_dir, target, grain, out_npz, n_cells, force=False
     from diffusers import DDIMScheduler
     from cellpose import models as cpm
     from skimage.transform import resize
-    VOUT = "/hpc/projects/icd.fast.ops/analysis/virtual_staining/multi_marker"
+    VOUT = f"{BASE_PATH}/analysis/virtual_staining/multi_marker"
     dev = torch.device("cuda")
     markers = json.load(open(f"{VOUT}/markers.json")); h2b = markers.index("chromatin_H2BC21")
     cfg = DiffAEConfig(spatial_cond=True, n_markers=len(markers), device="cuda"); Hg = cfg.crop_size
@@ -345,7 +346,7 @@ def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYN
     return out
 
 
-OPCP = "/hpc/projects/icd.fast.ops/analysis/op_cp_features/op_cp_features_{store}.h5ad"
+OPCP = f"{BASE_PATH}/analysis/op_cp_features/op_cp_features_{store}.h5ad"
 REF_SUFFIX = {"count": "count", "total_area": "area_sum", "mean_area": "area_mean",
               "mean_int": "intensity_mean_mean", "mean_ecc": "eccentricity_mean"}
 
@@ -520,7 +521,7 @@ def reference_from_direction(marker_dir, target, real_exp, marker_channel, struc
     from PIL import Image
     from skimage.measure import label as relabel, regionprops
     from skimage.transform import resize as skresize
-    npz = glob.glob(f"/hpc/projects/icd.fast.ops/models/diffex/directions/{marker_dir}/{grain}/{target}/cache/crops_{target}_*.npz")
+    npz = glob.glob(f"{BASE_PATH}/models/diffex/directions/{marker_dir}/{grain}/{target}/cache/crops_{target}_*.npz")
     if not npz:
         print(f"[ref-dir] no crops npz for {marker_dir}/{target}"); return
     d = np.load(npz[0], allow_pickle=True)
@@ -597,7 +598,7 @@ def reference_from_store(marker_dir, target, grain, image_channel, org_label, n_
     from ..classifier.config import GRAINS
     from skimage.morphology import skeletonize
     GK = GRAINS["geneKO"]["parquet"]                                          # attention parquet (has NTC + coords)
-    ACC = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
+    ACC = f"{BASE_PATH}/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
     COLS = ["gene", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank", "rank_type"]
 
     def _cells(pq, genes, n):                                                 # top-n ranked 'top' cells for gene(s)
@@ -609,7 +610,7 @@ def reference_from_store(marker_dir, target, grain, image_channel, org_label, n_
     if grain == "complex":
         import yaml
         from ..classifier.config import slugify
-        y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
+        y = yaml.safe_load(open(f"{BASE_PATH}/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
         members = next((e["genes"] for e in y.values() if slugify(e["name"]) == target), [])
         ko = _cells(ACC, members, n_cells)
     else:
@@ -626,7 +627,7 @@ def reference_from_store(marker_dir, target, grain, image_channel, org_label, n_
         for c, (_, row) in enumerate(df.iterrows()):
             exp = str(row["experiment"]); w = str(row["well"]).strip()
             m = re.match(r"^([A-Za-z]+)(\d+)$", w); pos = w if w.count("/") == 2 else (f"{m.group(1)}/{m.group(2)}/0" if m else w)
-            zp = f"/hpc/projects/icd.fast.ops/{exp}/3-assembly/phenotyping_v3.zarr"
+            zp = f"{BASE_PATH}/{exp}/3-assembly/phenotyping_v3.zarr"
             if not os.path.exists(zp):
                 continue
             try:
@@ -664,7 +665,7 @@ def reference_from_store(marker_dir, target, grain, image_channel, org_label, n_
 
 
 def sweep_grid(marker_dir, target, real_exp, marker_channel, pix=(0.065, 0.13, 0.185, 0.37),
-               thr=(0.1, 0.5, 1.0), ai=8, out="/hpc/projects/icd.fast.ops/models/diffex/morpho_grid_sweep.png"):
+               thr=(0.1, 0.5, 1.0), ai=8, out=f"{BASE_PATH}/models/diffex/morpho_grid_sweep.png"):
     """Sweep the two frangi knobs — pixel_size_um (rows) × threshold_mult (cols) — on one generated crop,
     render seg boundaries + object counts, so we can pick the cleanest (signal, no noise). No postprocess."""
     import matplotlib
@@ -900,7 +901,7 @@ def real_percell(marker_dir, target, grain, store_marker, features, store_channe
     ko_val = target
     if grain == "complex":
         import yaml
-        y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
+        y = yaml.safe_load(open(f"{BASE_PATH}/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
         ent = next((e for e in y.values() if slugify(e["name"]) == target), None)
         members = ent["genes"] if ent else []
         ko_val = ent["name"] if ent else target                      # complex rank parquet keys by full complex name
@@ -909,7 +910,7 @@ def real_percell(marker_dir, target, grain, store_marker, features, store_channe
         i_ko = np.where(gn == target)[0]
 
     if store_marker == "phase":                                       # phase: accuracy (KO) + top-attention (NTC)
-        ko_pq = "/hpc/projects/icd.fast.ops/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
+        ko_pq = f"{BASE_PATH}/models/diffex/accuracy_ranking/phase_geneKO_topacc_ALL_top1000.parquet"
         ntc_pq = GRAINS["geneKO"]["parquet"]; ko_val = target
     else:                                                             # fluor: the marker's set-accuracy rank parquet
         ko_pq = ntc_pq = f"{CACHE}/_rankings/fluor/{'complex' if grain == 'complex' else 'geneKO'}/{marker_dir}.parquet"
@@ -989,7 +990,7 @@ def full_features_cache(marker_dir, target, grain, store_marker, store_channel=N
     rng = np.random.default_rng(0)
     if grain == "complex":
         import yaml
-        y = yaml.safe_load(open("/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
+        y = yaml.safe_load(open(f"{BASE_PATH}/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"))
         members = next((e["genes"] for e in y.values() if slugify(e["name"]) == target), [])
         i_ko_all = np.where(np.isin(gn, members))[0]
     else:

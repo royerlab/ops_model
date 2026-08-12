@@ -11,8 +11,9 @@ import pandas as pd
 
 from _setacc_common import GENE_COLS, COMPLEX_COLS, _materialize, slugify
 from fluor_shap_montages import render_montage   # reuses OUT=figure4_shap_montages + seg overlay
+from ops_model.paths import BASE_PATH
 
-R = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor_shap"
+R = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings/fluor_shap"
 COLS = GENE_COLS + COMPLEX_COLS
 N = 100
 

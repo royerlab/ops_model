@@ -25,10 +25,11 @@ from ..generator.data import normalize
 from .config import DirConfig
 from .rank import supervised_direction
 from .traverse import _ddim_guided, _sample_guided, load_diffae
+from ops_model.paths import BASE_PATH
 
-ANALYSIS = "/hpc/projects/icd.fast.ops/analysis"
-DD = "/hpc/projects/icd.fast.ops/models/diffex/diffae"
-DIR_CACHE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets/_directions"
+ANALYSIS = f"{BASE_PATH}/analysis"
+DD = f"{BASE_PATH}/models/diffex/diffae"
+DIR_CACHE = f"{BASE_PATH}/models/diffex/viewer_assets/_directions"
 
 # (label, marker_channel|None, raw_channel, diffae_ckpt, gene). marker_channel=None → phase.
 FLUOR_SPECS = [

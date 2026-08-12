@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..classifier.config import DEFAULT_OUT_ROOT, GRAINS, PMA_PHASE_GENEKO  # noqa: F401
+from ops_model.paths import BASE_PATH
 
 
 @dataclass
@@ -25,7 +26,7 @@ class DirConfig:
     # (e.g. "nucleus_NucleoLIVE Live Cell dye"); gather() then pulls that marker's top cells
     # from fluor_csv and reads the raw `channel` above. None = phase mode (uses the grain parquet).
     marker_channel: str | None = None
-    fluor_csv: str = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/pma_fluorescent_cells_all.csv"
+    fluor_csv: str = f"{BASE_PATH}/models/alex_lin_attention/v4/pma_fluorescent_cells_all.csv"
     mask_cell: bool = False
     seed: int = 0
 

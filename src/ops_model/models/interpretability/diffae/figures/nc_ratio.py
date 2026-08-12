@@ -26,12 +26,13 @@ from skimage.filters import threshold_otsu, gaussian
 from skimage.morphology import binary_closing, disk
 
 from _setacc_common import _materialize
+from ops_model.paths import BASE_PATH
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
 
-VA = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5"
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_nc_ratio"
+VA = f"{BASE_PATH}/models/diffex/viewer_assets_v5"
+OUT = f"{BASE_PATH}/analysis/figure4_nc_ratio"
 MARKER_DIR = "proteasome_PSMB7"
 MC = "proteasome_PSMB7"          # marker_channel (DirConfig); channel to READ is passed separately
 TARGET = "PSMB6"

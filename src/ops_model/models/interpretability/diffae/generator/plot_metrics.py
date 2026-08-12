@@ -8,11 +8,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from ops_model.paths import BASE_PATH
 
 plt.rcParams["pdf.fonttype"] = 42
 
-DD = "/hpc/projects/icd.fast.ops/models/diffex/diffae"
-OUT = "/hpc/projects/icd.fast.ops/models/diffex/model_metrics"
+DD = f"{BASE_PATH}/models/diffex/diffae"
+OUT = f"{BASE_PATH}/models/diffex/model_metrics"
 
 
 def collect():

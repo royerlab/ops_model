@@ -10,8 +10,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from ops_model.paths import BASE_PATH
 
-_DEFAULT_BASE_PATH = "/hpc/projects/icd.fast.ops"
+_DEFAULT_BASE_PATH = f"{BASE_PATH}"
 
 # Backward-compatible filename templates for legacy csv_source values
 SOURCE_FILENAME_TEMPLATES = {

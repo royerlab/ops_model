@@ -15,9 +15,10 @@ from ops_model.models.interpretability.diffae.classifier.data import make_labels
 from ops_model.models.interpretability.diffae.directions.config import DirConfig
 from ops_model.models.interpretability.diffae.traversal._fluor_topcells import _overlay_rgba
 from ops_model.models.interpretability.diffae.traversal.build_pc_crops_masked import BASE, CROP_SIZE, _crop, _zarr_patch
+from ops_model.paths import BASE_PATH
 
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_setacc_panel"
-RANK_BASE = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/fluor_shap"
+OUT = f"{BASE_PATH}/analysis/figure4_setacc_panel"
+RANK_BASE = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings/fluor_shap"
 
 TIM23 = "TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
 COPI = "COPI vesicle coat complex, COPG1-COPZ1 variant"

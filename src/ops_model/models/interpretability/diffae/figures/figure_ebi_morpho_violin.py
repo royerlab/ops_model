@@ -35,10 +35,11 @@ import pandas as pd
 
 from figure_multirank_ebi_grid import (BGX, CACHE, COMBINED_ORDER, FOOT, GAP, OUT, SUP, T, TITLE, block_h,
                                       block_w, build_blocks, draw_block, ebi_rows, top_rows, windows)
+from ops_model.paths import BASE_PATH
 
 # paper-v2 stores first; the v2 dir is fluor-only, so the phase store still comes from the v1 dir (loud).
-OPCP_DIRS = ["/hpc/projects/icd.fast.ops/analysis/op_cp_features_paper_v2",
-             "/hpc/projects/icd.fast.ops/analysis/op_cp_features"]
+OPCP_DIRS = [f"{BASE_PATH}/analysis/op_cp_features_paper_v2",
+             f"{BASE_PATH}/analysis/op_cp_features"]
 VOUT = f"{OUT}/morpho"
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"

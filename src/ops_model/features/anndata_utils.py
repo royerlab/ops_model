@@ -26,11 +26,12 @@ import scanpy.external as sce
 import matplotlib.pyplot as plt
 
 from ops_utils.data.feature_metadata import FeatureMetadata
+from ops_model.paths import BASE_PATH
 
 
 DEFAULT_SEARCH_DIRS = [
-    Path("/hpc/projects/icd.fast.ops"),
-    Path("/hpc/projects/icd.fast.ops"),
+    Path(f"{BASE_PATH}"),
+    Path(f"{BASE_PATH}"),
 ]
 
 DEFAULT_GUIDE_COL = "sgRNA"
@@ -1441,7 +1442,7 @@ def load_multiple_experiments(
         List of paths to .h5ad files
 
     Example:
-        >>> base_dir = "/hpc/projects/icd.fast.ops"
+        >>> base_dir = f"{BASE_PATH}"
         >>> experiments = ["ops0089_20251119", "ops0084_20250101"]
         >>> paths = load_multiple_experiments(base_dir, experiments)
         >>> adata_combined = concatenate_anndata_objects(paths)

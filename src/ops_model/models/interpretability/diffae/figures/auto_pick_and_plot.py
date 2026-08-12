@@ -12,8 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("OPS_DIFFEX_ASSETS", "viewer_assets_v5")
 from ops_model.models.interpretability.diffae.traversal.morpho_pipeline import MORPHO_TARGETS
 from ops_model.models.interpretability.diffae.classifier.config import slugify
+from ops_model.paths import BASE_PATH
 
-VA = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_morphometrics"
+VA = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_morphometrics"
 BAD = re.compile("moment|hu_|inertia|eigval|intensity|haralick|zernike|glcm|orientation|centroid|_timing")
 
 BATCH = ["KIF11_PHASE", "ATP6V1B2_PHASE", "HGS_PHASE", "RRM1_PHASE", "RRN3_PHASE", "SEC61A1_PHASE",
