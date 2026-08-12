@@ -1935,8 +1935,11 @@ function renderTop() {
 }
 function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
+  const ents = tcEntries();   // color each pin to match its group color in the grid (same as the traversal pins)
   tc.pinned.forEach((p, i) => {
     const li = document.createElement("li"); li.innerHTML = `<span>⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
+    const gi = ents.findIndex(e => e.gene === p.gene && e.mode === p.mode);
+    li.style.color = PALETTE[(gi < 0 ? i : gi) % PALETTE.length];
     li.draggable = true; li.style.cursor = "move";        // drag to reorder (like the traversal pins)
     const b = document.createElement("button"); b.textContent = "×";
     b.onclick = () => unpinShared(p.gene);
