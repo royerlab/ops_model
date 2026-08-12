@@ -178,7 +178,7 @@ const METHODS_SLIDES = [
       ${_lbl(404, 128, "higher rank →")}
     </svg>`,
     body: "To find a perturbation's most telling cells, we score each cell by how much it <b>helps the classifier</b>: the drop in predicted probability when the cell is <b>removed</b> from a bag (\"explaining by removing\"), averaged over many bag sizes and random partners. The top-scoring <b>top-predictive cells</b> carry the phenotypic signature — the cells the viewer anchors its traversals to and shows in Top Cells. Re-weighting the perturbation-level <b>mAP</b> by these cells sharpens the distinctiveness ranking.",
-    why: "It picks, per perturbation, the handful of cells that most define its phenotype — the exemplars every traversal starts from.",
+    why: "It surfaces, per perturbation, the handful of real cells that most clearly show its phenotype — the clearest examples of what the knockout actually looks like, and the target the traversal morphs toward.",
     defs: [["Explaining by removing", "gauge a cell's importance by how much the prediction drops when you take it out of the bag."],
       ["Marginal contribution", "score(x) = p(class | bag with x) − p(class | bag without x), averaged over many bags (sizes 1–500)."],
       ["Top-predictive cells", "the highest-scoring cells for a class; used as traversal anchors and in the Top Cells tab."],
