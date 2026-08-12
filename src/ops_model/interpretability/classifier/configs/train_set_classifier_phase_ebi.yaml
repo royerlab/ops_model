@@ -20,7 +20,7 @@ data:
   min_cells_per_group: null  # drop (gene, channel) pairs with fewer cells (null = no filter)
   min_cells_drop_val: false # also drop from val when min_cells_per_group filters (default: train only)
   z_standardize_control_only: true  # compute z-standardization stats from NTC (control) cells only
-  label_map_path: src/ops_model/interpretability/classifier/configs/20260518_EBI_complexes_v1_old_gene_names.csv # CSV mapping gene names to class labels (e.g. pathways); trains only on genes in this file
+  label_map_path: src/ops_model/interpretability/classifier/configs/ebi_complexes.csv # CSV mapping gene names to class labels (e.g. pathways); trains only on genes in this file
   label_map_gene_col: gene_name  # column in label_map CSV containing gene names (empty/NaN → NTC)
   label_map_label_col: pathway   # column in label_map CSV containing class labels
 
