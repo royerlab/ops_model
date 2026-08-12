@@ -214,7 +214,7 @@ const METHODS_SLIDES = [
     defs: [["Decoder for CellDINO", "the diffusion model is trained to reconstruct a cell from its CellDINO vector, so it maps the fingerprint space back to images — the inverse of the Embedding step."],
       ["Conditioning on z", "the vector <i>steers</i> every denoising step; change the vector (e.g. along a knockout direction) and the decoded cell changes to match."],
       ["Forward / reverse process", "forward adds Gaussian noise to a real cell until it is pure noise (x_T); the reverse network predicts and removes that noise, guided by z, to recover a cell (x_0)."],
-      ["DDIM, word by word", "<b>Denoising</b> (removes noise) · <b>Diffusion</b> (the noise process) · <b>Implicit</b> (it follows one fixed, non-random path — an ODE — rather than a random walk) · <b>Models</b>. Upshot: deterministic sampling (same seed → same cell), which makes it both invertible and much faster (fewer steps)."],
+      ["DDIM", "<b>Denoising</b> (removes noise) · <b>Diffusion</b> (the noise process) · <b>Implicit</b> (it follows one fixed, non-random path — an ODE — rather than a random walk) · <b>Models</b>. Upshot: deterministic sampling (same seed → same cell), which makes it both invertible and much faster (fewer steps)."],
       ["Inversion (encoding)", "running DDIM backwards to recover the exact noise seed of a specific real cell, so a traversal can begin from it (guided inversion → α = 0 reconstructs it, r ≈ 0.99)."]]
   },
   {
