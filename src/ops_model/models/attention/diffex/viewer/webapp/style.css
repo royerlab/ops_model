@@ -421,7 +421,7 @@ button:hover{border-color:var(--accent)}
 .mth-defs dt{font-size:19px}
 .mth-defs dd{font-size:19px}
 .mth-navbar button{font-size:20px;padding:10px 20px}
-.mth-railitem{font-size:14px}
+.mth-railitem{font-size:17px}
 .mth-more{margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
 .mth-more>summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:19px;list-style:none}
 .mth-more>summary::-webkit-details-marker{display:none}
