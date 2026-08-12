@@ -56,7 +56,7 @@ Distributions are shown as violins of the per-cell values with a bar at the medi
 EXCLUDE
 
 
-The montage was assembled with the open-source latent-lens package (https://github.com/czi-ai/latent-lens; multiscale montages of image crops laid out by an embedding), which performs the grid-based, density-prioritized decimation and the multiscale tiling.
+The montage was assembled by grid-based, density-prioritized decimation and multiscale tiling of the image crops laid out by an embedding.
 Quantifying the accuracy of generated phenotypes
 
 To test whether the synthesized cells reproduce the intended perturbation phenotype, each traversal was scored by three complementary metrics, all computed as a function of α and interpreted relative to the value attainable on real cells of the same class.
