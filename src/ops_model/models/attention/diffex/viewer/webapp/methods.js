@@ -210,7 +210,7 @@ const METHODS_SLIDES = [
       </svg>` }
     ],
     body: "<b>Why a diffusion model?</b> We want to turn a <b>CellDINO vector</b> back into an image — a generative <b>decoder</b> conditioned on the fingerprint — so we can then <b>nudge the vector</b> and watch the cell change (that's the Traversal). It learns this by reversing noise: corrupt a real cell to static, then learn to undo it step by step, steered by that cell's CellDINO vector. <b>DDIM</b> makes the reverse deterministic, so it also runs backwards to recover a real cell's exact seed and anchor the edit.",
-    why: "It makes CellDINO space <i>visual and editable</i>: any fingerprint — real or shifted — becomes a cell you can see, which is what turns a number (a distinctiveness score, a direction) into a watchable phenotype.",
+    why: "It makes CellDINO space <i>visual and editable</i>: any fingerprint — real or shifted — becomes a cell you can see, which is what turns a number into a watchable phenotype.",
     defs: [["Decoder for CellDINO", "the diffusion model is trained to reconstruct a cell from its CellDINO vector, so it maps the fingerprint space back to images — the inverse of the Embedding step."],
       ["Conditioning on z", "the vector <i>steers</i> every denoising step; change the vector (e.g. along a knockout direction) and the decoded cell changes to match."],
       ["Forward / reverse process", "forward adds Gaussian noise to a real cell until it is pure noise (x_T); the reverse network predicts and removes that noise, guided by z, to recover a cell (x_0)."],
