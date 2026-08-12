@@ -43,7 +43,9 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar select,#topbar input{width:100%}
 #topbar select.mini{width:auto;display:inline-block;padding:2px 4px;font-size:11px;margin-left:4px}
 #topbar .row{display:flex;gap:6px;align-items:center}
-#topbar .row #cellcount{width:56px}
+#topbar #cellcount{width:56px}
+#topbar .pager{justify-content:center}
+#topbar .pager #pagenum{min-width:82px;text-align:center;opacity:.85;white-space:nowrap}
 #topbar .row button{flex:none;padding:7px 11px}
 #topbar .row .combo{flex:1;min-width:0}
 /* combobox: input shows the selection; focus reveals a scrollable (~10-row) filtered list */
