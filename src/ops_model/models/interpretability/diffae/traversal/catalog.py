@@ -173,18 +173,11 @@ def dist_map_for_assets(viewer_assets):
         cx = complex_dist()                                   # complex × reporter EBI mAP (complexes aren't in the gene matrix)
     except Exception:
         cx = None
-    try:
-        mb = json.load(open(f"{viewer_assets}/_minibinder_meta.json"))   # minibinders → per-binder cell_score
-    except Exception:
-        mb = {}
     out = {}
     for mj in glob.glob(f"{viewer_assets}/*/*/*/meta.json"):
         m = json.load(open(mj))
         rep = (rep_of(dist, m["marker_channel"]) if m.get("marker_channel") else "Phase")
-        if m["grain"] == "minibinder":                        # minibinders → cell_score (no mAP)
-            if m["slug"] in mb:
-                out[(m["modality"], m["grain"], m["slug"])] = float(mb[m["slug"]]["cell_score"])
-        elif m["grain"] == "complex":                         # complexes → EBI complex mAP
+        if m["grain"] == "complex":                           # complexes → EBI complex mAP
             if cx is not None and m["target"] in cx.index and rep in cx.columns:
                 v = cx.at[m["target"], rep]
                 if pd.notna(v):

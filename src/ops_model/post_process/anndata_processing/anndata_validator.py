@@ -442,7 +442,7 @@ class AnndataSpec:
         Dictionary mapping schema level names to their specifications
     guide_col : str
         Name of the .obs column holding per-construct identifiers
-        (e.g. "sgRNA" for CRISPR, "minibinder_perturbation" for minibinder).
+        (e.g. "sgRNA" for CRISPR, or a custom perturbation column).
     """
 
     def __init__(self, guide_col: str = DEFAULT_GUIDE_COL):
@@ -618,7 +618,7 @@ class AnndataSpec:
                     name=self.guide_col,
                     dtype=str,
                     required=True,
-                    description="Per-construct identifier (e.g. sgRNA, minibinder peptide)",
+                    description="Per-construct identifier (e.g. sgRNA or a custom construct id)",
                     suggestion=f"Add {self.guide_col} column with construct identifiers",
                 ),
                 FieldSpec(
@@ -673,7 +673,7 @@ class AnndataSpec:
                     dtype=str,
                     required=True,
                     unique=False,
-                    description="Per-construct identifier (e.g. sgRNA, minibinder peptide)",
+                    description="Per-construct identifier (e.g. sgRNA or a custom construct id)",
                     suggestion=f"Add {self.guide_col} column with construct identifiers",
                 ),
             ],
@@ -844,7 +844,7 @@ class AnndataValidator:
             failure. If False, returns ValidationReport without raising.
         guide_col : Optional[str], default=None
             Name of the .obs column holding per-construct identifiers
-            (e.g. "sgRNA" for CRISPR, "minibinder_perturbation" for minibinder).
+            (e.g. "sgRNA" for CRISPR, or a custom perturbation column).
             If None, validate() will read it from adata.uns["guide_col"] when
             available, falling back to the default ("sgRNA").
         """

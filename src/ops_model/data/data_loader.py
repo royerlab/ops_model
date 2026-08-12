@@ -39,8 +39,8 @@ import warnings
 warnings.filterwarnings("ignore", category=zarr.errors.ZarrUserWarning)
 
 # Default name of the per-construct identifier column in adata.obs.
-# Override per experiment via OpsDataManager(guide_col=...) (e.g.
-# "minibinder_perturbation" for minibinder experiments).
+# Override per experiment via OpsDataManager(guide_col=...) (e.g. a custom
+# perturbation column for non-CRISPR libraries).
 DEFAULT_GUIDE_COL = "sgRNA"
 
 
@@ -592,18 +592,18 @@ class OpsDataManager:
                 print(f"Reading link CSV from {csv_path}")
                 labels_tmp = pd.read_csv(csv_path)
 
-                # Minibinder back-compat: link CSVs from minibinder experiments
-                # don't have a "gene_name" column. Copy minibinder_perturbation
-                # into gene_name so downstream gene_name-aware code (e.g. the
-                # balanced-sampling and gene-label LUT helpers) keeps working.
-                # Follow-up: minibinder gene-level should ultimately use
-                # gene_target, not the construct id — tracked separately.
+                # Custom-perturbation back-compat: some link CSVs use a
+                # non-standard guide column (self.guide_col) and have no
+                # "gene_name" column. Copy the guide column into gene_name so
+                # downstream gene_name-aware code (balanced sampling, gene-label
+                # LUT helpers) keeps working.
                 if (
                     "gene_name" not in labels_tmp.columns
                     and "Gene name" not in labels_tmp.columns
-                    and "minibinder_perturbation" in labels_tmp.columns
+                    and self.guide_col != "gene_name"
+                    and self.guide_col in labels_tmp.columns
                 ):
-                    labels_tmp["gene_name"] = labels_tmp["minibinder_perturbation"]
+                    labels_tmp["gene_name"] = labels_tmp[self.guide_col]
 
                 if self.guide_col not in labels_tmp.columns:
                     raise ValueError(
