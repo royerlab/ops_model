@@ -1427,7 +1427,10 @@ function renderInfo(t) {
   const g = encodeURIComponent(t.target);
   sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${g}" target="_blank" rel="noopener">GeneCards ↗</a> · <a href="https://affinage.wi.mit.edu/gene/${g}" target="_blank" rel="noopener">Affinage ↗</a>`);
   const parts = s.split(" || ");   // "<function> || GO biological process: … || Reactome: … || CORUM complex: …"
-  sec("Function", parts[0]);
+  const TYPED = /^(GO (biological process|molecular function|cellular component)|Reactome|KEGG|CORUM complex|Pathway|InterPro|Pfam|UniProt)\b/i;   // parts[0] is sometimes a typed annotation, not a function blurb
+  const p0i = parts[0].indexOf(": ");
+  if (p0i > 0 && TYPED.test(parts[0])) sec(parts[0].slice(0, p0i), parts[0].slice(p0i + 2));
+  else sec("Function", parts[0]);
   const narr = (state.geneNarr || {})[t.target];   // affinage mechanistic narrative (long prose, PMID-cited) — collapsible
   if (narr) {
     const LIM = 320;
