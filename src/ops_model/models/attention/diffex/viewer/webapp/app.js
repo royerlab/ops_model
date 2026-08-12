@@ -7,9 +7,9 @@ const BASE = MANIFEST_URL.replace(/manifest\.json$/, "");
 
 // ── internal (full) vs public (demo subset) feature gating ─────────────────
 // The real public deployment shows only Top cells + Traversal (+ How-it-works steps 1–6).
-// Env resolution: window.VIEWER_ENV (future Argus-injected env.js) → hostname rule → default internal.
-// Add the prod ingress host to PUBLIC_HOSTS once assigned to auto-enable public mode there.
-const PUBLIC_HOSTS = [];
+// Env resolution: window.VIEWER_ENV (Argus/config.js) → hostname rule → default internal.
+// Prod (PR #8) serves at diffex.apps.czbiohub.org → auto public. (config.js may also set VIEWER_ENV.)
+const PUBLIC_HOSTS = ["diffex.apps.czbiohub.org"];
 const IS_PUBLIC_DEPLOY = (() => {
   const v = (window.VIEWER_ENV || "").toLowerCase();
   if (["public", "prod", "production"].includes(v)) return true;
