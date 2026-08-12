@@ -1251,6 +1251,7 @@ function rebuild() {
     const color = PALETTE[gi % PALETTE.length];
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     const group = document.createElement("div"); group.className = "group";
+    group.style.borderLeft = `4px solid ${color}`; group.style.paddingLeft = "12px";   // color bar down the left of the whole row (matches Top Cells)
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     hd.textContent = `${apfx}${p.target} · ${p.markerName}`; hd.title = hd.textContent;   // single header (title = full text on hover when truncated)
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
@@ -1269,7 +1270,6 @@ function rebuild() {
           const sch = setChip(state.scoresV5[pp.asset_dir], state.idx);
           popOut(pn.frames[Math.min(state.idx, pn.frames.length - 1)], `${pre}${pp.target} · ${pp.markerName}`,
             `<div class="po-sub">α ${av} · cell ${cc + 1}${sch ? " · " + sch.txt : ""}</div>`); }; }
-      if (c === start) img.style.borderLeftColor = color;      // colour bar only on left-most cell
       const badge = document.createElement("div"); badge.className = "badge"; badge.id = `pbadge${k}`; badge.style.display = "none";
       panel.appendChild(img); panel.appendChild(badge); cells.appendChild(panel);
       state.panels.push({ asset_dir: p.asset_dir, cell: c, alphas: p.alphas, frames });
@@ -1359,7 +1359,7 @@ function renderInfo(t) {
   $("info-sub").textContent = !t ? "" :
     t.grain === "minibinder"
       ? `minibinder · ${t.phenotype || "39S"} cell-score ${(t.cell_score ?? t.dist_map ?? 0).toFixed(3)} · binder prob ${(t.binder_prob || 0).toFixed(3)} · target ${t.gene_target || ""}`
-      : `${t.grain}` + (t.dist_map != null ? ` · ${t.grain === "complex" ? "EBI" : "geneKO"} mAP ${t.dist_map.toFixed(3)}` : "");
+      : `${t.grain === "complex" ? "protein complex" : t.grain}` + (t.dist_map != null ? ` · ${t.grain === "complex" ? "EBI" : "geneKO"} mAP ${t.dist_map.toFixed(3)}` : "");
   const body = $("info-body"); body.innerHTML = "";
   const s = t && (t.desc || (t.grain === "complex" ? complexDescOf(t.target) : null));   // complex members are marker-independent → fall back across markers (non-phase targets lack desc)
   if (!t || !s) { body.innerHTML = '<div class="empty">no annotation for this perturbation</div>'; return; }
