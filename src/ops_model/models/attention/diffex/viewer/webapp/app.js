@@ -204,6 +204,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (Array.isArray(s.pinned) && s.pinned.length) {   // re-pin same-marker comparisons
     const mc = state.marker.marker_channel || "Phase";
     state.pinned = s.pinned.map(pp => { const e = resolveEntry(pp.target, pp.anchor || "NTC"); return e ? pertOf(mc, e, e.control || "NTC") : null; }).filter(Boolean);
+    state.pinned.forEach(p => { if (!tc.pinned.some(q => q.gene === p.target)) tc.pinned.push({ gene: p.target, mode: tc.mode }); });   // keep shared pins in sync on reload
     renderPinned(); rebuild();
   }
   if (s.page) { state.page = s.page; rebuild(); }   // restore the cell page (selectTarget reset it to 0)
@@ -232,13 +233,8 @@ async function boot() {
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cnext").onclick = () => { state.page++; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("anchor").onchange = () => { state.anchor = $("anchor").value; rebuild(); };
-  $("addpanel").onclick = () => {
-    const set = activeSet(); if (!set.length) return;
-    const p = set[0];   // the current resolved (marker, anchor→target)
-    if (!state.pinned.some(q => q.key === p.key)) state.pinned.push(p);
-    renderPinned(); rebuild();
-  };
-  $("clearpanels").onclick = () => { state.pinned = []; renderPinned(); rebuild(); };
+  $("addpanel").onclick = () => { const set = activeSet(); if (set.length) pinShared(set[0].target, set[0].anchor); };
+  $("clearpanels").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
   $("alpha").oninput = () => showIdx(+$("alpha").value);
   $("alpha").onchange = saveState;   // persist α on release so reloads / v4↔v5 hold the current traversal position
   $("tile-scale").oninput = () => document.documentElement.style.setProperty("--tilepx", $("tile-scale").value + "px");   // traversal image scale
@@ -358,9 +354,8 @@ async function boot() {
   $("pc-dedup").onchange = () => { pc.dedup = $("pc-dedup").checked; buildPCList(); if (pc.cur) showPC(pc.cur); };
   $("pc-norm").onchange = () => { pc.norm = $("pc-norm").checked; buildPCList(); if (pc.cur) showPC(pc.cur); };
   $("pc-sort").onchange = () => { pc.sort = $("pc-sort").value; buildPCList(); };
-  $("tc-pin").onclick = () => { const g = state.target && state.target.target;   // pin current gene in the current mode
-    if (g && !tc.pinned.some(p => p.gene === g && p.mode === tc.mode)) tc.pinned.push({ gene: g, mode: tc.mode }); renderTopPins(); renderTop(); };
-  $("tc-pinclear").onclick = () => { tc.pinned = []; renderTopPins(); renderTop(); };
+  $("tc-pin").onclick = () => { if (state.target) pinShared(state.target.target); };   // shared with Traversal
+  $("tc-pinclear").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
   $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
@@ -1127,6 +1122,28 @@ function activeSet() {
   return set;
 }
 
+// pins are SHARED across Top Cells + Traversal (same perturbation set). NTC stays top-cells-only (an NTC traversal is degenerate).
+function pinShared(target, anchor = "NTC") {
+  if (!target) return;
+  if (target !== "NTC" && state.marker) {
+    const e = resolveEntry(target, anchor) || resolveEntry(target, "NTC");
+    if (e) { const p = pertOf(state.marker.marker_channel || "Phase", e, e.control || "NTC");
+      if (p && !state.pinned.some(q => q.key === p.key)) state.pinned.push(p); }
+  }
+  if (!tc.pinned.some(p => p.gene === target)) tc.pinned.push({ gene: target, mode: tc.mode });
+  redrawPins();
+}
+function unpinShared(target) {
+  state.pinned = state.pinned.filter(p => p.target !== target);
+  tc.pinned = tc.pinned.filter(p => p.gene !== target);
+  redrawPins();
+}
+function redrawPins() {   // refresh both pin lists + the active grid, and persist
+  renderPinned(); renderTopPins();
+  if (state.view === "top") renderTop(); else rebuild();
+  if (typeof saveState === "function") saveState();
+}
+
 async function exportGif() {   // client-side GIF of the current traversal grid across all α (works on static S3)
   const grid = $("grid"); if (!state.panels.length || typeof GIF === "undefined") return;
   const btn = $("exportgif"), old = btn.textContent; btn.disabled = true; btn.textContent = "rendering…";
@@ -1231,7 +1248,7 @@ function renderPinned() {
     const a = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     li.innerHTML = `<span>⠿ ${a}${p.target} · ${p.markerName}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
-    b.onclick = () => { state.pinned.splice(i, 1); renderPinned(); rebuild(); };
+    b.onclick = () => unpinShared(p.target);
     li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
     li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
     li.ondragleave = () => { li.style.opacity = ""; };
@@ -1922,7 +1939,7 @@ function renderTopPins() {
     const li = document.createElement("li"); li.innerHTML = `<span>⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
     li.draggable = true; li.style.cursor = "move";        // drag to reorder (like the traversal pins)
     const b = document.createElement("button"); b.textContent = "×";
-    b.onclick = () => { tc.pinned.splice(i, 1); renderTopPins(); renderTop(); };
+    b.onclick = () => unpinShared(p.gene);
     li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
     li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
     li.ondragleave = () => { li.style.opacity = ""; };
