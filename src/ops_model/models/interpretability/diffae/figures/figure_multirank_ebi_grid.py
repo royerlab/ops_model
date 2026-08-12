@@ -24,10 +24,11 @@ import pandas as pd
 import yaml
 
 from _setacc_common import CROP_SIZE, _materialize, composite, seg_crop
+from ops_model.paths import BASE_PATH
 
-MR = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/multi_rank"
-EBI_YAML = "/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_old_gene_names.yaml"
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_multirank_ebi"
+MR = f"{BASE_PATH}/models/alex_lin_attention/v5/multi_rank"
+EBI_YAML = f"{BASE_PATH}/configs/gene_clusters/EBI_complexes_v1_old_gene_names.yaml"
+OUT = f"{BASE_PATH}/analysis/figure4_multirank_ebi"
 CACHE = f"{OUT}/_cache"
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"

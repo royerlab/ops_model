@@ -11,17 +11,18 @@ import numpy as np
 import pandas as pd
 
 from ..classifier.config import slugify
+from ops_model.paths import BASE_PATH
 
-OUT = "/hpc/projects/icd.fast.ops/models/diffex"
+OUT = f"{BASE_PATH}/models/diffex"
 DD = f"{OUT}/diffae"
-_DIST_BASE = ("/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
+_DIST_BASE = (f"{BASE_PATH}/organelle_attribution/pca_optimized_v0.3/cell_dino/"
               "zscore_per_exp/paper_v2/with_cp/with_4i")
 _DIST_RELS = ["all_livecell"]   # v2 with_cp/with_4i: single 56-reporter matrix (live + CP + 4i)
 LAUNCH_JSON = f"{OUT}/directions/_ranking/fluor_marker_launch.json"
-GENE_PANEL = "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv"
-EBI_YAML = "/hpc/projects/icd.fast.ops/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"
-EBI_FLUOR_CSV = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/pma_fluorescent_cells_ebi_all.csv"
-GENE_EMB_H5AD = ("/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/cell_dino/"
+GENE_PANEL = f"{BASE_PATH}/configs/annotated_gene_panel_July2025.csv"
+EBI_YAML = f"{BASE_PATH}/configs/gene_clusters/EBI_complexes_v1_updated_gene_names.yaml"
+EBI_FLUOR_CSV = f"{BASE_PATH}/models/alex_lin_attention/v4/pma_fluorescent_cells_ebi_all.csv"
+GENE_EMB_H5AD = (f"{BASE_PATH}/organelle_attribution/pca_optimized_v0.3/cell_dino/"
                  "zscore_per_exp/paper_v2/phase_only/fixed_80%/cosine/gene_embedding_pca_optimized.h5ad")
 
 # fixed-cell reporter (distinctiveness matrix col) for CP/4i marker_channels

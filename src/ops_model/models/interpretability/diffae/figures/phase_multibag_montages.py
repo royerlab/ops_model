@@ -10,9 +10,10 @@ import pandas as pd
 
 from _setacc_common import _materialize
 import debug_setacc_top100 as D
+from ops_model.paths import BASE_PATH
 
-OUT_DIR = "/hpc/projects/icd.fast.ops/analysis/figure4_shap_montages"   # shared SHAP-montage review dir (phase + fluor)
-RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"
+OUT_DIR = f"{BASE_PATH}/analysis/figure4_shap_montages"   # shared SHAP-montage review dir (phase + fluor)
+RANK = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings/pma_shap_phase_geneKO.parquet"
 PHASE_CH = "Phase2D"
 N = 100
 

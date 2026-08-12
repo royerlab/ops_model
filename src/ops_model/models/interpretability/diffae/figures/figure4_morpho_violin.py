@@ -19,13 +19,14 @@ import pandas as pd
 from figure4_morpho_traversal import FIGURES, VA, image_panels, render_images
 from ops_model.models.interpretability.diffae.traversal.morpho_pipeline import MORPHO_TARGETS, real_percell
 from ops_model.models.interpretability.diffae.classifier.config import slugify
+from ops_model.paths import BASE_PATH
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
 
-OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals_violin"
+OUT = f"{BASE_PATH}/analysis/figure4_traversals_violin"
 COLORS = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=1": "#6baed6", "α=3": "#08519c"}
 ALPHAS_SHOW = [0, 1, 3]                           # image panel columns (α=3 = exaggeration, not α=5)
 CELLS = list(range(30))                           # render 30 example cells to pick from

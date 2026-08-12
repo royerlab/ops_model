@@ -19,6 +19,7 @@ channels in one stitched frame → registered). 4i/CP markers excluded (fixed la
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle, Circle, Ellipse
+from ops_model.paths import BASE_PATH
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
@@ -103,7 +104,7 @@ def _patch_cell(ax, cx, cy, s, edge=INK):
         ax.plot([cx + g, cx + g], [cy - s, cy + s], color=PURPLE, lw=0.5, alpha=0.55, zorder=7)
 
 
-def build(outstem="/hpc/projects/icd.fast.ops/analysis/figure4_schematic/virtual_staining_schematic"):
+def build(outstem=f"{BASE_PATH}/analysis/figure4_schematic/virtual_staining_schematic"):
     fig, ax = plt.subplots(figsize=(14.6, 4.9))
     ax.set_xlim(0, 14.6); ax.set_ylim(0, 4.9); ax.axis("off")
     ax.text(0.12, 4.72, "C", fontsize=28, fontweight="bold", va="top")

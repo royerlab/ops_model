@@ -14,7 +14,7 @@ class OpsPaths:
         return Path(
             os.environ.get(
                 "OPS_OUTPUT_BASE_DIR",
-                "/hpc/projects/icd.fast.ops",
+                f"{BASE_PATH}",
             )
         )
 
@@ -85,7 +85,7 @@ class OpsPaths:
         }
 
         self.other = {
-            "gene_library": "/hpc/projects/icd.fast.ops/configs/annotated_guide_library_123-UpdateJuly28_2025.csv",
+            "gene_library": f"{BASE_PATH}/configs/annotated_guide_library_123-UpdateJuly28_2025.csv",
         }
 
     def reformat_well_name(self, well: str) -> str:

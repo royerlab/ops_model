@@ -22,8 +22,9 @@ import os
 import numpy as np
 
 from . import catalog as C
+from ops_model.paths import BASE_PATH
 
-BASE = "/hpc/projects/icd.fast.ops"
+BASE = f"{BASE_PATH}"
 PCS_OUT = f"{C.OUT}/viewer_assets/pcs"
 CROP_SIZE = 160                      # native px re-crop (was 96); crisper at the 150px display + shows surround
 PHASE_CHANNEL = 0

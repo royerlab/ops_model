@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from ops_model.paths import BASE_PATH
 
-_V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
+_V4 = f"{BASE_PATH}/models/alex_lin_attention/v4"
 
 # Phase per-cell ranking exports. v4 = pma_attention-ranked (masked SetTransformer). v5 (paper-v2) =
 # set-accuracy-`score`-ranked, no-mask/160px, and now includes an NTC group (so NTC anchors come from the
@@ -16,7 +17,7 @@ _V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
 # v4 schema (segmentation_id→segmentation, score→pma_attention, rank_type="top"). Toggle via OPS_DIFFEX_V5=1.
 # Built + served side-by-side under viewer_assets_v5 so the live v4 viewer is untouched until the final swap.
 _USE_V5 = os.environ.get("OPS_DIFFEX_V5", "0") == "1"
-_V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
+_V5_RANK = f"{BASE_PATH}/models/diffex/viewer_assets_v5/_rankings"
 # geneKO: class is `gene`. complex (EBI): class is `predicted_class` (complex name).
 if _USE_V5:
     PMA_PHASE_GENEKO = f"{_V5_RANK}/pma_v5_phase_geneKO.parquet"
@@ -31,7 +32,7 @@ GRAINS = {
 }
 
 # Default output root; per-run results land under <root>/<grain>/<class-slug>/.
-DEFAULT_OUT_ROOT = "/hpc/projects/icd.fast.ops/models/diffex"
+DEFAULT_OUT_ROOT = f"{BASE_PATH}/models/diffex"
 
 
 def slugify(name: str) -> str:

@@ -24,8 +24,9 @@ from .config import DiffAEConfig
 from .data import load_diffae_crops
 from .model import DiffAE
 from .train import _pearson
+from ops_model.paths import BASE_PATH
 
-OUT = "/hpc/projects/icd.fast.ops/analysis/virtual_staining/multi_marker"
+OUT = f"{BASE_PATH}/analysis/virtual_staining/multi_marker"
 
 
 def markers_list():
@@ -46,7 +47,7 @@ def markers_list():
 # Every scored cell per marker (concat of Alex's 6 per-cell shards, incl NTC) — NOT the acc>0.5 qualifying
 # subset. Virtual staining needs a representative pool of paired (phase, marker) crops, so no distinctiveness
 # filtering: use all cells (74k–1.3M/marker) and sample ≤cap per marker. Built by scratchpad/build_allcells.py.
-ALL_CELLS = ("/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/fluorescence/"
+ALL_CELLS = (f"{BASE_PATH}/models/alex_lin_attention/v5/fluorescence/"
              "misc/all_cells_bychannel.parquet")
 
 
