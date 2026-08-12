@@ -132,7 +132,7 @@ const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag
 // adaptive score-overlay legend caption per mode (see #scoremode); shown only on Traversal when scoreMode != none
 const SCORE_LEGEND = {
   linear: "per-cell classifier score (NTC → knockout): 0 → 1",
-  ptarget: "P(target) for the whole set (bag): 0 → 100%",
+  ptarget: "set accuracy for the whole bag: 0 → 100%",
   rank: "classification rank within the set: ≥100 → rank 1",
 };
 function updateScoreLegend() {

@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
-<link rel="stylesheet" href="style.css?v=173"/>
+<link rel="stylesheet" href="style.css?v=174"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -116,8 +116,8 @@
           <select id="scoremode" data-seg>
             <option value="none">none</option>
             <option value="linear">per-cell linear (NTC vs KO)</option>
-            <option value="ptarget" selected>P(target) — set (bag)</option>
-            <option value="rank">target rank — set (bag)</option>
+            <option value="ptarget" selected>Set ACC — set (bag)</option>
+            <option value="rank">classification rank — set (bag)</option>
           </select>
         </label>
         <label class="chk feat-public"><input type="checkbox" id="pub-scoreoverlay" data-on="classification rank"/> classification rank overlay</label>
@@ -372,7 +372,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=202"></script>
+<script src="app.js?v=203"></script>
 <script src="methods.js?v=55"></script>
 </body>
 </html>
