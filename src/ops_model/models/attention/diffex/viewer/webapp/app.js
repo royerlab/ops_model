@@ -162,6 +162,12 @@ const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, ancho
 
 // ---- persist the browse selection + display prefs across page reloads (localStorage; works on static S3) ----
 const LS_KEY = "opsin.state.v1";
+function setScale(v) {   // one image-scale value shared by all tabs — drives both grids and mirrors both sliders
+  document.documentElement.style.setProperty("--tilepx", v + "px");
+  document.documentElement.style.setProperty("--tcpx", v + "px");
+  if ($("tile-scale").value != v) $("tile-scale").value = v;
+  if ($("tc-scale").value != v) $("tc-scale").value = v;
+}
 let restoredAlpha = null;   // α VALUE restored from localStorage, applied on the first rebuild after a reload/version-switch
 function saveState() {
   try {
@@ -191,7 +197,7 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (s.showReal != null) { $("showreal").checked = s.showReal; state.showReal = s.showReal; }
   if (s.sidePanel) setSidePanel(s.sidePanel, true);
   if (s.cellCount) { state.cellCount = s.cellCount; $("cellcount").value = s.cellCount; }
-  if (s.tilepx) { $("tile-scale").value = s.tilepx; document.documentElement.style.setProperty("--tilepx", s.tilepx + "px"); }
+  if (s.tilepx) setScale(s.tilepx);
   if (s.speed) { $("speed").value = s.speed; state.frameMs = +s.speed; }
   if (s.alphaLimit) { $("alphalimit").value = s.alphaLimit; state.alphaLimit = +s.alphaLimit; }
   if (s.anchor) state.anchor = s.anchor;   // populateAnchors keeps it if valid for the target, else resets to NTC
@@ -235,8 +241,9 @@ async function boot() {
   $("clearpanels").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
   $("alpha").oninput = () => showIdx(+$("alpha").value);
   $("alpha").onchange = saveState;   // persist α on release so reloads / v4↔v5 hold the current traversal position
-  $("tile-scale").oninput = () => document.documentElement.style.setProperty("--tilepx", $("tile-scale").value + "px");   // traversal image scale
-  $("tc-scale").oninput = () => document.documentElement.style.setProperty("--tcpx", $("tc-scale").value + "px");   // top-cells image scale
+  $("tile-scale").oninput = () => setScale($("tile-scale").value);   // image scale — shared across tabs (mirrors tc-scale)
+  $("tc-scale").oninput = () => setScale($("tc-scale").value);
+  setScale($("tile-scale").value);   // init both grids to the shared default
   $("colslayout").onchange = () => $("grid").classList.toggle("cols-layout", $("colslayout").checked);   // perturbations rows ↔ columns
   $("exportgif").onclick = exportGif;
   $("play").onclick = togglePlay;
