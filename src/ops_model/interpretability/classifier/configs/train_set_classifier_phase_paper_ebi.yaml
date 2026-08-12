@@ -69,5 +69,3 @@ model:
   n_layers_channel: 2
 
 # ---- Logging ----
-wandb_project: cellstate-set-classifier
-wandb_entity: ai_imaging  # set to your username for a personal project

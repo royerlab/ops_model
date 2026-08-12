@@ -39,7 +39,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -60,26 +59,13 @@ _CONFIG_DIR = str(
 )
 
 
-def _load_checkpoint(
-    checkpoint_path: str | None,
-    wandb_artifact: str | None,
-) -> dict:
-    if checkpoint_path:
-        path = Path(checkpoint_path).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError(f"Checkpoint not found: {path}")
-        return torch.load(path, map_location="cpu", weights_only=False)
-    if wandb_artifact:
-        api = wandb.Api()
-        artifact = api.artifact(wandb_artifact, type="model")
-        artifact_dir = artifact.download()
-        ckpt_path = next(
-            os.path.join(artifact_dir, f)
-            for f in os.listdir(artifact_dir)
-            if f.endswith(".pt")
-        )
-        return torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    raise ValueError("Set exactly one of checkpoint_path or wandb_artifact")
+def _load_checkpoint(checkpoint_path: str | None) -> dict:
+    if not checkpoint_path:
+        raise ValueError("checkpoint_path is required")
+    path = Path(checkpoint_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    return torch.load(path, map_location="cpu", weights_only=False)
 
 
 def _per_class_stats(
@@ -531,10 +517,7 @@ def _run_sweep(
 
 
 def run(cfg: DictConfig) -> None:
-    ckpt = _load_checkpoint(
-        cfg.get("checkpoint_path"),
-        cfg.get("wandb_artifact"),
-    )
+    ckpt = _load_checkpoint(cfg.get("checkpoint_path"))
     config = ckpt["config"]
     ckpt_gene_to_idx: dict[str, int] = ckpt["gene_to_idx"]
     ckpt_channel_to_idx: dict[str, int] = ckpt["channel_to_idx"]

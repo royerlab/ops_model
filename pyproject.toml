@@ -55,7 +55,6 @@ models = ["transformers<4.40"]
 classifier = [
     "hydra-core",
     "omegaconf",
-    "wandb",
     "pyarrow",
     "tqdm",
     "matplotlib",

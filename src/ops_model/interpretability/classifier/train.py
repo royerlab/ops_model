@@ -41,7 +41,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Dataset, Sampler
 from tqdm import tqdm
@@ -2287,19 +2286,9 @@ def _subset_train_cells(
 
 
 def run(cfg: DictConfig) -> None:
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    run_name = wandb_config.get("name") if isinstance(wandb_config, dict) else None
+    resolved_cfg = OmegaConf.to_container(cfg, resolve=True)
+    run_name = resolved_cfg.get("name") if isinstance(resolved_cfg, dict) else None
     print(f"Resolved run name: {run_name!r}")
-    # Default to offline/disabled so the script runs standalone with no W&B login;
-    # set `wandb_mode: online` (+ wandb_project/entity) in the config to log to W&B.
-    wandb_run = wandb.init(
-        project=cfg.get("wandb_project", "set-classifier"),
-        entity=cfg.get("wandb_entity", None),
-        settings=wandb.Settings(silent=True),
-        config=wandb_config,  # type: ignore[arg-type]
-        name=run_name,
-        mode=cfg.get("wandb_mode", "disabled"),
-    )
 
     device = torch.device(
         cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")
@@ -2630,11 +2619,9 @@ def run(cfg: DictConfig) -> None:
                 f"Train-cell subset: {orig:,} -> {new:,} "
                 f"(max_train_cells={int(max_train_cells):,})"
             )
-            wandb.log({"data/train_cells_original": orig, "data/train_cells": new})
         else:
             n_train_cells = sum(len(p) for p in train_ds._gene_pools.values())
             print(f"Using full train set: {n_train_cells:,} cells")
-            wandb.log({"data/train_cells": n_train_cells})
 
         # If len(dataset)*multiplier < batch_size, drop_last=True yields zero batches
         # (e.g. max_genes=1 with batch_size>1).
@@ -2815,7 +2802,6 @@ def run(cfg: DictConfig) -> None:
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
-    wandb.log({"model/n_params": n_params})
 
     # ---- Optimizer & scheduler ----
     lr = cfg.get("learning_rate", 1e-3)
@@ -2916,8 +2902,6 @@ def run(cfg: DictConfig) -> None:
             f"| train={elapsed:.1f}s val={val_elapsed:.1f}s"
         )
 
-        wandb.log(log_dict)
-
         if do_eval and val_acc > best_val_acc:
             best_val_acc = val_acc
             best_metrics = {
@@ -2937,7 +2921,7 @@ def run(cfg: DictConfig) -> None:
                 "model_state_dict": state_dict,
                 "gene_to_idx": gene_to_idx,
                 "channel_to_idx": channel_to_idx,
-                "config": wandb_config,
+                "config": resolved_cfg,
                 "epoch": epoch + 1,
                 "val_acc": val_acc,
             }
@@ -2946,21 +2930,11 @@ def run(cfg: DictConfig) -> None:
                 ckpt["label_remap"] = label_remap
             torch.save(ckpt, save_path)
             print(f"  Saved best model (val_acc={val_acc:.4f}) to {save_path}")
-            if cfg.get("wandb_mode", "disabled") != "disabled":
-                artifact = wandb.Artifact(
-                    name=f"model-{wandb_run.id}",
-                    type="model",
-                    metadata={"val_acc": val_acc, "epoch": epoch + 1},
-                )
-                artifact.add_file(save_path)
-                wandb_run.log_artifact(artifact)
 
     print(f"\nBest val accuracy: {best_val_acc:.4f}")
-    wandb.log({"best_val_accuracy": best_val_acc})
 
     # Optionally persist the selected model's per-N validation accuracies so a
-    # wrapping eval (e.g. CsPhenoEvaluator) can read them back without scraping
-    # stdout / the wandb run.
+    # wrapping eval can read them back without scraping stdout.
     metrics_out = cfg.get("metrics_out", None)
     if metrics_out is not None:
         out_path = Path(metrics_out)
@@ -2968,8 +2942,6 @@ def run(cfg: DictConfig) -> None:
         payload = {"n_cells_per_set": cfg.get("n_cells_per_set", None), **best_metrics}
         out_path.write_text(json.dumps(payload, indent=2))
         print(f"Wrote metrics to {out_path}")
-
-    wandb.finish()
 
 
 def build_model(ckpt: dict, device: torch.device) -> MixedChannelClassifier:
@@ -3007,7 +2979,7 @@ def build_model(ckpt: dict, device: torch.device) -> MixedChannelClassifier:
 @hydra.main(
     version_base="1.3.0",
     config_path=_CONFIG_DIR,
-    config_name="train_set_classifier",
+    config_name="train_set_classifier_phase_paper_v2",
 )
 def main(cfg: DictConfig) -> None:
     run(cfg)

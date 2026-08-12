@@ -31,7 +31,7 @@ data:
 
 # ---- Training ----
 n_cells_per_set: 100
-channels_per_set: null
+channels_per_set: null  # all markers per set; set [1, 2, 5, 10, 20, null] to also train on smaller random marker subsets
 train_n_cell_sets_per_gene: 32
 val_n_cell_sets_per_gene: 5
 channel_drop_fraction: 0.0
@@ -65,5 +65,3 @@ model:
   n_layers_channel: 2
 
 # ---- Logging ----
-wandb_project: cellstate-set-classifier
-wandb_entity: ai_imaging

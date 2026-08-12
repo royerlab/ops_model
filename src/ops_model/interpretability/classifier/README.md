@@ -13,7 +13,7 @@ metadata CSV**, both passed as paths.
 ## Install
 
 ```bash
-pip install -e ".[classifier]"   # adds hydra-core, omegaconf, wandb, pyarrow, tqdm, matplotlib
+pip install -e ".[classifier]"   # adds hydra-core, omegaconf, pyarrow, tqdm, matplotlib
 ```
 
 ## Inputs
@@ -55,8 +55,7 @@ python -m ops_model.interpretability.classifier.train \
 ```
 
 Writes the best-val checkpoint to `save_path` (stores `gene_to_idx`, `channel_to_idx`, and
-— for label-mapped runs — `label_to_idx` / `label_remap`). W&B is **off by default**
-(`wandb_mode: disabled`); set `wandb_mode=online` (+ `wandb_project`/`wandb_entity`) to log.
+— for label-mapped runs — `label_to_idx` / `label_remap`).
 
 To later compute cell scores, also set `dump_train_dir` / `dump_val_dir` so training caches per-gene
 `.pt` dumps (embeddings + cell metadata) alongside the checkpoint.
@@ -107,16 +106,15 @@ marginals, and the cell's coordinates (so downstream montages can render straigh
 
 | Config | Task |
 |---|---|
-| `train_set_classifier.yaml` | generic train template |
-| `train_set_classifier_fluor_cp_4i_paper_v2_null.yaml` | fluor, all markers, 1K gene |
-| `train_set_classifier_fluor_cp_4i_ebionly_null.yaml` | fluor, all markers, EBI complex |
 | `train_set_classifier_phase_paper_v2.yaml` | phase, 1K gene |
 | `train_set_classifier_phase_paper_ebi.yaml` | phase, EBI complex |
-| `eval_set_classifier.yaml` | eval template |
-| `eval_set_classifier_fluroescent_ebi.yaml` | eval, fluor EBI |
-| `eval_set_classifier_phase_ebi.yaml` | eval, phase EBI |
+| `train_set_classifier_fluor_cp_4i_paper_v2_null.yaml` | fluor, all markers (cps=null), 1K gene |
+| `train_set_classifier_fluor_cp_4i_ebionly_null.yaml` | fluor, all markers (cps=null), EBI complex |
+| `eval_set_classifier.yaml` | eval (one config for all four) |
 
-`channels_per_set: null` pools all markers per set; an int / list samples that many markers.
+`channels_per_set: null` pools **all** markers per set. To also train on smaller random
+marker subsets, set it to a list, e.g. `[1, 2, 5, 10, 20, null]` (each set then draws a
+random number of markers from that list).
 Point `CONFIG_PATH` at another directory to load configs from elsewhere.
 
 ## Module layout
