@@ -1289,7 +1289,7 @@ function rebuild() {
     const group = document.createElement("div"); group.className = "group"; group.style.setProperty("--cols", Math.min(N, 5));   // cap header/box to the actual cell columns
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
-    hd.appendChild(tt); hd.title = tt.textContent;   // title in its own span so the score chip can right-align; full text on hover
+    hd.appendChild(tt); hd.title = tt.title = tt.textContent;   // title on the visible name span (+ header) so hover shows the full name
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
     state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
@@ -1915,7 +1915,7 @@ function renderTop() {
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
     const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
     const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? `rgba(38,198,255,${(0.16 + 0.84 * av).toFixed(2)})` : "rgba(255,255,255,.06)"};color:${av != null && av > 0.5 ? "#04222e" : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}" title="${e.gene}"><span class="gh-title">${e.gene}</span><span class="tc-n">${cells.length}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" title="${e.gene}">${e.gene}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)

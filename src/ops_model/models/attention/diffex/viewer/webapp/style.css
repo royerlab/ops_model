@@ -132,7 +132,7 @@ button:hover{border-color:var(--accent)}
 .group{display:flex;flex-direction:column;gap:8px;max-width:calc(var(--cols,5) * (var(--tilepx,170px) + 10px) + 15px)}   /* cap to the cell box so long names ellipsize at its edge, not the page */
 .group-hd{font:650 20px ui-monospace,Menlo,monospace;display:flex;align-items:center;gap:10px}   /* single header per group, ~2× old caption */
 .group-hd .gh-title,.tc-hd .gh-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}   /* grow to fill + shrink/ellipsize, leaving room for the score chip */
-.group-hd .setacc,.tc-hd .tc-n,.tc-hd .tc-acc{flex:0 0 auto}   /* chips keep their size (name yields to them) */
+.group-hd .setacc{flex:0 0 auto}   /* chip keeps its size (name yields to it) */
 .group-hd .setacc{margin-left:auto}   /* score chip pushed to the right (like Top Cells) */
 .rowlbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 .group-cells{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(var(--tilepx,170px),1fr));
@@ -234,7 +234,9 @@ button:hover{border-color:var(--accent)}
 #stage.top-active>*{display:none}
 #stage.top-active>#tc-view{display:block}
 .tc-row{margin-bottom:18px}
-.tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.tc-hd .gh-title{flex-basis:100%}              /* name takes the whole first line so the score wraps below */
+.tc-hd .tc-acc{flex:0 0 auto;margin-top:2px}   /* accuracy chip on its own row at natural width (like the traversal cols score) */
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
 .tc-hd .tc-acc{font:700 13px ui-monospace,monospace;padding:2px 8px;border-radius:6px}
 .tc-strip{gap:4px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
