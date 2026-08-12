@@ -1906,7 +1906,7 @@ function renderTop() {
     else if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
     if (sel.dataset.bins !== bins.join(",")) { sel.innerHTML = bins.map(b => `<option value="${b}">${b} cells</option>`).join(""); sel.dataset.bins = bins.join(","); }
     sel.value = tc.accBin;
-    const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (!isPublic() && tc.showAcc && bins.length > 1) ? "" : "none";
+    const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (tc.showAcc && bins.length > 1) ? "" : "none";   // public hidden via feat-internal (applyFeatureGate)
   }
   let h = "", ci = 0;
   for (const e of tcEntries()) {

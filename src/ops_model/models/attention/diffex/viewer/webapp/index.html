@@ -181,8 +181,8 @@
       <label>Image scale <span class="hint">(cell size)</span> <input type="range" id="tc-scale" min="80" max="300" step="10" value="150"/></label>
       <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="cell mask"/> cell mask</label>
       <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
-      <label class="chk feat-internal"><input type="checkbox" id="tc-acc" checked data-on="classification accuracy"/> classification accuracy</label>
-      <label id="tc-accbin-wrap">Accuracy bag size
+      <label class="chk"><input type="checkbox" id="tc-acc" checked data-on="classification accuracy"/> classification accuracy</label>
+      <label id="tc-accbin-wrap" class="feat-internal">Accuracy bag size
         <select id="tc-accbin"></select>
       </label>
       <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
@@ -325,7 +325,7 @@
     <div id="methods-view"></div>
   </main>
 
-  <aside id="sidebar">
+  <aside id="sidebar" class="hidden">
     <div id="side-info-view">
       <div class="side-hd">Perturbation info</div>
       <div id="info-title"></div>
@@ -367,7 +367,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=210"></script>
+<script src="app.js?v=211"></script>
 <script src="methods.js?v=55"></script>
 </body>
 </html>
