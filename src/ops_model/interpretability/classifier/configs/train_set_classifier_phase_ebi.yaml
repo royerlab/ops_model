@@ -9,8 +9,7 @@ device: "cuda"  # auto-detect
 # ---- Data ----
 data:
   parquet_entries:
-    - path: /path/to/embeddings/celldino_vitl16_masked_allch.parquet
-    - path: /path/to/embeddings/celldino_vitl16_masked_allch2.parquet
+    - path: /path/to/embeddings/celldino_paper_phenotyping_v2_160.parquet
   max_row_groups: null      # set to limit row groups loaded (e.g. 10 for quick debug)
   max_cells_per_group: null # cap cells pe (gene, channel) to limit memory
   max_genes: null        # keep only top-N genes by cell count (null = all)
