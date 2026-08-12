@@ -1286,13 +1286,13 @@ function rebuild() {
     const color = PALETTE[gi % PALETTE.length];
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     const group = document.createElement("div"); group.className = "group";
-    group.style.borderLeft = `4px solid ${color}`; group.style.paddingLeft = "12px";   // color bar down the left of the whole row (matches Top Cells)
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
     hd.appendChild(tt); hd.title = tt.textContent;   // title in its own span so the score chip can right-align; full text on hover
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
     state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
+    cells.style.borderLeft = `4px solid ${color}`;   // colored bar; box styling in CSS (matches Top Cells strip)
     cells.style.setProperty("--cols", Math.min(N, 5));   // max 5 per row; wrap instead of stretching
     for (let c = start; c < Math.min(start + N, p.n_cells); c++) {
       const frames = p.alphas.map((_, i) => frameURL(p.asset_dir, diskCellFor(p.anchor, c), i));
@@ -1914,7 +1914,7 @@ function renderTop() {
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
     const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
     const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? `rgba(38,198,255,${(0.16 + 0.84 * av).toFixed(2)})` : "rgba(255,255,255,.06)"};color:${av != null && av > 0.5 ? "#04222e" : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}">${e.gene}<span class="tc-n">${cells.length}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}" title="${e.gene}"><span class="gh-title">${e.gene}</span><span class="tc-n">${cells.length}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)

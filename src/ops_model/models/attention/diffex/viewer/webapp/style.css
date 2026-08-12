@@ -91,11 +91,11 @@ button{background:var(--panel);color:var(--fg);border:1px solid var(--line);bord
        padding:7px 10px;font-size:13px;cursor:pointer}
 button:hover{border-color:var(--accent)}
 .hidden{display:none!important}
-#panellist,#a-panellist{list-style:none;margin:6px 0 0;padding:0;font-size:12px;font-family:ui-monospace,monospace}
-#panellist li,#a-panellist li{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 6px;background:var(--panel);
+#panellist,#a-panellist,#tc-panellist{list-style:none;margin:6px 0 0;padding:0;font-size:12px;font-family:ui-monospace,monospace}
+#panellist li,#a-panellist li,#tc-panellist li{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 6px;background:var(--panel);
               border:1px solid var(--line);border-radius:5px;margin-bottom:4px}
 #panellist li>span,#a-panellist li>span,#tc-panellist li>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}   /* long names ellipsize (keep one-line height) */
-#panellist li button,#a-panellist li button{padding:0 6px;font-size:12px}
+#panellist li button,#a-panellist li button,#tc-panellist li button{padding:0 6px;font-size:12px}
 
 #stage{flex:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px;overflow:auto}
 #heatbar{width:min(80vw,720px);margin-top:22px;box-sizing:border-box;padding:0 118px 0 52px}   /* inset to the α-slider track: play 38+gap14 left, α-read 104+gap14 right */
@@ -125,16 +125,17 @@ button:hover{border-color:var(--accent)}
 
 #grid{display:flex;flex-direction:column;gap:20px;width:100%;max-width:1100px}
 #grid.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
-#grid.cols-layout .group{flex:0 0 auto;width:calc(var(--tilepx,170px) + 16px)}                   /* tile width + the 4px bar + 12px pad-left (title can't force it wide) */
+#grid.cols-layout .group{flex:0 0 auto;width:auto}                   /* size to the cells box (title ellipsizes, can't force it wide) */
 #grid.cols-layout .group-cells{grid-template-columns:var(--tilepx,170px)}                      /* one vertical column of cells */
 #grid.cols-layout .group-hd{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word}   /* same font as rows layout; wrap+center within the column */
 #grid.cols-layout .setacc{display:block;margin:3px auto 0}   /* score chip drops below the title so it can't stretch the narrow column */
 .group{display:flex;flex-direction:column;gap:8px}
 .group-hd{font:650 20px ui-monospace,Menlo,monospace;display:flex;align-items:center;gap:10px}   /* single header per group, ~2× old caption */
-.group-hd .gh-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group-hd .gh-title,.tc-hd .gh-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .group-hd .setacc{margin-left:auto}   /* score chip pushed to the right (like Top Cells) */
 .rowlbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
-.group-cells{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(var(--tilepx,170px),1fr))}   /* image-scale slider drives --tilepx: smaller = more per row + more rows */
+.group-cells{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(var(--tilepx,170px),1fr));
+   background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}   /* box like the Top Cells strip; image-scale slider drives --tilepx */
 .panel{position:relative}
 .panel img{width:100%;aspect-ratio:1;background:#000;border:1px solid var(--line);border-radius:6px;display:block}
 .setacc{margin-left:10px;font:800 17px ui-monospace,monospace;padding:2px 8px;border-radius:6px;vertical-align:middle;box-shadow:0 0 3px rgba(0,0,0,.4)}
