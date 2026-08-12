@@ -32,7 +32,7 @@ from ops_model.features.processing_common import process_features_csv
 
 
 # Base directory for OPS experiments
-BASE_DIR = Path("/hpc/projects/intracellular_dashboard/ops")
+BASE_DIR = Path("/hpc/projects/icd.fast.ops")
 
 
 def check_csv_exists(
