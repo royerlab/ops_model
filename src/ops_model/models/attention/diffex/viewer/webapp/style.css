@@ -99,13 +99,13 @@ button:hover{border-color:var(--accent)}
 #panellist li button,#a-panellist li button,#tc-panellist li button{padding:0 6px;font-size:12px}
 
 #stage{flex:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px;overflow:auto}
-#heatbar{width:min(80vw,720px);margin-top:22px;box-sizing:border-box;padding:0 118px 0 52px}   /* inset to the α-slider track: play 38+gap14 left, α-read 104+gap14 right */
+#heatbar{width:min(80vw,720px);margin-top:4px;box-sizing:border-box;padding:0 118px 0 52px}   /* inset to the α-slider track: play 38+gap14 left, α-read 104+gap14 right */
 #heat-track{position:relative}   /* tick/real % map to this (= slider width) so the scrub thumb + colorbar tick move in lockstep */
 #heat-grad{height:14px;border-radius:7px;
   background:linear-gradient(90deg,var(--neg) 0%,var(--mid) 50%,var(--pos) 100%)}
 #heat-tick{position:absolute;top:-3px;width:3px;height:20px;background:#fff;border-radius:2px;
   box-shadow:0 0 4px #000;transition:left .05s linear}
-.heat-lbls{display:flex;justify-content:space-between;font-size:11px;margin-top:3px}
+.heat-lbls{display:flex;justify-content:space-between;font-size:14px;margin-top:3px}
 .heat-lbls .neg{color:var(--neg)}.heat-lbls .mid{color:var(--mid)}.heat-lbls .pos{color:var(--pos)}
 #scrub{display:flex;align-items:center;gap:14px;width:min(80vw,720px)}
 .slider-col{flex:1;display:flex;flex-direction:column;gap:2px}
