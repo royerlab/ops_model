@@ -1383,7 +1383,7 @@ function showIdx(i) {
     const sch = setChip(state.scoresV5[gp.dir], i);
     if (sch) {
       const rl = sch.showReal && state.realAcc20 ? state.realAcc20[gp.dir] : null;   // real-cell ceiling (P(target) only)
-      gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""} · ${gp.nCells}-cell bag`;
+      gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""}`;
       gp.sa.style.background = sch.bg; gp.sa.style.color = sch.fg;
       gp.sa.style.display = "inline-block";
     } else gp.sa.style.display = "none";
