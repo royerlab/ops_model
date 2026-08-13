@@ -52,8 +52,9 @@ const TRAV_CLIP_DEFAULT = 0.45;   // ≈ background median → maps background t
 const TRAV_CLIP = {};
 function updateTravClip() {
   const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
-  const w = $("tr-inorm-wrap"); if (w) w.style.display = mc ? "" : "none";       // marker-normalize is fluor-only
-  const ck = $("tr-inorm"); if (ck) ck.checked = tc.inorm;                       // mirror the shared marker-normalize state
+  const inp = $("tr-inorm");
+  if (inp) { inp.checked = tc.inorm; inp._togSync?.();                           // mirror shared state onto the segmented switch
+             if (inp._tog) inp._tog.style.display = mc ? "" : "none"; }          // marker-normalize toggle is fluor-only
   const on = state.view === "traversal" && !!mc && tc.inorm;                     // shares Top Cells' tc.inorm toggle
   const g = $("grid"); if (g) g.classList.toggle("fluorclip", on);
   const lo = on ? (mc in TRAV_CLIP ? TRAV_CLIP[mc] : TRAV_CLIP_DEFAULT) : 0, d = Math.max(1e-3, 1 - lo);
