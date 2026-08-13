@@ -43,7 +43,7 @@ def main():
     ap = argparse.ArgumentParser(description="Submit DiffAE training to SLURM")
     ap.add_argument("--n-crops", type=int, default=50_000)
     ap.add_argument("--crop-size", type=int, default=160)
-    ap.add_argument("--epochs", type=int, default=80)
+    ap.add_argument("--epochs", type=int, default=120)   # full recipe; training stops itself at this epoch
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--out-dir", default=f"{DEFAULT_OUT_ROOT}/diffae/phase_v1")
     ap.add_argument("--partition", default="gpu")
@@ -55,7 +55,11 @@ def main():
     ap.add_argument("--mem-gb", type=int, default=96)
     ap.add_argument("--time-min", type=int, default=720)
     ap.add_argument("--after", default=None,
-                    help="SLURM job id: start afterany:<id> (resume=True continues training → auto-resubmit chains)")
+                    help="SLURM job id: the FIRST link waits afterany:<id> before starting")
+    ap.add_argument("--rearm", type=int, default=2,
+                    help="auto-resume jobs chained afterany the trainer (resume=True continues to --epochs). "
+                         "Default 2 covers ~36h so training reaches epoch 120 even if one 12h wall isn't enough. "
+                         "0 disables. A link that finds training already complete exits immediately.")
     ap.add_argument("--name", default="diffae_phase_v1")
     ap.add_argument("--augment-affine", action="store_true",
                     help="continuous rotation+scale+flip aug (else discrete dihedral)")
@@ -105,13 +109,29 @@ def main():
     }
     if args.constraint:
         slurm_params["slurm_constraint"] = args.constraint
-    if args.after:  # resume-chain: wait for the prior job to end (any reason), then continue
-        slurm_params["slurm_additional_parameters"] = {"dependency": f"afterany:{args.after}"}
-    submit_parallel_jobs(
-        jobs_to_submit=jobs, experiment="diffae",
-        slurm_params=slurm_params, log_dir="diffae",
-        dry_run=args.dry_run, wait_for_completion=False,
-    )
+    # Auto-rearm: submit the trainer + `--rearm` resume links, each afterany-dependent on the
+    # previous. resume=True makes every link continue from train_state toward --epochs; a link that
+    # finds training already complete just exits. This is ON BY DEFAULT so runs auto-survive the wall.
+    prev = args.after
+    n_links = 1 + max(0, args.rearm)
+    for i in range(n_links):
+        sp = dict(slurm_params)
+        if prev:
+            sp["slurm_additional_parameters"] = {"dependency": f"afterany:{prev}"}
+        res = submit_parallel_jobs(
+            jobs_to_submit=jobs, experiment="diffae",
+            slurm_params=sp, log_dir="diffae",
+            dry_run=args.dry_run, wait_for_completion=False,
+            print_resource_summary=(i == 0), print_success=(i == 0),
+        )
+        if args.dry_run:
+            break
+        prev = res.get("base_job_id")
+        if not prev:
+            print(f"[auto-rearm] ERROR: no base_job_id from link {i}; aborting chain to avoid unchained duplicates")
+            break
+        print(f"[auto-rearm] link {i}/{n_links - 1} -> job {prev}"
+              + (" (trainer)" if i == 0 else " (resume)"))
 
 
 if __name__ == "__main__":
