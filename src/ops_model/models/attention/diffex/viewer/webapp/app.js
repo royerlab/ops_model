@@ -132,12 +132,12 @@ const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag
 const SCORE_LEGEND = {
   linear: "per-cell classifier score (NTC → knockout): 0 → 1",
   ptarget: "classifier confidence · 0 → 100%",
-  rank: "classifier rank of the true perturbation (of ~1,000) · redder = closer to 1st",
+  rank: "classifier rank of the true perturbation (of ~1,000) · bluer = closer to 1st",
 };
 function updateScoreLegend() {
   const show = state.scoreMode !== "none" && (!state.view || state.view === "traversal");
   $("score-legend").style.display = show ? "flex" : "none";
-  if (show) $("score-legend-txt").innerHTML = "white → red · " + (SCORE_LEGEND[state.scoreMode] || "");
+  if (show) $("score-legend-txt").innerHTML = "white → blue · " + (SCORE_LEGEND[state.scoreMode] || "");
 }
 function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode at α-index i, or null. Both modes use the one white→red heat.
   if (!sv || !SET_MODES.includes(state.scoreMode)) return null;
@@ -152,8 +152,8 @@ function setChip(sv, i) {   // {txt, bg, fg, showReal} for the selected set-mode
   return { txt: `set-acc ${Math.round(x * 100)}%`, bg: heat(x), fg: x > 0.55 ? "#fff" : "#111", showReal: true };
 }
 const frameURL = (dir, cell, i) => `${travBase(dir)}${dir}/cell${cell}/frame_${PAD(i)}.webp`;
-const heat = (v) => {   // classifier confidence 0→1 as white → deep red (#99000d)
-  const r = Math.round(255 + (153 - 255) * v), gg = Math.round(255 - 255 * v), b = Math.round(255 + (13 - 255) * v);
+const heat = (v) => {   // classifier confidence 0→1 as white → deep blue (#0d0099)
+  const r = Math.round(255 + (13 - 255) * v), gg = Math.round(255 - 255 * v), b = Math.round(255 + (153 - 255) * v);
   return `rgb(${r},${gg},${b})`;
 };
 const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, anchor, slug: t.slug,
