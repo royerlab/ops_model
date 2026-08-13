@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "ops_model: DL models for Optical Pooled Screening (OPS) analysis"
+abstract: "Deep-learning models and pipelines for Optical Pooled Screening (OPS) data: per-cell feature extraction, embedding post-processing, and downstream analysis and interpretability."
+type: software
+license: BSD-3-Clause
+repository-code: "https://github.com/czbiohub-sf/ops_model"
+authors:
+  - family-names: Hillsley
+    given-names: Alexander
+    orcid: "https://orcid.org/0000-0001-7540-8623"
+    affiliation: "Chan Zuckerberg Biohub San Francisco"
+  - family-names: Sturm
+    given-names: Gav
+    orcid: "https://orcid.org/0000-0002-7280-4310"
+    affiliation: "Chan Zuckerberg Biohub San Francisco"
+  - family-names: Potts
+    given-names: Mark
+    affiliation: "Chan Zuckerberg Biohub San Francisco"

@@ -1,12 +1,25 @@
+<a href="https://github.com/czbiohub-sf">
+  <img src="https://avatars.githubusercontent.com/u/28747162?v=4" alt="Chan Zuckerberg Biohub San Francisco" width="90" align="right" />
+</a>
+
 # ops_model
 
-[![License](https://img.shields.io/pypi/l/ops_model.svg?color=green)](https://github.com/ahillsley/ops_model/raw/main/LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/ops_model.svg?color=green)](https://pypi.org/project/ops_model)
-[![Python Version](https://img.shields.io/pypi/pyversions/ops_model.svg?color=green)](https://python.org)
-[![CI](https://github.com/ahillsley/ops_model/actions/workflows/ci.yml/badge.svg)](https://github.com/ahillsley/ops_model/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/ahillsley/ops_model/branch/main/graph/badge.svg)](https://codecov.io/gh/ahillsley/ops_model)
+**This repository is the result of work done at the [Chan Zuckerberg Biohub San Francisco](https://github.com/czbiohub-sf).**
 
 DL models for analysis of Optical Pooled Screening (OPS) data at CZB SF.
+
+## Preprint
+
+This repository accompanies the following preprint, and should be preserved and kept public indefinitely:
+
+> [A multimodal perturbation atlas defines the phenotypic resolution of cellular morphology](https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1.abstract) — bioRxiv, 2026. doi:10.64898/2026.06.01.728087
+
+## Data availability
+
+The raw imaging dataset that these pipelines process is available for download through the Biohub OPS Explorer portal:
+
+> [OPS Explorer — perturbation atlas collection](https://biohub.ai/ops-explorer?collection=6a3f8b91-1c5e-4d3a-9b4c-f7e0a2d8b6f3)
+
 
 The pipeline has three stages:
 
@@ -14,8 +27,47 @@ The pipeline has three stages:
 2. **Embedding post-processing** — combine per-experiment / per-marker embeddings into a final guide- and gene-level embedding.
 3. **Analysis** — downstream / paper analyses.
 
-> All commands are run from the **monorepo root** (`ops_monorepo/`) with `uv run`.
-> See `RUNNING.md` for environment setup and `HIGH_LEVEL_FUNCTIONALITY.md` for the full command reference.
+---
+
+## Installation
+
+`ops_model` is **not a standalone package.** It is one submodule of the
+[`czbiohub-sf/ops_monorepo`](https://github.com/czbiohub-sf/ops_monorepo) uv workspace and is only
+supported as a piece of that larger project. Install the monorepo, not this repo on its own:
+
+```bash
+git clone --recurse-submodules git@github.com:czbiohub-sf/ops_monorepo.git
+cd ops_monorepo
+uv sync
+```
+
+All commands are then run from the **monorepo root** (`ops_monorepo/`) with `uv run`, as in every
+example below. `RUNNING.md` covers environment setup, including the `module load uv` and
+`UV_CACHE_DIR` steps for cluster use.
+
+The pipelines read and write under `$OPS_BASE_PATH`, which has no default and must be set:
+
+```bash
+export OPS_BASE_PATH="/path/to/ops_data"
+```
+
+### Why it only works inside the monorepo
+
+- This package imports `ops_utils` throughout (78 import sites), and two `diffae` modules import
+  `organelle_profiler`. Both are sibling submodules resolved through the uv workspace, and neither
+  is published on PyPI.
+- An unrelated package named `ops-utils` *does* exist on PyPI, so resolving this package's
+  dependencies outside the workspace pulls in the wrong project entirely.
+- The monorepo root carries dependency overrides that this package's resolution relies on — for
+  example `matplotlib>=3.10.5`, which defeats a strict pin inherited from `cytoself`, and
+  `iohub>=0.3.7`.
+
+### Dependencies
+
+Declared dependencies and the optional extras (`classifier`, `models`, `test`, `dev`) live in
+[`pyproject.toml`](pyproject.toml); Python 3.12 is required. Exact resolved versions for the whole
+workspace are pinned in the monorepo's `uv.lock`, which is the authoritative environment
+specification.
 
 ---
 
@@ -157,3 +209,16 @@ uv run python -m ops_model.interpretability.diffae.directions.run --target HSPA5
 Stage 3 also accepts `--grain complex` to explain a protein complex rather than a single gene. `traversal/` holds shared crop and morphometric precompute; `figures/` holds the figure scripts built on these outputs.
 
 See [`interpretability/README.md`](src/ops_model/interpretability/README.md) for the layout, and the per-subgroup READMEs for the full flag sets and output layouts.
+
+---
+
+## Ownership and maintenance
+
+This repository is owned by the [Leonetti group](https://biohub.org/leonetti/) at the [Chan Zuckerberg Biohub San Francisco](https://github.com/czbiohub-sf).
+
+Maintainers (see also [`.github/CODEOWNERS`](.github/CODEOWNERS)):
+
+- Alexander Hillsley ([@ahillsley](https://github.com/ahillsley))
+- Gav Sturm ([@gav-sturm](https://github.com/gav-sturm))
+
+Please open an issue or pull request for questions, bugs, or contributions.
