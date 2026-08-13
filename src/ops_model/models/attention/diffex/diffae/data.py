@@ -29,8 +29,14 @@ def build_broad_table(cfg) -> pd.DataFrame:
             if "rank_type" in df.columns:
                 df = df[df["rank_type"] == "top"]
         else:
-            cols = ["gene", "channel", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank_type"]
-            df = pd.read_csv(cfg.fluor_csv, usecols=cols)
+            src = cfg.fluor_csv
+            if src.endswith(".parquet"):                       # per-marker rankings parquet (channel_name == marker)
+                df = pd.read_parquet(src)
+                if "channel_name" in df.columns and "channel" not in df.columns:
+                    df = df.rename(columns={"channel_name": "channel"})
+            else:
+                cols = ["gene", "channel", "experiment", "well", "segmentation", "x_pheno", "y_pheno", "rank_type"]
+                df = pd.read_csv(src, usecols=cols)
             df = df[(df["channel"] == cfg.marker_channel) & (df["rank_type"] == "top")]
         if df.empty:
             raise ValueError(f"no 'top' cells for marker_channel={cfg.marker_channel!r}")

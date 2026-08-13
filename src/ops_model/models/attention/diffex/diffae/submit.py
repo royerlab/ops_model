@@ -66,7 +66,9 @@ def main():
     ap.add_argument("--marker-channel", default=None,
                     help="fluor mode: fluor-CSV `channel` value (e.g. 'nucleolus-GC_NPM3')")
     ap.add_argument("--channel", default="Phase2D",
-                    help="raw pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5)")
+                    help="raw pheno-zarr channel to read (Phase2D | GFP | mCherry | Cy5 | CP1_...)")
+    ap.add_argument("--fluor-csv", default=None,
+                    help="fluor cells source (combined CSV or a per-marker rankings .parquet); overrides config default")
     ap.add_argument("--cond-channel", default=None,
                     help="virtual staining: condition on this raw channel (e.g. Phase2D) while generating --channel")
     ap.add_argument("--spatial-cond", action="store_true",
@@ -88,6 +90,8 @@ def main():
         spatial_cond=args.spatial_cond,
         celldino_z_score=not args.raw_celldino, intensity_norm=args.intensity_norm,
     )
+    if args.fluor_csv:
+        cfg.fluor_csv = args.fluor_csv
     jobs = [{
         "name": args.name,
         "func": run_diffae,
