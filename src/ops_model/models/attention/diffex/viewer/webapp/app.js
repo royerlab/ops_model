@@ -392,7 +392,6 @@ async function boot() {
   let _saveTimer;   // persist selection/prefs after any change settles (debounced; snapshot reads live state)
   const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
   document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
-  document.querySelectorAll("#controls .chk").forEach(l => { const t = (l.textContent || "").trim(); if (t) l.dataset.tip = t; });   // fast hover tooltip for toggles whose pill/label truncates
   setupBagUI();                                               // anchor-bag selector (multi_bag default) before first marker selection
   if (!restoreState()) {                                       // restore last session, else default = phase marker + HSPA5
     selectMarker(0); $("markerfilter").value = markerLabel(0);
@@ -413,7 +412,7 @@ async function boot() {
 function toggleize(label) {
   const inp = label.querySelector('input[type=checkbox]'); if (!inp || inp._tog) return;
   const onLbl = inp.dataset.on || label.textContent.trim();
-  const g = document.createElement("div"); g.className = "seg-group tog"; g.title = label.textContent.trim();
+  const g = document.createElement("div"); g.className = "seg-group tog"; g.dataset.tip = label.textContent.trim();   // fast hover tooltip (pill text truncates)
   const off = document.createElement("button"), on = document.createElement("button");
   off.type = on.type = "button"; off.className = on.className = "seg"; off.textContent = "off"; on.textContent = onLbl;
   const sync = () => { off.classList.toggle("active", !inp.checked); on.classList.toggle("active", inp.checked); };
