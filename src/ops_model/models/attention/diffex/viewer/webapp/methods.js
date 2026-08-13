@@ -86,7 +86,7 @@ const METHODS_SLIDES = [
         <rect x="278" y="42" width="120" height="132" rx="8" fill="rgba(38,198,255,.06)" stroke="${MTH_C.acc}"/>
         <text x="338" y="59" fill="${MTH_C.acc}" font-size="9.5" text-anchor="middle">one knockout's cells</text>
         ${[[308, 88], [370, 88], [308, 126], [370, 126]].map((p, i) => `<g class="mth-hi" style="animation-delay:${i * 0.7}s">${_pheno(p[0], p[1], 15, MTH_PHENO[i], MTH_C.acc)}</g>`).join("")}
-        <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
+        <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is unique?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of geneKOs are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the geneKO inside it. This yields millions of (perturbation, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation. This viewer explores one such atlas: <b>1,000 gene knockouts in A549 cells</b>, profiled by fluorescence microscopy (39 live + 13 fixed markers), label-free <b>phase</b> imaging of the same live cells, and scRNA-seq — <b>~57 million single-cell profiles</b> in all.",
     why: "The core question this whole viewer answers: for each perturbation, which change in the cell is unique to it — the one that sets this knockout apart from all the others, separated from the noise of the technique's scale and heterogeneity?",
