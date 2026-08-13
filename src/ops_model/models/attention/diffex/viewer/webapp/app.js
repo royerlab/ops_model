@@ -1002,6 +1002,7 @@ const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || 
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   $("markerfilter").title = markerLabel(i);   // hover shows the full marker name when truncated in the input
+  $("markerfilter").dataset.tip = markerLabel(i);   // fast custom tooltip (same as group titles/pins)
   refreshTargets();
   updateBagUI();        // anchor-bag selector is phase-only (before fillCellDropdown: montageCells depends on bag)
   fillCellDropdown();   // phase → 45/50 cells (bag), markers → 20 (reflect what was built)
@@ -1096,6 +1097,7 @@ function selectTarget(slug) {
   state.target = state.targets.find(t => t.slug === slug);
   if (!state.target) return;
   $("filter").title = targetLabel(state.target);   // hover shows the full name (long complex names get truncated in the input)
+  $("filter").dataset.tip = targetLabel(state.target);   // fast custom tooltip (same as group titles/pins)
   populateAnchors(state.target.target);
   state.page = 0; rebuild();
   if (state.view === "attn") renderAttn();          // selection drives the attention-head view
@@ -1254,7 +1256,7 @@ function renderPinned() {
     li.style.color = PALETTE[((gi < 0 ? i : gi)) % PALETTE.length];   // exact color of its grid row
     li.draggable = true; li.style.cursor = "move";        // drag to reorder
     const a = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
-    li.innerHTML = `<span>⠿ ${a}${p.target} · ${p.markerName}</span>`;
+    li.innerHTML = `<span data-tip="${a}${p.target} · ${p.markerName}">⠿ ${a}${p.target} · ${p.markerName}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => unpinShared(p.target);
     li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
@@ -1625,7 +1627,7 @@ function renderAttnPinned() {   // pinned-perturbation list (mirrors the travers
     const li = document.createElement("li");
     li.style.color = PALETTE[(i + 1) % PALETTE.length];   // +1: current selection owns PALETTE[0]
     const ctx = r.modality === "phase" ? "" : ` · ${r.modality}`;
-    li.innerHTML = `<span>${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}</span>`;
+    li.innerHTML = `<span data-tip="${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}">${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => { state.attnPinned.splice(i, 1); renderAttnPinned(); renderAttn(); };
     li.appendChild(b); ul.appendChild(li);
@@ -1962,7 +1964,7 @@ function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
   const ents = tcEntries();   // color each pin to match its group color in the grid (same as the traversal pins)
   tc.pinned.forEach((p, i) => {
-    const li = document.createElement("li"); li.innerHTML = `<span>⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
+    const li = document.createElement("li"); li.innerHTML = `<span data-tip="${p.gene} · ${p.mode}">⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
     const gi = ents.findIndex(e => e.gene === p.gene && e.mode === p.mode);
     li.style.color = PALETTE[(gi < 0 ? i : gi) % PALETTE.length];
     li.draggable = true; li.style.cursor = "move";        // drag to reorder (like the traversal pins)
