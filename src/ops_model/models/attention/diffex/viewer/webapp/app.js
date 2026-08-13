@@ -105,7 +105,7 @@ function applyFeatureGate() {
 const state = {
   manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", sidePanel: "info",
   cellCount: 10, page: 0, pinned: [], panels: [], alphas: [],
-  idx: 0, playing: false, playSeq: [], playPos: 0, frameMs: 180,   // default 1× (180ms/frame)
+  idx: null, playing: false, playSeq: [], playPos: 0, frameMs: 180,   // idx=null → first rebuild starts at mid (α=0), not alphas[0]=−5; default 1× (180ms/frame)
   scoreMode: "ptarget", showReal: false, scores: {}, scoresV5: {}, groups: [], realAcc20: null,   // scoreMode: none|linear|ptarget|rank. scores[dir]=linear per-cell; scoresV5[dir]=v5 set (bag,per-α); realAcc20[dir]=real top1@bag20
 
   pausePoints: new Set(), pauseN: -1,   // α indices where autoplay dwells (click ticks to toggle)
