@@ -431,7 +431,7 @@ function segmentize(sel) {
   const sync = () => [...g.children].forEach((b, i) => b.classList.toggle("active", opts[i].value === sel.value));
   opts.forEach(o => {
     const b = document.createElement("button");
-    b.type = "button"; b.className = "seg"; b.textContent = o.textContent; b.title = o.title || o.textContent; b.dataset.value = o.value;
+    b.type = "button"; b.className = "seg"; b.textContent = o.textContent; b.dataset.tip = o.title || o.textContent; b.dataset.value = o.value;   // fast hover tooltip (pill text truncates)
     b.onclick = () => { if (sel.value === o.value) return; sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); sync(); };
     g.appendChild(b);
   });
