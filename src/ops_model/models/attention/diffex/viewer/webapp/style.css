@@ -346,7 +346,7 @@ button:hover{border-color:var(--accent)}
 #stage.methods-active>#methods-view{display:block}
 .mth-rail{display:flex;flex-direction:column;gap:4px;margin-top:10px}
 .mth-rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px}
-.mth-rail-brand{display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid var(--line)}   /* Biohub|CellXState is its own section below the thin line; paper link sits above it */
+.mth-rail-brand{display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid var(--line);text-decoration:none}   /* Biohub|CellXState is its own section below the thin line; paper link sits above it */
 .mth-rail-foot img{height:20px;opacity:.92}
 .mth-rail-foot span{font-size:14px;color:var(--mut)}
 .mth-paper{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--panel);text-decoration:none;transition:border-color .15s,background .15s}
