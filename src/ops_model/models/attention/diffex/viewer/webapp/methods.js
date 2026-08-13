@@ -323,10 +323,10 @@ const METHODS_SLIDES = [
         ${_lbl(356, 197, "same cell, different stain \u2014 pick any of 42")}
       </svg>`; },
     body: "We reuse the diffusion autoencoder as a <b>virtual-staining</b> model, conditioning it on a phase image in <b>two ways</b>: a <b>semantic</b> path (phase → frozen Cell-DINO ViT → a pooled code that FiLM-conditions the U-Net, with a marker id — the <i>what</i>) and a <b>spatial</b> path (the raw phase pixels concatenated into the U-Net input — keeping the <i>layout</i>, so the output stays pixel-registered). Switching the marker id renders any of 42 fluorescent channels from the same phase cell.",
-    why: "The spatial conditioning is what makes it faithful — predicted markers line up with the real cell's structures (Pearson lifts ~0.13 → ~0.78). One model covers all 42 live markers from a single label-free image; run on a traversal it yields a full multi-channel phenotype per perturbation.",
+    why: "The spatial conditioning is what makes it faithful — predicted markers line up with the real cell's structures. One model covers all 42 live markers from a single label-free image; run on a traversal it yields a full multi-channel phenotype per perturbation.",
     defs: [["Virtual staining", "predicting fluorescent-marker images from a label-free phase image."],
       ["Semantic (FiLM) conditioning", "phase → frozen Cell-DINO ViT → a pooled code that globally steers the U-Net (with a marker id) — the \"what\" to render, carrying no spatial layout."],
-      ["Spatial conditioning", "the raw phase image concatenated as an extra U-Net input channel, so the prediction keeps the input's layout and stays pixel-registered (fidelity lift ~0.13 → ~0.78)."],
+      ["Spatial conditioning", "the raw phase image concatenated as an extra U-Net input channel, so the prediction keeps the input's layout and stays pixel-registered."],
       ["FiLM", "feature-wise modulation — how the semantic code + marker id scale the U-Net's features to select what to generate."],
       ["Marker id", "a learned token selecting which of the 42 fluorescent channels to render from the same phase cell."]]
   },
