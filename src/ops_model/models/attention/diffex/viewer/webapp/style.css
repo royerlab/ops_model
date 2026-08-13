@@ -125,20 +125,20 @@ button:hover{border-color:var(--accent)}
 .playctl .seg{flex:0 0 auto;padding:4px 11px}   /* speed pills size to their text (0.25×/0.5× fully visible) */
 .playctl select{height:34px}   /* match the play button height */
 
-#grid{display:flex;flex-direction:column;gap:20px;width:100%;max-width:1100px}
+#grid{display:flex;flex-direction:column;gap:20px;width:100%;max-width:1400px}
 #grid.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
 #grid.cols-layout .group{flex:0 0 auto;width:calc(var(--tilepx,170px) + 26px);max-width:none}   /* fixed column width so long names ellipsize (like Top Cells columns) */
 #grid.cols-layout .group-cells{grid-template-columns:var(--tilepx,170px)}                      /* one vertical column of cells */
 #grid.cols-layout .group-hd{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;text-align:center;white-space:normal;word-break:break-word}   /* same font as rows layout; wrap+center within the column */
 #grid.cols-layout .setacc{display:block;margin:3px auto 0}   /* score chip drops below the title so it can't stretch the narrow column */
-.group{display:flex;flex-direction:column;gap:8px;max-width:calc(var(--cols,5) * (var(--tilepx,170px) + 10px) + 15px)}   /* cap to the cell box so long names ellipsize at its edge, not the page */
+.group{display:flex;flex-direction:column;gap:8px}   /* fill the grid width (like Top Cells) so cells pack more per row; gh-title ellipsizes within it */
 .group-hd{font:650 20px ui-monospace,Menlo,monospace;display:flex;align-items:center;gap:10px}   /* single header per group, ~2× old caption */
 .group-hd .gh-title,.tc-hd .gh-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}   /* grow to fill + shrink/ellipsize, leaving room for the score chip */
 .group-hd .setacc{flex:0 0 auto}   /* chip keeps its size (name yields to it) */
 .group-hd .setacc{margin-left:auto}   /* score chip pushed to the right (like Top Cells) */
 .rowlbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
-.group-cells{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(var(--tilepx,170px),1fr));
-   background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}   /* box like the Top Cells strip; image-scale slider drives --tilepx */
+.group-cells{display:grid;gap:4px;grid-template-columns:repeat(auto-fill,minmax(var(--tilepx,170px),1fr));
+   background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}   /* box like the Top Cells strip; image-scale slider drives --tilepx */
 .panel{position:relative}
 .panel img{width:100%;aspect-ratio:1;background:#000;border:1px solid var(--line);border-radius:6px;display:block}
 .setacc{margin-left:10px;font:800 17px ui-monospace,monospace;padding:2px 8px;border-radius:6px;vertical-align:middle;box-shadow:0 0 3px rgba(0,0,0,.4)}
