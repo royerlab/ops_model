@@ -138,9 +138,9 @@ def build_body():
 <p><em>Pooled bag-level recovery, per-bag (left) vs global-mu (right). Solid = generated, dotted = per-bag real-cell ceiling; all 1,000 geneKO / 95 complex. <strong>Left (correct):</strong> bag-200 top-1 ~48% (geneKO) / ~69% (complex), peak α≈+0.5, below the ~66% / ~89% real ceilings. <strong>Right (old):</strong> geneKO ~76% (slightly <em>exceeds</em> its ceiling), complex ~86% — the more impressive-looking result, but standardization-inflated per the control above.</em></p>
 
 <h2>3 · Distinctiveness (how separable generated cells are from other classes)</h2>
-<p>Within-domain copairs mAP: do a class's generated cells cluster together and apart from other classes? Dotted = real-cell reference. Both median (robust) and mean (outlier-sensitive) shown. <strong>K (cells/class) coverage differs by grain:</strong> complex (95 classes) extends to K = {{20, 50, 100, 200}}; geneKO (1,000 classes) caps at <strong>K = 50</strong> — at K ≥ 100 the copairs pass OOMs (&gt; 240 GB; 100–200k cells), and the cached real reference is only 30 cells/class, so higher-K geneKO is neither computable nor referenceable without a himem/GPU rewrite.</p>
+<p>Within-domain copairs mAP: do a class's generated cells cluster together and apart from other classes? Dotted = real-cell reference. Both median (robust) and mean (outlier-sensitive) shown. <strong>K (cells/class) coverage differs by grain:</strong> complex (95 classes) extends to K = {{20, 50, 100, 200}}; geneKO (1,000 classes) reaches <strong>K = 100</strong> on a 700 GB himem node (peak ~412 GB). geneKO <strong>K = 200 is not run</strong> — it needs &gt; 700 GB (peak hit 705 GB at the limit), exceeding the largest available node (773 GB), so it would require a GPU/chunked-AP rewrite rather than just more memory. The cached real reference is 30 cells/class, so the dotted real line is the same 30-cell reference at every K.</p>
 {img("distinct_sweep_median.png", 1000)}
-<p><em>Median distinctiveness mAP. (geneKO: K=20/50 only; complex: K=20/50/100/200.)</em></p>
+<p><em>Median distinctiveness mAP. (geneKO: K=20/50/100; complex: K=20/50/100/200.)</em></p>
 {img("distinct_sweep_mean.png", 1000)}
 <p><em>Mean distinctiveness mAP.</em></p>
 {img("distinct_violin.png", 950)}

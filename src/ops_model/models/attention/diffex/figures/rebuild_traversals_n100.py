@@ -17,9 +17,9 @@ from ops_model.models.attention.diffex.viewer import catalog as C
 from ops_model.models.attention.diffex.classifier.config import slugify
 
 ASSETS = "viewer_assets_v5"
-RANK = f"{C.OUT}/{ASSETS}/_rankings/fluor"
-V5G = f"{C.OUT}/{ASSETS}/_rankings/pma_v5_phase_geneKO.parquet"
-V5C = f"{C.OUT}/{ASSETS}/_rankings/pma_v5_phase_complex.parquet"
+RANK = f"{C.OUT}/{ASSETS}/_rankings/fluor_shap"
+V5G = f"{C.OUT}/{ASSETS}/_rankings/pma_shap_phase_geneKO.parquet"
+V5C = f"{C.OUT}/{ASSETS}/_rankings/pma_shap_phase_complex.parquet"
 PHASE_CK = f"{C.DD}/phase_v1/diffae_best.pt"
 NCELLS = 100
 

@@ -18,12 +18,9 @@ _V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
 _USE_V5 = os.environ.get("OPS_DIFFEX_V5", "0") == "1"
 _V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
 # geneKO: class is `gene`. complex (EBI): class is `predicted_class` (complex name).
-if _USE_V5:
-    PMA_PHASE_GENEKO = f"{_V5_RANK}/pma_v5_phase_geneKO.parquet"
-    PMA_PHASE_EBI = f"{_V5_RANK}/pma_v5_phase_complex.parquet"   # built when the complex phase lands
-else:
-    PMA_PHASE_GENEKO = f"{_V4}/pma_phase_cells_v2_all.parquet"
-    PMA_PHASE_EBI = f"{_V4}/pma_phase_cells_ebi_all.parquet"
+# Multibag SHAP rankings are the ONLY ranking now (single-bag pma_v5 / v4 retired).
+PMA_PHASE_GENEKO = f"{_V5_RANK}/pma_shap_phase_geneKO.parquet"
+PMA_PHASE_EBI = f"{_V5_RANK}/pma_shap_phase_complex.parquet"
 
 GRAINS = {
     "geneKO": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},

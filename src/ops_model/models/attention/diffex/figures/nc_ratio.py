@@ -1,13 +1,14 @@
 """Nuclear/cytoplasmic proteasome-intensity ratio (PSMB7) — real cells + DiffEx traversal, replacing the
 tubular seg (which over-fragments as signal shifts nucleus<->cytoplasm).
 
-Masks are proteasome-INDEPENDENT and framed IDENTICALLY to the generated frames (same materialize_crops
-pipeline the traversal build used): nucleus = the aligned `nuclei_prediction` DNN channel; cytoplasm =
-cell foreground minus nucleus. Metric = mean GFP(nucleus) / mean GFP(cytoplasm) — scale-invariant, so the
-8-bit display frames are valid. Cell index == rank order of the generation ranking, so each generated cell
-reuses its own anchor's nucleus.
+Nucleus = the cell's real DNA seg (`nuclei_prediction` channel, cropped via the SAME materialize_crops
+pipeline the traversal frames use → aligned + proteasome-independent). Cytoplasm = everything that is not
+the nucleus. Each generated cell's α=0 reconstructs its NTC anchor (real_dir=_anchors/NTC); anchor coords
+aren't stored, so we match each anchor's real.webp to the NTC ranking (GFP corr) to recover them.
+Metric = mean GFP(nucleus) / mean GFP(cytoplasm), scale-invariant.
 
-Outputs a full panel (real | α0 | α1 | α3 image row + nucleus/cytoplasm overlay row) + the N/C violin.
+Output format REUSES the morpho-violin figures: per-cell `<stem>_images_cell{N}.{png,svg}` (grayscale +
+nucleus-overlay rows via render_images) + `<stem>_violin.{png,svg}` (same styling as figure4_morpho_violin).
 Run (SLURM): python nc_ratio.py --submit
 """
 import json
@@ -26,6 +27,8 @@ from skimage.filters import threshold_otsu, gaussian
 from skimage.morphology import binary_closing, disk
 
 from _setacc_common import _materialize
+from figure4_morpho_traversal import render_images                 # reuse the 2-row image block (grayscale + overlay)
+from figure4_morpho_violin import COLORS, VIEW_PCT                  # reuse the violin palette + view-clip
 
 plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["svg.fonttype"] = "none"
@@ -33,13 +36,14 @@ plt.rcParams["svg.fonttype"] = "none"
 VA = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5"
 OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_nc_ratio"
 MARKER_DIR = "proteasome_PSMB7"
-MC = "proteasome_PSMB7"          # marker_channel (DirConfig); channel to READ is passed separately
+MC = "proteasome_PSMB7"
 TARGET = "PSMB6"
 GRAIN = "geneKO"
-RANK = f"{VA}/_rankings/fluor/geneKO/proteasome_PSMB7.parquet"   # the ranking the traversal was generated from
+RANK = f"{VA}/_rankings/fluor_shap/geneKO/proteasome_PSMB7.parquet"
 N_REAL = 300
-COLORS = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=1": "#6baed6", "α=3": "#08519c"}
-EXAMPLE_CELL = 0
+ALPHAS_SHOW = (0, 1, 3)
+N_IMG_CELLS = 10                                                   # example cells to render (like the morpho examples)
+OUT_STEM = "PSMB7_nc"
 
 
 def _rank_df(gene, n=None):
@@ -61,148 +65,161 @@ def _central(binmask):
 
 
 def _nucleus(pred):
-    """Nucleus mask from the aligned nuclei_prediction crop: blurred Otsu, fill, central component."""
     g = gaussian(pred, 2); v = g[g > 0]
     if v.size == 0:
         return np.zeros(pred.shape, bool)
-    m = ndi.binary_fill_holes(binary_closing(g > threshold_otsu(v), disk(3)))
-    return _central(m)
+    return _central(ndi.binary_fill_holes(binary_closing(g > threshold_otsu(v), disk(3))))
 
 
-def _foreground(gray):
-    """Cell foreground (drops background so 'all other pixels' don't include empty corners)."""
-    g = gaussian(gray, 2); v = g[g > 0]
-    if v.size == 0:
-        return np.ones(gray.shape, bool)
-    fg = ndi.binary_fill_holes(binary_closing(g > np.percentile(g, 55), disk(3)))
-    return _central(fg) if fg.any() else fg
-
-
-def _ratio(gray, nucleus, cyto):
-    if nucleus.sum() < 20 or cyto.sum() < 20:
-        return np.nan
-    return float(gray[nucleus].mean() / (gray[cyto].mean() + 1e-6))
+def _mets(gray, nm):
+    """Both scale-invariant readouts: N/C ratio (nucleus/cytoplasm) and nuclear enrichment (nucleus/whole-crop)."""
+    if nm.sum() < 20 or (~nm).sum() < 20:
+        return None
+    nmean = gray[nm].mean()
+    return {"nc": float(nmean / (gray[~nm].mean() + 1e-6)),
+            "nuc": float(nmean / (gray.mean() + 1e-6))}
 
 
 def _crops(df, channel):
-    """materialize_crops the given channel for these cells — identical framing to the generated frames."""
-    raw, recs = _materialize(df.assign(gene=TARGET), MC, channel, TARGET)
-    return raw[:, 0], recs                                        # (N, H, W)
+    raw, recs = _materialize(df.assign(gene=TARGET), MC, channel, TARGET)   # identical framing to the generated frames
+    return raw[:, 0], recs
 
 
 def real_nc(gene, n):
     df = _rank_df(gene, n * 2)
-    gfp, recs = _crops(df, "GFP")
-    nuc, _ = _crops(df, "nuclei_prediction")
-    out = []
+    gfp, _ = _crops(df, "GFP"); nuc, _ = _crops(df, "nuclei_prediction")
+    out = {"nc": [], "nuc": []}
     for i in range(min(len(gfp), len(nuc))):
-        nm = _nucleus(nuc[i]); fg = _foreground(gfp[i]); cy = fg & ~nm
-        v = _ratio(gfp[i], nm, cy)
-        if np.isfinite(v):
-            out.append(v)
-        if len(out) >= n:
+        mm = _mets(gfp[i], _nucleus(nuc[i]))
+        if mm:
+            out["nc"].append(mm["nc"]); out["nuc"].append(mm["nuc"])
+        if len(out["nc"]) >= n:
             break
-    return np.array(out)
+    return {k: np.array(v) for k, v in out.items()}
 
 
-def gen_nc(alphas_show=(0, 1, 3)):
-    md = f"{VA}/{MARKER_DIR}/{GRAIN}/{TARGET}"
-    al = np.array(json.load(open(f"{md}/meta.json"))["alphas"])
-    idxs = {a: int(np.argmin(np.abs(al - a))) for a in alphas_show}
-    ncell = len([d for d in os.listdir(md) if d.startswith("cell")])
-    anch = _rank_df(TARGET, ncell)
-    nuc, _ = _crops(anch, "nuclei_prediction")                   # anchor nucleus per cell, aligned to frames
-    per = {a: [] for a in alphas_show}
-    for c in range(min(ncell, len(nuc))):
-        nm = _nucleus(nuc[c])
+def _match_anchors(ncell, K=2500):
+    """Recover each NTC anchor's coords by matching its real.webp to the top-K NTC ranking (GFP corr), then
+    crop that cell's nuclei_prediction. Returns {cell: (nucleus_mask, corr)}."""
+    from skimage.transform import resize
+    topK = _rank_df("NTC", K)
+    gfp, _ = _crops(topK, "GFP"); nucp, _ = _crops(topK, "nuclei_prediction")
+    zc = lambda a: (a - a.mean()) / (a.std() + 1e-6)
+    G = np.stack([zc(g).ravel() for g in gfp])
+    res = {}
+    for c in range(ncell):
+        ap = f"{VA}/{MARKER_DIR}/_anchors/NTC/cell{c}/real.webp"
+        if not os.path.exists(ap):
+            continue
+        ar = np.asarray(Image.open(ap).convert("L"), np.float32)
+        if ar.shape != gfp[0].shape:
+            ar = resize(ar, gfp[0].shape, preserve_range=True)
+        cc = G @ zc(ar).ravel() / G.shape[1]
+        b = int(cc.argmax())
+        res[c] = (_nucleus(nucp[b]), float(cc[b]))
+    mc = np.median([v[1] for v in res.values()]) if res else 0
+    print(f"  [match] {len(res)} anchors matched to NTC ranking, median corr={mc:.3f}", flush=True)
+    return res
+
+
+def gen_nc(match, md, idxs):
+    from skimage.transform import resize
+    per = {a: {"nc": [], "nuc": []} for a in idxs}
+    for c, (nm, cc) in match.items():
+        if cc < 0.6:
+            continue
         for a, i in idxs.items():
             fp = f"{md}/cell{c}/frame_{i:02d}.webp"
             if not os.path.exists(fp):
                 continue
             gray = np.asarray(Image.open(fp).convert("L"), np.float32)
-            nmr = nm if nm.shape == gray.shape else _rs(nm, gray.shape)
-            fg = _foreground(gray); cy = fg & ~nmr
-            v = _ratio(gray, nmr, cy)
-            if np.isfinite(v):
-                per[a].append(v)
-    return {a: np.array(v) for a, v in per.items()}, idxs, md, nuc
+            nmr = nm if nm.shape == gray.shape else (resize(nm.astype(float), gray.shape) > 0.5)
+            mm = _mets(gray, nmr)
+            if mm:
+                per[a]["nc"].append(mm["nc"]); per[a]["nuc"].append(mm["nuc"])
+    return {a: {k: np.array(v) for k, v in d.items()} for a, d in per.items()}
 
 
-def _rs(mask, shape):
+def _panels(md, c, nucleus, idxs):
+    """render_images panels: (title, grayscale, label-mask, per-object feats). Nucleus = label 1 (colored via
+    the inferno overlay path); cytoplasm stays grayscale — same 2-row block as the morpho image panels."""
     from skimage.transform import resize
-    return resize(mask.astype(float), shape) > 0.5
+    out = []
 
-
-def _ov(gray, nm, cy):
-    rgb = np.stack([gray] * 3, -1) / max(gray.max(), 1e-6)
-    rgb[nm] = 0.5 * rgb[nm] + 0.5 * np.array([0.15, 0.55, 1.0])
-    rgb[cy] = 0.75 * rgb[cy] + 0.25 * np.array([1.0, 0.5, 0.1])
-    return np.clip(rgb, 0, 1)
-
-
-def panel(gen, idxs, md, nuc, real_gfp_ex, real_nuc_ex):
-    """Full panel: real | α0/α1/α3 image row + nucleus(blue)/cytoplasm(orange) overlay row, violin at right."""
-    from skimage.transform import resize
-    c = EXAMPLE_CELL
-
-    def _fit(pred, shape):
-        return pred if pred.shape == shape else resize(pred, shape, preserve_range=True)
-    cols = [("real", real_gfp_ex, real_nuc_ex)]
+    def add(title, gray):
+        nm = nucleus if nucleus.shape == gray.shape else (resize(nucleus.astype(float), gray.shape) > 0.5)
+        out.append((title, gray, nm.astype(np.int32), {"1": {"comp": 1.0}}))
+    ar = f"{VA}/{MARKER_DIR}/_anchors/NTC/cell{c}/real.webp"
+    if os.path.exists(ar):
+        add("real (NTC)", np.asarray(Image.open(ar).convert("L"), np.float32))
     for a, i in idxs.items():
-        g = np.asarray(Image.open(f"{md}/cell{c}/frame_{i:02d}.webp").convert("L"), np.float32)
-        cols.append((f"α={a}", g, _fit(nuc[c], g.shape)))
-    nc = len(cols)
-    fig = plt.figure(figsize=(nc * 2.0 + 4.2, 4.4), facecolor="white")
-    gs = fig.add_gridspec(2, nc + 2, width_ratios=[1] * nc + [0.25, 2.4], hspace=0.06, wspace=0.06,
-                          left=0.02, right=0.985, top=0.9, bottom=0.06)
-    for j, (t, g, pred) in enumerate(cols):
-        nm = _nucleus(pred); fg = _foreground(g); cy = fg & ~nm
-        ax = fig.add_subplot(gs[0, j]); ax.imshow(g, cmap="gray"); ax.set_title(t, fontsize=13); ax.axis("off")
-        ax2 = fig.add_subplot(gs[1, j]); ax2.imshow(_ov(g, nm, cy)); ax2.axis("off")
-    axv = fig.add_subplot(gs[:, nc + 1])
-    data = [gen.get(0, []), gen.get(1, []), gen.get(3, [])]
-    _violin_into(axv, PANEL_REAL, data)
-    os.makedirs(OUT, exist_ok=True)
-    for ext in ("png", "svg"):
-        fig.savefig(f"{OUT}/PSMB7_nc_ratio_panel.{ext}", dpi=220, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"saved {OUT}/PSMB7_nc_ratio_panel", flush=True)
+        add(f"α={a:+.0f}", np.asarray(Image.open(f"{md}/cell{c}/frame_{i:02d}.webp").convert("L"), np.float32))
+    return out
 
 
-PANEL_REAL = {}
+def _images(subdir, match, md, idxs):
+    os.makedirs(subdir, exist_ok=True)
+    for c in list(match)[:N_IMG_CELLS]:
+        panels = _panels(md, c, match[c][0], idxs)
+        figi = plt.figure(figsize=(len(panels) * 2.3, 5.0), facecolor="white")
+        render_images(figi, figi.add_gridspec(1, 1)[0], panels, "comp", 0.0, 1.0, title_fs=22, cbar=False, hspace=0.05)
+        for ext in ("png", "svg"):
+            figi.savefig(f"{subdir}/{OUT_STEM}_images_cell{c}.{ext}", dpi=220, bbox_inches="tight", facecolor="white")
+        plt.close(figi)
 
 
-def _violin_into(ax, real, gen_data):
-    data = [real.get("NTC", []), real.get("KO", []), *gen_data]
-    labels = ["real", "KO", "α=0", "α=1", "α=3"]
+def _violin(subdir, data, labels, ylabel):
     keep = [i for i, d in enumerate(data) if len(d)]
-    parts = ax.violinplot([np.asarray(data[i]) for i in keep], positions=keep, showextrema=False, widths=0.82)
+    figv = plt.figure(figsize=(4.8, 5.6), facecolor="white"); ax = figv.add_subplot(111); ax.set_facecolor("white")
+    pooled = np.concatenate([data[i] for i in keep]); ylo, yhi = np.percentile(pooled, VIEW_PCT); pad = 0.05 * (yhi - ylo + 1e-9)
+    clamp = lambda d: np.clip(d, ylo, yhi)                     # trimmed tail accumulates as a bulge (not cut off)
+    parts = ax.violinplot([clamp(data[i]) for i in keep], positions=keep, showmeans=False, showextrema=False, showmedians=False, widths=0.82)
     for pc, i in zip(parts["bodies"], keep):
         pc.set_facecolor(COLORS[labels[i]]); pc.set_alpha(0.6); pc.set_edgecolor(COLORS[labels[i]]); pc.set_linewidth(1.5)
     for i in keep:
-        ax.hlines(np.mean(data[i]), i - 0.34, i + 0.34, color="#222", lw=3, zorder=5)
-    ax.axhline(1.0, color="#999", lw=2, ls="--")
-    pooled = np.concatenate([np.asarray(data[i]) for i in keep])
-    ylo, yhi = np.percentile(pooled, (1, 98)); pad = 0.05 * (yhi - ylo + 1e-9)
+        ax.hlines(np.mean(data[i]), i - 0.34, i + 0.34, color="#222", lw=3, zorder=5)   # mean = full data
+    ax.axhline(0, color="#999", lw=2)
     ax.set_ylim(ylo - pad, yhi + pad)
-    ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, fontsize=20)
-    ax.set_ylabel("Nuclear / cytoplasmic\nproteasome intensity", fontsize=18)
-    ax.tick_params(axis="y", labelsize=18, width=2, length=7); ax.tick_params(axis="x", length=0)
+    ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, fontsize=30)
+    ax.set_ylabel(ylabel, fontsize=30 if len(ylabel) <= 18 else (24 if len(ylabel) <= 26 else 19))   # single line
+    ax.tick_params(axis="y", labelsize=26, width=2.5, length=9); ax.tick_params(axis="x", length=0)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_linewidth(2.5)
+    os.makedirs(subdir, exist_ok=True)
+    for ext in ("png", "svg"):
+        figv.savefig(f"{subdir}/{OUT_STEM}_violin.{ext}", dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figv)
+
+
+def make_figures(ntc, ko, per, match, md, idxs):
+    labels = ["real", "KO", "α=0", "α=1", "α=3"]
+    m = lambda d: round(float(np.mean(d)), 3) if len(d) else None
+    for sub, key, ylabel in (("nc_ratio", "nc", "Nuclear / cytoplasmic proteasome"),
+                             ("nuclear_intensity", "nuc", "Nuclear proteasome intensity")):
+        subdir = f"{OUT}/{sub}"
+        _images(subdir, match, md, idxs)
+        nbase = float(np.nanmean(ntc[key])) or 1e-9                 # real bars: baseline = real-NTC mean
+        g0 = per.get(0, {}).get(key, np.array([]))
+        gbase = float(np.nanmean(g0)) or 1e-9                        # gen: self-referenced to α=0 (uniform)
+        pctr = lambda v: (np.asarray(v, float) - nbase) / abs(nbase) * 100   # real vs real-NTC
+        pctg = lambda v: (np.asarray(v, float) - gbase) / abs(gbase) * 100   # gen vs its α=0 reconstruction
+        data = [pctr(ntc[key]), pctr(ko[key]), pctg(g0),
+                pctg(per.get(1, {}).get(key, np.array([]))), pctg(per.get(3, {}).get(key, np.array([])))]
+        _violin(subdir, data, labels, ylabel)
+        print(f"  [{sub}] real NTC {m(data[0])} / KO {m(data[1])} | α0 {m(data[2])} α1 {m(data[3])} α3 {m(data[4])} -> {subdir}", flush=True)
 
 
 def build():
+    md = f"{VA}/{MARKER_DIR}/{GRAIN}/{TARGET}"
+    al = np.array(json.load(open(f"{md}/meta.json"))["alphas"])
+    idxs = {a: int(np.argmin(np.abs(al - a))) for a in ALPHAS_SHOW}
+    ncell = len([d for d in os.listdir(md) if d.startswith("cell")])
     ntc = real_nc("NTC", N_REAL); ko = real_nc(TARGET, N_REAL)
-    PANEL_REAL["NTC"] = ntc; PANEL_REAL["KO"] = ko
-    gen, idxs, md, nuc = gen_nc()
-    # example real crop for the panel's "real" column (top KO cell)
-    ex = _rank_df(TARGET, 1)
-    rg, _ = _crops(ex, "GFP"); rn, _ = _crops(ex, "nuclei_prediction")
-    m = lambda d: round(float(np.mean(d)), 3) if len(d) else None
-    print(f"  real NTC {m(ntc)} (n{len(ntc)}) / KO {m(ko)} (n{len(ko)}) | gen α0 {m(gen.get(0,[]))} "
-          f"α1 {m(gen.get(1,[]))} α3 {m(gen.get(3,[]))}", flush=True)
-    panel(gen, idxs, md, nuc, rg[0], rn[0])
+    match = _match_anchors(ncell)
+    per = gen_nc(match, md, idxs)
+    make_figures(ntc, ko, per, match, md, idxs)
 
 
 def submit():

@@ -27,10 +27,10 @@ COLS_PHASE = GENE_COLS_PHASE + COMPLEX_COLS_PHASE
 
 def phase_df(block, cls):
     if block == "genes":
-        df = pd.read_parquet(f"{RANKS}/pma_v5_phase_geneKO.parquet")
+        df = pd.read_parquet(f"{RANKS}/pma_shap_phase_geneKO.parquet")
         df = df[df["gene"] == cls]
     else:
-        df = pd.read_parquet(f"{RANKS}/pma_v5_phase_complex.parquet")
+        df = pd.read_parquet(f"{RANKS}/pma_shap_phase_complex.parquet")
         df = df[df["predicted_class"] == cls].copy()
         df["gene"] = cls                                    # so _materialize's gene->cls rename labels it
     df = df.sort_values("rank").reset_index(drop=True)
@@ -40,7 +40,7 @@ def phase_df(block, cls):
 
 
 def phase_ntc():
-    df = pd.read_parquet(f"{RANKS}/pma_v5_phase_geneKO.parquet")
+    df = pd.read_parquet(f"{RANKS}/pma_shap_phase_geneKO.parquet")
     return df[df["gene"] == "NTC"].sort_values("rank").reset_index(drop=True)
 
 
