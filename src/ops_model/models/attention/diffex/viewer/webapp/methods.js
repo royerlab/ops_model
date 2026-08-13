@@ -376,7 +376,10 @@ function renderMethods() {
     rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
       <div class="mth-rail">${deck.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
         return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>
-      <div class="mth-rail-foot"><a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a><span>Biohub | CellXState</span></div>`;
+      <div class="mth-rail-foot">
+        <a class="mth-paper" href="https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1" target="_blank" rel="noopener">📄 Liu et al., bioRxiv 2026 ↗</a>
+        <div class="mth-rail-brand"><a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a><span>Biohub | CellXState</span></div>
+      </div>`;
   }
   const s = deck[_mthIdx], view = document.getElementById("methods-view");
   if (!view) return;
