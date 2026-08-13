@@ -22,7 +22,7 @@ def embed_crops(images: np.ndarray, cfg, cache_path=None) -> np.ndarray:
 
     from ops_model.models.cell_dino import CellDinoModel
 
-    model = CellDinoModel(z_score=True)  # loads checkpoint + moves to cuda
+    model = CellDinoModel(z_score=getattr(cfg, "celldino_z_score", True))  # loads checkpoint + moves to cuda
     feats = []
     with torch.inference_mode():
         for i in range(0, len(images), cfg.batch_size):

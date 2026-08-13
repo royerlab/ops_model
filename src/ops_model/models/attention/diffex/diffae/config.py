@@ -36,6 +36,14 @@ class DiffAEConfig:
     fluor_csv: str = f"{PMA_PHASE_GENEKO.rsplit('/', 1)[0]}/pma_fluorescent_cells_all.csv"
     mask_cell: bool = False
     seed: int = 0
+    # ---- intensity handling (no-normalization experiment) ----
+    # celldino_z_score=False feeds NON-z-scored crops to the frozen CellDINO encoder, so the
+    # embedding carries absolute intensity. intensity_norm="global" replaces the per-image z-score
+    # of the DiffAE target with a single global z-score (one mu/sd for the whole sample), preserving
+    # cross-cell brightness. Defaults reproduce prod exactly. Both feed the cache-key tag → a run
+    # with different settings NEVER reuses a stale .npz.
+    celldino_z_score: bool = True
+    intensity_norm: str = "per_image"   # "per_image" | "global"
 
     # ---- model ----
     cond_dim: int = 1024       # FROZEN CellDINO (ViT-L) embedding dim — the conditioning

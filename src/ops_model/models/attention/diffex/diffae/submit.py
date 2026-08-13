@@ -71,6 +71,10 @@ def main():
                     help="virtual staining: condition on this raw channel (e.g. Phase2D) while generating --channel")
     ap.add_argument("--spatial-cond", action="store_true",
                     help="concat the cond-channel IMAGE into the UNet (pixel-registered stain); requires --cond-channel")
+    ap.add_argument("--raw-celldino", action="store_true",
+                    help="feed NON-z-scored crops to the frozen CellDINO (embeddings then carry absolute intensity)")
+    ap.add_argument("--intensity-norm", default="per_image", choices=["per_image", "global"],
+                    help="DiffAE target scaling: per_image z-score (prod) | global (one mu/sd, preserves cross-cell brightness)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -82,6 +86,7 @@ def main():
         augment_affine=affine, augment_dihedral=dihedral, init_ckpt=args.init_ckpt,
         marker_channel=args.marker_channel, channel=args.channel, cond_channel=args.cond_channel,
         spatial_cond=args.spatial_cond,
+        celldino_z_score=not args.raw_celldino, intensity_norm=args.intensity_norm,
     )
     jobs = [{
         "name": args.name,

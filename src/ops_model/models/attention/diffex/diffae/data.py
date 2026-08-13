@@ -69,6 +69,18 @@ def normalize(images: np.ndarray) -> np.ndarray:
     return np.clip((x - mu) / sd / 3.0, -1.0, 1.0)
 
 
+def scale_imgs(images: np.ndarray, cfg) -> np.ndarray:
+    """DiffAE target scaling. Default per-image z-score (prod). intensity_norm='global' uses a
+    SINGLE global mu/sd over the whole sample (one constant, not per-image, not per-plate) so
+    absolute cross-cell brightness survives — the no-normalization experiment. Still lands in
+    [-1,1] for the diffusion model."""
+    if getattr(cfg, "intensity_norm", "per_image") == "global":
+        x = images.astype(np.float32)
+        mu, sd = float(x.mean()), float(x.std()) + 1e-6   # one stat for all cells → intensity preserved
+        return np.clip((x - mu) / sd / 3.0, -1.0, 1.0)
+    return normalize(images)
+
+
 def load_diffae_crops(cfg, crops_cache, emb_cache, cond_cache=None, return_cond_images=False):
     """Returns (images_norm, celldino_embs[, cond_images_norm]).
 
@@ -90,9 +102,9 @@ def load_diffae_crops(cfg, crops_cache, emb_cache, cond_cache=None, return_cond_
         cond_raw, _, _ = materialize_crops(labels_df, cond_cfg, cache_path=cond_cache)
         embs = embed_crops(cond_raw, cfg, cache_path=emb_cache)     # CellDINO of the conditioning channel
         if return_cond_images:
-            return normalize(images_raw), embs, normalize(cond_raw)
-        return normalize(images_raw), embs
+            return scale_imgs(images_raw, cfg), embs, scale_imgs(cond_raw, cfg)
+        return scale_imgs(images_raw, cfg), embs
     embs = embed_crops(images_raw, cfg, cache_path=emb_cache)       # frozen CellDINO (same-channel)
     if return_cond_images:
-        return normalize(images_raw), embs, normalize(images_raw)
-    return normalize(images_raw), embs
+        return scale_imgs(images_raw, cfg), embs, scale_imgs(images_raw, cfg)
+    return scale_imgs(images_raw, cfg), embs

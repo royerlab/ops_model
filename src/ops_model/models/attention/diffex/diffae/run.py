@@ -26,11 +26,13 @@ def run_diffae(cfg: DiffAEConfig, out_dir: str) -> dict:
 
     cond_ch = getattr(cfg, "cond_channel", None)
     spatial = getattr(cfg, "spatial_cond", False)
+    base = f"{cfg.n_crops}_{cfg.crop_size}"                 # cache key
+    cdtag = "" if getattr(cfg, "celldino_z_score", True) else "_rawcd"   # non-z-scored CellDINO → distinct emb cache
     loaded = load_diffae_crops(
         cfg,
-        crops_cache=str(cache / f"diffae_crops_{cfg.n_crops}_{cfg.crop_size}.npz"),
-        emb_cache=str(cache / f"diffae_celldino_{cfg.n_crops}_{cfg.crop_size}.npz"),
-        cond_cache=(str(cache / f"diffae_cond_{cond_ch}_{cfg.n_crops}_{cfg.crop_size}.npz")
+        crops_cache=str(cache / f"diffae_crops_{base}.npz"),
+        emb_cache=str(cache / f"diffae_celldino_{base}{cdtag}.npz"),
+        cond_cache=(str(cache / f"diffae_cond_{cond_ch}_{base}.npz")
                     if cond_ch else None),
         return_cond_images=spatial,
     )
