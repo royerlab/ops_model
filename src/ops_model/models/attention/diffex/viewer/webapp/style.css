@@ -36,12 +36,12 @@ header .sub{color:var(--mut);font-size:12px}
 .tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
 .tb-field:has(#markerfilter){min-width:240px;max-width:320px}   /* Marker search: ~50% wider than default, capped so it doesn't squish the rest */
 .tb-field:has(#grain){min-width:0}          /* Type: sizes to its pills — adapts to count (2 public / 4 internal) + label length */
-.tb-field:has(#grain) .seg{flex:0 0 auto;padding:4px 15px}   /* pills hug their (variable-length) labels with roomy padding */
+.tb-field:has(#grain) .seg{flex:0 0 auto;padding:4px 15px;font-size:13px}   /* pills hug their (variable-length) labels with roomy padding */
 .tb-field.tb-grow{flex:1.6 1 300px;min-width:280px;max-width:480px}   /* Perturbation gets priority + a comfortable width so long complex names aren't squished */
-.tb-field>label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
-.tb-field .hint{text-transform:none;letter-spacing:0;font-size:11px;opacity:.7}
-#topbar select,#topbar input{width:100%}
-#topbar select.mini{width:auto;display:inline-block;padding:2px 4px;font-size:11px;margin-left:4px}
+.tb-field>label{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+.tb-field .hint{text-transform:none;letter-spacing:0;font-size:12px;opacity:.7}
+#topbar select,#topbar input{width:100%;font-size:14.5px}
+#topbar select.mini{width:auto;display:inline-block;padding:2px 4px;font-size:12px;margin-left:4px}
 #topbar .row{display:flex;gap:6px;align-items:center}
 #topbar #cellcount{width:56px}
 #topbar #pagenum{min-width:70px;text-align:center;opacity:.85;white-space:nowrap}
