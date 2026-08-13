@@ -685,7 +685,13 @@ async function liveLoad() {   // (re)fetch this marker's layout for the current 
 }
 function liveRefresh() { live.imgCache.clear(); liveDraw(); }   // marker/cell/α changed (keep pan/zoom)
 function liveResize() { const r = $("montage-view").getBoundingClientRect(); live.cv.width = r.width; live.cv.height = r.height; }
-function liveFit() { const s = Math.min(live.cv.width, live.cv.height) * 0.85; live.scale = s; live.tx = (live.cv.width - s) / 2; live.ty = (live.cv.height - s) / 2; }
+function liveFit() {   // center the (aspect-preserved) layout: coords start at 0, so extent = max nx/ny (≤1)
+  const s = Math.min(live.cv.width, live.cv.height) * 0.85; live.scale = s;
+  let ex = 1, ey = 1;
+  for (const g of live.layout) { if (g.nx > ex) ex = g.nx; if (g.ny > ey) ey = g.ny; }
+  ex = Math.min(ex, 1); ey = Math.min(ey, 1);
+  live.tx = (live.cv.width - ex * s) / 2; live.ty = (live.cv.height - ey * s) / 2;
+}
 function liveSchedule() { if (live.raf) return; live.raf = requestAnimationFrame(() => { live.raf = 0; liveDraw(); }); }
 function liveImg(u) { let im = live.imgCache.get(u); if (im) return im; im = new Image(); im.onload = liveSchedule; im.src = u; live.imgCache.set(u, im); return im; }
 const liveTargets = () => state.marker ? state.marker.targets.filter(t => !t.control && t.grain === "geneKO") : [];

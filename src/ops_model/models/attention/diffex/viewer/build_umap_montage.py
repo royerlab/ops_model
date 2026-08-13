@@ -59,10 +59,10 @@ def build_layout(h5ad, out_dir, embeddings=("umap", "phate")):
     os.makedirs(out_dir, exist_ok=True)
     outs = []
     for emb in embeddings:
-        c = _embed_coords(ann, emb); lo = c.min(0); rng = c.max(0) - lo; rng[rng == 0] = 1
+        c = _embed_coords(ann, emb); lo = c.min(0); rng = max(float((c.max(0) - lo).max()), 1e-9)   # single scale → preserve aspect (per-axis /rng[i] squared the embedding → live view looked tall)
         genes = []
         for i, g in enumerate(obs["perturbation"]):
-            rec = {"g": str(g), "nx": float((c[i, 0] - lo[0]) / rng[0]), "ny": float((c[i, 1] - lo[1]) / rng[1])}
+            rec = {"g": str(g), "nx": float((c[i, 0] - lo[0]) / rng), "ny": float((c[i, 1] - lo[1]) / rng)}
             for cf in color_fields:
                 rec[cf] = _cat(obs[cf].iloc[i])
             genes.append(rec)
