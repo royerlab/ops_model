@@ -1136,9 +1136,9 @@ function pinShared(target, anchor = "NTC") {
   if (target !== "NTC" && state.marker) {
     const e = resolveEntry(target, anchor) || resolveEntry(target, "NTC");
     if (e) { const p = pertOf(state.marker.marker_channel || "Phase", e, e.control || "NTC");
-      if (p && !state.pinned.some(q => q.key === p.key)) state.pinned.push(p); }
+      if (p && !state.pinned.some(q => q.key === p.key)) state.pinned.unshift(p); }   // newest pin rests at TOP
   }
-  if (!tc.pinned.some(p => p.gene === target)) tc.pinned.push({ gene: target, mode: tc.mode });
+  if (!tc.pinned.some(p => p.gene === target)) tc.pinned.unshift({ gene: target, mode: tc.mode });   // above NTC (NTC drifts to bottom)
   redrawPins();
 }
 function unpinShared(target) {

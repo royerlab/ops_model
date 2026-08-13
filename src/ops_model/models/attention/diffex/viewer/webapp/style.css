@@ -21,11 +21,11 @@ header .sub{color:var(--mut);font-size:12px}
 #sidebar.hidden{display:none}
 .side-hd{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
          border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:12px}
-#info-title{font-size:20px;font-weight:650;line-height:1.25}
-#info-sub{color:var(--mut);font-size:12px;font-family:ui-monospace,monospace;margin:4px 0 14px}
-#info-body{font-size:13px;line-height:1.55}
+#info-title{font-size:23px;font-weight:650;line-height:1.25}
+#info-sub{color:var(--mut);font-size:14px;font-family:ui-monospace,monospace;margin:4px 0 14px}
+#info-body{font-size:15px;line-height:1.55}
 #info-body .sec{margin-top:12px}
-#info-body .sec-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent);margin-bottom:3px}
+#info-body .sec-lbl{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent);margin-bottom:3px}
 #info-body .empty{color:var(--mut);font-style:italic}
 #info-body a{color:var(--accent);text-decoration:none}
 #info-body a:hover{text-decoration:underline}
@@ -236,7 +236,11 @@ button:hover{border-color:var(--accent)}
 #stage.top-active>*{display:none}
 #stage.top-active>#tc-view{display:block}
 .tc-row{margin-bottom:18px}
-.tc-hd{font:650 15px ui-monospace,monospace;margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+/* Top Cells left panel: all controls +10% (the leading .hint description is left untouched) */
+#tab-top label,#tab-top .lbl,#tab-top .chk{font-size:13px}
+#tab-top button,#tab-top select{font-size:14px}
+#tab-top #tc-panellist,#tab-top #tc-panellist li,#tab-top #tc-panellist li button{font-size:13px}
+.tc-hd{font:650 20px ui-monospace,monospace;margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}   /* match Traversal group header size */
 .tc-hd .tc-acc{flex:0 0 auto;margin-left:auto}   /* rows: score chip on the same line, right-aligned */
 .tc-hd .tc-n{margin-left:auto;font:400 11px ui-monospace,monospace;color:var(--mut)}
 .tc-hd .tc-acc{font:700 13px ui-monospace,monospace;padding:2px 8px;border-radius:6px}
@@ -348,11 +352,11 @@ button:hover{border-color:var(--accent)}
 .mth-rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px}
 .mth-rail-brand{display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid var(--line);text-decoration:none}   /* Biohub|CellXState is its own section below the thin line; paper link sits above it */
 .mth-rail-foot img{height:20px;opacity:.92}
-.mth-rail-foot span{font-size:14px;color:var(--mut)}
+.mth-rail-foot span{font-size:16px;color:var(--mut)}
 .mth-paper{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--panel);text-decoration:none;transition:border-color .15s,background .15s}
 .mth-paper:hover{border-color:var(--accent);background:rgba(38,198,255,.07)}
-.mth-paper-lbl{font-size:16px;font-weight:600;color:var(--accent)}
-.mth-paper-cite{font-size:13.5px;color:var(--mut)}
+.mth-paper-lbl{font-size:18px;font-weight:600;color:var(--accent)}
+.mth-paper-cite{font-size:15.5px;color:var(--mut)}
 .mth-paper-go{color:var(--accent)}
 .mth-railitem{display:flex;align-items:center;gap:9px;text-align:left;background:none;border:none;color:var(--mut);
   padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px;border-left:3px solid transparent;width:100%}
