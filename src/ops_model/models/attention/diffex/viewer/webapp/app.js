@@ -48,7 +48,7 @@ function updateImgLevels() {
 // Independent fixed black-point clip for FLUOR traversal images (crops background) — separate from the shared
 // brightness toggle. Generated-image background is uniform across markers (measured: p50≈0.45, std 0.017),
 // so one value suffices; add "<marker_channel>": <lo 0..1> overrides only if a marker needs it.
-const TRAV_CLIP_DEFAULT = 0.45;   // ≈ background median → maps background to black, keeps signal (p75+≈0.54)
+const TRAV_CLIP_DEFAULT = 0.38;   // background floor (p10–p25≈0.37–0.41) — softer than the 0.45 median (that clipped too hard)
 const TRAV_CLIP = {};
 function updateTravClip() {
   const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
