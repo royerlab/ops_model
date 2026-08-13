@@ -89,7 +89,7 @@ const METHODS_SLIDES = [
         <text x="338" y="156" fill="#8b949e" font-size="10.5" text-anchor="middle">many phenotypes —</text><text x="338" y="169" fill="#8b949e" font-size="10.5" text-anchor="middle">which is real?</text>
       </svg>`; },
     body: "In a <b>pooled optical CRISPR screen</b>, thousands of geneKOs are mixed in one dish and imaged together; each cell's DNA <b>barcode</b>, sequenced in place, names the geneKO inside it. This yields millions of (perturbation, image) pairs — but each knockout's real effect is subtle and buried in enormous cell-to-cell variation. This viewer explores one such atlas: <b>1,000 gene knockouts in A549 cells</b>, profiled by fluorescence microscopy (39 live + 13 fixed markers), label-free <b>phase</b> imaging of the same live cells, and scRNA-seq — <b>~57 million single-cell profiles</b> in all.",
-    why: "The core question this whole viewer answers: for each perturbation, <b>which change in the cell captures its true phenotype</b> — separated from the noise of the technique's scale and heterogeneity? Everything that follows is one answer.",
+    why: "The core question this whole viewer answers: for each perturbation, which change in the cell captures its true phenotype — separated from the noise of the technique's scale and heterogeneity? Everything that follows is one answer.",
     defs: [["Pooled optical screen", "imaging a mixed population where every cell has a different geneKO, all together."],
       ["Barcode", "a short DNA tag, read out in situ, that identifies which CRISPR guide (perturbation) is in each cell."],
       ["Perturbation", "the genetic change applied to a cell — here a CRISPR knockout; NTC = non-targeting control (no geneKO)."]]
