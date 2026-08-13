@@ -392,6 +392,7 @@ async function boot() {
   let _saveTimer;   // persist selection/prefs after any change settles (debounced; snapshot reads live state)
   const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
   document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
+  document.querySelectorAll("#controls .chk").forEach(l => { const t = (l.textContent || "").trim(); if (t) l.dataset.tip = t; });   // fast hover tooltip for toggles whose pill/label truncates
   setupBagUI();                                               // anchor-bag selector (multi_bag default) before first marker selection
   if (!restoreState()) {                                       // restore last session, else default = phase marker + HSPA5
     selectMarker(0); $("markerfilter").value = markerLabel(0);
@@ -1025,9 +1026,9 @@ function pickMarker(i) { selectMarker(i); $("markerfilter").value = markerLabel(
 const targetLabel = (t) => {
   const sa = state.targetSort === "setacc" ? targetAcc(t) : -1;   // sorting by SET ACC → show set-accuracy in parens instead of mAP
   const paren = t.grain === "pc" && t.explained_variance != null ? ` (${t.explained_variance.toFixed(1)}%)`
-    : sa >= 0 ? ` (${Math.round(sa * 100)}% acc)`
+    : sa >= 0 ? ` (${Math.round(sa * 100)}% accuracy)`
     : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : "";
-  return `${t.target}${paren}${t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : ""}`;
+  return `${t.target}${paren}${t.grain === "minibinder" ? " ·mb" : ""}`;
 };
 function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
   updateBagUI();              // correct the anchor bag for this grain BEFORE building the grid (minibinder/PC → single_bag; never blank)
@@ -1081,7 +1082,7 @@ function renderTargetList() {
     const d = document.createElement("div"); d.className = "combo-item" + (state.target && t.slug === state.target.slug ? " sel" : "");
     d.title = t.target;   // hover shows the full name (protein-complex names get ellipsis-truncated)
     if (state.targetSort === "setacc") {   // show the set-score % (P(target) @ α=1), not the mAP
-      const a = targetAcc(t), suffix = t.grain === "complex" ? " ·cx" : t.grain === "minibinder" ? " ·mb" : "";
+      const a = targetAcc(t), suffix = t.grain === "minibinder" ? " ·mb" : "";
       d.textContent = `${t.target}${suffix}`;
       const s = document.createElement("span"); s.className = "ci-sub"; s.textContent = a < 0 ? " —" : ` ${Math.round(a * 100)}%`; d.appendChild(s);
     } else {
@@ -1273,8 +1274,7 @@ function rebuild() {
   const set = activeSet();
   const N = state.cellCount, start = state.page * N;
   const cr = state.target ? state.target.n_cells : (set[0] ? set[0].n_cells : 0);   // rank range of the current perturbation's cells
-  $("cellrange").textContent = cr ? `${Math.min(start + 1, cr)}-${Math.min(start + N, cr)} (${cr})` : "";
-  $("pagenum").textContent = `Page ${state.page + 1}${cr ? " / " + Math.max(1, Math.ceil(cr / N)) : ""}`;
+  $("pagenum").textContent = cr ? `${Math.min(start + 1, cr)}-${Math.min(start + N, cr)} / ${cr}` : "";   // single indicator between the arrows: cells shown / total
   const g = $("grid"); g.innerHTML = "";
   state.panels = []; state.groups = []; let k = 0;
   set.forEach((p, gi) => {                          // one group (row) per perturbation
@@ -1627,7 +1627,7 @@ function renderAttnPinned() {   // pinned-perturbation list (mirrors the travers
     const li = document.createElement("li");
     li.style.color = PALETTE[(i + 1) % PALETTE.length];   // +1: current selection owns PALETTE[0]
     const ctx = r.modality === "phase" ? "" : ` · ${r.modality}`;
-    li.innerHTML = `<span data-tip="${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}">${r.label}${r.grain === "complex" ? " ·cx" : ""}${ctx}</span>`;
+    li.innerHTML = `<span data-tip="${r.label}${ctx}">${r.label}${ctx}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => { state.attnPinned.splice(i, 1); renderAttnPinned(); renderAttn(); };
     li.appendChild(b); ul.appendChild(li);
@@ -1665,7 +1665,7 @@ function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: 
   const headIdxs = state.attnHead === "all" ? heads.heads.map((_, i) => i) : [Math.min(state.attnHead, heads.heads.length - 1)];
   const group = document.createElement("div"); group.className = "agroup";
   const hd = document.createElement("div"); hd.className = "agroup-hd"; hd.style.color = color;
-  hd.textContent = `${ref.label}${ref.grain === "complex" ? " ·cx" : ""} · cells ${start}–${end - 1}`;
+  hd.textContent = `${ref.label} · cells ${start}–${end - 1}`;
   group.appendChild(hd);
   for (const h of headIdxs) {
     const row = document.createElement("div"); row.className = "arow";
@@ -1958,8 +1958,7 @@ function renderTop() {
   v.innerHTML = h || '<div class="empty">select a perturbation</div>';
   v.classList.toggle("masked", tc.mask !== false);   // show/hide the blue seg overlay layer
   $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcEntries().length} row(s)`;
-  $("cellrange").textContent = `${lo + 1}-${Math.min(cap, lo + n)} (${cap})`;   // top-bar rank range (matches traversal)
-  $("pagenum").textContent = `Page ${pg + 1} / ${Math.max(1, Math.ceil(cap / n))}`;
+  $("pagenum").textContent = `${lo + 1}-${Math.min(cap, lo + n)} / ${cap}`;   // single indicator between the arrows: cells shown / total
 }
 function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
