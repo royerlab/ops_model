@@ -264,11 +264,11 @@ def build_marker_layouts(mont_dir=None):
         h5 = ML.embedding_h5ad(mk); slug = jss(mk)
         a = ad.read_h5ad(h5)
         for emb in ("umap", "phate"):
-            c = BM._embed_coords(a, emb); lo = c.min(0); rng = c.max(0) - lo; rng[rng == 0] = 1
+            c = BM._embed_coords(a, emb); lo = c.min(0); rng = max(float((c.max(0) - lo).max()), 1e-9)   # single scale → preserve aspect (per-axis squared the embedding → stretched live view)
             genes = []
             for i, g in enumerate(a.obs["perturbation"]):
                 g = str(g)
-                rec = {"g": g, "nx": float((c[i, 0] - lo[0]) / rng[0]), "ny": float((c[i, 1] - lo[1]) / rng[1])}
+                rec = {"g": g, "nx": float((c[i, 0] - lo[0]) / rng), "ny": float((c[i, 1] - lo[1]) / rng)}
                 rec.update(ann_of.get(g, {}))
                 genes.append(rec)
             with open(f"{mont_dir}/layout_{slug}_{emb}.json", "w") as f:
