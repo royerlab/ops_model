@@ -323,7 +323,7 @@ async function boot() {
   fillCellDropdown();      // per-modality cell count (phase 45, markers 20); refilled on marker change
   fillOverlayMarkers();    // load the 42 VS marker names into the Overlay dropdown
   $("m-cell").value = 1;   // default NTC cell = 1
-  $("m-alpha").value = "5";   // force default α=5 (exaggerated); overrides any browser-restored form value
+  $("m-alpha").value = "3";   // force default α=3; overrides any browser-restored form value
   const LIVE = () => mont.renderMode === "live";
   $("m-render").onchange = setRenderMode;
   $("m-emb").onchange = () => LIVE() ? liveLoad() : loadMontage();
