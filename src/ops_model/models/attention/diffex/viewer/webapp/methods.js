@@ -364,18 +364,20 @@ const MTH_ORDER = ["The screen", "Embedding", "Classifier", "Top cells", "Diffus
 const MTH_EXTRA = new Set(["Attention heads", "Virtual staining", "mRNA phenotypes"]);
 const MTH_DECK = [{ nav: "About", about: true }, ...MTH_ORDER.map(n => METHODS_SLIDES.find(s => s.nav === n)).filter(Boolean)];
 // public deck = About + steps 1–6 (Screen…Traversal); internal = full deck. isPublic() from app.js (loaded first).
-const _mthDeck = () => (typeof isPublic === "function" && isPublic()) ? MTH_DECK.slice(0, 7) : MTH_DECK;
+const _mthDeck = () => (typeof isPublic === "function" && isPublic()) ? MTH_DECK.slice(0, 1) : MTH_DECK;   // public = About only (no numbered method slides)
 
 let _mthIdx = 0;
 function renderMethods() {
   const deck = _mthDeck(), coreN = deck.filter(s => !s.about && !MTH_EXTRA.has(s.nav)).length;
+  const single = deck.length <= 1;   // public = About only: no tour list, no numbering, no back/next
   if (_mthIdx >= deck.length) _mthIdx = deck.length - 1;
   const rail = document.getElementById("tab-methods");
-  if (rail && rail.querySelectorAll(".mth-railitem").length !== deck.length) {   // (re)build when the deck size changes (e.g. public toggle)
+  if (rail && rail.dataset.decklen != deck.length) {   // (re)build when the deck size changes (e.g. public toggle)
+    rail.dataset.decklen = deck.length;
     if (!rail.dataset.inited) { const sv = +localStorage.getItem("opsin.mth"); if (sv >= 0 && sv < deck.length) _mthIdx = sv; rail.dataset.inited = "1"; }   // restore last-viewed once
-    rail.innerHTML = `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
+    rail.innerHTML = `${single ? "" : `<div class="hint">A visual tour of the methods behind this viewer — click through, ← → to navigate.</div>
       <div class="mth-rail">${deck.map((s, i) => { const x = MTH_EXTRA.has(s.nav);
-        return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>
+        return `<button class="mth-railitem${x ? " mth-railitem-x" : ""}" onclick="methodsGo(${i})"><span class="mth-num">${x ? "+" : i + 1}</span>${x ? "Extra · " + s.nav : s.nav}</button>`; }).join("")}</div>`}
       <div class="mth-rail-foot">
         <a class="mth-paper" href="https://www.biorxiv.org/content/10.64898/2026.06.01.728087v1" target="_blank" rel="noopener">📄 Liu et al., bioRxiv 2026 ↗</a>
         <div class="mth-rail-brand"><a href="https://biohub.org" target="_blank" rel="noopener" title="Chan Zuckerberg Biohub SF"><img src="biohub-mark.png?v=1" alt="Biohub"/></a><span>Biohub | CellXState</span></div>
@@ -383,7 +385,7 @@ function renderMethods() {
   }
   const s = deck[_mthIdx], view = document.getElementById("methods-view");
   if (!view) return;
-  const nav = `<div class="mth-navbar">
+  const nav = single ? "" : `<div class="mth-navbar">
       <button onclick="methodsStep(-1)" ${_mthIdx === 0 ? "disabled" : ""}>← back</button>
       <div class="mth-dots">${deck.map((_, i) => `<span class="mth-dot${i === _mthIdx ? " on" : ""}" onclick="methodsGo(${i})"></span>`).join("")}</div>
       <button onclick="methodsStep(1)" ${_mthIdx === deck.length - 1 ? "disabled" : ""}>next →</button>
