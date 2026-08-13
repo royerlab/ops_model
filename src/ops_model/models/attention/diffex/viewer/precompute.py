@@ -85,7 +85,7 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                       load_workers=12, n_per_class=1000,
                       accuracy_parquet=None, variant=None, accuracy_fluor_csv=None, force=False,
                       v5_score=False, v5_bag=None, fluor_rank_parquet=None, invert_anchors=True,
-                      save_gemb=False, skip_webp=False, webp_compare=False, cell_range=None, ddim_steps=100):
+                      save_gemb=False, save_float=False, skip_webp=False, webp_compare=False, cell_range=None, ddim_steps=100):
     """Per-marker driver: gather the shared control/anchor cells ONCE and reuse across every
     `target` (all a marker's geneKOs/complexes share the same NTC/anchor base cells + seeds).
     Saves the ~n_cells real cells once under <modality>/_anchors/<anchor>/. Amortizes the
@@ -247,6 +247,10 @@ def precompute_marker(grain, targets, ckpt, out_root, marker_channel=None, chann
                     full[:, ai, :] = gwe[:, j, :]
                 out["gemb_webp"] = full.astype(np.float32); out["gemb_webp_ais"] = np.asarray(cmp_ais)
             np.savez(adir / "gemb.npz", **out)
+        if save_float:                                   # lossless native-160 float per cell (chunk-safe) → cell{c}/frames_f32.npz (A×160×160, [-1,1])
+            for c in cells:
+                cdir = adir / f"cell{c}"; cdir.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(cdir / "frames_f32.npz", gen=gen[c].astype(np.float32), alphas=np.asarray(al, np.float32))
         if not skip_webp:
             fp = ThreadPoolExecutor(max_workers=n_workers)
             for c in cells:

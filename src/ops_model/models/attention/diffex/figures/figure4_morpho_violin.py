@@ -45,7 +45,7 @@ def _pct(vals, base):
     return (np.asarray(vals, float) - base) / b * 100.0
 
 
-def make_violin(dir_, feature, simple, out_stem):
+def make_violin(dir_, feature, simple, out_stem, raw=False):
     marker_dir, grain, target = dir_.split("/", 2)
     md = f"{VA}/_morphometrics/{dir_}"
     ff = json.load(open(f"{md}/full_features.json"))
@@ -61,17 +61,20 @@ def make_violin(dir_, feature, simple, out_stem):
     rr = (real_percell(marker_dir, target, grain, store_marker, [feature], store_channel=store_channel) or {}).get(feature) if store_marker else None
     if rr is not None and len(rr["ntc"]) and len(rr["ko"]):
         nbase = float(np.nanmean(rr["ntc"]))                     # real %-change baseline = real-NTC mean
-        real_ntc = _pct(rr["ntc"][~np.isnan(rr["ntc"])], nbase)
-        real_ko = _pct(rr["ko"][~np.isnan(rr["ko"])], nbase)
+        rn = rr["ntc"][~np.isnan(rr["ntc"])]; rk = rr["ko"][~np.isnan(rr["ko"])]
+        real_ntc, real_ko = (rn, rk) if raw else (_pct(rn, nbase), _pct(rk, nbase))
     else:
         real_ntc = real_ko = np.array([]); print(f"  {out_stem}: no real per-cell for {feature}")
 
-    data = [real_ntc, real_ko, _pct(gen[0], base), _pct(gen[1], base), _pct(gen[3], base)]
+    # raw = native measured units (real store units vs generated seg units → any offset is visible);
+    # non-raw = %-change (real vs real-NTC, generated self-referenced to α=0)
+    data = ([real_ntc, real_ko, gen[0], gen[1], gen[3]] if raw
+            else [real_ntc, real_ko, _pct(gen[0], base), _pct(gen[1], base), _pct(gen[3], base)])
     labels = ["real", "KO", "α=0", "α=1", "α=3"]
     os.makedirs(os.path.dirname(f"{OUT}/{out_stem}"), exist_ok=True)
 
-    # ---- (1) image panel — identical to the line-graph figure — one per example cell ----
-    for cell in CELLS:
+    # ---- (1) image panel — identical to the line-graph figure — one per example cell (skip in raw mode) ----
+    for cell in ([] if raw else CELLS):
         try:
             panels, okey, lo, hi = image_panels(md, dir_, dir_, feature, cell, ALPHAS_SHOW)
         except (FileNotFoundError, IndexError):
@@ -87,19 +90,28 @@ def make_violin(dir_, feature, simple, out_stem):
     keep = [i for i, d in enumerate(data) if len(d)]
     figv = plt.figure(figsize=(4.8, 5.6), facecolor="white")
     ax = figv.add_subplot(111); ax.set_facecolor("white")
-    parts = ax.violinplot([data[i] for i in keep], positions=keep, showmeans=False, showextrema=False, showmedians=False, widths=0.82)
+    pooled = np.concatenate([data[i] for i in keep])
+    if raw:                                                    # raw: show the FULL range (no clamp) so α=3 isn't cut off
+        ylo, yhi = float(np.min(pooled)), float(np.max(pooled)); clamp = lambda d: d
+    else:                                                      # normalized: view window + clamp-to-bulge
+        ylo, yhi = np.percentile(pooled, VIEW_PCT); clamp = lambda d: np.clip(d, ylo, yhi)
+    pad = 0.05 * (yhi - ylo + 1e-9)
+    parts = ax.violinplot([clamp(data[i]) for i in keep], positions=keep, showmeans=False, showextrema=False, showmedians=False, widths=0.82)
     for pc, i in zip(parts["bodies"], keep):
         pc.set_facecolor(COLORS[labels[i]]); pc.set_alpha(0.6); pc.set_edgecolor(COLORS[labels[i]]); pc.set_linewidth(1.5)
     for i in keep:
-        ax.hlines(np.mean(data[i]), i - 0.34, i + 0.34, color="#222", lw=3, zorder=5)   # mean line (full data)
-    ax.axhline(0, color="#999", lw=2)
-    pooled = np.concatenate([data[i] for i in keep])          # view-clip: robust ylim, data/median untouched
-    ylo, yhi = np.percentile(pooled, VIEW_PCT); pad = 0.05 * (yhi - ylo + 1e-9)
+        ax.hlines(np.mean(data[i]), i - 0.34, i + 0.34, color="#222", lw=3, zorder=5)   # mean = FULL (unclamped) data → doesn't move
+    if not raw:
+        ax.axhline(0, color="#999", lw=2)
     ax.set_ylim(ylo - pad, yhi + pad)
     ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, fontsize=30)
-    import textwrap
-    ylab = "\n".join(textwrap.wrap(simple, 14)) if len(simple) > 14 else simple   # wrap long labels so they don't clip the canvas
-    ax.set_ylabel(ylab, fontsize=26 if len(simple) > 18 else 30)
+    if raw:
+        ylab = f"{simple} (raw)"                               # native measured units
+    else:
+        from matplotlib.ticker import FuncFormatter
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:+.0f}%" if abs(v) >= 0.5 else "0%"))   # ticks read -100% / +100%
+        ylab = f"{simple} (% change)"                         # single line, feature name + % change unit
+    ax.set_ylabel(ylab, fontsize=(30 if len(ylab) <= 20 else 24 if len(ylab) <= 28 else 19 if len(ylab) <= 38 else 16))
     ax.tick_params(axis="y", labelsize=26, width=2.5, length=9)
     ax.tick_params(axis="x", length=0)
     for s in ("top", "right"):
