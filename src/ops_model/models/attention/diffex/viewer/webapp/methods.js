@@ -295,7 +295,7 @@ const METHODS_SLIDES = [
         ${_lbl(230, 194, "each arm = a different phenotype axis (size · shape · nucleus); distance = how different", "#8b949e", 9.5)}
       </svg>`; },
     body: "The <b>Montage</b> tab takes a single anchor cell, traverses it toward <i>every</i> one of the ~1,000 perturbations, and drops each morphed cell at that perturbation's spot on a <b>perturbation-similarity map</b> (UMAP/PHATE). <b>LatentLens</b> tiles thousands of these crops into one zoomable montage.",
-    why: "It turns 1,000 separate what-ifs into a single navigable landscape — perturbations with similar phenotypes cluster together, visible at a glance.",
+    why: "Instead of viewing perturbations one at a time, you see all 1,000 on a single map where similar phenotypes sit together — so clusters and outliers stand out at a glance.",
     defs: [["Perturbation embedding (UMAP / PHATE)", "a 2-D map where each point is a perturbation, placed so phenotypically similar knockouts sit close together."],
       ["Anchor cell", "the one real cell (see DDIM) whose counterfactual we render for every perturbation, so the comparison is apples-to-apples."],
       ["LatentLens", "the tiling engine that lays thousands of image crops onto the map as a smooth, zoomable montage."]]
