@@ -52,7 +52,9 @@ const TRAV_CLIP_DEFAULT = 0.45;   // ≈ background median → maps background t
 const TRAV_CLIP = {};
 function updateTravClip() {
   const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
-  const on = state.view === "traversal" && !!mc;
+  const w = $("tr-inorm-wrap"); if (w) w.style.display = mc ? "" : "none";       // marker-normalize is fluor-only
+  const ck = $("tr-inorm"); if (ck) ck.checked = tc.inorm;                       // mirror the shared marker-normalize state
+  const on = state.view === "traversal" && !!mc && tc.inorm;                     // shares Top Cells' tc.inorm toggle
   const g = $("grid"); if (g) g.classList.toggle("fluorclip", on);
   const lo = on ? (mc in TRAV_CLIP ? TRAV_CLIP[mc] : TRAV_CLIP_DEFAULT) : 0, d = Math.max(1e-3, 1 - lo);
   const slope = (1 / d).toFixed(4), icpt = (-lo / d).toFixed(4);
@@ -384,7 +386,8 @@ async function boot() {
   $("tc-pinclear").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
-  $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
+  $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; updateTravClip(); renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
+  $("tr-inorm").onchange = () => { tc.inorm = $("tr-inorm").checked; updateTravClip(); if (tc.data) renderTop(); saveState(); };   // same shared toggle, driven from the Traversal tab
   $("tc-acc").onchange = () => { tc.showAcc = $("tc-acc").checked; ensureSetacc(renderTop); saveState(); };   // per-group classification-accuracy chip on/off
   $("tc-accbin").onchange = () => { tc.accBin = +$("tc-accbin").value; renderTop(); saveState(); };   // classifier bag size the accuracy is measured at
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
