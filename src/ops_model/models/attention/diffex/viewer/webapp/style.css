@@ -349,8 +349,11 @@ button:hover{border-color:var(--accent)}
 .mth-rail-brand{display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid var(--line)}   /* Biohub|CellXState is its own section below the thin line; paper link sits above it */
 .mth-rail-foot img{height:20px;opacity:.92}
 .mth-rail-foot span{font-size:14px;color:var(--mut)}
-.mth-paper{font-size:14px;color:var(--accent);text-decoration:none}
-.mth-paper:hover{text-decoration:underline}
+.mth-paper{display:flex;flex-direction:column;gap:3px;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--panel);text-decoration:none;transition:border-color .15s,background .15s}
+.mth-paper:hover{border-color:var(--accent);background:rgba(38,198,255,.07)}
+.mth-paper-lbl{font-size:16px;font-weight:600;color:var(--accent)}
+.mth-paper-cite{font-size:13.5px;color:var(--mut)}
+.mth-paper-go{color:var(--accent)}
 .mth-railitem{display:flex;align-items:center;gap:9px;text-align:left;background:none;border:none;color:var(--mut);
   padding:7px 9px;border-radius:7px;cursor:pointer;font-size:13px;border-left:3px solid transparent;width:100%}
 .mth-railitem:hover{background:rgba(255,255,255,.05);color:var(--fg)}
