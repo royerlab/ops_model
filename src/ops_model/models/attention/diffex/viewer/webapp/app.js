@@ -393,9 +393,11 @@ async function boot() {
   const scheduleSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveState, 250); };
   document.addEventListener("change", scheduleSave); document.addEventListener("click", scheduleSave);
   setupBagUI();                                               // anchor-bag selector (multi_bag default) before first marker selection
-  if (!restoreState()) {                                       // restore last session, else default = phase marker + HSPA5
-    selectMarker(0); $("markerfilter").value = markerLabel(0);
-    const defT = state.targets.find(t => t.target === "HSPA5");
+  if (!restoreState()) {                                       // restore last session, else default = LysoTracker marker + MTOR
+    let mi = state.manifest.markers.findIndex(m => String(m.label || m.marker_channel || "").toLowerCase().includes("lysotracker"));
+    if (mi < 0) mi = 0;
+    selectMarker(mi); $("markerfilter").value = markerLabel(mi);
+    const defT = state.targets.find(t => String(t.target).toUpperCase() === "MTOR");
     if (defT) { $("filter").value = targetLabel(defT); selectTarget(defT.slug); }
   }
   document.querySelectorAll("select[data-seg]").forEach(segmentize);   // small dropdowns → segmented pills
