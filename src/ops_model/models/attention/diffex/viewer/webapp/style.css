@@ -505,6 +505,9 @@ button:hover{border-color:var(--accent)}
    On the dots overlay (redrawn every animation frame) the per-frame SVG filter caused Safari ghosting/freeze;
    on the live canvas it distorted geometry (stretched/tall). */
 #montage-view canvas, #montage-view img { filter: none !important; }
+/* Traversal fluor: chain an independent black-point clip AFTER the shared brightness filter (crops out background).
+   Gated by the #grid.fluorclip class (set only for fluor markers in the Traversal view) — Top Cells is untouched. */
+#grid.fluorclip img { filter: url(#img-levels) url(#trav-clip); }
 #imgclim-field{display:flex;flex-direction:column;gap:6px}
 #imgclim-field .ic-lbl{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 #imgclim-field #i-climreset{padding:2px 8px;flex:none}

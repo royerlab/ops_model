@@ -45,6 +45,19 @@ function updateImgLevels() {
   for (const id of ["lvlR", "lvlG", "lvlB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
 }
 
+// Independent fixed black-point clip for FLUOR traversal images (crops background) — separate from the shared
+// brightness toggle. Per-marker: add "<marker_channel>": <lo 0..1> overrides here; others use TRAV_CLIP_DEFAULT.
+const TRAV_CLIP_DEFAULT = 0.20;
+const TRAV_CLIP = {};
+function updateTravClip() {
+  const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
+  const on = state.view === "traversal" && !!mc;
+  const g = $("grid"); if (g) g.classList.toggle("fluorclip", on);
+  const lo = on ? (mc in TRAV_CLIP ? TRAV_CLIP[mc] : TRAV_CLIP_DEFAULT) : 0, d = Math.max(1e-3, 1 - lo);
+  const slope = (1 / d).toFixed(4), icpt = (-lo / d).toFixed(4);
+  for (const id of ["tclipR", "tclipG", "tclipB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
+}
+
 // the single Image-brightness control lives in the active tab's left panel — under its Image-scale
 // slider when present (Traversal/Top cells), else at the top of that tab's controls (hidden in How-it-works).
 function placeImgClim() {
@@ -1367,6 +1380,7 @@ function rebuild() {
   let keep = (state.idx != null && state.idx >= 0 && state.idx < n) ? state.idx : mid;   // hold α across perturbation/cell-page changes; reset only on load / α-count change
   if (restoredAlpha != null) { const j = state.alphas.indexOf(restoredAlpha); if (j >= 0) keep = j; restoredAlpha = null; }   // reload/version-switch: restore the saved α
   $("alpha").value = keep; buildPlaySeq(state.alphas); showIdx(keep);
+  updateTravClip();   // fluor traversal → apply the independent background clip (phase / non-traversal → off)
 
   const t = state.target;
   const scoreLbl = t && t.grain === "minibinder" ? `${t.phenotype || "39S"} cell-score` : t && t.grain === "complex" ? "EBI mAP" : "dist mAP";
