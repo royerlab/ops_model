@@ -2,5 +2,5 @@
 
 K direction MLPs (InfoNCE + decorrelation, unsupervised) on CellDINO embeddings →
 rank by control-vs-target classifier score shift → DDIM-traverse the selected
-direction and verify with re-encoded scores. See ../PLAN.md §3.
+direction and verify with re-encoded scores. See README.md.
 """

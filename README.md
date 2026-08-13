@@ -126,3 +126,34 @@ uv run python -m ops_model.post_process.combination.titration.combined_titration
 ```
 
 Both write one CSV per curve plus diagnostic plots, and are cache-aware — re-running fills in only the missing cell budgets. The titration mode flag selects both the sampling schedule and the output subdirectory; see [`titration/README.md`](src/ops_model/post_process/combination/titration/README.md) for the mode table, the full flag set, and the output layout.
+
+### Interpretability — `interpretability/`
+
+What did a perturbation actually *do* phenotypically? Two independent approaches, one working in embedding space and one in image space.
+
+**Set classifier** — `interpretability/classifier/`
+
+A permutation-invariant classifier that predicts a gene knockout (or an EBI protein-complex label) from a *set* of single-cell embeddings, which turns "is this phenotype detectable?" into a measurable accuracy. `train.py` and `eval.py` are Hydra entry points reading the YAMLs in `configs/`; `eval.py` sweeps accuracy against the per-class cell-count threshold.
+
+```bash
+uv run python -m ops_model.interpretability.classifier.train \
+    --config-name=train_set_classifier_phase_ebi
+
+uv run python -m ops_model.interpretability.classifier.eval \
+    --config-name=eval_set_classifier
+```
+
+
+**DiffAE counterfactuals** — `interpretability/diffae/`
+
+EExplores changing phenotypes *in image space*: generating counterfactual single-cells that shift a classifier's decision, so a phenotype can be inspected visually rather than only scored. Three sequential stages — a per-cell classifier to explain, a conditional diffusion autoencoder, then contrastive direction discovery plus DDIM traversal — each with a `run.py` (local) and a `submit.py` (SLURM).
+
+```bash
+uv run python -m ops_model.interpretability.diffae.classifier.run --model C --gene HSPA5
+uv run python -m ops_model.interpretability.diffae.generator.run
+uv run python -m ops_model.interpretability.diffae.directions.run --target HSPA5
+```
+
+Stage 3 also accepts `--grain complex` to explain a protein complex rather than a single gene. `traversal/` holds shared crop and morphometric precompute; `figures/` holds the figure scripts built on these outputs.
+
+See [`interpretability/README.md`](src/ops_model/interpretability/README.md) for the layout, and the per-subgroup READMEs for the full flag sets and output layouts.

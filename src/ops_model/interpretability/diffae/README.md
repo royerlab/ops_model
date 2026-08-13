@@ -2,11 +2,10 @@
 
 Explain geneKO / protein-complex phenotypes **in image space**: generate
 counterfactual single-cell morphs ("if this control cell were a KD, what would it
-look like?") and the per-pixel change map, instead of relying on OP/CP features.
-Adapted from DiffEx (arXiv:2502.09663) and Alex Lin's EvolutionaryScale pipeline,
-working in the **CellDINO embedding space** that the SetTransformer already uses.
+look like?") and the per-pixel change map, instead of relying on Organelle-Profiler/Cell-Profiler features.
+Adapted from DiffEx (arXiv:2502.09663) in conjunction with the set-classifier,
+working in the **CellDINO embedding space**.
 
-See [PLAN.md](PLAN.md) for the design rationale and the full running log.
 
 ## Pipeline (three stages, each a subpackage)
 
@@ -30,11 +29,3 @@ python -m ops_model.interpretability.diffae.generator.diagnose_conditioning   # 
 # Stage 3 — directions + counterfactual traversal for a target
 python -m ops_model.interpretability.diffae.directions.submit --grain geneKO --target HSPA5
 ```
-
-Outputs: `/hpc/projects/icd.fast.ops/models/diffex/{<grain>,diffae,directions}/…`.
-
-## Status
-Stages 1 & 3 built and validated end-to-end; Stage-2 DiffAE conditioning was the
-hard part — see PLAN.md (the v1 generator ignored the embedding; the rebuild with
-conditioning dropout + EMA fixes it). Current focus: training the DiffAE to a
-conditioning ratio high enough for visible morphs, then scaling across targets.
