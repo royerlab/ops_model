@@ -114,6 +114,12 @@ V5M_SIDECAR_EBIFB = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
     "per_experiment_v5_multibag_ebifb.parquet"
 )
+# Combined fluor sidecar — per (exp, well, seg, channel_name) with both
+# gko + ebionly weight columns. Consumed on --signal-set no_phase runs.
+V5M_SIDECAR_FLUOR = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_multibag_fluor.parquet"
+)
 V5_STRATEGIES = {
     "v5_gko", "v5_ebionly", "v5_ebifb",
     "v5_gko_cutoff_20k", "v5_ebionly_cutoff_20k", "v5_ebifb_cutoff_20k",
@@ -122,6 +128,9 @@ V5_STRATEGIES = {
     "v5m_gko", "v5m_ebionly", "v5m_ebifb",
     "v5m_gko_cutoff_20k", "v5m_ebionly_cutoff_20k", "v5m_ebifb_cutoff_20k",
     "v5m_gko_cutoff_10k", "v5m_ebionly_cutoff_10k", "v5m_ebifb_cutoff_10k",
+    # multi-bag SHAP fluor variants (per-cell, per-channel; use --signal-set no_phase)
+    "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
+    "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
 }
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
@@ -275,6 +284,25 @@ def _resolve_strategy(name: str) -> dict:
         return {"op": "column", "col": "v5m_ebionly_cutoff_10k"}
     if name == "v5m_ebifb_cutoff_10k":
         return {"op": "column", "col": "v5m_ebifb_cutoff_10k"}
+    # ---- v5-multibag FLUOR variants -----------------------------------
+    # Fluor SHAP coverage per (exp, channel) is thin; set nan_default=0 so
+    # unranked cells contribute nothing to the weighted mean, cap w_norm at 5
+    # so a few ranked cells can't dominate. Guides with 0 ranked cells at an
+    # (exp, channel) fall back to uniform w=1 → gene keeps a baseline profile
+    # on every marker (fair-coverage; no marker silently dropped for that gene).
+    # cutoff_500 ≈ phase cutoff_20k proportion (top ~31% of median ~1600 cells).
+    if name == "v5m_gko_fluor_cutoff_500":
+        return {"op": "column", "col": "v5m_gko_fluor_cutoff_500",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_gko_fluor_cutoff_100":
+        return {"op": "column", "col": "v5m_gko_fluor_cutoff_100",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_ebionly_fluor_cutoff_500":
+        return {"op": "column", "col": "v5m_ebionly_fluor_cutoff_500",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_ebionly_fluor_cutoff_100":
+        return {"op": "column", "col": "v5m_ebionly_fluor_cutoff_100",
+                "nan_default": 0.0, "w_norm_max": 5.0}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -420,6 +448,8 @@ STRATEGIES = [
     "v5m_gko", "v5m_ebionly", "v5m_ebifb",
     "v5m_gko_cutoff_20k", "v5m_ebionly_cutoff_20k", "v5m_ebifb_cutoff_20k",
     "v5m_gko_cutoff_10k", "v5m_ebionly_cutoff_10k", "v5m_ebifb_cutoff_10k",
+    "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
+    "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -471,7 +501,17 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
     apply per-(cell, channel) attention weighting from that sidecar.
     """
     spec = _resolve_strategy(strategy_name)
-    fluor_path = str(FLUOR_ATTN_SIDECAR) if use_fluor else None
+    # v5m_*_fluor_* strategies read weights from the multi-bag FLUOR sidecar
+    # (per_experiment_v5_multibag_fluor.parquet). Everything else keeps the
+    # v4 fluor sidecar.
+    is_v5m_fluor = strategy_name in {
+        "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
+        "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
+    }
+    if is_v5m_fluor:
+        fluor_path = str(V5M_SIDECAR_FLUOR) if use_fluor else None
+    else:
+        fluor_path = str(FLUOR_ATTN_SIDECAR) if use_fluor else None
     fluor_dir = str(V4_PER_EXP_FLUOR) if use_fluor else None
 
     # Route to the combined sidecar (with set_accuracy column) only when
@@ -494,6 +534,12 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
         phase_sidecar = V5M_SIDECAR_EBIONLY
     elif strategy_name in ("v5m_ebifb", "v5m_ebifb_cutoff_20k", "v5m_ebifb_cutoff_10k"):
         phase_sidecar = V5M_SIDECAR_EBIFB
+    elif is_v5m_fluor:
+        # Fluor-only strategies still need phase_sidecar_path to be schema-
+        # compatible (contains the requested weight column) even though the
+        # phase channel is not processed on --signal-set no_phase. Point at
+        # the fluor parquet — the column exists there.
+        phase_sidecar = V5M_SIDECAR_FLUOR
     else:
         phase_sidecar = ATTN_SIDECAR
 

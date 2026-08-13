@@ -52,7 +52,10 @@ def _compute_weights(spec: Dict, attns: Dict[str, "np.ndarray"], thresholds: Dic
 
     Returns ``w`` (float32, length = n_cells). NaN-handling:
 
-    * "column"      — NaN → 1.0 (uniform fallback for cells outside the head's panel)
+    * "column"      — NaN → ``nan_default`` (default 1.0, uniform fallback for cells
+                       outside the head's panel; set to 0.0 to DROP unranked cells,
+                       e.g. for fluor where thin coverage would otherwise dilute the
+                       signal with uniform weight)
     * "min"         — both NaN → 1; one NaN → use the other; else min
     * "product"     — any NaN → 1 (treat NaN as multiplicative identity)
     * "concordance" — NaN counts as "in agreement" so non-panel cells aren't dropped
@@ -63,7 +66,8 @@ def _compute_weights(spec: Dict, attns: Dict[str, "np.ndarray"], thresholds: Dic
     op = spec["op"]
     if op == "column":
         a = attns[spec["col"]]
-        return np.where(np.isnan(a), 1.0, a).astype(np.float32)
+        nan_default = float(spec.get("nan_default", 1.0))
+        return np.where(np.isnan(a), nan_default, a).astype(np.float32)
 
     if op == "min":
         a = attns[spec["cols"][0]]
@@ -401,8 +405,53 @@ def make_patched_phase1_worker(
 
             df = pd.DataFrame({"sgRNA": sgrna, "w": w})
             group_mean = df.groupby("sgRNA", observed=True)["w"].transform("mean")
-            group_mean = np.where(group_mean > 0, group_mean, 1.0)
-            w_norm = (w / group_mean).astype(np.float32)
+            # If a guide has ALL cells at w=0 (e.g. NaN→0 strategies where no
+            # cells of that guide made it into the SHAP screen at this channel),
+            # `w / mean(w)` would multiply the guide's X by 0 → zero-vector
+            # profile. Zero profiles drag the gene centroid toward origin and
+            # collapse distinctiveness. Fall back to uniform w=1 for those
+            # guides so the profile is a valid unweighted mean, not a zero.
+            gm_arr = group_mean.to_numpy()
+            # Cells whose sgRNA is NaN aren't in any group → group_mean is NaN.
+            # Treat them like zero-groups. What we do with zero-groups (guides
+            # with 0 ranked cells at this exp/channel) depends on strategy:
+            #
+            # - fallback="uniform" (default, phase-style): w=1 → guide keeps a
+            #   baseline-mean profile. Preserves every KO but dilutes signal
+            #   when coverage is thin (fluor: ~67% of guides fall back).
+            # - fallback="drop": w=0 → guide's cells all become zero vectors
+            #   → guide's block-level profile is a zero vector → guide gets
+            #   dropped by downstream filtering that removes zero-norm rows.
+            #   Concentrates signal but risks losing genes if all their guides
+            #   drop from some channel.
+            fallback_mode = str(strategy_spec.get("fallback", "uniform"))
+            zero_group = (gm_arr == 0) | np.isnan(gm_arr)
+            if fallback_mode == "drop":
+                fallback_w_val = 0.0
+            else:
+                fallback_w_val = 1.0
+            w_fixed = np.where(zero_group, fallback_w_val, w).astype(np.float32)
+            group_mean_fixed = np.where(zero_group, 1.0, gm_arr)
+            w_norm = (w_fixed / group_mean_fixed).astype(np.float32)
+            # Belt-and-braces: never let a NaN weight leak into X
+            w_norm = np.nan_to_num(w_norm, nan=1.0, posinf=1.0, neginf=0.0)
+            # Cap w_norm so no single cell can dominate a guide's channel
+            # profile. When per-(gene, channel) coverage is sparse (a common
+            # case in fluor), a guide with ~2 ranked cells has mean(w) ~ 0.002
+            # and those cells hit w_norm ~ 500 — the profile collapses to
+            # those few outliers. Cap keeps ranked cells emphasized without
+            # blowing up.
+            w_norm_max = float(strategy_spec.get("w_norm_max", 0.0))
+            n_capped = 0
+            if w_norm_max > 0:
+                over = w_norm > w_norm_max
+                n_capped = int(over.sum())
+                w_norm = np.minimum(w_norm, np.float32(w_norm_max))
+            n_zero_guides = int(pd.Series(zero_group).groupby(sgrna).any().sum())
+            if n_zero_guides > 0 or n_capped > 0:
+                print(f"  [weighting] {n_zero_guides:,} guides had zero ranked "
+                       f"cells → uniform-weight fallback; capped {n_capped:,} "
+                       f"cells at w_norm={w_norm_max}")
 
             X = np.asarray(adata.X, dtype=np.float32)
             X *= w_norm[:, None]
@@ -550,15 +599,42 @@ def make_patched_phase1_worker(
                 channel = getattr(_fluor_ctx, "last_channel", None)
                 if channel is None:
                     print(f"  WARN: load_features_corrected on v4 fluor h5ad "
-                          f"{p.name} without a channel context — returning full")
-                    return _orig_lfc(cell_path, *a, **kw)
+                          f"{p.name} without a channel context — returning empty")
+                    return None
                 channel_norm = _normalize_channel(channel)
                 adata = ad.read_h5ad(p)
-                m = (adata.obs["channel_name"].astype(str) == channel_norm).values
-                if not m.any():
-                    print(f"  WARN: no v4 fluor rows for channel {channel_norm!r} "
-                          f"in {p.name} — falling back to v3")
-                    return _orig_lfc(cell_path, *a, **kw)
+                obs_ch = adata.obs["channel_name"].astype(str)
+                # Two axes of variation between the caller's channel name and
+                # the h5ad's channel_name column:
+                #   (a) prefix: v3 iterates short forms ('SEC61B') while the
+                #       h5ad stores prefixed 'ER_SEC61B'.
+                #   (b) whitespace: sidecar uses underscores ('ChromaLIVE_488_
+                #       excitation') while the h5ad has spaces
+                #       ('ChromaLIVE 488 excitation').
+                # Match by comparing everything with spaces stripped/canonical,
+                # against every h5ad channel_name canonicalized the same way.
+                def _canon(s: str) -> str:
+                    return s.replace(" ", "_")
+                request_canon = _canon(channel_norm)
+                request_tail = request_canon.split("_")[-1]
+                m = None
+                for candidate in obs_ch.unique():
+                    cand_canon = _canon(candidate)
+                    if cand_canon == request_canon \
+                            or cand_canon.endswith("_" + request_canon) \
+                            or cand_canon.endswith(request_canon) \
+                            or (request_tail and cand_canon.endswith("_" + request_tail)):
+                        m = (obs_ch == candidate).values
+                        channel_norm = candidate
+                        break
+                if m is None or not m.any():
+                    print(f"  WARN: no v4 fluor rows matching channel "
+                          f"{request_canon!r} in {p.name} (available: "
+                          f"{sorted(obs_ch.unique())[:3]}...) — returning empty")
+                    # CRITICAL: never fall back to `_orig_lfc` here — that would
+                    # return the FULL multi-channel h5ad with mixed channels
+                    # and NaN sgRNAs, which then blows up aggregate_to_level.
+                    return None
                 adata = adata[m].copy()
                 exp_for_ctx = getattr(_fluor_ctx, "last_experiment", None) or p.stem
                 ch_for_ctx = channel_norm
