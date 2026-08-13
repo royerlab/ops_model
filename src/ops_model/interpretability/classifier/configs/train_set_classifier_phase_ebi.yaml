@@ -1,0 +1,69 @@
+# Config for train_set_classifier.py
+# Train a set-transformer classifier on per-cell embeddings.
+
+name: "celldino-phase-ebi"
+
+seed: 42
+device: "cuda"  # auto-detect
+
+# ---- Data ----
+data:
+  parquet_entries:
+    - path: /path/to/embeddings/celldino_paper_phenotyping_v2_160.parquet
+  max_row_groups: null      # set to limit row groups loaded (e.g. 10 for quick debug)
+  max_cells_per_group: null # cap cells pe (gene, channel) to limit memory
+  max_genes: null        # keep only top-N genes by cell count (null = all)
+  max_channels: 1    # keep only top-N channels by cell count (null = all)
+  # Exact channel labels as in _build_channel_label / printed "Cells per channel" (not raw parquet name if annotation overrides)
+  exclude_channel_names: null  # e.g. [Phase2D] to drop that channel entirely
+  min_cells_per_group: null  # drop (gene, channel) pairs with fewer cells (null = no filter)
+  min_cells_drop_val: false # also drop from val when min_cells_per_group filters (default: train only)
+  z_standardize_control_only: true  # compute z-standardization stats from NTC (control) cells only
+  label_map_path: src/ops_model/interpretability/classifier/configs/ebi_complexes.csv # CSV mapping gene names to class labels (e.g. pathways); trains only on genes in this file
+  label_map_gene_col: gene_name  # column in label_map CSV containing gene names (empty/NaN → NTC)
+  label_map_label_col: pathway   # column in label_map CSV containing class labels
+
+# ---- Training ----
+# n_cells_per_set: 10           # default cells sampled per channel per set
+# n_cells_per_set_overrides:  # per-channel overrides, e.g. {Phase2D: 200}
+#   Phase2D: 100
+n_cells_per_set: 100
+train_n_cell_sets_per_gene: 32  # how many cell-set draws per gene per train epoch
+val_n_cell_sets_per_gene: 5    # how many cell-set draws per gene per val epoch
+channel_drop_fraction: 0.0     # fraction of channels to randomly drop per training sample (0 = disabled)
+mixed_channels_mode: true     # pool all channels into one set (single-level model)
+val_n_cells_per_set: [500, 200]  # evaluate at multiple n_cells values (mixed mode only)
+phase2d_val: false                     # enable Phase2D-only validation (false to disable)
+eval_every: 1                  # validate every N training epochs
+batch_size: 64
+num_epochs: 150
+learning_rate: 1e-4
+weight_decay: 0.0
+max_grad_norm: null
+warmup_epochs: 20
+val_fraction: 0.2
+num_workers: 4
+save_path: best_set_classifier.pt
+# dump_val_dir: null    # if set, save val dataset to this directory (one .pt per gene)
+# dump_train_dir: /path/to/train_ops_zstdcontrol_cdino  # if set, save train dataset to this directory (one .pt per gene)
+# dump_val_dir: /path/to/val_ops_zstdcontrol_cdino
+load_train_dir: /path/to/train_ops_zstdcontrol_cdino  # if set, load pre-dumped train dataset (skip parquet processing)
+load_val_dir: /path/to/val_ops_zstdcontrol_cdino    # if set, load pre-dumped val dataset (skip parquet processing)
+
+# ---- Model ----
+model:
+  d_model: 512
+  n_heads: 4
+  d_ff: null        # null = 4 * d_model
+  dropout: 0.0
+
+  # Per-channel set transformer (pools N_cells → 1 vector per channel)
+  n_layers_cell: 2
+  n_inducing_cell: 32
+
+  channel_conditioning: "concat"  # "add" | "concat" | "adaln" | "adaln-token" | "none"
+  cosine_classifier: True       # use cosine-similarity head with learned temperature
+
+  # Cross-channel set transformer (full attention, pools channel vectors → 1 final vector)
+
+# ---- Logging ----

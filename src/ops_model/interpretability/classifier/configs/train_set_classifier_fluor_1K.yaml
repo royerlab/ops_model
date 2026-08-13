@@ -1,0 +1,70 @@
+# Config for train_set_classifier.py
+# Combined fluorescent set-classifier: phenotyping fluorescent markers + Cell
+# Painting (ops0094) + 4i (ops0144). 1001 gene + NTC classification.
+# null channel sampling (each set uses ALL available channels), 100 cells/set.
+# CELL-STRATIFIED train/val split (no cross-cell leakage). Creates the shared dump.
+
+name: "celldino-fluor-cp-4i-paper-v2-cellstrat-null"
+
+seed: 42
+device: "cuda"  # auto-detect
+
+# ---- Data ----
+data:
+  parquet_entries:
+    - path: /path/to/embeddings/celldino_paper_phenotyping_v2_160.parquet
+    - path: /path/to/embeddings/celldino_paper_v2_cp_160.parquet
+    - path: /path/to/embeddings/celldino_paper_v2_4i_160.parquet
+  max_row_groups: null
+  max_cells_per_group: null
+  max_genes: null
+  max_channels: null
+  # Drop phase + unannotated channels; keep all fluorescent markers (pheno + CP + 4i).
+  exclude_channel_names: ["Phase2D", "no label_no label"]
+  min_cells_per_group: null
+  min_cells_drop_val: false
+  z_standardize_control_only: true  # z-standardize per (channel x experiment) using NTC (control) cell stats
+  # Split train/val by unique cell (experiment, well, segmentation_id) so all
+  # markers/modalities of a cell stay on one side (no leakage).
+  cell_stratify: true
+
+# ---- Training ----
+n_cells_per_set: 100
+channels_per_set: null  # all markers per set; set [1, 2, 5, 10, 20, null] to also train on smaller random marker subsets
+train_n_cell_sets_per_gene: 32
+val_n_cell_sets_per_gene: 5
+channel_drop_fraction: 0.0
+mixed_channels_mode: true
+val_n_cells_per_set: [500, 200]
+phase2d_val: false
+eval_every: 1
+batch_size: 64
+num_epochs: 100
+learning_rate: 1e-4
+weight_decay: 0.0
+max_grad_norm: null
+warmup_epochs: 20
+val_fraction: 0.2
+num_workers: 4
+save_path: best_set_classifier_paper_v2_fluor_cp_4i_null.pt
+# Dump the cell-stratified processed dataset once; the sweep run reuses it.
+dump_train_dir: /path/to/dumps/paper_v2_fluor_cp_4i_cellstrat/train
+dump_val_dir: /path/to/dumps/paper_v2_fluor_cp_4i_cellstrat/val
+
+# ---- Model ----
+model:
+  d_model: 512
+  n_heads: 4
+  d_ff: null        # null = 4 * d_model
+  dropout: 0.0
+
+  # Per-channel set transformer (pools N_cells → 1 vector per channel)
+  n_layers_cell: 2
+  n_inducing_cell: 32
+
+  channel_conditioning: "concat"  # "add" | "concat" | "adaln" | "adaln-token" | "none"
+  cosine_classifier: True       # use cosine-similarity head with learned temperature
+
+  # Cross-channel set transformer (full attention, pools channel vectors → 1 final vector)
+
+# ---- Logging ----

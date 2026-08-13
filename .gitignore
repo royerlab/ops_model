@@ -118,3 +118,8 @@ src/ops_model/vesuvius/
 *.csv
 *.svg
 slurm_logs/
+
+# Keep the set-classifier interpretability example configs (placeholder paths)
+!src/ops_model/interpretability/classifier/configs/
+!src/ops_model/interpretability/classifier/configs/*.yaml
+!src/ops_model/interpretability/classifier/configs/*.csv
