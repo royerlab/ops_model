@@ -23,7 +23,7 @@ plt.rcParams["svg.fonttype"] = "none"
 
 
 def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, bottom_caption=None,
-               title_in=0.55):
+               title_in=0.55, pert_bottom=False, top_caption=None):
     cols = []
     for c in columns:
         try:
@@ -37,7 +37,7 @@ def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, 
     n = len(cols)
 
     left, right = 0.05, 0.997
-    bot_in = 0.40 if bottom_caption else 0.10          # inches reserved for the marker/caption row
+    bot_in = 0.5 if pert_bottom else (0.40 if bottom_caption else 0.10)   # room for the perturbation label under the KO row
     W = n * tile / (right - left)
     H = 2 * tile + title_in + bot_in                   # square cells (tile x tile) → images tile tight
     fig = plt.figure(figsize=(W, H), facecolor="white")
@@ -50,7 +50,10 @@ def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, 
             ax.set_xticks([]); ax.set_yticks([])
             for s in ax.spines.values():
                 s.set_edgecolor("#888"); s.set_linewidth(0.5)
-            if i == 0:
+            if pert_bottom:                                  # phase: no top title, perturbation label under the KO row
+                if i == 1 and c.get("top_label"):
+                    ax.set_xlabel(c["top_label"], fontsize=11, fontweight="bold")
+            elif i == 0:
                 ax.set_title(c.get("marker_label") or c["top_label"], fontsize=11, fontweight="bold", pad=4)   # marker on top
             elif c.get("marker_label"):
                 ax.set_xlabel(c["top_label"], fontsize=11, fontweight="bold")                                  # KO/gene name on bottom
@@ -58,6 +61,8 @@ def make_panel(columns, panel_title, out_stem, tile=1.6, tiles_fn=column_tiles, 
                 ax.set_ylabel("NTC" if i == 0 else "KO", fontsize=11, fontweight="bold", rotation=0,
                               labelpad=14, va="center")
     fig.suptitle(panel_title, fontsize=13, fontweight="bold", x=left, ha="left", va="top", y=0.995)
+    if top_caption:
+        fig.text(0.5, 1 - title_in / H + 0.012, top_caption, fontsize=11, ha="center", va="bottom", style="italic")
     if bottom_caption:
         fig.text(0.5, 0.4 * bot_in / H, bottom_caption, fontsize=11, ha="center", style="italic")
     os.makedirs(OUT, exist_ok=True)

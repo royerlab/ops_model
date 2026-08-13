@@ -6,5 +6,5 @@ from _setacc_phase import COLS_PHASE, column_tiles_phase
 
 if __name__ == "__main__":
     make_panel(COLS_PHASE, "Top-predictive cells (phase)", "panelE_phase_setacc",
-               tiles_fn=column_tiles_phase, bottom_caption="Label-free 2D Phase",
-               title_in=0.66)   # room for 2-line column titles + suptitle, snug
+               tiles_fn=column_tiles_phase, top_caption="Label-free Phase",
+               title_in=0.62, pert_bottom=True)   # NTC top, perturbation label at bottom, "Label-free Phase" on top

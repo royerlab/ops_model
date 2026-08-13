@@ -44,8 +44,8 @@ def column_tiles_shap(col):
 
 def build():
     make_panel(COLS, "Top-predictive cells (phase)", "panelF_phase_newpheno",
-               tiles_fn=column_tiles_shap, bottom_caption="Label-free 2D Phase",
-               title_in=0.66)
+               tiles_fn=column_tiles_shap, top_caption="Label-free Phase",
+               title_in=0.62, pert_bottom=True)   # NTC top, perturbation label at bottom
 
 
 def _job():
