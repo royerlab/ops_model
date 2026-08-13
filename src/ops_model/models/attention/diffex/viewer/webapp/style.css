@@ -501,6 +501,10 @@ button:hover{border-color:var(--accent)}
 
 /* universal image clim — display-time levels stretch applied to every panel's images/canvases */
 #stage img, #stage canvas, .popout img { filter: url(#img-levels); }   /* .popout is fixed/outside #stage → include it */
+/* Montage has its own opacity/brightness controls; keep the SVG contrast filter OFF its surfaces.
+   On the dots overlay (redrawn every animation frame) the per-frame SVG filter caused Safari ghosting/freeze;
+   on the live canvas it distorted geometry (stretched/tall). */
+#montage-view canvas, #montage-view img { filter: none !important; }
 #imgclim-field{display:flex;flex-direction:column;gap:6px}
 #imgclim-field .ic-lbl{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 #imgclim-field #i-climreset{padding:2px 8px;flex:none}
