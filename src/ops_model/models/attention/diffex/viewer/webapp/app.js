@@ -237,6 +237,10 @@ async function boot() {
   $("cellcount").onchange = () => { state.cellCount = Math.max(1, +$("cellcount").value | 0); state.page = 0; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cnext").onclick = () => { state.page++; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
+  $("viewer-reset").onclick = () => {   // wipe persisted selection/prefs + reload → clean default view
+    try { Object.keys(localStorage).filter(k => k.startsWith("opsin.")).forEach(k => localStorage.removeItem(k)); } catch (e) { }
+    location.reload();
+  };
   $("anchor").onchange = () => { state.anchor = $("anchor").value; rebuild(); };
   $("addpanel").onclick = () => { const set = activeSet(); if (set.length) pinShared(set[0].target, set[0].anchor); };
   $("clearpanels").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
