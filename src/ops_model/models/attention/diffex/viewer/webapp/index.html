@@ -68,7 +68,7 @@
   <div class="tb-field">
     <label>Cells per page <span id="cellrange" class="hint"></span></label>
     <div class="row">
-      <input id="cellcount" type="number" min="1" max="20" value="8"/>
+      <input id="cellcount" type="number" min="1" max="20" value="10"/>
       <button id="cprev" title="previous page">◀</button>
       <span id="pagenum" class="hint">Page 1</span>
       <button id="cnext" title="next page">▶</button>
@@ -92,13 +92,13 @@
 <div id="app">
   <aside id="controls">
     <div id="imgclim-field">
-      <span class="ic-lbl">Image brightness</span>
+      <span class="ic-lbl">Image contrast</span>
       <div class="row">
         <div class="dual" style="flex:1;min-width:88px">
           <input id="i-climlo" type="range" min="0" max="1" step="0.02" value="0" title="black point"/>
           <input id="i-climhi" type="range" min="0" max="1" step="0.02" value="1" title="white point"/>
         </div>
-        <button id="i-climreset" title="reset image brightness">↺</button>
+        <button id="i-climreset" title="reset image contrast">↺</button>
       </div>
     </div>
     <div class="tabpane hidden" id="tab-methods"></div>
@@ -353,7 +353,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=219"></script>
-<script src="methods.js?v=68"></script>
+<script src="app.js?v=220"></script>
+<script src="methods.js?v=69"></script>
 </body>
 </html>

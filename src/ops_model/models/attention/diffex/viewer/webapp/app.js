@@ -103,7 +103,7 @@ function applyFeatureGate() {
 
 const state = {
   manifest: null, marker: null, markerIdx: null, targets: [], target: null, anchor: "NTC", sidePanel: "info",
-  cellCount: 8, page: 0, pinned: [], panels: [], alphas: [],
+  cellCount: 10, page: 0, pinned: [], panels: [], alphas: [],
   idx: 0, playing: false, playSeq: [], playPos: 0, frameMs: 180,   // default 1× (180ms/frame)
   scoreMode: "ptarget", showReal: false, scores: {}, scoresV5: {}, groups: [], realAcc20: null,   // scoreMode: none|linear|ptarget|rank. scores[dir]=linear per-cell; scoresV5[dir]=v5 set (bag,per-α); realAcc20[dir]=real top1@bag20
 
@@ -132,7 +132,7 @@ const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag
 const SCORE_LEGEND = {
   linear: "per-cell classifier score (NTC → knockout): 0 → 1",
   ptarget: "classifier confidence · 0 → 100%",
-  rank: "classifier rank · 100th → 1st (best)",
+  rank: "classifier rank of the true perturbation (of ~1,000) · redder = closer to 1st",
 };
 function updateScoreLegend() {
   const show = state.scoreMode !== "none" && (!state.view || state.view === "traversal");
@@ -1381,7 +1381,7 @@ function showIdx(i) {
     const sch = setChip(state.scoresV5[gp.dir], i);
     if (sch) {
       const rl = sch.showReal && state.realAcc20 ? state.realAcc20[gp.dir] : null;   // real-cell ceiling (P(target) only)
-      gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""} · bag ${gp.nCells}`;
+      gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""} · ${gp.nCells}-cell bag`;
       gp.sa.style.background = sch.bg; gp.sa.style.color = sch.fg;
       gp.sa.style.display = "inline-block";
     } else gp.sa.style.display = "none";
