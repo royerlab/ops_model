@@ -1160,7 +1160,7 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
   const btn = $("exportgif"), old = btn.textContent; btn.disabled = true; btn.textContent = "rendering…";
   const gr = grid.getBoundingClientRect();
   const MARGIN = 18;                 // general padding around the whole gif
-  const TOP = 72;                    // heatbar band on its own line above the grid (extra gap below its end labels)
+  const TOP = 54;                    // heatbar band on its own line above the grid (tight gap below its end labels)
   // walk each group (row/column) keeping its header label + colored tiles, in raw grid coords
   const groups = [];
   grid.querySelectorAll(".group").forEach(gEl => {
@@ -1216,16 +1216,23 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
   };
   for (const a of path) {
     cx.fillStyle = "#0d0f14"; cx.fillRect(0, 0, W, H);
-    const grd = cx.createLinearGradient(bx0, 0, bx1, 0);                          // orange (anti-phenotype) → blue (anchor) → red (phenotype)
-    grd.addColorStop(0, "#f0a020"); grd.addColorStop(0.5, "#26c6ff"); grd.addColorStop(1, "#ff5252");
+    const pos = state.posOnly;                                                   // α≥0: bar starts at the anchor (no anti-phenotype half)
+    const grd = cx.createLinearGradient(bx0, 0, bx1, 0);
+    if (pos) { grd.addColorStop(0, "#26c6ff"); grd.addColorStop(1, "#ff5252"); }          // anchor → phenotype
+    else { grd.addColorStop(0, "#f0a020"); grd.addColorStop(0.5, "#26c6ff"); grd.addColorStop(1, "#ff5252"); }  // anti → anchor → phenotype
     cx.fillStyle = grd; cx.fillRect(bx0, cy - 4, barW, 8);
     const frac = hi > lo ? (a - lo) / (hi - lo) : 0.5, mx = bx0 + frac * barW;    // moving marker (only thing that changes → no flicker)
     cx.strokeStyle = "#fff"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(mx, cy - 10); cx.lineTo(mx, cy + 10); cx.stroke();
     cx.fillStyle = "#fff"; cx.beginPath(); cx.moveTo(mx, cy - 10); cx.lineTo(mx - 4, cy - 15); cx.lineTo(mx + 4, cy - 15); cx.closePath(); cx.fill();
-    cx.font = "600 12px sans-serif"; cx.textBaseline = "top";                     // three static labels colored like the bar
-    cx.textAlign = "left";   cx.fillStyle = "#f0a020"; cx.fillText("anti-phenotype", bx0, cy + 10);
-    cx.textAlign = "center"; cx.fillStyle = "#26c6ff"; cx.fillText(anch, (bx0 + bx1) / 2, cy + 10);
-    cx.textAlign = "right";  cx.fillStyle = "#ff5252"; cx.fillText("phenotype", bx1, cy + 10);
+    cx.font = "600 12px sans-serif"; cx.textBaseline = "top";                     // static labels colored like the bar
+    if (pos) {
+      cx.textAlign = "left";  cx.fillStyle = "#26c6ff"; cx.fillText(anch, bx0, cy + 10);
+      cx.textAlign = "right"; cx.fillStyle = "#ff5252"; cx.fillText("phenotype", bx1, cy + 10);
+    } else {
+      cx.textAlign = "left";   cx.fillStyle = "#f0a020"; cx.fillText("anti-phenotype", bx0, cy + 10);
+      cx.textAlign = "center"; cx.fillStyle = "#26c6ff"; cx.fillText(anch, (bx0 + bx1) / 2, cy + 10);
+      cx.textAlign = "right";  cx.fillStyle = "#ff5252"; cx.fillText("phenotype", bx1, cy + 10);
+    }
     for (const g of groups) {                                                    // wrapped label centered above the group's images, then the tiles
       cx.font = "12px sans-serif"; cx.textAlign = "center"; cx.textBaseline = "bottom"; cx.fillStyle = g.color;
       g.lines.forEach((ln, li) => cx.fillText(ln, g.gcx, g.gtop - 5 - (g.lines.length - 1 - li) * LH));
