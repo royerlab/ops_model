@@ -345,8 +345,8 @@ button:hover{border-color:var(--accent)}
 #stage.methods-active>*{display:none}
 #stage.methods-active>#methods-view{display:block}
 .mth-rail{display:flex;flex-direction:column;gap:4px;margin-top:10px}
-.mth-rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
-.mth-rail-brand{display:flex;align-items:center;gap:9px}
+.mth-rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px}
+.mth-rail-brand{display:flex;align-items:center;gap:9px;padding-top:12px;border-top:1px solid var(--line)}   /* Biohub|CellXState is its own section below the thin line; paper link sits above it */
 .mth-rail-foot img{height:20px;opacity:.92}
 .mth-rail-foot span{font-size:14px;color:var(--mut)}
 .mth-paper{font-size:14px;color:var(--accent);text-decoration:none}
