@@ -8,7 +8,7 @@ Weights are downloaded on first use from the public S3 bucket:
     s3://czi-subcell-public/models/DNA-Protein_MAE-CellS-ProtS-Pool.pth
 
 Local cache:
-    /hpc/projects/icd.fast.ops/models/model_checkpoints/subcell/bg/
+    $OPS_BASE_PATH/models/model_checkpoints/subcell/bg/
 
 Channel mapping:
     batch["data"] channel 0  →  Blue  (DNA / DAPI)

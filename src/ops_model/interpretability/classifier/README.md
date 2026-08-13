@@ -111,10 +111,6 @@ working directory is **not** changed — relative `save_path` / `metrics_out` la
 the launch dir, while hydra still writes its run dir (resolved config + log) under
 `outputs/<date>/<time>/`.
 
-Data paths in the shipped configs are `/path/to/...` placeholders; fill them in. On
-the shared store, derive them from `$OPS_BASE_PATH` (default
-`/hpc/projects/icd.fast.ops`, see `src/ops_model/paths.py`).
-
 ### `train.py` — hydra, `--config-name`
 
 ```bash

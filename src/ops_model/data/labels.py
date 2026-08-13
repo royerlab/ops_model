@@ -72,7 +72,7 @@ def load_immunostaining_labels(
         filename_template: Filename pattern with {well} placeholder,
             e.g. "cell_painting_linked_{well}.csv" or "four_i_linked_{well}.csv"
         base_path: Base directory containing per-experiment subdirectories.
-            Defaults to /hpc/projects/icd.fast.ops.
+            Defaults to ``BASE_PATH`` (see ``ops_model.paths``).
 
     Returns:
         labels_df ready to pass to OpsDataManager.construct_dataloaders()

@@ -3,7 +3,7 @@ embedding on a HELD-OUT set of cells (fresh seed → disjoint from training), th
 Pearson(pred, real) and save a `phase | predicted | real` montage.
 
     python -m ops_model.interpretability.diffae.generator.virtstain_eval \
-        --out-dir /hpc/projects/icd.fast.ops/analysis/virtual_staining/chromalive561_from_phase \
+        --out-dir "$OPS_BASE_PATH/analysis/virtual_staining/chromalive561_from_phase" \
         --marker-channel "mitochondria_ChromaLIVE 561 excitation" --channel mCherry --cond-channel Phase2D
 """
 from __future__ import annotations

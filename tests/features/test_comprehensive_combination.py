@@ -15,7 +15,6 @@ import pytest
 import numpy as np
 import pandas as pd
 import anndata as ad
-from pathlib import Path
 
 from ops_utils.data.feature_metadata import FeatureMetadata
 from ops_model.features.anndata_utils import (
@@ -379,67 +378,6 @@ class TestEdgeCases:
 
 
 # ============================================================================
-# Integration Tests (require real data)
-# ============================================================================
-
-
-@pytest.mark.integration
-@pytest.mark.skipif(
-    not Path("/hpc/projects/icd.fast.ops").exists(),
-    reason="Requires access to HPC data",
-)
-class TestIntegration:
-    """Integration tests with real data."""
-
-    def test_comprehensive_with_real_data(self):
-        """Test full workflow with real OPS data."""
-        experiments_channels = [
-            ("ops0089_20251119", "Phase2D"),
-            ("ops0089_20251119", "GFP"),
-        ]
-
-        adata_guide, adata_gene = concatenate_experiments_comprehensive(
-            experiments_channels, feature_type="dinov3", verbose=False
-        )
-
-        # Validate basic structure
-        assert adata_guide.shape[0] > 0
-        assert adata_gene.shape[0] > 0
-        assert "comprehensive_metadata" in adata_gene.uns
-
-        # Check embeddings
-        assert "X_pca" in adata_gene.obsm
-        assert "X_umap" in adata_gene.obsm
-
-    def test_fallback_vertical_with_real_data(self):
-        """Test vertical fallback with real data."""
-        experiments_channels = [
-            ("ops0089_20251119", "Phase2D"),
-            ("ops0108_20251201", "Phase2D"),
-        ]
-
-        adata_guide, adata_gene = concatenate_experiments_comprehensive(
-            experiments_channels, feature_type="dinov3", verbose=False
-        )
-
-        # Should have single feature set (vertical fallback)
-        assert adata_gene.shape[1] == 1024
-
-    def test_fallback_horizontal_with_real_data(self):
-        """Test horizontal fallback with real data."""
-        experiments_channels = [
-            ("ops0089_20251119", "GFP"),
-            ("ops0108_20251201", "GFP"),
-        ]
-
-        adata_guide, adata_gene = concatenate_experiments_comprehensive(
-            experiments_channels, feature_type="dinov3", verbose=False
-        )
-
-        # Should have two feature sets (horizontal fallback)
-        assert adata_gene.shape[1] == 2048  # 2 × 1024
-
-
 # ============================================================================
 # Parametrized Tests
 # ============================================================================

@@ -3,7 +3,7 @@
     python -m ops_model.interpretability.diffae.generator.submit
 
 =============================== RUNBOOK ===============================
-Checkpoints (root /hpc/projects/icd.fast.ops/models/diffex/diffae/) and their
+Checkpoints (root $OPS_BASE_PATH/models/diffex/diffae/) and their
 best cond_ratio (emb/noise conditioning strength; higher = stronger edits):
   phase_v1/            50k crops,  ep120, 0.468   <- PRODUCTION (all traversals use this)
   phase_v1_500k/       500k scratch, ep12, 0.416  (undertrained; parked)

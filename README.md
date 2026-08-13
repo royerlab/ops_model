@@ -42,13 +42,21 @@ uv sync
 ```
 
 All commands are then run from the **monorepo root** (`ops_monorepo/`) with `uv run`, as in every
-example below. `RUNNING.md` covers environment setup, including the `module load uv` and
-`UV_CACHE_DIR` steps for cluster use.
+example below — never from inside a subpackage directory, never with a manually activated
+conda/venv, and never with bare `python` or `pytest`. See the
+[monorepo README](https://github.com/czbiohub-sf/ops_monorepo#getting-started) for cluster setup
+(`module load uv`, `UV_CACHE_DIR`).
 
 The pipelines read and write under `$OPS_BASE_PATH`, which has no default and must be set:
 
 ```bash
 export OPS_BASE_PATH="/path/to/ops_data"
+```
+
+Tests run the same way, and also need `OPS_BASE_PATH` set:
+
+```bash
+uv run pytest ops_model/tests/
 ```
 
 ### Why it only works inside the monorepo

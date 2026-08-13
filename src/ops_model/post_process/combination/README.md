@@ -65,7 +65,7 @@ A worked example (the validation-cohort run) is at
 
 ```yaml
 cell_dino: true
-output_dir: /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3
+output_dir: /path/to/output_dir
 experiments: ops0146,ops0147,ops0150,ops0151
 phase_only: true
 fixed_threshold: 0.80
@@ -114,8 +114,7 @@ experiment's cell-level h5ads at:
 
 `<feature_dir>` per mode: `cell_dino_features` (`--cell-dino`), `dino_features` (`--dino`),
 `cell-profiler` (`--cell-profiler`), `dynaclr_features`, `subcell_features`. Channels are mapped
-to biological-signal groups via the channel maps
-(`/hpc/projects/icd.fast.ops/configs/ops_channel_maps.yaml`).
+to biological-signal groups via the channel maps.
 `--organelle-profiler` instead reads consolidated `all_cells_*.h5ad` files from `--op-root`.
 
 Restrict the experiment set with `--experiments ops0100,ops0105,…`, or `--paper-v1`
@@ -132,7 +131,7 @@ python -m ops_model.post_process.combination.pca_optimization \
     --cell-dino --phase-only \
     --experiments ops0100,ops0105,ops0117,ops0119,ops0120 \
     --fixed-threshold 0.80 \
-    --output-dir /hpc/projects/icd.fast.ops/experiments/<you>/combine_test \
+    --output-dir /path/to/output_dir \
     -y
 ```
 Omitting `--slurm` runs Phase 1 + Phase 2 in-process.
@@ -148,12 +147,12 @@ python -m ops_model.post_process.combination.pca_optimization \
 **3. Validation cohort** (4 experiments, Phase-only, custom CHAD file) — from the module docstring:
 ```bash
 python -m ops_model.post_process.combination.pca_optimization \
-    --output-dir /hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3 \
+    --output-dir /path/to/output_dir \
     --cell-dino --zscore-per-experiment \
     --run-tag paper_v1/validation_4exp_phase_only \
     --experiments ops0146,ops0147,ops0150,ops0151 \
     --phase-only \
-    --chad-annotation /hpc/projects/icd.fast.ops/configs/gene_clusters/val_library_chad_positive_controls_v1.yml \
+    --chad-annotation /path/to/cluster_definitions.csv \
     --slurm
 ```
 
