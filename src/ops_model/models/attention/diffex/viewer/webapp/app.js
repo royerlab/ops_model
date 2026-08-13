@@ -32,6 +32,7 @@ function setSidePanel(m, init) {   // right panel: 'info' (selected perturbation
   if (!init && typeof saveState === "function") saveState();
 }
 const NOCACHE = "?t=" + Date.now();   // per-load cache-bust for the small JSON metadata (manifest/index/labels/…)
+const IS_SAFARI = /^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent);   // real Safari (not Chrome/Firefox on iOS)
                                       // so reloads always get the freshly-rebuilt data; images stay cached
 const PAD = (i) => String(i).padStart(2, "0");
 const $ = (id) => document.getElementById(id);
@@ -620,10 +621,16 @@ async function loadMontage() {
   mont.dimKey = dimKey;
   const keep = (mont.osd && mont.osd.world.getItemCount()) ? mont.osd.viewport.getBounds() : null;  // preserve viewpoint
   if (!mont.osd) {
+    // Safari reclaims canvas backing-store memory aggressively; on Retina (DPR 2) the OSD canvas is 4× the pixels,
+    // so pan/zoom evicts tiles → OSD re-requests them → thrash (ghost/duplicated tiles → freeze). Render at DPR 1
+    // on Safari (4× less canvas memory; Chrome untouched — it stays crisp at native DPR).
+    if (IS_SAFARI) OpenSeadragon.pixelDensityRatio = 1;
     mont.osd = OpenSeadragon({ id: "osd", tileSources: layers, showNavigationControl: false,
       crossOriginPolicy: false, gestureSettingsMouse: { clickToZoom: false, scrollToZoom: true },
       zoomPerScroll: 1.7, animationTime: 0.25, springStiffness: 9,
       minPixelRatio: mont.detail,                           // level-of-detail (live via Zoom detail slider)
+      smoothTileEdgesMinZoom: Infinity,                     // no per-tile edge-smoothing offscreen canvases (Safari ghosting/memory hog)
+      maxImageCacheCount: 150, imageLoaderLimit: 5,         // bound tile-cache memory + concurrent decodes (Safari thrash on interaction)
       minZoomImageRatio: 0.4, maxZoomPixelRatio: 8, background: "#000" });
     ["update-viewport", "animation", "animation-finish", "resize"].forEach(ev => mont.osd.addHandler(ev, drawOverlay));
     wireHover();
