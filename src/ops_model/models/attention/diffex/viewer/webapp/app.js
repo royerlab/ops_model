@@ -1948,9 +1948,10 @@ function renderTop() {
       const url = `${BASE}${tcBase()}${cropDir}/${c.img}${TC_CROP_V}`;
       const ovUrl = c.ov ? `${BASE}${tcBase()}overlays/${c.ov}${TC_CROP_V}` : null;
       const ov = ovUrl ? `<img class="tc-ov" src="${ovUrl}">` : "";
-      const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>${e.mode} ${sk}=${c[sk]} · rank ${c.rank}</div>`;
+      const cv = sk === "conf" && c[sk] != null && !isNaN(+c[sk]) ? +(+c[sk]).toPrecision(2) : c[sk];   // round accuracy/confidence to 2 sig figs
+      const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>${e.mode} ${sk}=${cv} · rank ${c.rank}</div>`;
       const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)}${ovUrl ? "," + JSON.stringify(ovUrl) : ""}`;
-      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${c[sk]}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
+      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${cv}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
     }
     h += "</div></div>";
   }
