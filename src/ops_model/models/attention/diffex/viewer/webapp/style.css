@@ -18,7 +18,6 @@ header .sub{color:var(--mut);font-size:12px}
 .verbtn:hover{border-color:var(--accent)}
 .verbtn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 #side-info{font-size:13.5px;padding:6px 15px}
-#side-info.active{background:var(--panel);color:var(--fg);border-color:var(--accent)}   /* grayed, not bright-blue */
 #sidebar{width:340px;flex:none;border-left:1px solid var(--line);padding:18px;overflow:auto}
 #sidebar.hidden{display:none}
 .side-hd{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);

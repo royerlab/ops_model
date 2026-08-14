@@ -245,7 +245,7 @@ async function boot() {
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
   ensureSetacc(() => {});   // preload set-accuracy so the default "by SET ACC" ordering is ready
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
-  wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : "");
+  wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : (state.unavail ? state.unavail.name : ""));
   $("tprev").onclick = () => stepTarget(-1);   // step through perturbations quickly
   $("tnext").onclick = () => stepTarget(1);
   $("target-sort").onchange = () => { state.targetSort = $("target-sort").value;
@@ -1143,20 +1143,23 @@ function renderTargetList() {
   if (!n) list.innerHTML = '<div class="combo-empty">no matches</div>';
 }
 
+function unavailMsg() {   // shared "Cells not available" banner (traversal + top cells)
+  const { name, acc } = state.unavail, pct = acc == null ? "—" : Math.round(acc * 100) + "%";
+  return `<div class="unavail-msg"><div class="unavail-t">Cells not available</div>` +
+    `<div class="unavail-s"><b>${name}</b> — <b>${pct}</b> is below the accuracy threshold. No images generated.</div></div>`;
+}
+
 function pickUnavail(name, acc) {   // a searched perturbation with no traversal/top cells (accuracy below threshold)
   state.unavail = { name, acc }; state.target = null;
   $("filter").value = name; $("filter").blur(); $("target-list").classList.add("hidden");
-  rebuild(); if (typeof saveState === "function") saveState();
+  rebuild(); if (state.view === "top") loadTop();   // show the message on whichever main view is active
+  if (typeof saveState === "function") saveState();
 }
 
-function renderUnavail() {
-  const { name, acc } = state.unavail, pct = acc == null ? "—" : Math.round(acc * 100) + "%";
-  $("grid").innerHTML = `<div class="unavail-msg"><div class="unavail-t">Cells not available</div>` +
-    `<div class="unavail-s"><b>${name}</b> — perturbation accuracy <b>${pct}</b> is below the distinctiveness ` +
-    `threshold, so no traversal or top cells were generated.</div></div>`;
-  $("pagenum").textContent = "";
-  $("info-title").textContent = name; $("info-sub").textContent = "No traversal / top cells";
-  $("info-body").innerHTML = `Perturbation accuracy <b>${pct}</b> is below the distinctiveness threshold.`;
+function renderUnavail() {   // traversal view: replace the grid; keep the perturbation's real annotation in the info panel
+  $("grid").innerHTML = unavailMsg(); $("pagenum").textContent = "";
+  const name = state.unavail.name;
+  renderInfo(findTargetEntry(name) || { target: name, grain: $("grain").value || "geneKO", desc: (state.geneDesc || {})[name] });
 }
 function pickTarget(slug) { selectTarget(slug); const t = state.targets.find(x => x.slug === slug); $("filter").value = t ? targetLabel(t) : ""; $("filter").blur(); $("target-list").classList.add("hidden"); }
 
@@ -2032,7 +2035,7 @@ function renderTop() {
     }
     h += "</div></div>";
   }
-  v.innerHTML = h || '<div class="empty">select a perturbation</div>';
+  v.innerHTML = (state.unavail ? unavailMsg() : "") + (h || '<div class="empty">select a perturbation</div>');   // message above the NTC/pinned groups
   v.classList.toggle("masked", tc.mask !== false);   // show/hide the blue seg overlay layer
   $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcEntries().length} row(s)`;
   $("pagenum").textContent = `${lo + 1}-${Math.min(cap, lo + n)} / ${cap}`;   // single indicator between the arrows: cells shown / total
