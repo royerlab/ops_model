@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=209"/>
+<link rel="stylesheet" href="style.css?v=210"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -14,9 +14,6 @@
   </div>
   <div class="hdr-right">
     <button id="envtoggle" class="verbtn envtoggle" title="Staging only — preview the public demo subset (Top cells + Traversal + How-it-works steps 1–6; hides Montage/PCs/Attention). Not shown on the public deployment.">🔒 Preview public</button>
-    <div class="asset-ver" title="Info — the selected perturbation's annotation (About moved into How it works)">
-      <button id="side-info" class="verbtn active" onclick="setSidePanel('info')">ⓘ Info</button>
-    </div>
     <a class="biohub-logo" href="https://biohub.org" target="_blank" rel="noopener" title="Biohub"><img src="biohub-mark.png?v=1" alt="Biohub"/></a>
   </div>
 </header>
@@ -89,6 +86,10 @@
   <div class="tb-field" id="bag-field" style="display:none">
     <label>Anchor bag</label>
     <select id="m-bag" title="single_bag = attention/accuracy anchors (disk cells 0-199); multi_bag = multirank anchors (disk cells 200-399). Phase only."></select>
+  </div>
+  <div class="tb-field" id="pertinfo-field" style="margin-left:auto;min-width:0">
+    <label>&nbsp;</label>
+    <button id="side-info" class="verbtn active" onclick="setSidePanel('info')" title="Show the selected perturbation's info / annotation">ⓘ Perturbation Info</button>
   </div>
 </div>
 
@@ -335,7 +336,7 @@
 
   <aside id="sidebar" class="hidden">
     <div id="side-info-view">
-      <div class="side-hd">Perturbation info</div>
+      <div class="side-hd">Perturbation info<button class="side-x" onclick="setSidePanel('info')" title="Close">✕</button></div>
       <div id="info-title"></div>
       <div id="info-sub"></div>
       <div id="info-body"></div>
@@ -366,7 +367,7 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=247"></script>
+<script src="app.js?v=248"></script>
 <script src="methods.js?v=76"></script>
 </body>
 </html>

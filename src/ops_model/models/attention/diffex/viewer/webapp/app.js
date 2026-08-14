@@ -1128,13 +1128,42 @@ function renderTargetList() {
     }
     d.onmousedown = (e) => { e.preventDefault(); pickTarget(t.slug); }; list.appendChild(d); n++;
   });
+  if (q && accBins) {   // below-threshold perturbations: no traversal/top cells, but accuracy exists → still searchable
+    const mk = attnModality(), avail = new Set(arr.map(t => t.target.toLowerCase()));
+    const pool = (accBins[mk] && accBins[mk].acc) || {};
+    Object.keys(pool).forEach(name => {
+      if (avail.has(name.toLowerCase()) || !name.toLowerCase().includes(q)) return;
+      const a = saAcc(mk, name, 100), d = document.createElement("div");
+      d.className = "combo-item unavail"; d.title = `${name} — no traversal/top cells (accuracy below threshold)`;
+      d.textContent = name;
+      const s = document.createElement("span"); s.className = "ci-sub"; s.textContent = a == null ? " —" : ` ${Math.round(a * 100)}%`; d.appendChild(s);
+      d.onmousedown = (e) => { e.preventDefault(); pickUnavail(name, a); }; list.appendChild(d); n++;
+    });
+  } else if (q && !accBins) { ensureSetacc(() => renderTargetList()); }
   if (!n) list.innerHTML = '<div class="combo-empty">no matches</div>';
+}
+
+function pickUnavail(name, acc) {   // a searched perturbation with no traversal/top cells (accuracy below threshold)
+  state.unavail = { name, acc }; state.target = null;
+  $("filter").value = name; $("filter").blur(); $("target-list").classList.add("hidden");
+  rebuild(); if (typeof saveState === "function") saveState();
+}
+
+function renderUnavail() {
+  const { name, acc } = state.unavail, pct = acc == null ? "—" : Math.round(acc * 100) + "%";
+  $("grid").innerHTML = `<div class="unavail-msg"><div class="unavail-t">Cells not available</div>` +
+    `<div class="unavail-s"><b>${name}</b> — perturbation accuracy <b>${pct}</b> is below the distinctiveness ` +
+    `threshold, so no traversal or top cells were generated.</div></div>`;
+  $("pagenum").textContent = "";
+  $("info-title").textContent = name; $("info-sub").textContent = "No traversal / top cells";
+  $("info-body").innerHTML = `Perturbation accuracy <b>${pct}</b> is below the distinctiveness threshold.`;
 }
 function pickTarget(slug) { selectTarget(slug); const t = state.targets.find(x => x.slug === slug); $("filter").value = t ? targetLabel(t) : ""; $("filter").blur(); $("target-list").classList.add("hidden"); }
 
 function selectTarget(slug) {
   state.target = state.targets.find(t => t.slug === slug);
   if (!state.target) return;
+  state.unavail = null;   // clear any prior "cells not available" message
   $("filter").title = targetLabel(state.target);   // hover shows the full name (long complex names get truncated in the input)
   $("filter").dataset.tip = targetLabel(state.target);   // fast custom tooltip (same as group titles/pins)
   populateAnchors(state.target.target);
@@ -1317,6 +1346,7 @@ function renderPinned() {
 
 // grid = activeSet rows × cells-per-page cols, all synced to the shared α slider.
 function rebuild() {
+  if (state.unavail) { renderUnavail(); return; }   // searched perturbation with no traversal/top cells
   const set = activeSet();
   const N = state.cellCount, start = state.page * N;
   const cr = state.target ? state.target.n_cells : (set[0] ? set[0].n_cells : 0);   // rank range of the current perturbation's cells

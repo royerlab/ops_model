@@ -21,6 +21,13 @@ header .sub{color:var(--mut);font-size:12px}
 #sidebar.hidden{display:none}
 .side-hd{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
          border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:12px}
+.side-x{float:right;margin-top:-2px;background:none;border:none;color:var(--mut);cursor:pointer;
+        font-size:15px;line-height:1;padding:0 2px}
+.side-x:hover{color:var(--fg)}
+.combo-item.unavail{opacity:.55;font-style:italic}
+.unavail-msg{padding:60px 24px;text-align:center;color:var(--mut)}
+.unavail-t{font-size:26px;font-weight:650;color:var(--fg);margin-bottom:10px}
+.unavail-s{font-size:15px;max-width:580px;margin:0 auto;line-height:1.5}
 #info-title{font-size:23px;font-weight:650;line-height:1.25}
 #info-sub{color:var(--mut);font-size:14px;font-family:ui-monospace,monospace;margin:4px 0 14px}
 #info-body{font-size:15px;line-height:1.55}
