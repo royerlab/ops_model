@@ -45,11 +45,12 @@ function updateImgLevels() {
   for (const id of ["lvlR", "lvlG", "lvlB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
 }
 
-// Independent fixed black-point clip for FLUOR traversal images (crops background) — separate from the shared
-// brightness toggle. Generated-image background is uniform across markers (measured: p50≈0.45, std 0.017),
-// so one value suffices; add "<marker_channel>": <lo 0..1> overrides only if a marker needs it.
-const TRAV_CLIP_DEFAULT = 0.30;   // chosen from HSPA5/5xUPRE clip sweep — removes background without eating signal
-const TRAV_CLIP = {};
+// Independent black-point clip for FLUOR traversal images (crops background) — separate from the shared
+// brightness toggle. Per-marker black point = that marker's p1 over its generated frames — the SAME marker-global
+// percentile recipe Top Cells' crops_norm uses (lo=p1). Values median ≈0.30 (matches the eyeballed default), range
+// 0.21–0.44. Regenerate with build_trav_clip if frames change. TRAV_CLIP_DEFAULT is the fallback for unlisted markers.
+const TRAV_CLIP_DEFAULT = 0.30;
+const TRAV_CLIP = {"5xUPRE": 0.247, "ChromaLIVE 488 excitation": 0.353, "ER/Golgi COP-II_SEC23A": 0.275, "ER/Golgi_COPE": 0.388, "ER/golgi bridge_VAPA": 0.275, "ER_NCLN": 0.294, "ER_SEC61B": 0.294, "Endoplasmic Reticulum_Concanavalin A": 0.275, "F-actin_Phalloidin": 0.255, "Fe2__FeRhoNox_live_cell_dye": 0.314, "Microtubules_Tubulin": 0.306, "Mitochondria_TOMM20": 0.373, "Nucleoli_NPM1": 0.373, "Nucleus_Hoechst": 0.388, "Plasma Membrane_Wheat Germ Agglutinin": 0.325, "actin filament_FastAct_SPY555 Live Cell Dye": 0.271, "autophagosome_ATG101": 0.259, "autophagosome_MAP1LC3B": 0.306, "b_catenin_b_catenin__mouse_488": 0.231, "c_Myc_c_Myc__mouse_488": 0.306, "caspase activity_CellEvent-Caspase live-cell dye": 0.318, "cell proliferation marker_MKI67": 0.337, "chaperones_HSPA1B": 0.239, "chromatin_H2BC21": 0.392, "cis-Golgi_mStayGold-CENPRaltORF": 0.361, "clathrin vesicles_CLTA": 0.247, "early endosome_EEA1": 0.333, "endocytic vesicle pH_pHrodo-dextran Live Cell Dye": 0.353, "endosome_VPS35": 0.31, "intermediate filaments_VIM": 0.294, "laminin_LMNB1": 0.384, "late endosome_RAB7A": 0.357, "lipid droplet_BODIPY live cell dye": 0.306, "lipid droplet_PLIN2": 0.271, "lysosome_LAMP1": 0.369, "lysosome_LysoTracker live-cell dye": 0.408, "microtubules_MAP4": 0.306, "mitochondria_ChromaLIVE 561 excitation": 0.373, "mitochondria_TOMM70A": 0.384, "nuclear speckles_SRRM2": 0.412, "nucleolus-DFC_FBL": 0.435, "nucleolus-GC_NPM3": 0.388, "nucleus_NucleoLIVE Live Cell dye": 0.373, "oxidative stress_CellROX live-cell dye": 0.255, "p21_p21__rabbit_647": 0.212, "p53_p53__mouse_488": 0.231, "pRb_pRb__rabbit_647": 0.278, "pS6_pS6__rabbit_647": 0.243, "peroxisome_Peroxi_SPY650 live cell dye": 0.247, "plasma membrane_ATP1B3": 0.282, "plasma membrane_SLC3A2": 0.239, "proteasome_PSMB7": 0.341, "recycling endosome_TFRC": 0.361, "stress granule_G3BP1": 0.247, "trans-Golgi_VAMP3": 0.282};
 function updateTravClip() {
   const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
   const inp = $("tr-inorm");
