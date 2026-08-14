@@ -1195,6 +1195,7 @@ function redrawPins() {   // refresh both pin lists + the active grid, and persi
 async function exportGif() {   // client-side GIF of the current traversal grid across all α (works on static S3)
   const grid = $("grid"); if (!state.panels.length || typeof GIF === "undefined") return;
   const btn = $("exportgif"), old = btn.textContent; btn.disabled = true; btn.textContent = "rendering…";
+  const CLIPF = (tc.inorm && state.marker && state.marker.marker_channel) ? "url(#trav-clip)" : "none";   // bake the fluor marker-normalize clip into the GIF (canvas drawImage ignores CSS/SVG filters)
   const gr = grid.getBoundingClientRect();
   const MARGIN = 18;                 // general padding around the whole gif
   const TOP = 54;                    // heatbar band on its own line above the grid (tight gap below its end labels)
@@ -1275,7 +1276,7 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
       g.lines.forEach((ln, li) => cx.fillText(ln, g.gcx, g.gtop - 5 - (g.lines.length - 1 - li) * LH));
       const lead = g.tiles.reduce((m, t) => t.x < m.x ? t : m, g.tiles[0]);
       for (const t of g.tiles) {
-        const im = cache[t.frames[a]]; if (im && im.width) cx.drawImage(im, t.x, t.y, t.w, t.h);
+        const im = cache[t.frames[a]]; if (im && im.width) { cx.filter = CLIPF; cx.drawImage(im, t.x, t.y, t.w, t.h); cx.filter = "none"; }
         if (state.scoreMode === "linear") {                                      // per-cell linear classifier score (top-right of tile)
           const sc = state.scores[t.dir], v = sc && sc.scores[t.cell] ? sc.scores[t.cell][Math.min(a, sc.scores[t.cell].length - 1)] : null;
           if (v != null) chip(`${Math.round(v * 100)}%`, t.x + t.w, t.y, v, "right");
