@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=211"/>
+<link rel="stylesheet" href="style.css?v=212"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -87,8 +87,7 @@
     <label>Anchor bag</label>
     <select id="m-bag" title="single_bag = attention/accuracy anchors (disk cells 0-199); multi_bag = multirank anchors (disk cells 200-399). Phase only."></select>
   </div>
-  <div class="tb-field" id="pertinfo-field" style="margin-left:auto;min-width:0">
-    <label>&nbsp;</label>
+  <div class="tb-field" id="pertinfo-field" style="margin-left:auto;min-width:0;justify-content:center">
     <button id="side-info" class="verbtn active" onclick="setSidePanel('info')" data-tip="Show the selected perturbation's info / annotation" title="Show the selected perturbation's info / annotation">ⓘ Perturbation Info</button>
   </div>
 </div>
