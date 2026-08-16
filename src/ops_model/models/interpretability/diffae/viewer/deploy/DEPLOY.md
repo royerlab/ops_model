@@ -10,7 +10,7 @@
 ## Environments
 | env | URL | auth | data source |
 |---|---|---|---|
-| rdev / staging | `*.apps.czbiohub.org` | **Okta-protected** | `diffex-viewer-dev` bucket (S3-CSI mount at `/data`) |
+| staging | `relative-termite.staging-biohub.staging.czi.team` (rdev = `*.apps.czbiohub.org`) | **Okta-protected** (curl → `302` to `czi.okta.com`, so **no curl `?v` check** — verify in-browser via DevTools Network) | `diffex-viewer-dev` bucket (S3-CSI mount at `/data`) |
 | **prod** | **opsin.apps.czbiohub.org** | **PUBLIC** (no Okta) | **CloudFront** (`d2xofoeogdsfrz.cloudfront.net`), public subset — *no* S3-CSI mount |
 
 ## The pipeline
