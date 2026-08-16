@@ -174,7 +174,7 @@ def gen_peak_fluor(case="MTOR", device="cuda"):
     """Metric B for a fluor traversal: peak-α of the generated cells' removal-based marginal (fluor classifier)."""
     import glob, json, os, types, torch
     from ops_model.models.attention.diffex.viewer.set_classifier import load_set_classifier, V5_CKPT_ROOT, V5_RUNS
-    from ops_model.models.attention.diffex.figures.gen_validation.centroid_recovery_fluor import _emb
+    from ops_model.models.attention.diffex.gen_validation.centroid_recovery.centroid_recovery_fluor import _emb
     c = _FLUOR_CASES[case]
     model, cmap, c2i = load_set_classifier(run=V5_RUNS[c["run_key"]], device=device, root=V5_CKPT_ROOT)
     tl = cmap[c["cls"]]; ci = c2i[c["channel"]]

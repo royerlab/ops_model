@@ -103,7 +103,7 @@ def build_body():
 
 <h2>Source on Bruno</h2>
 <table><tbody>
-<tr><td><strong>Cache build</strong></td><td><code>ops_model/.../diffex/figures/gen_validation/valid200_cache_build.py</code> (V200_ASSETS=viewer_assets_v5, NCELL=400)</td></tr>
+<tr><td><strong>Cache build</strong></td><td><code>ops_model/.../diffex/gen_validation/valid200/valid200_cache_build.py</code> (V200_ASSETS=viewer_assets_v5, NCELL=400)</td></tr>
 <tr><td><strong>Scoring</strong></td><td><code>bag_sweep_score.py</code> (SetTransformer) · <code>centroid_bagsweep.py</code> (centroid recovery) · <code>gen_real_distinct.py</code> (distinctiveness)</td></tr>
 <tr><td><strong>Plots</strong></td><td><code>bag_sweep_plots.py</code></td></tr>
 <tr><td><strong>Cache</strong></td><td><code>/hpc/projects/icd.fast.ops/analysis/figure4_traversals/gen_real_map_cache_v5new/</code></td></tr>
