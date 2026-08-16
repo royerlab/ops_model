@@ -2,6 +2,14 @@
 (experiment, well, segmentation_id, channel_name), with weight columns for
 both classifier variants (geneKO / EBI).
 
+Two source variants are supported:
+  --variant partial (default) — original shap_screen_fluor_all.csv +
+                                shap_screen_ebi_fluor_all.csv (thin coverage:
+                                ~11-14% of (gene, marker) pairs ranked).
+  --variant full20k          — shap_screen_fluor_full_20k_all.csv +
+                                shap_screen_ebi_fluor_full_20k_all.csv (every
+                                (gene, marker) pair ranked, cap 20k cells/pair).
+
 Reads the two multi-rank CSVs and merges them on the shared cell/channel key.
 
 Output schema matches the shape of per_experiment_v4_attn_fluor.parquet, so the
@@ -29,15 +37,27 @@ import pandas as pd
 import pyarrow.csv as pa_csv
 
 SRC = Path("/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/multi_rank")
-OUT = Path("/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
-           "per_experiment_v5_multibag_fluor.parquet")
-FILES = {"gko":     "shap_screen_fluor_all.csv",
-         "ebionly": "shap_screen_ebi_fluor_all.csv"}
+# Two source variants:
+#   "partial"  — original CSVs (~11-14% of (gene, marker) pairs have rankings)
+#   "full20k"  — every (gene, marker) pair ranked, cap 20k cells/pair
+VARIANTS = {
+    "partial": {
+        "files": {"gko":     "shap_screen_fluor_all.csv",
+                  "ebionly": "shap_screen_ebi_fluor_all.csv"},
+        "out":   "per_experiment_v5_multibag_fluor.parquet",
+    },
+    "full20k": {
+        "files": {"gko":     "shap_screen_fluor_full_20k_all.csv",
+                  "ebionly": "shap_screen_ebi_fluor_full_20k_all.csv"},
+        "out":   "per_experiment_v5_multibag_fluor_full20k.parquet",
+    },
+}
+OUT_DIR = Path("/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1")
 KEY = ["experiment", "well", "segmentation_id", "channel"]
 
 
-def _load(head: str) -> pd.DataFrame:
-    p = SRC / FILES[head]
+def _load(head: str, files: dict[str, str]) -> pd.DataFrame:
+    p = SRC / files[head]
     print(f"[{head}] reading {p}")
     t0 = time.time()
     tbl = pa_csv.read_csv(p, convert_options=pa_csv.ConvertOptions(
@@ -74,20 +94,27 @@ def _load(head: str) -> pd.DataFrame:
     return out
 
 
-def build_sidecar() -> Path:
-    dfs = {head: _load(head) for head in FILES}
-    print("merging heads on (exp, well, seg, channel_name)…")
+def build_sidecar(variant: str = "partial") -> Path:
+    cfg = VARIANTS[variant]
+    files, out_name = cfg["files"], cfg["out"]
+    dfs = {head: _load(head, files) for head in files}
+    print(f"[{variant}] merging heads on (exp, well, seg, channel)…")
     t0 = time.time()
     merged = dfs["gko"].merge(dfs["ebionly"], on=KEY, how="outer")
-    print(f"merged: {len(merged):,} rows in {time.time()-t0:.1f}s")
+    print(f"[{variant}] merged: {len(merged):,} rows in {time.time()-t0:.1f}s")
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    print(f"writing {OUT}")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / out_name
+    print(f"[{variant}] writing {out}")
     t0 = time.time()
-    merged.to_parquet(OUT, index=False)
-    print(f"wrote {len(merged):,} rows in {time.time()-t0:.1f}s")
-    return OUT
+    merged.to_parquet(out, index=False)
+    print(f"[{variant}] wrote {len(merged):,} rows in {time.time()-t0:.1f}s")
+    return out
 
 
 if __name__ == "__main__":
-    build_sidecar()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--variant", choices=list(VARIANTS), default="partial")
+    args = ap.parse_args()
+    build_sidecar(args.variant)

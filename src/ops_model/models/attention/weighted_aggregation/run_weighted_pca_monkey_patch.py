@@ -116,9 +116,16 @@ V5M_SIDECAR_EBIFB = Path(
 )
 # Combined fluor sidecar — per (exp, well, seg, channel_name) with both
 # gko + ebionly weight columns. Consumed on --signal-set no_phase runs.
+# `_full20k` variant uses the newer multi_rank/*_full_20k_* CSVs that cover
+# every (gene, channel) pair up to 20k cells (older sidecar was thin per
+# marker at ~11-14% coverage → uniform-fallback dilution).
 V5M_SIDECAR_FLUOR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
     "per_experiment_v5_multibag_fluor.parquet"
+)
+V5M_SIDECAR_FLUOR_FULL = Path(
+    "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/expansion_v1/"
+    "per_experiment_v5_multibag_fluor_full20k.parquet"
 )
 V5_STRATEGIES = {
     "v5_gko", "v5_ebionly", "v5_ebifb",
@@ -131,6 +138,11 @@ V5_STRATEGIES = {
     # multi-bag SHAP fluor variants (per-cell, per-channel; use --signal-set no_phase)
     "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
     "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
+    # full-coverage (20k/(gene, marker)) sidecar variants — every (gene, marker)
+    # pair has rankings, so uniform-fallback dilution vanishes and the top-K
+    # cutoff drives the profile on every marker.
+    "v5m_gko_fluor_full_cutoff_500",     "v5m_gko_fluor_full_cutoff_100",
+    "v5m_ebionly_fluor_full_cutoff_500", "v5m_ebionly_fluor_full_cutoff_100",
 }
 FLUOR_ATTN_SIDECAR = Path(
     "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4/expansion_v1/"
@@ -303,6 +315,21 @@ def _resolve_strategy(name: str) -> dict:
     if name == "v5m_ebionly_fluor_cutoff_100":
         return {"op": "column", "col": "v5m_ebionly_fluor_cutoff_100",
                 "nan_default": 0.0, "w_norm_max": 5.0}
+    # Full-coverage sidecar (per_experiment_v5_multibag_fluor_full20k.parquet)
+    # — same weight columns as above, but rankings exist for every (gene,
+    # marker) pair (up to 20k cells).
+    if name == "v5m_gko_fluor_full_cutoff_500":
+        return {"op": "column", "col": "v5m_gko_fluor_cutoff_500",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_gko_fluor_full_cutoff_100":
+        return {"op": "column", "col": "v5m_gko_fluor_cutoff_100",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_ebionly_fluor_full_cutoff_500":
+        return {"op": "column", "col": "v5m_ebionly_fluor_cutoff_500",
+                "nan_default": 0.0, "w_norm_max": 5.0}
+    if name == "v5m_ebionly_fluor_full_cutoff_100":
+        return {"op": "column", "col": "v5m_ebionly_fluor_cutoff_100",
+                "nan_default": 0.0, "w_norm_max": 5.0}
     if name == "acc_select_geneko_raw":
         gene_to_K = _build_geneko_gene_to_K()
         return {"op": "acc_select", "col": "attn_geneko", "mode": "raw",
@@ -450,6 +477,8 @@ STRATEGIES = [
     "v5m_gko_cutoff_10k", "v5m_ebionly_cutoff_10k", "v5m_ebifb_cutoff_10k",
     "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
     "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
+    "v5m_gko_fluor_full_cutoff_500",     "v5m_gko_fluor_full_cutoff_100",
+    "v5m_ebionly_fluor_full_cutoff_500", "v5m_ebionly_fluor_full_cutoff_100",
     # sister-coherence strategies → route to <root>/sister/<name>/ subdir
     "sister", "sister_pow2", "sister_pow4",
     "sister_floored_01", "sister_smoothed_01",
@@ -508,7 +537,13 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
         "v5m_gko_fluor_cutoff_500",      "v5m_gko_fluor_cutoff_100",
         "v5m_ebionly_fluor_cutoff_500",  "v5m_ebionly_fluor_cutoff_100",
     }
-    if is_v5m_fluor:
+    is_v5m_fluor_full = strategy_name in {
+        "v5m_gko_fluor_full_cutoff_500",     "v5m_gko_fluor_full_cutoff_100",
+        "v5m_ebionly_fluor_full_cutoff_500", "v5m_ebionly_fluor_full_cutoff_100",
+    }
+    if is_v5m_fluor_full:
+        fluor_path = str(V5M_SIDECAR_FLUOR_FULL) if use_fluor else None
+    elif is_v5m_fluor:
         fluor_path = str(V5M_SIDECAR_FLUOR) if use_fluor else None
     else:
         fluor_path = str(FLUOR_ATTN_SIDECAR) if use_fluor else None
@@ -540,6 +575,8 @@ def _install_patches(strategy_name: str, use_fluor: bool = False) -> None:
         # phase channel is not processed on --signal-set no_phase. Point at
         # the fluor parquet — the column exists there.
         phase_sidecar = V5M_SIDECAR_FLUOR
+    elif is_v5m_fluor_full:
+        phase_sidecar = V5M_SIDECAR_FLUOR_FULL
     else:
         phase_sidecar = ATTN_SIDECAR
 
