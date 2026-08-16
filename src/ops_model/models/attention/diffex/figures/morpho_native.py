@@ -32,19 +32,23 @@ from ops_model.models.attention.diffex.viewer.morpho_pipeline import (
     GEN_CROP, PAD, MO_PARAMS, MORPHO_TARGETS, _clip_border, _seg_masked_object, _vs_h2b_nucleus_npz, full_features)
 
 NUCLEOLI_MO = {**MO_PARAMS, "min_object_size": 25, "mo_object_min_area_px": 25}   # size-exclude VS-NPM3 noise blobs
+NUCLEOLI_MO_STRICT = {**NUCLEOLI_MO, "mo_local_adjust": 1.35}                     # higher mo_local_adjust = stricter local threshold (MO_PARAMS default 1.3); gen-only, real stays on NUCLEOLI_MO.
+                                                                                   # sweet spot confirmed via single-cell preview: 1.5+ detects nothing at any α; 1.4 matches lenient at α=0/1 but
+                                                                                   # correctly drops the unreliable high-α signal (zero at α>=2.5) instead of lenient's noisy partial detections there
 
 
 VA = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5"
 OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals_violin/_native"
 SYN = "/hpc/projects/icd.fast.ops/models/diffex/morpho_synth_native"
 HALF = GEN_CROP // 2                                 # 80 → 160px native window
-Z0, Z1, Z2, Z3 = 8, 10, 12, 14                       # alpha_idx for α=0, α=1, α=2, α=3
+_ALPHA_GRID = [-5, -4, -3, -2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5]   # the real 17-pt grid: 0.5-step in [-3,3], 1.0-step outside -- NOT uniform
+_ALPHA_IDX = {a: i for i, a in enumerate(_ALPHA_GRID)}
+_aidx = lambda a: _ALPHA_IDX[a]                       # alpha value -> alpha_idx (exact match required -- the grid is fixed, not continuous)
+DEFAULT_ALPHAS = (0, 0.5, 1, 1.5, 2, 2.5, 3)
 TIM23 = "TIM23 mitochondrial inner membrane pre-sequence translocase complex, TIM17A variant"
 N_PANEL = 100                                         # cells cached with full img/lab/mask into panel.npz (candidate pool for downstream picking)
 PANEL_GRID_COLS = 6                                   # debug-image grid width — kept small regardless of N_PANEL so _render_panel stays a quick sanity check
-NET = {"connectivity": "largest_connected_component_size", "degree": "average_degree", "branches": "num_branches"}
-LENIENT_MO = {"threshold_method": "masked_object", "threshold_factor": 1.0, "mo_global_method": "triangle",
-              "mo_local_adjust": 0.6, "mo_object_min_area_px": 2, "min_object_size": 2}   # more lenient: lower local threshold + min-area → recover dim/merged gen puncta
+NET = {"connectivity": "largest_connected_component_size", "degree": "average_degree", "branches": "num_branches", "nodes": "num_nodes"}
 
 _LYSO = dict(modality="lysosome_LysoTracker_live_cell_dye", ch="GFP", network=False,
              ntc_rank="fluor_shap/geneKO/lysosome_LysoTracker_live_cell_dye",
@@ -54,20 +58,115 @@ _POLR1B = dict(mt="POLR1B_NUCLEOLI_PHASE", modality="phase", ch="Phase2D", netwo
                real_label="nucleoli_phase2d_seg", shape=True, mask_by_cell=False, drop_empty=True)   # VS-nucleus localizes; drop failed-nucleus cells
 _TIM23 = dict(mt="CHROMALIVE_TIM23", modality="mitochondria_ChromaLIVE_561_excitation", ch="mCherry", network=True,
               ntc_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation",
-              ko_rank="fluor_shap/complex/mitochondria_ChromaLIVE_561_excitation", ko_gene=TIM23, real_label="mcherry_seg")
+              ko_rank="fluor_shap/complex/mitochondria_ChromaLIVE_561_excitation", ko_gene=TIM23, real_label="mcherry_seg",
+              alpha_range=(-1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3),   # extend below 0 -> real NTC (degree) sits above the α=0..3 curve, need negative α to show the crossing
+              hist_match=True,   # rebalance gen intensity profile -> real-NTC reference (same rescaling mTOR used); untried for TIM23 so far
+              min_obj_px=15)   # drop sub-visual segmentation-noise fragments (<15px) from "count" -- real NTC picks up ~2x more of these than gen (sensor noise vs. diffusion smoothing), inflating count without being visually apparent (15 replaces an earlier 25 trial; 10 also tested in a separate min_obj10 variant)
+# SAMM50/MICOS13 (MICOS complex, mitochondria ChromaLIVE561) -- same seg params/checkpoint/shared NTC anchor
+# pool as TIM23, individual geneKO ranking (not complex-pooled) for both ntc_rank and ko_rank.
+_SAMM50 = dict(mt="CHROMALIVE_SAMM50", modality="mitochondria_ChromaLIVE_561_excitation", ch="mCherry", network=True,
+              ntc_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation",
+              ko_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation", ko_gene="SAMM50", real_label="mcherry_seg",
+              hist_match=True, min_obj_px=15)
+_MICOS13 = dict(mt="CHROMALIVE_MICOS13", modality="mitochondria_ChromaLIVE_561_excitation", ch="mCherry", network=True,
+              ntc_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation",
+              ko_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation", ko_gene="MICOS13", real_label="mcherry_seg",
+              hist_match=True, min_obj_px=15)
 
 # group → measurement config; seg params pulled from MORPHO_TARGETS[mt]. These 3 are the final Fig-4 picks
 # (mtor_mo_hm_100, polr1b_vsnpm3_100cpu, tim23_100 in _native/) that bruno_final.py/bruno_real_panels.py read.
 GROUPS = {
-    "mtor_mo_hm": dict(mt="MTOR_LYSO", **_LYSO,                                   # histogram-match gen→real-NTC profile (split the smooth perinuclear mass)
-                       seg_override=dict(seg_method="masked_object", mo_nucleus=False), mo_params=LENIENT_MO, real_mo=True, hist_match=True),
+    "mtor_mo_hm": dict(mt="MTOR_LYSO", **_LYSO,                                   # back to MTOR_LYSO's default blob detection (masked_object detour reverted, was working fine before).
+                       seg_override=dict(frangi_override=dict(threshold=0.05))),  # light touch: default 0.03 lets spurious weak local maxima blow up α=0's count specifically; 0.05 calms
+                                                                                   # that down (confirmed close to the other alphas) while keeping overall density close to the original 0.03 look
+                                                                                   # (0.1 also fixes the α=0 spike but pushes overall density down much further from how it looked before)
+    "mtor_mo_hm_histmatch": dict(mt="MTOR_LYSO", **_LYSO, hist_match=True,        # same threshold fix + hist-match rescale, to compare against threshold alone
+                       seg_override=dict(frangi_override=dict(threshold=0.05))),
     "polr1b_vsnpm3": dict(mt="POLR1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False,   # VS-NPM3 is the MEASUREMENT TOOL, applied symmetrically to real-phase AND gen-phase
                           ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",           # phase ranking (same pool as plain polr1b) — NOT the NPM3-fluor ranking (different modality/cells)
                           ko_gene="POLR1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=100,   # match gen ncell=100 exactly
                           vs_nuc_from="phase", mo_params=NUCLEOLI_MO, panel_src="phase", gen_cell_offset=200,   # panel shows PHASE under the VS-NPM3-derived seg; cells 200-299 = multirank top-100
                           seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
                                             mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "polr1b_vsnpm3_stringent": dict(mt="POLR1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False,   # same VS method as polr1b_vsnpm3 (vs_real, seg_override, mo_params for REAL all unchanged) --
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",                     # ONLY gen_mo_params differs, applying stricter MO to generated cells alone
+                          ko_gene="POLR1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=1000,   # top-1000, matching mTOR/TIM23's real population size
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=200,   # real=1.3, gen=1.35
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "taf1b_vsnpm3_stringent": dict(mt="TAF1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False,   # same VS-NPM3/stringent-MO method as polr1b_vsnpm3_stringent, f=1.25
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="TAF1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=1000,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=200,   # real=1.3, gen=1.35 -- anchor slots 200-299 (0-99 are stale, predate the current ranking)
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "taf1b_vsnpm3_stringent_oldanchor": dict(mt="TAF1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False,   # gen-only comparison: SAME everything, gen_cell_offset=0 (the stale anchor range) instead of 200
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="TAF1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=1000,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=0,
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "polr1b_vsnpm3_simplenuc14": dict(mt="POLR1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False,   # test: SIMPLE auto-detected nucleus (no VS-H2B) for gen, mo_local_adjust=1.4 -- matches the quick single-cell preview methodology exactly, to see what the FULL 100-cell run gives with that approach
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="POLR1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=100,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params={**NUCLEOLI_MO, "mo_local_adjust": 1.4}, panel_src="phase", gen_cell_offset=200,
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=False, frangi_override=None)),   # mo_vs_nucleus=False -> gen falls back to _nucleus_mask() auto-detect, same as the quick preview
+    "polr1b_vsnpm3_histmatch": dict(mt="POLR1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False, hist_match=True,   # same VS method as polr1b_vsnpm3 (vs_real, seg_override untouched), + hist-match rescale
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="POLR1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=100,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, panel_src="phase", gen_cell_offset=200,
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
     "tim23":     dict(**_TIM23),
+    "samm50_chromalive":  dict(**_SAMM50),
+    "micos13_chromalive": dict(**_MICOS13),
+
+    # F-rescale variants (MORPH_F_RESCALE_HANDOFF.md): φ={0,1,2,3} = α/f at each perturbation's own centroid-
+    # recovery f (POLR1B=2.45, MTOR=1.38, TIM23=2.25 -- from f_centroid_recovery/f_all.json + centroid_recovery_fluor/*.json).
+    # α 0/1.5/2.5/3.0 are already measured in the main group's stats.npz -- alpha_range here is ONLY the ONE
+    # genuinely new grid point each perturbation needs (α=4 for mTOR, α=5 for POLR1B/TIM23); bruno_fscore.py
+    # merges this with the existing stats.npz instead of remeasuring the overlap. Same seg settings as the
+    # validated main group in each case.
+    "mtor_mo_hm_fscore": dict(mt="MTOR_LYSO", **_LYSO, alpha_range=(4.0,),                     # φ3 = α 4.0 (φ0,1,2 = α 0,1.5,3.0 already in mtor_mo_hm_100)
+                       seg_override=dict(frangi_override=dict(threshold=0.05))),
+    "polr1b_vsnpm3_fscore": dict(mt="POLR1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False, alpha_range=(4.0, 5.0),   # φ1.5 = α 4.0, φ2 = α 5.0 (φ0,1 = α 0,2.5 -- now sourced from polr1b_vsnpm3_stringentcpu); φ3 (α=7.35) capped to the same 5.0 at render time
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="POLR1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=100,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=200,   # gen_mo_params: match the validated stringent (1.4) gen-side seg
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "tim23_fscore": dict(mt="CHROMALIVE_TIM23", modality="mitochondria_ChromaLIVE_561_excitation", ch="mCherry", network=True,   # φ2 = α 5.0 (φ0,1 = α 0,2.5 already in tim23_100); φ3 capped to the same 5.0
+                       ntc_rank="fluor_shap/geneKO/mitochondria_ChromaLIVE_561_excitation",
+                       ko_rank="fluor_shap/complex/mitochondria_ChromaLIVE_561_excitation", ko_gene=TIM23, real_label="mcherry_seg",
+                       alpha_range=(5.0,), min_obj_px=15),
+    "taf1b_vsnpm3_fscore": dict(mt="TAF1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False, alpha_range=(5.0,),   # f=2.25 (corrected from 1.25): only phi2 (alpha=5.0) is a new point; phi0/0.5/1/1.5 fall in taf1b_vsnpm3_stringent's base 0-3 range
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="TAF1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=1000,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=200,
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    "taf1b_vsnpm3_fscore_oldanchor": dict(mt="TAF1B", modality="vs_npm3_from_phase", ch="Phase2D", network=False, alpha_range=(5.0,),   # same as above but gen_cell_offset=0, for the old-anchor/combined comparison plots
+                          ntc_rank="pma_shap_phase_geneKO", ko_rank="pma_shap_phase_geneKO",
+                          ko_gene="TAF1B", shape=True, mask_by_cell=False, drop_empty=True, vs_real=True, vs_real_n=1000,
+                          vs_nuc_from="phase", mo_params=NUCLEOLI_MO, gen_mo_params=NUCLEOLI_MO_STRICT, panel_src="phase", gen_cell_offset=0,
+                          seg_override=dict(marker_dir="vs_npm3_from_phase", seg_method="masked_object", structure_type="vesicular",
+                                            mo_nucleus=True, mo_vs_nucleus=True, mo_vs_erode=4, frangi_override=None)),
+    # SAMM50 f=1.55, MICOS13 f=2.0 (own centroid-recovery peak-alpha, MICOS complex, real values -- not
+    # borrowed from TIM23). alpha_range = the ONE new grid point each needs beyond the base 0-3 measurement.
+    "samm50_chromalive_fscore":  dict(**_SAMM50, alpha_range=(5.0,)),
+    "micos13_chromalive_fscore": dict(**_MICOS13, alpha_range=(4.0,)),
+}
+
+FSCORE_F = {"mtor_mo_hm_fscore": 1.38, "polr1b_vsnpm3_fscore": 2.45, "tim23_fscore": 2.25, "taf1b_vsnpm3_fscore": 2.25,
+            "samm50_chromalive_fscore": 1.55, "micos13_chromalive_fscore": 2.0}   # centroid-recovery f (α units) per perturbation
+FSCORE_PHI_ALPHA = {                                                                         # φ -> resolved α per group (post-snap); None = not measured (leave blank, never substitute another φ's data)
+    "mtor_mo_hm_fscore":    {0: 0, 0.5: 0.5, 1: 1.5, 1.5: 2.0, 2: 3.0, 3: None},   # φ3 (α=4.0) dropped from display by request
+    "polr1b_vsnpm3_fscore": {0: 0, 0.5: 1.0, 1: 2.5, 1.5: 4.0, 2: 5.0, 3: None},   # φ3 (true α=7.35) exceeds the generated range
+    "tim23_fscore":         {0: 0, 0.5: 1.0, 1: 2.5, 1.5: 3.0, 2: 5.0, 3: None},    # φ3 (true α=6.75) exceeds the generated range
+    "taf1b_vsnpm3_fscore":  {0: 0, 0.5: 1.0, 1: 2.5, 1.5: 3.0, 2: 5.0, 3: None},      # f=2.25 (corrected from 1.25) -- identical mapping to tim23_fscore (same f); φ1 (true α=2.25) ties 2.0/2.5 -- snapped to 2.5 (larger); φ2 (true α=4.5) ties 4.0/5.0 -- snapped to 5.0 (larger); φ3 (true α=6.75) exceeds the generated range
+    "samm50_chromalive_fscore":  {0: 0, 0.5: 1.0, 1: 1.5, 1.5: 2.5, 2: 3.0, 3: None},   # f=1.55: true alphas 0,0.775,1.55,2.325,3.1; φ3 (α=5.0, has data) dropped from display by request, matching every other group's page-wide convention
+    "micos13_chromalive_fscore": {0: 0, 0.5: 1.0, 1: 2.0, 1.5: 3.0, 2: 4.0, 3: None},  # f=2.0: exact grid hits at phi<=2 (0,1,2,3,4); phi3 (true α=6) exceeds the generated range
 }
 
 
@@ -109,11 +208,31 @@ def _cell_nuc(exp, well, x, y, sid, dilate):
     return cd, (nuc if nuc.any() else None)
 
 
-def _measure(lab_crop, mask, nuc, feats, marker_channel):
+def _size_filter(org, min_obj_px):
+    """Drop connected components < min_obj_px px. Factored out of _measure() so panel/debug-image
+    construction can apply the IDENTICAL filter -- otherwise the visual overlay (built from the raw,
+    pre-filter labels) never reflects the fix, even though the measured count/area do."""
+    if not min_obj_px:
+        return org
+    from skimage.measure import label as relabel
+    lbl = relabel(org > 0)
+    if lbl.max():
+        sizes = np.bincount(lbl.ravel())
+        keep = np.zeros(len(sizes), bool)
+        keep[1:] = sizes[1:] >= min_obj_px
+        return np.where(keep[lbl], lbl, 0).astype(np.int32)
+    return lbl.astype(np.int32)
+
+
+def _measure(lab_crop, mask, nuc, feats, marker_channel, min_obj_px=0):
     """Same feature extractor for real & gen: process_single_cell at spacing (1,1) → pixel units.
-    Returns a {feat: value} dict for the requested feats (count/area/connectivity/degree/branches/location)."""
+    Returns a {feat: value} dict for the requested feats (count/area/connectivity/degree/branches/location).
+    min_obj_px: drop connected components smaller than this (px) before measuring -- _segment_blob_log has
+    NO min-size filter of its own (always floors each blob to >=2px radius regardless of min_object_size),
+    so tile-stitching leaves tiny (down to ~2px) disk remnants that blow up count/area on noisy gen frames."""
     from organelle_profiler.feature_extraction.fe_workers import process_single_cell
     org = _clip_border(np.where(mask, lab_crop, 0)).astype(np.int32)
+    org = _size_filter(org, min_obj_px)
     out = {f: (0.0 if (f in ("count", "area") or f in NET) else np.nan) for f in feats}   # mean-type (shape/location) → NaN when empty
     if org.max() == 0:
         return out
@@ -131,10 +250,20 @@ def _measure(lab_crop, mask, nuc, feats, marker_channel):
         out["count"] = int(num["area_filled"].count()) if "area_filled" in num else len(odf)
         if "area" in feats:
             out["area"] = float(num["area_filled"].sum()) if "area_filled" in num else 0.0
-        for sf in ("circularity", "eccentricity", "aspect_ratio"):               # per-object shape means (nucleolar shape)
-            col = sf if sf in num else (f"{sf}_approx" if f"{sf}_approx" in num else None)   # CPU path names it circularity_approx
+        for sf in ("eccentricity", "aspect_ratio"):                              # per-object shape means (nucleolar shape)
+            col = sf if sf in num else (f"{sf}_approx" if f"{sf}_approx" in num else None)
             if sf in feats and col is not None:
                 out[sf] = float(num[col].mean())
+        if "circularity" in feats:
+            # organelle_profiler's circularity_approx uses a Ramanujan ellipse-perimeter approximation
+            # (cheap, but unbounded — blows up past 1.0 on thin/degenerate objects). Same metric as
+            # cct_nucleoli_roundness.py::measure_roundness: real perimeter_crofton, clipped to [0,1].
+            from skimage.measure import regionprops_table
+            rp = regionprops_table(org, properties=["area", "perimeter_crofton"])
+            if len(rp["area"]):
+                p = np.asarray(rp["perimeter_crofton"], float); a = np.asarray(rp["area"], float)
+                circ = np.clip(np.where(p > 0, 4 * np.pi * a / (p ** 2), np.nan), 0, 1)
+                out["circularity"] = float(np.nanmean(circ))
     for short in NET:
         if short in feats:
             k = next((kk for kk in cf if kk.endswith(NET[short])), None)
@@ -204,18 +333,22 @@ def gen_measure(gname, g, ncell, dilate):
     hist_ref = _build_hist_ref(g, n=g.get("hm_ref_n", 25)) if (g.get("hist_match") and hm_mode != "clahe") else None
     base_dir = f"{SYN}/{gname}"
     cell_offset = g.get("gen_cell_offset", 0)                                       # e.g. 200 → multirank top-100 anchors, rank-aligned w/ real _rank()
+    alpha_range = g.get("alpha_range", DEFAULT_ALPHAS)
+    aidxs = [_aidx(a) for a in alpha_range]
     vs = None
     if mt.get("mo_vs_nucleus"):
         vs = f"{OUT}/{gname}/vs_nucleus.npz"; os.makedirs(os.path.dirname(vs), exist_ok=True)
         vs_src = g.get("vs_nuc_from", mt["marker_dir"])                             # H2B nucleus from this modality (phase for VS-NPM3, whose frames are phase-derived)
         _vs_h2b_nucleus_npz(vs_src, mt["target"], mt["grain"], vs, ncell, crop=GEN_CROP, float_frames=True,
-                            alpha_idxs=[Z0, Z1, Z2, Z3], force=True, cell_offset=cell_offset)   # 4-α subset aligned to the seg staging positions 0..3
+                            alpha_idxs=aidxs, force=False, cell_offset=cell_offset)   # subset aligned to the seg staging positions 0..len(alpha_range)-1;
+                                                                                       # force=False reuses the cached vs_nucleus.npz (GPU DDIM+Cellpose, expensive) when re-running the SAME group/alpha_range/ncell -- only the downstream MO seg logic changed
     full_features(mt["marker_dir"], mt["target"], mt["real_exp"], mt["marker_channel"], grain=mt["grain"],
                   n_cells=ncell, adaptive=True, seg_method=mt.get("seg_method"), structure_type=mt.get("structure_type"),
                   org_label=mt["org_label"], mo_nucleus=mt.get("mo_nucleus", False), vs_nucleus_npz=vs,
                   vs_erode=mt.get("mo_vs_erode", 0), frangi_override=mt.get("frangi_override"), crop=GEN_CROP, float_frames=True,
                   cell_masks=({c: cell for c, (cell, nuc, _) in masks.items()} if mask_by_cell else None),
-                  mo_params=g.get("mo_params"), hist_ref=hist_ref, hm_mode=hm_mode, alpha_idxs=[Z0, Z1, Z2, Z3],   # seg ONLY the 4 measured α (≈4× faster)
+                  mo_params=g.get("gen_mo_params", g.get("mo_params")), hist_ref=hist_ref, hm_mode=hm_mode, alpha_idxs=aidxs,   # seg ONLY the measured α; gen_mo_params (if set) overrides mo_params for GEN only -- real_measure()/_real_measure_vs() keep reading mo_params, unaffected
+                  clahe_params=g.get("clahe_params"),
                   cell_offset=cell_offset, base_dir=base_dir, out_root=f"{OUT}/{gname}")
     zpath = f"{base_dir}/{mt['real_exp']}/3-assembly/phenotyping_v3.zarr"
     root, lname = _gen_labels(zpath, len(_ALPHAS))
@@ -228,14 +361,14 @@ def gen_measure(gname, g, ncell, dilate):
     pcells = list(range(min(N_PANEL, ncell)))                                     # FIXED rank positions 0..N-1 (local index == rank-1) — same 6 cells
                                                                                     # across every α AND matched to real's rank-position panel (not "first N survivors", which drifts per-α and per-side)
     nthr = int(os.environ.get("MNAT_THREADS", "8"))
-    for pos, a in enumerate((0, 1, 2, 3)):                                         # subset staged at positions 0..3 = α 0/1/2/3
+    for pos, a in enumerate(alpha_range):                                          # subset staged at positions 0..len(alpha_range)-1
         lab = np.asarray(root[f"A/{pos}/0/labels/{lname}/0"][0, 0, 0]).astype(np.int32)
         img = np.asarray(root[f"A/{pos}/0/0"][0, -1, 0]).astype(np.float32)
 
         def _work(item):
             c, cell, nuc = item
             lc = lab[:, c * (GEN_CROP + PAD):c * (GEN_CROP + PAD) + GEN_CROP]
-            return c, cell, lc, _measure(lc, cell, nuc, feats, mt["marker_channel"])
+            return c, cell, lc, _measure(lc, cell, nuc, feats, mt["marker_channel"], min_obj_px=g.get("min_obj_px", 0))
 
         with ThreadPoolExecutor(max_workers=nthr) as ex:
             out = list(ex.map(_work, items))
@@ -246,9 +379,10 @@ def gen_measure(gname, g, ncell, dilate):
                 x0 = c * (GEN_CROP + PAD)
                 pimg = img[:, x0:x0 + GEN_CROP]
                 if g.get("panel_src"):                                            # show the SOURCE image (e.g. phase) under the seg, not the seg-input (VS-NPM3)
-                    zr = {0: Z0, 1: Z1, 2: Z2, 3: Z3}[a]
+                    zr = _aidx(a)
                     pimg = np.clip((np.load(f"{VA}/{g['panel_src']}/{mt['grain']}/{mt['target']}/cell{c + cell_offset}/frames_f32.npz")["gen"][zr] + 1) / 2, 0, 1)
-                panel.setdefault(pcells.index(c), {})[f"gen_a{a}"] = (np.asarray(pimg).copy(), lc.copy(), cell.copy())
+                lc_show = _size_filter(_clip_border(np.where(cell, lc, 0)).astype(np.int32), g.get("min_obj_px", 0))   # same preprocessing _measure() applies, so the overlay matches what's actually measured
+                panel.setdefault(pcells.index(c), {})[f"gen_a{a}"] = (np.asarray(pimg).copy(), lc_show.copy(), cell.copy())
         for f in feats:
             res[f][a] = np.array(acc[f], float)
     return res, panel
@@ -343,7 +477,7 @@ def _real_measure_vs(g, mt, rows, dilate, feats, mask_by_cell, drop_empty, want_
         lo, hi = np.percentile(V, [1, 99.5]); Vs = np.clip((V - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
         _, mask, nuc = keep[i]
         lab = _seg_masked_object(Vs, tp=tp, nucleus=True, nucleus_override=(nuc if nuc is not None else None), override_erode=g.get("vs_erode", 4))
-        vals = _measure(lab, mask, nuc, feats, mt["marker_channel"])
+        vals = _measure(lab, mask, nuc, feats, mt["marker_channel"], min_obj_px=g.get("min_obj_px", 0))
         pit = (crops[i].copy(), lab.copy(), np.asarray(mask).copy()) if want_panel else None
         return vals, pit
 
@@ -392,7 +526,7 @@ def real_measure(g, gene, rank_path, n, dilate, want_panel=False):
                                     tp=(g.get("mo_params") or MO_PARAMS), nucleus=mt.get("mo_nucleus", False))
         else:
             lc = _crop(_open(exp, well, g["real_label"]), None, x, y, HALF)
-        vals = _measure(lc, mask, nuc, feats, mt["marker_channel"])
+        vals = _measure(lc, mask, nuc, feats, mt["marker_channel"], min_obj_px=g.get("min_obj_px", 0))
         pit = None
         if want_panel:
             try:
@@ -458,7 +592,7 @@ def run(gname, ncell=100, dilate=8, tag=""):
     rn, rn_panel = real_measure(g, "NTC", g["ntc_rank"], real_n, dilate, want_panel=True)
     rk, rk_panel = real_measure(g, g["ko_gene"], g["ko_rank"], real_n, dilate, want_panel=True)
     labels = {"count": "count", "area": "area (px)", "connectivity": "connectivity (LCC)",
-              "degree": "network degree", "branches": "branch count", "location": "radial position",
+              "degree": "network degree", "branches": "branch count", "nodes": "node count", "location": "radial position",
               "circularity": "circularity", "eccentricity": "eccentricity", "aspect_ratio": "aspect ratio"}
     feats = _feats(g)
     stats = {}
@@ -469,7 +603,7 @@ def run(gname, ncell=100, dilate=8, tag=""):
             _crit(feat + " [real top-100]", rn[feat][:100], rk[feat][:100], gen[feat])
         stats[f"rn_{feat}"] = rn[feat]; stats[f"rk_{feat}"] = rk[feat]
         stats[f"rn100_{feat}"] = rn[feat][:100]; stats[f"rk100_{feat}"] = rk[feat][:100]
-        for a in (0, 1, 2, 3):
+        for a in g.get("alpha_range", DEFAULT_ALPHAS):
             stats[f"gen_{feat}_a{a}"] = gen[feat][a]
         _violin(odir, feat, labels[feat], rn[feat], rk[feat], gen[feat])
     np.savez_compressed(f"{OUT}/{odir}/stats.npz", **stats)
@@ -480,16 +614,79 @@ def run(gname, ncell=100, dilate=8, tag=""):
     print(f"[native] {odir} saved panel.npz + stats.npz + violins + panel.png", flush=True)
 
 
+def run_gen_only(gname, ncell=100, dilate=8, tag=""):
+    """Lean variant of run() -- skips real_measure() entirely (real doesn't depend on alpha/gen-side seg
+    tweaks, already in the base stats.npz) and skips violin/debug-panel rendering. tag MUST match whatever
+    the base full run used (run()'s odir = f"{gname}{tag}") so this reuses the SAME vs_nucleus.npz cache
+    (force=False in gen_measure) instead of paying for GPU DDIM+Cellpose nucleus prediction again.
+    Saves just {gen_<feat>_a<alpha>: array} + gpanel to new_alpha.npz/new_alpha_panel.npz, for
+    bruno_fscore.py (or a manual merge) to combine with the base group's existing stats.npz/panel.npz."""
+    g = GROUPS[gname]
+    odir = f"{gname}{tag}"
+    os.makedirs(f"{OUT}/{odir}", exist_ok=True)
+    print(f"[native] {gname} (gen-only) -> {odir}: ncell={ncell} dilate={dilate}", flush=True)
+    gen, gpanel = gen_measure(odir, g, ncell, dilate)
+    feats = _feats(g)
+    stats = {}
+    for feat in feats:
+        for a in g.get("alpha_range", DEFAULT_ALPHAS):
+            stats[f"gen_{feat}_a{a}"] = gen[feat][a]
+    np.savez_compressed(f"{OUT}/{odir}/new_alpha.npz", **stats)
+    np.savez_compressed(f"{OUT}/{odir}/new_alpha_panel.npz", gpanel=np.array(gpanel, dtype=object))
+    print(f"[native] {odir} saved new_alpha.npz + new_alpha_panel.npz", flush=True)
+
+
+def run_real_only(gname, ncell=100, dilate=8, tag=""):
+    """Lean variant of run() -- skips gen_measure() entirely, only redoes real_measure() (e.g. when the
+    REAL-side mo_params changed). Overwrites rn_*/rk_*/rn100_*/rk100_* in stats.npz and the rn/rk entries
+    in panel.npz IN PLACE, preserving every gen_* key and gpanel entry already there."""
+    g = GROUPS[gname]
+    odir = f"{gname}{tag}"
+    stats_path = f"{OUT}/{odir}/stats.npz"
+    panel_path = f"{OUT}/{odir}/panel.npz"
+    stats = dict(np.load(stats_path))
+    panel = dict(np.load(panel_path, allow_pickle=True))
+    real_n = g.get("vs_real_n", ncell) if g.get("vs_real") else (ncell if g.get("gen_cell_offset") else 1000)
+    rn, rn_panel = real_measure(g, "NTC", g["ntc_rank"], real_n, dilate, want_panel=True)
+    rk, rk_panel = real_measure(g, g["ko_gene"], g["ko_rank"], real_n, dilate, want_panel=True)
+    feats = _feats(g)
+    for feat in feats:
+        stats[f"rn_{feat}"] = rn[feat]; stats[f"rk_{feat}"] = rk[feat]
+        stats[f"rn100_{feat}"] = rn[feat][:100]; stats[f"rk100_{feat}"] = rk[feat][:100]
+    np.savez_compressed(stats_path, **stats)
+    np.savez_compressed(panel_path, gpanel=panel["gpanel"], rn=np.array(rn_panel, dtype=object), rk=np.array(rk_panel, dtype=object))
+    print(f"[native] {odir} real-only: updated rn/rk in stats.npz + panel.npz", flush=True)
+
+
+def _job_gen_only(gname, ncell, dilate, threads, tag=""):
+    os.environ["OPS_DIFFEX_ASSETS"] = "viewer_assets_v5"
+    os.environ["SLURM_CPUS_PER_TASK"] = "1"
+    os.environ["MNAT_THREADS"] = str(threads)
+    run_gen_only(gname, ncell, dilate, tag=tag)
+
+
+def submit_gen_only(groups, ncell=100, dilate=8, cpus=16, tag=""):
+    import pathlib
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+    os.environ["PYTHONPATH"] = str(pathlib.Path(__file__).resolve().parent) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    os.environ.setdefault("OPS_DIFFEX_ASSETS", "viewer_assets_v5")
+    jobs = [{"name": f"mnatgen_{gp}", "func": _job_gen_only, "kwargs": {"gname": gp, "ncell": ncell, "dilate": dilate, "threads": cpus, "tag": tag}} for gp in groups]
+    sp = {"slurm_partition": "gpu", "gpus_per_node": 1, "cpus_per_task": cpus, "mem_gb": 64, "timeout_min": 180,
+          "slurm_setup": ["export OPS_DIFFEX_ASSETS=viewer_assets_v5"]}
+    submit_parallel_jobs(jobs, experiment="diffex_mnat", slurm_params=sp, log_dir="diffex_mnat", wait_for_completion=False)
+
+
 def _violin(gname, feat, ylab, rn_a, rk_a, gen):
     """Raw-units violin: real NTC, real KO, gen α0/α1/α3 — same window/seg/mask so bars are directly comparable."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams["pdf.fonttype"] = 42
-    C = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=1": "#6baed6", "α=2": "#3182bd", "α=3": "#08519c"}
-    data = [np.asarray(rn_a, float), np.asarray(rk_a, float), gen[0], gen[1], gen[2], gen[3]]
+    C = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=0.5": "#9ecae1", "α=1": "#6baed6",
+        "α=1.5": "#4292c6", "α=2": "#3182bd", "α=2.5": "#1c5c94", "α=3": "#08519c"}
+    data = [np.asarray(rn_a, float), np.asarray(rk_a, float), gen[0], gen[0.5], gen[1], gen[1.5], gen[2], gen[2.5], gen[3]]
     data = [d[np.isfinite(d)] for d in data]                                      # drop NaN (location) for the KDE/median
-    labs = ["real", "KO", "α=0", "α=1", "α=2", "α=3"]
+    labs = ["real", "KO", "α=0", "α=0.5", "α=1", "α=1.5", "α=2", "α=2.5", "α=3"]
     keep = [i for i, d in enumerate(data) if len(d)]
     fig, ax = plt.subplots(figsize=(5.4, 5.2), facecolor="white")
     parts = ax.violinplot([data[i] for i in keep], positions=keep, showmeans=False, showextrema=False, showmedians=False, widths=0.82)
@@ -620,7 +817,7 @@ def vsnpm3_panel(n=6, min_size=25, erode=4):
         return out
 
     gen = {a: [] for a in (0, 1, 3)}
-    for a, ai in ((0, Z0), (1, Z1), (3, Z3)):
+    for a, ai in ((0, _aidx(0)), (1, _aidx(1)), (3, _aidx(3))):
         for c in range(n):
             V = norm(np.load(f"{vs}/cell{c}/frames_f32.npz")["gen"][ai])
             lo, hi = np.percentile(V, [1, 99.5]); Vs = np.clip((V - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
@@ -660,7 +857,7 @@ def phase_diag(n=6, min_size=15, erode=4):
     nuc = np.load(f"{OUT}/polr1b_100/vs_nucleus.npz")["masks"]                            # (100,17,160,160) VS-H2B nucleus
     ph = f"{VA}/phase/geneKO/POLR1B"
     norm = lambda a: np.clip((a + 1) / 2, 0, 1)
-    alphas = [(0, Z0), (1, Z1), (3, Z3)]
+    alphas = [(0, _aidx(0)), (1, _aidx(1)), (3, _aidx(3))]
     fig, axes = plt.subplots(len(alphas), n, figsize=(n * 2.0, len(alphas) * 2.0), facecolor="white")
     for ri, (a, ai) in enumerate(alphas):
         for ci in range(n):
@@ -694,7 +891,7 @@ def vsnpm3_diag(n=6, min_size=20, erode=4):
     tp = {**MO_PARAMS, "min_object_size": min_size, "mo_object_min_area_px": min_size}    # size-exclude noise
     nuc = np.load(f"{OUT}/polr1b_100/vs_nucleus.npz")["masks"]                            # (100,17,160,160) VS-H2B nucleus from phase
     ph = f"{VA}/phase/geneKO/POLR1B"; vs = f"{VA}/vs_npm3_from_phase/geneKO/POLR1B"
-    alphas = [(0, Z0), (1, Z1), (3, Z3)]
+    alphas = [(0, _aidx(0)), (1, _aidx(1)), (3, _aidx(3))]
     norm = lambda a: np.clip((a + 1) / 2, 0, 1)
     rows = []
     for a, ai in alphas:
