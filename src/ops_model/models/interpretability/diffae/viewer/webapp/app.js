@@ -1042,6 +1042,8 @@ function wireCombo(inputId, listId, renderList, currentLabel) {
 }
 
 const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || state.manifest.markers[i].marker_channel || "Phase");
+const mkDisp = (s) => (s || "").replace(/_/g, " ");   // marker_channel for header display: underscores -> spaces
+const curMarkerDisp = () => mkDisp((state.marker && state.marker.marker_channel) || "Phase");   // current marker, readable
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   $("markerfilter").title = markerLabel(i);   // hover shows the full marker name when truncated in the input
@@ -1393,7 +1395,7 @@ function rebuild() {
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     const group = document.createElement("div"); group.className = "group"; group.style.setProperty("--cols", Math.min(N, 5));   // cap header/box to the actual cell columns
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
-    const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${p.markerName}`;
+    const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${mkDisp(p.markerName)}`;
     hd.appendChild(tt); tt.dataset.tip = tt.textContent;   // instant hover tooltip (data-tip) with the full name
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
     state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
@@ -1802,7 +1804,7 @@ function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: 
   const headIdxs = state.attnHead === "all" ? heads.heads.map((_, i) => i) : [Math.min(state.attnHead, heads.heads.length - 1)];
   const group = document.createElement("div"); group.className = "agroup";
   const hd = document.createElement("div"); hd.className = "agroup-hd"; hd.style.color = color;
-  hd.textContent = `${ref.label} · cells ${start}–${end - 1}`;
+  hd.textContent = `${ref.label} · ${curMarkerDisp()}`;   // perturbation · full marker name (cell range is on the top bar)
   group.appendChild(hd);
   for (const h of headIdxs) {
     const row = document.createElement("div"); row.className = "arow";
@@ -2084,7 +2086,7 @@ function renderTop() {
     const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
     const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
     const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene}">${e.gene}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene} · ${curMarkerDisp()}">${e.gene} · ${curMarkerDisp()}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
       const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
