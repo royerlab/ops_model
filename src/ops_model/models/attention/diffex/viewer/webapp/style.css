@@ -18,6 +18,8 @@ header .sub{color:var(--mut);font-size:12px}
 .verbtn:hover{border-color:var(--accent)}
 .verbtn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
 #side-info{font-size:13.5px;padding:6px 15px}
+#pertinfo-field{align-self:center}   /* center the button on the topbar height (topbar is align-items:flex-start) */
+#filter.unavail-sel{color:var(--mut);font-style:italic}   /* grayed like the below-threshold entry in the dropdown */
 #sidebar{width:340px;flex:none;border-left:1px solid var(--line);padding:18px;overflow:auto}
 #sidebar.hidden{display:none}
 .side-hd{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);
@@ -25,10 +27,11 @@ header .sub{color:var(--mut);font-size:12px}
 .side-x{float:right;margin-top:-2px;background:none;border:none;color:var(--mut);cursor:pointer;
         font-size:15px;line-height:1;padding:0 2px}
 .side-x:hover{color:var(--fg)}
-.combo-item.unavail{opacity:.55;font-style:italic}
+.combo-item.unavail{opacity:.55;font-style:italic;color:var(--mut)}
 .unavail-msg{padding:60px 24px;text-align:center;color:var(--mut)}
 .unavail-t{font-size:26px;font-weight:650;color:var(--fg);margin-bottom:10px}
 .unavail-s{font-size:15px;max-width:580px;margin:0 auto;line-height:1.5}
+.unavail-a{font-size:17px;max-width:580px;margin:14px auto 0;line-height:1.5;color:var(--fg)}
 #info-title{font-size:23px;font-weight:650;line-height:1.25}
 #info-sub{color:var(--mut);font-size:14px;font-family:ui-monospace,monospace;margin:4px 0 14px}
 #info-body{font-size:15px;line-height:1.55}
@@ -132,6 +135,7 @@ button:hover{border-color:var(--accent)}
 .playctl{display:flex;gap:8px;width:min(80vw,720px);justify-content:center;align-items:center}   /* centered under the middle of the traversal slider */
 .playctl .seg{flex:0 0 auto;padding:4px 11px}   /* speed pills size to their text (0.25×/0.5× fully visible) */
 .playctl select{height:34px}   /* match the play button height */
+.playctl .chk{display:inline-flex;height:34px;box-sizing:border-box;margin:0;padding:0 11px;border:1px solid var(--line);border-radius:6px}   /* "play α ≥ 0" same height as the play ±5 dropdown (explicit flex so height applies to the label) */
 
 #grid{display:flex;flex-direction:column;gap:20px;width:100%;max-width:1400px}
 #grid.cols-layout{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:flex-start;max-width:none;width:100%;overflow-x:auto}   /* perturbations ALWAYS side-by-side; scroll if many */
@@ -513,9 +517,10 @@ button:hover{border-color:var(--accent)}
    On the dots overlay (redrawn every animation frame) the per-frame SVG filter caused Safari ghosting/freeze;
    on the live canvas it distorted geometry (stretched/tall). */
 #montage-view canvas, #montage-view img { filter: none !important; }
-/* Traversal fluor: chain an independent black-point clip AFTER the shared brightness filter (crops out background).
-   Gated by the #grid.fluorclip class (set only for fluor markers in the Traversal view) — Top Cells is untouched. */
+/* Traversal: chain an independent black-point clip AFTER the shared brightness filter (crops out background).
+   Gated by the #grid.fluorclip class (set in the Traversal view: per-marker for fluor, global PHASE_CLIP for phase) — Top Cells is untouched. */
 #grid.fluorclip img { filter: url(#img-levels) url(#trav-clip); }
+.popout.fluorclip img { filter: url(#img-levels) url(#trav-clip); }   /* pop-out of a fluor traversal tile → same marker-normalize clip as the grid */
 #imgclim-field{display:flex;flex-direction:column;gap:6px}
 #imgclim-field .ic-lbl{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
 #imgclim-field #i-climreset{padding:2px 8px;flex:none}

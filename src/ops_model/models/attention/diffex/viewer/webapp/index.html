@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=213"/>
+<link rel="stylesheet" href="style.css?v=219"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -126,7 +126,7 @@
         <label class="feat-internal">Classifier score overlay
           <select id="scoremode" data-seg>
             <option value="none">none</option>
-            <option value="linear">per-cell linear (NTC vs KO)</option>
+            <option value="linear">per-cell removal percentile (Metric B)</option>
             <option value="ptarget" selected>Set ACC — set (bag)</option>
             <option value="rank">classification rank — set (bag)</option>
           </select>
@@ -139,10 +139,10 @@
       </div>
       <div class="grp">
         <span class="lbl">Pin perturbations</span>
-        <div class="row"><button id="addpanel">+ pin current</button><button id="clearpanels">clear</button></div>
+        <div class="row"><button id="addpanel" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="clearpanels" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
         <ul id="panellist"></ul>
       </div>
-      <div class="row"><button id="exportgif" title="download the current traversal grid (all α) as an animated GIF">⬇ Export traversal GIF</button></div>
+      <div class="row"><button id="exportgif" data-tip="Download the current traversal grid (all α) as an animated GIF" title="download the current traversal grid (all α) as an animated GIF">⬇ Export traversal GIF</button></div>
     </div>
 
     <div class="tabpane hidden" id="tab-attn">
@@ -167,7 +167,7 @@
       <div class="row"><button id="a-reset" title="reset all display settings">↺ reset controls</button></div>
       <div class="grp">
         <span class="lbl">Pin perturbations <span class="hint">(compare geneKOs; current always shown)</span></span>
-        <div class="row"><button id="a-pin">+ pin current</button><button id="a-pinclear">clear</button></div>
+        <div class="row"><button id="a-pin" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="a-pinclear" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
         <ul id="a-panellist"></ul>
       </div>
       <div class="hint" id="a-status"></div>
@@ -200,7 +200,7 @@
       <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       <div class="grp">
         <span class="lbl">Pin perturbations</span>
-        <div class="row"><button id="tc-pin">+ pin current</button><button id="tc-pinclear">clear</button></div>
+        <div class="row"><button id="tc-pin" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="tc-pinclear" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
         <ul id="tc-panellist"></ul>
       </div>
       <div class="hint" id="tc-status"></div>
@@ -292,7 +292,7 @@
       <div id="heat-track">
         <div id="heat-grad"></div>
         <div id="heat-tick"></div>
-        <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (α=0)</span><span class="pos">phenotype</span></div>
+        <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (φ=0)</span><span class="pos">phenotype</span></div>
       </div>
     </div>
     <div id="scrub">
@@ -301,7 +301,7 @@
         <input id="alpha" type="range" min="0" max="16" value="8" step="1"/>
         <div id="ticks" title="click a tick to toggle an autoplay pause there"></div>
       </div>
-      <span id="alpha-read">α = 0.0</span>
+      <span id="alpha-read">φ = —</span>
     </div>
     <div class="playctl">
       <select id="speed" title="playback speed">
@@ -366,7 +366,8 @@
 <script src="openseadragon.min.js"></script>
 <script src="gif.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=249"></script>
+<script src="af_scores.js?v=6"></script>
+<script src="app.js?v=270"></script>
 <script src="methods.js?v=76"></script>
 </body>
 </html>

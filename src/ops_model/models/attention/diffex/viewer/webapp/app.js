@@ -50,15 +50,16 @@ function updateImgLevels() {
 // percentile recipe Top Cells' crops_norm uses (lo=p1). Values median ≈0.30 (matches the eyeballed default), range
 // 0.21–0.44. Regenerate with build_trav_clip if frames change. TRAV_CLIP_DEFAULT is the fallback for unlisted markers.
 const TRAV_CLIP_DEFAULT = 0.30;
+const PHASE_CLIP = 0.20;                                           // phase background black-point (bumped from p1=0.149 for a bit more background clipping)
 const TRAV_CLIP = {"5xUPRE": 0.247, "ChromaLIVE 488 excitation": 0.353, "ER/Golgi COP-II_SEC23A": 0.275, "ER/Golgi_COPE": 0.388, "ER/golgi bridge_VAPA": 0.275, "ER_NCLN": 0.294, "ER_SEC61B": 0.294, "Endoplasmic Reticulum_Concanavalin A": 0.275, "F-actin_Phalloidin": 0.255, "Fe2__FeRhoNox_live_cell_dye": 0.314, "Microtubules_Tubulin": 0.306, "Mitochondria_TOMM20": 0.373, "Nucleoli_NPM1": 0.373, "Nucleus_Hoechst": 0.388, "Plasma Membrane_Wheat Germ Agglutinin": 0.325, "actin filament_FastAct_SPY555 Live Cell Dye": 0.271, "autophagosome_ATG101": 0.259, "autophagosome_MAP1LC3B": 0.306, "b_catenin_b_catenin__mouse_488": 0.231, "c_Myc_c_Myc__mouse_488": 0.306, "caspase activity_CellEvent-Caspase live-cell dye": 0.318, "cell proliferation marker_MKI67": 0.337, "chaperones_HSPA1B": 0.239, "chromatin_H2BC21": 0.392, "cis-Golgi_mStayGold-CENPRaltORF": 0.361, "clathrin vesicles_CLTA": 0.247, "early endosome_EEA1": 0.333, "endocytic vesicle pH_pHrodo-dextran Live Cell Dye": 0.353, "endosome_VPS35": 0.31, "intermediate filaments_VIM": 0.294, "laminin_LMNB1": 0.384, "late endosome_RAB7A": 0.357, "lipid droplet_BODIPY live cell dye": 0.306, "lipid droplet_PLIN2": 0.271, "lysosome_LAMP1": 0.369, "lysosome_LysoTracker live-cell dye": 0.408, "microtubules_MAP4": 0.306, "mitochondria_ChromaLIVE 561 excitation": 0.373, "mitochondria_TOMM70A": 0.384, "nuclear speckles_SRRM2": 0.412, "nucleolus-DFC_FBL": 0.435, "nucleolus-GC_NPM3": 0.388, "nucleus_NucleoLIVE Live Cell dye": 0.373, "oxidative stress_CellROX live-cell dye": 0.255, "p21_p21__rabbit_647": 0.212, "p53_p53__mouse_488": 0.231, "pRb_pRb__rabbit_647": 0.278, "pS6_pS6__rabbit_647": 0.243, "peroxisome_Peroxi_SPY650 live cell dye": 0.247, "plasma membrane_ATP1B3": 0.282, "plasma membrane_SLC3A2": 0.239, "proteasome_PSMB7": 0.341, "recycling endosome_TFRC": 0.361, "stress granule_G3BP1": 0.247, "trans-Golgi_VAMP3": 0.282};
 function updateTravClip() {
-  const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase → no clip
+  const mc = state.marker && state.marker.marker_channel;                       // null/undefined = phase
   const inp = $("tr-inorm");
   if (inp) { inp.checked = tc.inorm; inp._togSync?.();                           // mirror shared state onto the segmented switch
-             if (inp._tog) inp._tog.style.display = mc ? "" : "none"; }          // marker-normalize toggle is fluor-only
-  const on = state.view === "traversal" && !!mc && tc.inorm;                     // shares Top Cells' tc.inorm toggle
+             if (inp._tog) inp._tog.style.display = ""; }                        // same "marker-normalized" toggle for fluor AND phase (phase applies the global background clip)
+  const on = state.view === "traversal" && tc.inorm;                            // fluor: per-marker clip · phase: global background clip
   const g = $("grid"); if (g) g.classList.toggle("fluorclip", on);
-  const lo = on ? (mc in TRAV_CLIP ? TRAV_CLIP[mc] : TRAV_CLIP_DEFAULT) : 0, d = Math.max(1e-3, 1 - lo);
+  const lo = on ? (mc ? (mc in TRAV_CLIP ? TRAV_CLIP[mc] : TRAV_CLIP_DEFAULT) : PHASE_CLIP) : 0, d = Math.max(1e-3, 1 - lo);
   const slope = (1 / d).toFixed(4), icpt = (-lo / d).toFixed(4);
   for (const id of ["tclipR", "tclipG", "tclipB"]) { const f = $(id); if (f) { f.setAttribute("slope", slope); f.setAttribute("intercept", icpt); } }
 }
@@ -149,7 +150,7 @@ function travBase(dir) { return BASE; }   // v5 attention+accuracy cells are con
 const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag) score modes → row-header chip
 // adaptive score-overlay legend caption per mode (see #scoremode); shown only on Traversal when scoreMode != none
 const SCORE_LEGEND = {
-  linear: "per-cell classifier score (NTC → knockout): 0 → 1",
+  linear: "per-cell removal percentile vs real cells (Metric B) · ≤50th = white, high percentiles → blue",
   ptarget: "classifier confidence · 0 → 100%",
   rank: "classifier rank of the true perturbation (of ~1,000) · bluer = closer to 1st",
 };
@@ -175,7 +176,9 @@ const heat = (v) => {   // classifier confidence 0→1 as white → deep blue (#
   const r = Math.round(255 + (13 - 255) * v), gg = Math.round(255 - 255 * v), b = Math.round(255 + (153 - 255) * v);
   return `rgb(${r},${gg},${b})`;
 };
-const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, anchor, slug: t.slug,
+// Metric-B percentile → top-heavy color: ≤50th percentile stays white, only HIGH percentiles saturate blue.
+const pctHeatVal = (v) => Math.pow(Math.max(0, (v - 0.5) * 2), 1.8);
+const pertOf = (markerName, t, anchor) => ({ markerName, target: t.target, grain: t.grain, anchor, slug: t.slug,
   asset_dir: t.asset_dir, alphas: t.alphas, n_cells: t.n_cells, has_real: t.has_real,
   real_dir: t.real_dir || t.asset_dir, key: markerName + "|" + t.slug });
 
@@ -245,14 +248,14 @@ async function boot() {
   mont.rmMap = await fetch(`${BASE}_montage/render_mode.json${NOCACHE}`).then(r => r.ok ? r.json() : {}).catch(() => ({}));  // per-marker renderer: tiles (per-marker montage) vs live
   ensureSetacc(() => {});   // preload set-accuracy so the default "by SET ACC" ordering is ready
   wireCombo("markerfilter", "marker-list", renderMarkerList, () => markerLabel(state.markerIdx));
-  wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : (state.unavail ? state.unavail.name : ""));
+  wireCombo("filter", "target-list", renderTargetList, () => state.target ? targetLabel(state.target) : (state.unavail ? unavailLabel() : ""));
   $("tprev").onclick = () => stepTarget(-1);   // step through perturbations quickly
   $("tnext").onclick = () => stepTarget(1);
   $("target-sort").onchange = () => { state.targetSort = $("target-sort").value;
     const show = () => { renderTargetList(); $("target-list").classList.remove("hidden"); };
     state.targetSort === "setacc" ? ensureSetacc(show) : show(); };
   $("altanchor").onchange = () => { state.altAnchorsOnly = $("altanchor").checked; refreshTargets(); };
-  $("grain").onchange = refreshTargets;
+  $("grain").onchange = () => refreshTargets(false);   // grain switch → reset to the top of the new list (a gene has no meaning under complex grain)
   $("cellcount").onchange = () => { state.cellCount = Math.max(1, +$("cellcount").value | 0); state.page = 0; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cprev").onclick = () => { state.page = Math.max(0, state.page - 1); rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
   $("cnext").onclick = () => { state.page++; rebuild(); if (state.view === "attn") renderAttn(); if (state.view === "top") renderTop(); };
@@ -337,6 +340,7 @@ async function boot() {
     if (view === "pc") loadPC();
     if (view === "top") loadTop();
     if (view === "methods") renderMethods();
+    if (view === "traversal") updateTravClip();   // re-apply the clip on tab entry (toggling it in Top Cells runs updateTravClip while view!=traversal → clip left off; resync here)
   });
   fillCellDropdown();      // per-modality cell count (phase 45, markers 20); refilled on marker change
   fillOverlayMarkers();    // load the 42 VS marker names into the Overlay dropdown
@@ -388,8 +392,8 @@ async function boot() {
   $("tc-pinclear").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
-  $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; updateTravClip(); renderTop(); saveState(); };   // marker-global vs per-cell intensity (fluor)
-  $("tr-inorm").onchange = () => { tc.inorm = $("tr-inorm").checked; updateTravClip(); if (tc.data) renderTop(); saveState(); };   // same shared toggle, driven from the Traversal tab
+  $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; updateTravClip(); renderTop(); syncTcPopouts(); saveState(); };   // marker-global vs per-cell intensity (fluor)
+  $("tr-inorm").onchange = () => { tc.inorm = $("tr-inorm").checked; updateTravClip(); if (tc.data) renderTop(); syncTcPopouts(); saveState(); };   // same shared toggle, driven from the Traversal tab
   $("tc-acc").onchange = () => { tc.showAcc = $("tc-acc").checked; ensureSetacc(renderTop); saveState(); };   // per-group classification-accuracy chip on/off
   $("tc-accbin").onchange = () => { tc.accBin = +$("tc-accbin").value; renderTop(); saveState(); };   // classifier bag size the accuracy is measured at
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
@@ -990,7 +994,7 @@ function findTargetEntry(gene) {   // manifest target entry for a gene (prefer p
 // clicking a montage gene selects it in the browse search box (falls back to info-only if the
 // current marker/grain has no geneKO entry for it — e.g. a fluor marker lacking that gene).
 function selectGeneFromMontage(gene) {
-  if ($("grain").value === "complex") { $("grain").value = "geneKO"; $("grain")._segSync?.(); refreshTargets(); }   // montage genes are geneKO
+  if ($("grain").value === "complex") { $("grain").value = "geneKO"; $("grain")._segSync?.(); refreshTargets(false); }   // montage genes are geneKO
   const t = state.targets.find(x => x.target === gene && x.grain === "geneKO");
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
   else renderInfo(findTargetEntry(gene) || { target: gene, grain: "geneKO", desc: (state.geneDesc || {})[gene] });
@@ -1068,7 +1072,7 @@ const targetLabel = (t) => {
     : t.dist_map != null ? ` (${t.dist_map.toFixed(2)})` : "";
   return `${t.target}${paren}${t.grain === "minibinder" ? " ·mb" : ""}`;
 };
-function refreshTargets() {   // marker or grain changed → recompute candidates (NTC-anchored), keep/reset selection
+function refreshTargets(preservePert = true) {   // marker or grain changed → recompute candidates (NTC-anchored). preservePert: keep the SAME perturbation across a marker/channel switch (default); grain switches pass false to reset to the top of the new list.
   updateBagUI();              // correct the anchor bag for this grain BEFORE building the grid (minibinder/PC → single_bag; never blank)
   const g = $("grain").value;
   const altSet = new Set(state.marker.targets.filter(e => e.control).map(e => e.target));   // names with a non-NTC anchor
@@ -1076,8 +1080,15 @@ function refreshTargets() {   // marker or grain changed → recompute candidate
     && (!state.altAnchorsOnly || altSet.has(t.target)));
   if (g !== "complex" && !state.altAnchorsOnly && !state.targets.some(t => t.target === "NTC"))   // NTC selectable (Top Cells / embedding / PC); no traversal assets
     state.targets.push({ grain: "geneKO", target: "NTC", slug: "NTC", dist_map: null, n_cells: 0, alphas: [], desc: "non-targeting control" });
-  let t = state.target && state.targets.find(x => x.slug === state.target.slug);
-  if (!t) t = state.targets[0];
+  const curName = preservePert ? ((state.target && state.target.target) || (state.unavail && state.unavail.name)) : null;   // perturbation identity to carry across the channel switch
+  let t = curName ? state.targets.find(x => x.target === curName) : null;
+  if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); return; }
+  if (curName) {   // this perturbation has no traversal/top cells in the new channel → stay on it, show the "cells not available" message (don't jump to the top-accuracy perturbation)
+    const go = () => pickUnavail(curName, saAcc(attnModality(), curName, 100));
+    accBins ? go() : ensureSetacc(go);
+    return;
+  }
+  t = state.targets[0];   // initial load / grain switch → default to the top of the list
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); }
   else { state.target = null; $("filter").value = ""; rebuild(); }
 }
@@ -1143,21 +1154,39 @@ function renderTargetList() {
   if (!n) list.innerHTML = '<div class="combo-empty">no matches</div>';
 }
 
+function markersWithImages(name) {   // channels whose manifest has a traversal/top-cell entry for this perturbation
+  return state.manifest.markers.filter(m => m.targets.some(t => t.target === name && !t.control))
+    .map(m => m.label || m.marker_channel || "Phase");
+}
+
 function unavailMsg() {   // shared "Cells not available" banner (traversal + top cells)
   const { name, acc } = state.unavail, pct = acc == null ? "—" : Math.round(acc * 100) + "%";
-  return `<div class="unavail-msg"><div class="unavail-t">Cells not available</div>` +
-    `<div class="unavail-s"><b>${name}</b> — <b>${pct}</b> is below the accuracy threshold. No images generated.</div></div>`;
+  const chans = markersWithImages(name);
+  const avail = chans.length
+    ? `<div class="unavail-a">Images available in: <b>${chans.join(", ")}</b></div>`
+    : `<div class="unavail-a">No channel has images for this perturbation.</div>`;
+  return `<div class="unavail-msg"><div class="unavail-t">Images not generated</div>` +
+    `<div class="unavail-s"><b>${name}</b> — <b>${pct}</b> is below the accuracy threshold. No images generated.</div>` +
+    avail + `</div>`;
+}
+
+function unavailLabel() {   // "NAME (X% accuracy)" — mirrors targetLabel's setacc suffix so the search bar reads the same as a real perturbation
+  const { name, acc } = state.unavail;
+  return acc == null ? name : `${name} (${Math.round(acc * 100)}% accuracy)`;
 }
 
 function pickUnavail(name, acc) {   // a searched perturbation with no traversal/top cells (accuracy below threshold)
   state.unavail = { name, acc }; state.target = null;
-  $("filter").value = name; $("filter").blur(); $("target-list").classList.add("hidden");
+  const lbl = unavailLabel(), f = $("filter");
+  f.value = lbl; f.dataset.tip = lbl; f.title = lbl;   // hover reads the selected (unavailable) perturbation, not the previous one
+  f.classList.add("unavail-sel");                      // gray/italic like the below-threshold entry in the dropdown
+  f.blur(); $("target-list").classList.add("hidden");
   rebuild(); if (state.view === "top") loadTop();   // show the message on whichever main view is active
   if (typeof saveState === "function") saveState();
 }
 
 function renderUnavail() {   // traversal view: replace the grid; keep the perturbation's real annotation in the info panel
-  $("grid").innerHTML = unavailMsg(); $("pagenum").textContent = "";
+  $("grid").innerHTML = unavailMsg(); $("pagenum").textContent = ""; $("meta").textContent = "";   // clear the old perturbation's mAP line below the grid
   const name = state.unavail.name;
   renderInfo(findTargetEntry(name) || { target: name, grain: $("grain").value || "geneKO", desc: (state.geneDesc || {})[name] });
 }
@@ -1167,6 +1196,7 @@ function selectTarget(slug) {
   state.target = state.targets.find(t => t.slug === slug);
   if (!state.target) return;
   state.unavail = null;   // clear any prior "cells not available" message
+  $("filter").classList.remove("unavail-sel");   // un-gray the input now that a real perturbation is selected
   $("filter").title = targetLabel(state.target);   // hover shows the full name (long complex names get truncated in the input)
   $("filter").dataset.tip = targetLabel(state.target);   // fast custom tooltip (same as group titles/pins)
   populateAnchors(state.target.target);
@@ -1228,7 +1258,7 @@ function redrawPins() {   // refresh both pin lists + the active grid, and persi
 async function exportGif() {   // client-side GIF of the current traversal grid across all α (works on static S3)
   const grid = $("grid"); if (!state.panels.length || typeof GIF === "undefined") return;
   const btn = $("exportgif"), old = btn.textContent; btn.disabled = true; btn.textContent = "rendering…";
-  const CLIPF = (tc.inorm && state.marker && state.marker.marker_channel) ? "url(#trav-clip)" : "none";   // bake the fluor marker-normalize clip into the GIF (canvas drawImage ignores CSS/SVG filters)
+  const CLIPF = grid.classList.contains("fluorclip") ? "url(#trav-clip)" : "none";   // bake the active traversal clip (fluor marker-normalize / phase background) into the GIF (canvas drawImage ignores CSS/SVG filters)
   const gr = grid.getBoundingClientRect();
   const MARGIN = 18;                 // general padding around the whole gif
   const TOP = 54;                    // heatbar band on its own line above the grid (tight gap below its end labels)
@@ -1256,11 +1286,13 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
   const cache = {};
   const srcs = [...new Set(groups.flatMap(g => g.tiles.flatMap(t => t.frames)))];
   await Promise.all(srcs.map(src => new Promise(res => {
-    const im = new Image(); im.onload = im.onerror = () => { cache[src] = im; res(); }; im.src = src; })));
+    const im = new Image(); im.crossOrigin = "anonymous";   // CORS-mode fetch so prod CloudFront frames don't taint the export canvas (CloudFront returns ACAO:*)
+    im.onload = im.onerror = () => { cache[src] = im; res(); };
+    im.src = src + (src.includes("?") ? "&" : "?") + "cors=1"; })));   // cache-buster: grid <img> already cached these non-CORS; force one clean CORS request (key cache by original src)
   // frame plan = viewer autoplay: ping-pong over the ±alphaLimit range, dwelling at the user's pause ticks (dwell → longer per-frame delay, not duplicate frames)
   computeRange();
   const lo = state.rangeLo, hi = state.rangeHi;
-  const base = Math.max(40, ((+$("speed").value) || state.frameMs || 120) * 0.38);   // faster baseline than the on-screen player
+  const base = 1.5 * Math.max(40, ((+$("speed").value) || state.frameMs || 120) * 0.38);   // faster baseline than the on-screen player, then 50% slower overall
   const hold = v => (v === lo || v === hi) ? 6 : (state.pausePoints.has(v) ? 3 : 1);   // always dwell at the sweep ends, slightly longer than interior pauses
   const path = [];
   for (let v = lo; v <= hi; v++) path.push(v);
@@ -1310,9 +1342,9 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
       const lead = g.tiles.reduce((m, t) => t.x < m.x ? t : m, g.tiles[0]);
       for (const t of g.tiles) {
         const im = cache[t.frames[a]]; if (im && im.width) { cx.filter = CLIPF; cx.drawImage(im, t.x, t.y, t.w, t.h); cx.filter = "none"; }
-        if (state.scoreMode === "linear") {                                      // per-cell linear classifier score (top-right of tile)
+        if (state.scoreMode === "linear") {                                      // per-cell Metric-B removal percentile (top-right of tile)
           const sc = state.scores[t.dir], v = sc && sc.scores[t.cell] ? sc.scores[t.cell][Math.min(a, sc.scores[t.cell].length - 1)] : null;
-          if (v != null) chip(`${Math.round(v * 100)}%`, t.x + t.w, t.y, v, "right");
+          if (v != null) { const hv = pctHeatVal(v); chip(`${Math.round(v * 100)}%`, t.x + t.w, t.y, 0, "right", { bg: heat(hv), fg: hv > 0.55 ? "#fff" : "#111" }); }   // top-heavy: 50th pct white, only high turns blue
         }
       }
       { const sch = setChip(state.scoresV5[g.dir], a);                            // v5 set score (selected mode) on the row's leftmost tile
@@ -1377,9 +1409,11 @@ function rebuild() {
         img.onclick = () => { const pn = state.panels[kk]; if (!pn) return;
           const pre = pp.anchor && pp.anchor !== "NTC" ? `${pp.anchor}→` : "";
           const av = (state.alphas && state.idx != null) ? state.alphas[Math.min(state.idx, state.alphas.length - 1)] : "";
+          const fp = afPeak(pp.target, pp.grain, attnModality()), ph = (fp && av !== "") ? (av / fp).toFixed(1) : "—";   // show φ = α/f, not raw α
           const sch = setChip(state.scoresV5[pp.asset_dir], state.idx);
           popOut(pn.frames[Math.min(state.idx, pn.frames.length - 1)], `${pre}${pp.target} · ${pp.markerName}`,
-            `<div class="po-sub">α ${av} · cell ${cc + 1}${sch ? " · " + sch.txt : ""}</div>`); }; }
+            `<div class="po-sub">φ ${ph} · cell ${cc + 1}${sch ? " · " + sch.txt : ""}</div>`, null,
+            $("grid").classList.contains("fluorclip")); }; }
       const badge = document.createElement("div"); badge.className = "badge"; badge.id = `pbadge${k}`; badge.style.display = "none";
       panel.appendChild(img); panel.appendChild(badge); cells.appendChild(panel);
       state.panels.push({ asset_dir: p.asset_dir, cell: c, alphas: p.alphas, frames });
@@ -1433,7 +1467,7 @@ function rebuild() {
 function fetchScores(dir) {
   if (state.scores[dir] !== undefined) return;   // cached or pending
   state.scores[dir] = null; state.scoresV5[dir] = null;
-  fetch(`${travBase(dir)}${dir}/scores.json${NOCACHE}`).then(r => r.ok ? r.json() : null)
+  fetch(`${travBase(dir)}${dir}/scores_loo.json${NOCACHE}`).then(r => r.ok ? r.json() : null)   // Metric-B per-cell per-α removal percentile vs real cells (replaces the old linear NTC→KO score)
     .then(j => { state.scores[dir] = j; showIdx(state.idx); }).catch(() => {});
   fetch(`${travBase(dir)}${dir}/scores_v5.json${NOCACHE}`).then(r => r.ok ? r.json() : null)   // v5 SetTransformer set-accuracy (bag)
     .then(j => { state.scoresV5[dir] = j; showIdx(state.idx); }).catch(() => {});
@@ -1441,15 +1475,21 @@ function fetchScores(dir) {
 
 function showIdx(i) {
   state.idx = i;
+  const clipOn = $("grid") && $("grid").classList.contains("fluorclip");   // fluor traversal → SVG marker-normalize clip active
   state.panels.forEach((p, k) => {
-    const img = $(`pimg${k}`); if (img) img.src = p.frames[Math.min(i, p.frames.length - 1)];
+    const img = $(`pimg${k}`);
+    if (img) {
+      img.src = p.frames[Math.min(i, p.frames.length - 1)];
+      if (clipOn) { img.style.filter = "none"; void img.offsetWidth; img.style.filter = ""; }   // re-assert the url(#trav-clip) filter after the src swap (Chrome randomly drops it on <img> src change → the "flip to un-normalized" bug)
+    }
     const bd = $(`pbadge${k}`); if (!bd) return;
     const sc = state.scores[p.asset_dir];
     const v = state.scoreMode === "linear" && sc && sc.scores[p.cell] ? sc.scores[p.cell][Math.min(i, sc.scores[p.cell].length - 1)] : null;
     if (v != null) {
+      const hv = pctHeatVal(v);                      // top-heavy: 50th pct = white, only high percentiles turn blue
       bd.textContent = `${Math.round(v * 100)}%`;
-      bd.style.background = heat(v);                 // white → deep red by confidence
-      bd.style.color = v > 0.55 ? "#fff" : "#111";
+      bd.style.background = heat(hv);
+      bd.style.color = hv > 0.55 ? "#fff" : "#111";
       bd.style.display = "block";
     } else bd.style.display = "none";
   });
@@ -1469,7 +1509,15 @@ function showIdx(i) {
     } else gp.sa.style.display = "none";
   });
   const n = state.alphas.length, a = state.alphas[i];
-  $("alpha-read").textContent = `α = ${a.toFixed(1)}`;
+  const ent = afEntry(state.target && state.target.target, state.target && state.target.grain, attnModality());   // [f, confidence]
+  const fpk = ent ? ent[0] : null;   // centroid-recovery peak-α → phenotype-fraction φ = α/f (φ=1 = phenotype reached)
+  const ar = $("alpha-read");
+  ar.textContent = `φ = ${fpk ? (a / fpk).toFixed(1) : "—"}`;
+  const cf = ent ? ent[1] : null, cfp = cf == null ? null : Math.round(cf * 100);   // confidence = share of generated cells that recover the true class at the peak α
+  const tip = fpk == null ? "no f score"
+    : fpk === 1 ? `no rescale · peak recovery ${cfp}%`
+    : `f = ${fpk.toFixed(1)} · peak recovery ${cfp}%`;
+  ar.dataset.tip = tip; ar.title = tip;
   $("heat-tick").style.left = `calc(${(i / (n - 1)) * 100}% - 1.5px)`;
 }
 
@@ -1516,7 +1564,7 @@ function renderInfo(t) {
     return;
   }
   const g = encodeURIComponent(t.target);
-  sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=${g}" target="_blank" rel="noopener">GeneCards ↗</a> · <a href="https://affinage.wi.mit.edu/gene/${g}" target="_blank" rel="noopener">Affinage ↗</a>`);
+  sec("Links", `<a href="https://opencell.sf.czbiohub.org/search/${g}" target="_blank" rel="noopener">OpenCell ↗</a> · <a href="https://www.uniprot.org/uniprotkb?query=gene:${g}+AND+organism_id:9606" target="_blank" rel="noopener">UniProt ↗</a> · <a href="https://affinage.wi.mit.edu/gene/${g}" target="_blank" rel="noopener">Affinage ↗</a>`);
   const parts = s.split(" || ");   // "<function> || GO biological process: … || Reactome: … || CORUM complex: …"
   const TYPED = /^(GO (biological process|molecular function|cellular component)|Reactome|KEGG|CORUM complex|Pathway|InterPro|Pfam|UniProt)\b/i;   // parts[0] is sometimes a typed annotation, not a function blurb
   const p0i = parts[0].indexOf(": ");
@@ -1617,6 +1665,15 @@ function tick() {
 // grain = geneKO|complex, key = gene (geneKO) or complex-slug. A "ref" bundles that + a display label.
 const jsSlug = (s) => String(s).replace(/[^A-Za-z0-9]/g, "_").replace(/^_+|_+$/g, "");
 const attnModality = () => (state.marker && state.marker.marker_channel) ? jsSlug(state.marker.marker_channel) : "phase";
+function afEntry(name, grain, chan) {   // [f, confidence] for a perturbation, keyed "{channel}/{grain}/{classSlug}". f=peak-α (1=never recovers); confidence=peak recovery height (0-1).
+  const af = window.AF_SCORES;
+  if (!af || !name || !grain) return null;
+  const v = af[`${chan}/${grain}/${jsSlug(name)}`];
+  return v == null ? null : (Array.isArray(v) ? v : [v, null]);
+}
+function afPeak(name, grain, chan) {   // centroid-recovery peak-α (f); φ = α/f (φ=1 → phenotype reached)
+  const e = afEntry(name, grain, chan); return e ? e[0] : null;
+}
 const attnBase = (ref) => `${BASE}attention_heads/${ref.modality}/${ref.grain}/${ref.key}`;
 const sameRef = (a, b) => a.modality === b.modality && a.grain === b.grain && a.key === b.key;
 function haveAttn(modality, grain, key) {
@@ -1937,8 +1994,8 @@ function pcCell(i) {   // click a strip cell → glassy pop-out for close inspec
 }
 // glassy, draggable, stackable inset — you can still see the viewer through it
 const PO_W = 450, PO_GAIN = 1.7;   // pop-out base width (matches .popout CSS); drag gain (>1 = tile moves faster than the cursor)
-function popOut(imgUrl, title, metaHtml, ovUrl) {
-  const el = document.createElement("div"); el.className = "popout";
+function popOut(imgUrl, title, metaHtml, ovUrl, clip, tcnorm) {
+  const el = document.createElement("div"); el.className = "popout" + (clip ? " fluorclip" : "");   // clip → apply the same fluor marker-normalize filter as the grid
   const pops = document.querySelectorAll(".popout").length;   // stagger horizontally by a full tile width, wrap rows
   const perRow = Math.max(1, Math.floor((window.innerWidth - 180) / (PO_W + 12)));
   el.style.left = `${150 + (pops % perRow) * (PO_W + 12)}px`;
@@ -1947,12 +2004,17 @@ function popOut(imgUrl, title, metaHtml, ovUrl) {
   const ov = (ovUrl && tc.mask) ? `<img class="po-ov" src="${ovUrl}">` : "";   // follow the live mask toggle at click time
   el.innerHTML = `<div class="po-bar"><span>${title}</span><button title="close">×</button></div>` +
     `<div class="po-img"><img src="${imgUrl}">${ov}</div><div class="po-body">${metaHtml}</div>`;
+  if (tcnorm) el.querySelector(".po-img img").dataset.tcnorm = "1";   // Top Cells fluor crop → swap crops/crops_norm live with the marker-norm toggle
   el.querySelector("button").onclick = () => el.remove();
   const bar = el.querySelector(".po-bar"); let s = null;
   bar.addEventListener("mousedown", (e) => { s = { x: e.clientX, y: e.clientY, l: el.offsetLeft, t: el.offsetTop }; e.preventDefault(); });
   window.addEventListener("mousemove", (e) => { if (!s) return; el.style.left = `${s.l + (e.clientX - s.x) * PO_GAIN}px`; el.style.top = `${s.t + (e.clientY - s.y) * PO_GAIN}px`; });
   window.addEventListener("mouseup", () => { s = null; });
   document.body.appendChild(el);
+}
+function syncTcPopouts() {   // swap open Top Cells pop-out images crops<->crops_norm so they follow the marker-norm toggle (traversal pop-outs follow via the live SVG filter)
+  const want = tc.inorm ? "crops_norm" : "crops";
+  document.querySelectorAll(".popout img[data-tcnorm]").forEach(img => { img.src = img.src.replace(/\/crops(_norm)?\//, "/" + want + "/"); });
 }
 function pcGeneOverlay(name) {
   const g = pc.data && pc.data.geneData[name]; if (!g) return;
@@ -2006,7 +2068,8 @@ function renderTop() {
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
   const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
-  const inw = $("tc-inorm") && $("tc-inorm")._tog; if (inw) inw.style.display = mk === "phase" ? "none" : "";   // marker-intensity normalization is fluor-only — hide its toggle for phase
+  const tci = $("tc-inorm"); if (tci) { tci.checked = tc.inorm; tci._togSync?.(); }   // resync Top Cells pill to shared tc.inorm (may have been flipped from the Traversal tab)
+  const inw = tci && tci._tog; if (inw) inw.style.display = mk === "phase" ? "none" : "";   // marker-intensity normalization is fluor-only — hide its toggle for phase
   if (sel) {
     if (isPublic()) tc.accBin = (bins.length && bins.includes(100)) ? 100 : (bins[bins.length - 1] || 100);   // public: fixed 100-cell bag, no selector
     else if (bins.length && !bins.includes(tc.accBin)) tc.accBin = bins.includes(100) ? 100 : bins[bins.length - 1];
@@ -2030,7 +2093,7 @@ function renderTop() {
       const ov = ovUrl ? `<img class="tc-ov" src="${ovUrl}">` : "";
       const cv = sk === "conf" && c[sk] != null && !isNaN(+c[sk]) ? +(+c[sk]).toPrecision(2) : c[sk];   // round accuracy/confidence to 2 sig figs
       const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>${e.mode} ${sk}=${cv} · rank ${c.rank}</div>`;
-      const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)}${ovUrl ? "," + JSON.stringify(ovUrl) : ""}`;
+      const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)},${ovUrl ? JSON.stringify(ovUrl) : "null"},false,${tcBase().includes("markers/")}`;   // last arg: fluor crops have crops_norm → pop-out can follow the marker-norm toggle
       h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${cv}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
     }
     h += "</div></div>";
