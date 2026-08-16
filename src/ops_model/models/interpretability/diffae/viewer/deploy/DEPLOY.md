@@ -33,6 +33,13 @@ gh pr merge <release-please PR #> --repo czbiohub-sf/diffex-viewer --squash
 ```
 Wait ~5–10 min for ArgoCD to propagate; verify (below). If it doesn't roll, ping Kyle.
 
+> 📋 **ALWAYS (for prod deploys): hand the user the exact curl check with the expected `?v`.** After merging a
+> release PR to prod, end your reply with the ready-to-paste command and the version it should print, e.g.:
+> ```bash
+> curl -s https://opsin.apps.czbiohub.org/ | grep -oE 'app.js\?v=[0-9]+'   # expect app.js?v=<N>
+> ```
+> Fill in `<N>` with the actual bumped version from this release so the user can confirm prod is live themselves.
+
 > ⚠️ **Wait for the release PR's CI to finish before merging** (Kyle). Releasing frequently is fine, but the
 > release PR only pins the *correct* sha once **Argus has finished building the latest commit** — you must make
 > sure that last CI commit/build lands in the PR before merging. Merge too early and prod pins an image that
