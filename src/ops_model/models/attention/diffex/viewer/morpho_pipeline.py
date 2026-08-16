@@ -92,7 +92,7 @@ def _fit_ellipse_mask(nuc, scale=1.0):
 
 def _vs_h2b_nucleus_npz(marker_dir, target, grain, out_npz, n_cells, force=False, crop=CROP, float_frames=False, alpha_idxs=None, cell_offset=0):
     """VS-predict H2B (nuclear) from each generated phase frame with the all-channel DiffAE, Cellpose-SAM the
-    virtual nucleus, keep the largest (central) object → cache (n_cells, n_alpha, CROP, CROP) uint8 nucleus masks.
+    virtual nucleus, keep the object closest to the crop center → cache (n_cells, n_alpha, CROP, CROP) uint8 nucleus masks.
     Cached (masks depend only on the traversal frames). Replaces the Otsu/ellipse nucleus mask with a real one."""
     import json
     import numpy as np
@@ -153,8 +153,10 @@ def _vs_h2b_nucleus_npz(marker_dir, target, grain, out_npz, n_cells, force=False
         for j, c in enumerate(idx):
             m = cp.eval(np.clip((pred[j] + 1) / 2, 0, 1), diameter=None, flow_threshold=0.4, cellprob_threshold=0.0)[0]
             if m.max() > 0:
-                ids, cnt = np.unique(m, return_counts=True); ids, cnt = ids[1:], cnt[1:]
-                m = (m == ids[cnt.argmax()])                        # largest = the central nucleus
+                ids = np.unique(m); ids = ids[ids != 0]
+                ctr = (np.array(m.shape) - 1) / 2.0
+                d2 = [np.sum((np.argwhere(m == i).mean(axis=0) - ctr) ** 2) for i in ids]
+                m = (m == ids[np.argmin(d2)])                       # closest-to-center object = the true nucleus
             out[c, pos] = resize(np.asarray(m, float), (crop, crop), order=0).astype(np.uint8)
         print(f"[vs-nuc] {target} α{ai} (pos {pos}): {len(idx)} cells", flush=True)
     np.savez_compressed(out_npz, masks=out)
@@ -240,10 +242,18 @@ def _run_seg_masked_object(zpath, n_alpha, label_name, nucleus=False, nucleus_sc
     W = int(np.asarray(root["A/0/0/0"]).shape[-1])
     n_cells = round((W + PAD) / (crop + PAD))
     vs_masks = np.load(vs_nucleus_npz)["masks"] if vs_nucleus_npz else None
+    last_good = [None] * n_cells   # per-cell fallback: most recent (lower-α) nucleus mask that wasn't empty
     out = []
     for ai in range(n_alpha):
         img = np.asarray(root[f"A/{ai}/0/0"][0, -1, 0]).astype(np.float32)   # marker channel = last
         nm = vs_masks[:, ai] if vs_masks is not None else None
+        if nm is not None:
+            nm = nm.copy()
+            for c in range(min(n_cells, len(nm))):
+                if nm[c].any():
+                    last_good[c] = nm[c]
+                elif last_good[c] is not None:   # VS-H2B found no nucleus at this α -- reuse the last α where it did, rather than dropping the cell entirely
+                    nm[c] = last_good[c]
         lab = _seg_strip_mo(img, n_cells, nucleus=nucleus, nucleus_scale=nucleus_scale, nuc_masks=nm, vs_erode=vs_erode, crop=crop, mo_params=mo_params)
         Y, Wx = lab.shape
         _init_organelle_label_array(zpath, f"A/{ai}/0", label_name, shape=(1, 1, 1, Y, Wx))
@@ -365,7 +375,7 @@ def _run_seg_nucleus(zpath, n_alpha, label_name, min_area=50):
     return out
 
 
-def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None, method=None, label_name=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0, crop=CROP, mo_params=None):
+def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYNTH_BASE, frangi_params=None, method=None, label_name=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0, crop=CROP, mo_params=None, clahe_params=None):
     """Run the REAL production org-seg on each α position of the mini-zarr (config resolved from the
     real experiment's channel map). `frangi_params` overrides the resolved frangi config (e.g. to switch
     to the ADAPTIVE dynamic threshold on the generated images). Writes labels; returns per-α results.
@@ -378,25 +388,23 @@ def run_seg(real_exp, marker_channel, n_alpha, structure_type=None, base_dir=SYN
     if method == "nucleus":
         return _run_seg_nucleus(f"{base_dir}/{real_exp}/3-assembly/phenotyping_v3.zarr",
                                 n_alpha, label_name or "nucleus_seg")
-    # each α is an independent zarr position → segment them in parallel across the job's CPUs (was serial)
-    from joblib import Parallel, delayed
-    nj = max(1, min(int(os.environ.get("SLURM_CPUS_PER_TASK", 8)), n_alpha))
-
+    # each α is an independent zarr position, but they all write labels into the SAME shared zarr store —
+    # concurrent (joblib/loky) writes there race and silently corrupt/drop a position's labels (confirmed:
+    # α=0 randomly came back near-empty under parallel workers, clean every time run serially). Serial only.
     def _seg_one(ai):
         os.environ["OPS_OUTPUT_BASE_DIR"] = base_dir
         from organelle_profiler.organelle_seg.organelle_segmentation import segment_single_position_channel
-        r = segment_single_position_channel(experiment=real_exp, position=f"A/{ai}/0",
-                                             channel_key=marker_channel, structure_type=structure_type,
-                                             use_clahe=True, frangi_params=frangi_params, method=method)
+        for attempt in range(2):                  # first-ever GPU/CuPy kernel compile can race and fail cold; retry once
+            r = segment_single_position_channel(experiment=real_exp, position=f"A/{ai}/0",
+                                                 channel_key=marker_channel, structure_type=structure_type,
+                                                 use_clahe=True, frangi_params=frangi_params, method=method,
+                                                 clahe_params=clahe_params)   # None -> library default; pass a small kernel_size to keep CLAHE tiles within one cell's crop in a multi-cell strip
+            if r.get("success") or attempt:
+                break
+            print(f"  α_idx {ai}: attempt 1 failed ({r.get('error')}) — retrying")
         return (ai, r.get("success"), r.get("num_objects"), r.get("output_label"), r.get("error"))
 
-    if nj <= 1:                                # serial (no loky spawn) — safe under nested submitit workers
-        out = sorted(_seg_one(ai) for ai in range(n_alpha))
-    else:
-        try:
-            out = sorted(Parallel(n_jobs=nj, backend="loky")(delayed(_seg_one)(ai) for ai in range(n_alpha)))
-        except Exception:                      # loky context unavailable (nested under submitit) → serial
-            out = sorted(_seg_one(ai) for ai in range(n_alpha))
+    out = sorted(_seg_one(ai) for ai in range(n_alpha))
     for ai, s, n, lab, err in out:
         print(f"  α_idx {ai}: success={s} n_obj={n} label={lab} {err or ''}")
     return out
@@ -607,7 +615,7 @@ def reference_from_direction(marker_dir, target, real_exp, marker_channel, struc
     if network:
         from skimage.morphology import skeletonize   # used below for per-object skel features
         if adaptive:                                             # match the generated: adaptive dynamic threshold (adaptive=False → perfected config)
-            _, dp = _resolve_seg(real_exp, marker_channel); fp = dict(dp)
+            _, dp = _resolve_seg(real_exp, marker_channel, structure_type=structure_type); fp = dict(dp)
             fp["threshold"] = None; fp["threshold_mult"] = 0.1; fp["pixel_size_um"] = 0.065   # match generated seg
     out = f"{CACHE}/_morphometrics/{marker_dir}/{grain}/{target}"; os.makedirs(out, exist_ok=True)
     root, ref = None, {}
@@ -753,14 +761,18 @@ def sweep_grid(marker_dir, target, real_exp, marker_channel, pix=(0.065, 0.13, 0
     fig.tight_layout(); fig.savefig(out, dpi=125, bbox_inches="tight"); print(f"[sweep] {out}")
 
 
-def _resolve_seg(real_exp, marker_channel):
-    """Config-matched (method, detection_params) for this channel — from org_seg_params, no hardcoding."""
+def _resolve_seg(real_exp, marker_channel, structure_type=None):
+    """Config-matched (method, detection_params) for this channel — from org_seg_params, no hardcoding.
+    structure_type MUST be passed when the group has one (e.g. "vesicular") -- leaving it None here makes
+    _determine_processing_params fall back to its own default ("tubular"), silently resolving the WRONG
+    method/params (confirmed: mTOR's vesicular/blob config resolves as tubular/frangi with max_radius_um=1.5
+    instead of the correct 0.6, which then leaks into any frangi_override merge)."""
     os.environ.setdefault("OPS_OUTPUT_BASE_DIR", SYNTH_BASE)
     from organelle_profiler.organelle_seg.channel_processor import resolve_single_channel_info
     from organelle_profiler.organelle_seg.metadata import _determine_processing_params
     ci = resolve_single_channel_info(marker_channel, ["Phase2D", marker_channel], experiment=real_exp)
     dp, _, m = _determine_processing_params(organelle_key=ci.get("organelle_key", marker_channel),
-        source_channel=marker_channel, structure_type=None, ch_info=ci, frangi_params=None,
+        source_channel=marker_channel, structure_type=structure_type, ch_info=ci, frangi_params=None,
         clahe_params=None, post_clahe_smoothing_sigma=None)
     return m, (dp or {})
 
@@ -782,7 +794,7 @@ def run_target(marker_dir, target, real_exp, marker_channel, store_marker, grain
     + store ref-map AUTO from the resolved method. For frangi on the GENERATED (fake) images, switch to the
     ADAPTIVE dynamic threshold (compute_frangi_threshold) — the config's fixed threshold mis-fits the fake
     intensity/noise. mini-zarr → REAL seg → readback + real_ref (+ ref cells)."""
-    method, dp = _resolve_seg(real_exp, marker_channel)
+    method, dp = _resolve_seg(real_exp, marker_channel, structure_type=structure_type)
     network = (structure_type == "tubular") if structure_type else (method == "frangi")   # only tubular has a skeleton (vesicular = blob features)
     ref_map = _auto_ref_map(network, marker_channel)
     fp = None
@@ -817,7 +829,7 @@ def validate(marker_dir="lysosome_LAMP1", target="ABCE1", grain="geneKO",
 
 def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", n_cells=6,
                   fake_pixel_um=0.05, adaptive_mult=0.1, adaptive=True, out_root=None, frangi_override=None, structure_type=None, seg_method=None, base_dir=SYNTH_BASE, org_label=None, mo_nucleus=False, mo_nucleus_scale=1.0, vs_nucleus_npz=None, vs_erode=0,
-                  crop=CROP, float_frames=False, cell_masks=None, mo_params=None, hist_ref=None, hm_mode="global", alpha_idxs=None, cell_offset=0):
+                  crop=CROP, float_frames=False, cell_masks=None, mo_params=None, hist_ref=None, hm_mode="global", alpha_idxs=None, cell_offset=0, clahe_params=None):
     """REAL org-profiler feature extraction on the generated (cell, α) crops — NO skimage shortcut.
     Stage traversal (mini-zarr) → production org-seg → per crop run `process_single_cell`
     (extract_organelle_features + calculate_network_features), aggregate objects→cell with the pipeline's
@@ -827,7 +839,7 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
     import zarr
     from organelle_profiler.feature_extraction.fe_workers import process_single_cell
     from organelle_profiler.feature_extraction.fe_constants import AGGREGATION_FUNCTIONS
-    method, dp = _resolve_seg(real_exp, marker_channel)
+    method, dp = _resolve_seg(real_exp, marker_channel, structure_type=structure_type)
     network = (structure_type == "tubular") if structure_type else (method == "frangi")   # only tubular has a skeleton (vesicular = blob features)
     fp = None
     if network and adaptive:                                      # adaptive frangi override for fake images
@@ -837,7 +849,7 @@ def full_features(marker_dir, target, real_exp, marker_channel, grain="geneKO", 
         fp = dict(fp if fp else dp); fp.update(frangi_override)
     chans0 = ["Phase2D"] if marker_channel == "Phase2D" else ["Phase2D", marker_channel]   # phase: single channel (generated frame IS phase; avoids the empty Phase2D-slot collision)
     zpath, na = build_mini_zarr(marker_dir, target, grain, real_exp, chans0, n_cells, base_dir=base_dir, crop=crop, float_frames=float_frames, hist_ref=hist_ref, hm_mode=hm_mode, alpha_idxs=alpha_idxs, cell_offset=cell_offset)
-    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_nucleus_npz, vs_erode=vs_erode, crop=crop, mo_params=mo_params)
+    res = run_seg(real_exp, marker_channel, na, structure_type=structure_type, frangi_params=fp, method=seg_method, base_dir=base_dir, label_name=org_label, mo_nucleus=mo_nucleus, mo_nucleus_scale=mo_nucleus_scale, vs_nucleus_npz=vs_nucleus_npz, vs_erode=vs_erode, crop=crop, mo_params=mo_params, clahe_params=clahe_params)
     label_name = next((r[3] for r in res if r[1] and r[3]), None)
     if not label_name:
         print("[full] seg produced no label — abort"); return
@@ -1205,6 +1217,10 @@ MORPHO_TARGETS = {
                 marker_channel="nucleolus-GC_NPM3", store_marker="nucleolus-gc_npm3", grain="geneKO",
                 image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="vesicular",
                 seg_method="masked_object", mo_nucleus=True, frangi_override={"pixel_size_um": 0.825}),
+    "TAF1B": dict(marker_dir="nucleolus_GC_NPM3", target="TAF1B", real_exp="ops0092_20251027",   # same VS-NPM3 phase-nucleoli method as POLR1B
+                marker_channel="nucleolus-GC_NPM3", store_marker="nucleolus-gc_npm3", grain="geneKO",
+                image_channel="GFP", org_label="gfp_seg", store_channel="gfp", structure_type="vesicular",
+                seg_method="masked_object", mo_nucleus=True, frangi_override={"pixel_size_um": 0.825}),
     # GBF1 geneKO on ER/Golgi COP-II (SEC23A) puncta — MO intensity seg (punctate blobs, like nucleoli)
     "GBF1": dict(marker_dir="ER_Golgi_COP_II_SEC23A", target="GBF1", real_exp="ops0081_20250924",
                 marker_channel="ER_Golgi_COP-II_SEC23A", store_marker="er_golgi_cop-ii_sec23a", grain="geneKO",
@@ -1223,6 +1239,9 @@ MORPHO_TARGETS = {
                 marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
                 grain="complex", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
     "CHROMALIVE_MICOS13": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation", target="MICOS13", real_exp="ops0122_20260211",
+                marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
+                grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
+    "CHROMALIVE_SAMM50": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation", target="SAMM50", real_exp="ops0122_20260211",
                 marker_channel="mitochondria_ChromaLIVE 561 excitation", store_marker="mitochondria_chromalive_561_excitation",
                 grain="geneKO", image_channel="mCherry", org_label="mcherry_seg", store_channel="mcherry", structure_type="tubular"),
     "CHROMALIVE_TOMM20": dict(marker_dir="mitochondria_ChromaLIVE_561_excitation", target="TOMM20", real_exp="ops0122_20260211",
