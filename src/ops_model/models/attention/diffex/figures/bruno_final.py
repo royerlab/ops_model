@@ -1,5 +1,5 @@
 """FINAL Figure-4 deliverable (for review before Confluence upload): 3 groups (mTOR/POLR1B/TIM23), each with
-raw + normalized violins (α0,1,2,3) and a remade cell-grid image panel (real KO/NTC + gen α0,1,2 — α3 dropped there).
+raw + normalized violins (α0,0.5,1,1.5,2,2.5,3) and a remade cell-grid image panel (real KO/NTC + gen α0,1,2 — α3 dropped there).
 
 Normalization is now a SINGLE real-NTC baseline shared by every category (real NTC, real KO, gen α0/α1/α2) —
 NOT the old per-modality scheme (gen normalized to its own α0). Valid now because we've validated gen α0 ≈
@@ -25,8 +25,10 @@ plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
 
 NAT = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals_violin/_native"
 OUT = "/hpc/projects/icd.fast.ops/analysis/figure4_traversals_violin/bruno"
-C = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=1": "#6baed6", "α=2": "#3182bd", "α=3": "#08519c"}
-LABS = ["real NTC", "real KO", "α=0", "α=1", "α=2", "α=3"]
+C = {"real": "#999999", "KO": "#2e8b57", "α=0": "#c6dbef", "α=0.5": "#9ecae1", "α=1": "#6baed6",
+    "α=1.5": "#4292c6", "α=2": "#3182bd", "α=2.5": "#1c5c94", "α=3": "#08519c"}
+LABS = ["real NTC", "real KO", "α=0", "α=0.5", "α=1", "α=1.5", "α=2", "α=2.5", "α=3"]
+ALPHAS = (0, 0.5, 1, 1.5, 2, 2.5, 3)
 PX_UM = 0.325                                          # native phenotyping_v3 pixel size (shared by phase + fluor channels, same instrument/FOV)
 AREA_FEATS = {"area"}                                  # features measured in px² (spacing=(1,1) in _measure) → convert to µm² for raw display
 
@@ -34,11 +36,15 @@ AREA_FEATS = {"area"}                                  # features measured in px
 GROUPS = [
     ("mTOR", "mtor_mo_hm_100", [("location", "Radial position", "(normalized radial position)"),
                                  ("area", "Lysosome area", "(µm²)")]),
-    ("POLR1B", "polr1b_vsnpm3_100cpu", [("circularity", "Nucleolar circularity", "(4π·area/perimeter²)"),
+    ("POLR1B", "polr1b_vsnpm3_100cpu", [("circularity", "Nucleolar circularity", ""),
                                         ("aspect_ratio", "Nucleolar aspect ratio", "(major/minor axis)"),
                                         ("area", "Nucleolar area", "(µm²)")]),
     ("TIM23", "tim23_100", [("degree", "Network degree", "(mean node degree)"),
-                            ("count", "Mitochondrial fragment count", "(objects/cell)")]),
+                            ("count", "Mitochondrial fragment count", "(objects/cell)"),
+                            ("area", "Mitochondrial total area", "(µm²)"),
+                            ("connectivity", "Largest connected component", "(px)"),
+                            ("branches", "Branch count", "(num branches/cell)"),
+                            ("nodes", "Node count", "(num nodes/cell)")]),
 ]
 
 
@@ -53,13 +59,13 @@ def _load(dirname):
 
 def _series(z, feat, normalize):
     rn, rk = z[f"rn_{feat}"], z[f"rk_{feat}"]
-    g0, g1, g2, g3 = z[f"gen_{feat}_a0"], z[f"gen_{feat}_a1"], z[f"gen_{feat}_a2"], z[f"gen_{feat}_a3"]
+    gens = [z[f"gen_{feat}_a{a}"] for a in ALPHAS]
     if feat in AREA_FEATS:                                            # px² → µm² (spacing=(1,1) in _measure → native px units)
-        rn, rk, g0, g1, g2, g3 = (v * PX_UM ** 2 for v in (rn, rk, g0, g1, g2, g3))
+        rn, rk, *gens = (v * PX_UM ** 2 for v in (rn, rk, *gens))
     if not normalize:
-        return [rn, rk, g0, g1, g2, g3]
-    base = float(np.nanmean(rn))                                     # SINGLE shared baseline — real NTC mean (matches the MEAN line drawn below)
-    return [_pct(rn, base), _pct(rk, base), _pct(g0, base), _pct(g1, base), _pct(g2, base), _pct(g3, base)]
+        return [rn, rk, *gens]
+    base = float(np.nanmean(rn))                                     # SINGLE shared baseline — real NTC mean (matches the median line drawn below)
+    return [_pct(rn, base), _pct(rk, base), *(_pct(g, base) for g in gens)]
 
 
 def render_violin(group, dirname, feat, disp, unit, normalize):
@@ -67,20 +73,13 @@ def render_violin(group, dirname, feat, disp, unit, normalize):
     data = [np.asarray(d, float) for d in _series(z, feat, normalize)]
     data = [d[np.isfinite(d)] for d in data]
     keep = [i for i, d in enumerate(data) if len(d)]
-    fig, ax = plt.subplots(figsize=(5.2, 5.4), facecolor="white")
+    fig, ax = plt.subplots(figsize=(7.8, 5.4), facecolor="white")
     parts = ax.violinplot([data[i] for i in keep], positions=keep, showmeans=False, showextrema=False, showmedians=False, widths=0.82)
     for pc, i in zip(parts["bodies"], keep):
         pc.set_facecolor(C[LABS[i].replace("real NTC", "real").replace("real KO", "KO")]); pc.set_alpha(0.6)
         pc.set_edgecolor(C[LABS[i].replace("real NTC", "real").replace("real KO", "KO")]); pc.set_linewidth(1.5)
-    for i in keep:                                                       # IQR bar + median tick (classic boxplot) + mean diamond
-        q1, q3 = np.percentile(data[i], [25, 75])
-        ax.vlines(i, q1, q3, color="#222", lw=9, alpha=0.9, zorder=5)
-        ax.hlines(np.median(data[i]), i - 0.17, i + 0.17, color="white", lw=2.5, zorder=6)
-        ax.scatter(i, np.mean(data[i]), s=60, marker="D", color="white", edgecolor="#222", zorder=7, lw=1.6)
-    from matplotlib.lines import Line2D
-    ax.legend(handles=[Line2D([0], [0], color="#222", lw=2.5, label="median"),
-                       Line2D([0], [0], marker="D", color="white", markeredgecolor="#222", markersize=7, lw=0, label="mean")],
-              loc="upper right", fontsize=11, frameon=False)
+    for i in keep:
+        ax.hlines(np.median(data[i]), i - 0.34, i + 0.34, color="#222", lw=3, zorder=5)
     if normalize:
         ax.axhline(0, color="#999", lw=1.5, zorder=1)
         from matplotlib.ticker import FuncFormatter
@@ -88,7 +87,7 @@ def render_violin(group, dirname, feat, disp, unit, normalize):
         ylab = f"{disp}\n(% change vs real NTC)"
     else:
         ylab = f"{disp} {unit}"
-    ax.set_xticks(range(len(LABS))); ax.set_xticklabels(["real\nNTC", "real\nKO", "α=0", "α=1", "α=2", "α=3"], fontsize=20)
+    ax.set_xticks(range(len(LABS))); ax.set_xticklabels(["real\nNTC", "real\nKO"] + [f"α={a:g}" for a in ALPHAS], fontsize=15)
     longest = max(len(line) for line in ylab.split("\n"))
     ax.set_ylabel(ylab, fontsize=(20 if longest <= 30 else 16))
     ax.tick_params(axis="y", labelsize=18, width=2.5, length=8); ax.tick_params(axis="x", length=0)
@@ -184,7 +183,7 @@ def _write_index(rows):
     lines = ["# Figure 4 — final panels (bruno review, not yet on Confluence)\n",
              f"Source: `_native/` stats.npz + panel.npz (no re-measurement — pure rendering).\n",
              "Normalization: SINGLE real-NTC baseline shared by real NTC / real KO / gen α0,1,2 (not per-modality).\n",
-             "Violins show α0, α1, α2, α3; the cell grid shows α0, α1, α2 (α3 dropped there).\n",
+             "Violins show α0, 0.5, 1, 1.5, 2, 2.5, 3; the cell grid shows α0, α1, α2 (α3+ dropped there).\n",
              "\n| Group | Feature | Raw | Normalized |",
              "|---|---|---|---|"]
     for group, dirname, feats in GROUPS:
