@@ -74,7 +74,7 @@ _MICOS13 = dict(mt="CHROMALIVE_MICOS13", modality="mitochondria_ChromaLIVE_561_e
               hist_match=True, min_obj_px=15)
 
 # group → measurement config; seg params pulled from MORPHO_TARGETS[mt]. These 3 are the final Fig-4 picks
-# (mtor_mo_hm_100, polr1b_vsnpm3_100cpu, tim23_100 in _native/) that bruno_final.py/bruno_real_panels.py read.
+# (mtor_mo_hm_100, polr1b_vsnpm3_100cpu, tim23_100 in _native/) that raw_alpha_violins.py/raw_alpha_panels.py read.
 GROUPS = {
     "mtor_mo_hm": dict(mt="MTOR_LYSO", **_LYSO,                                   # back to MTOR_LYSO's default blob detection (masked_object detour reverted, was working fine before).
                        seg_override=dict(frangi_override=dict(threshold=0.05))),  # light touch: default 0.03 lets spurious weak local maxima blow up α=0's count specifically; 0.05 calms
@@ -125,7 +125,7 @@ GROUPS = {
     # F-rescale variants (MORPH_F_RESCALE_HANDOFF.md): φ={0,1,2,3} = α/f at each perturbation's own centroid-
     # recovery f (POLR1B=2.45, MTOR=1.38, TIM23=2.25 -- from f_centroid_recovery/f_all.json + centroid_recovery_fluor/*.json).
     # α 0/1.5/2.5/3.0 are already measured in the main group's stats.npz -- alpha_range here is ONLY the ONE
-    # genuinely new grid point each perturbation needs (α=4 for mTOR, α=5 for POLR1B/TIM23); bruno_fscore.py
+    # genuinely new grid point each perturbation needs (α=4 for mTOR, α=5 for POLR1B/TIM23); fscore_violins.py
     # merges this with the existing stats.npz instead of remeasuring the overlap. Same seg settings as the
     # validated main group in each case.
     "mtor_mo_hm_fscore": dict(mt="MTOR_LYSO", **_LYSO, alpha_range=(4.0,),                     # φ3 = α 4.0 (φ0,1,2 = α 0,1.5,3.0 already in mtor_mo_hm_100)
@@ -620,7 +620,7 @@ def run_gen_only(gname, ncell=100, dilate=8, tag=""):
     the base full run used (run()'s odir = f"{gname}{tag}") so this reuses the SAME vs_nucleus.npz cache
     (force=False in gen_measure) instead of paying for GPU DDIM+Cellpose nucleus prediction again.
     Saves just {gen_<feat>_a<alpha>: array} + gpanel to new_alpha.npz/new_alpha_panel.npz, for
-    bruno_fscore.py (or a manual merge) to combine with the base group's existing stats.npz/panel.npz."""
+    fscore_violins.py (or a manual merge) to combine with the base group's existing stats.npz/panel.npz."""
     g = GROUPS[gname]
     odir = f"{gname}{tag}"
     os.makedirs(f"{OUT}/{odir}", exist_ok=True)

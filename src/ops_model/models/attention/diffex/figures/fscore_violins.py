@@ -1,4 +1,4 @@
-"""F-rescale variant of bruno_final's violins/cellgrid, per MORPH_F_RESCALE_HANDOFF.md: replace the raw
+"""F-rescale variant of raw_alpha_violins's violins/cellgrid, per MORPH_F_RESCALE_HANDOFF.md: replace the raw
 traversal alpha axis with phenotype-fraction phi = alpha/f (f = each perturbation's own centroid-recovery
 peak-alpha), so phi=0/1/2/3 sit at the SAME biological milestone across mTOR/POLR1B/TIM23.
 
@@ -12,7 +12,7 @@ Merges each group's existing stats.npz/panel.npz (already has alpha 0/1.5/2.5/3 
 new_alpha.npz/new_alpha_panel.npz (the ONE new grid point each perturbation needed: alpha=4 for mTOR,
 alpha=5 for POLR1B/TIM23) -- no remeasurement of anything already on disk.
 
-Run: python bruno_fscore.py
+Run: python fscore_violins.py
 """
 import os
 
@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-import bruno_final as bf
+import raw_alpha_violins as bf
 import morpho_native as mn
 
 plt.rcParams["pdf.fonttype"] = 42
@@ -151,7 +151,7 @@ def _write_index(rows):
     lines = ["# Figure 4 -- F-rescaled violins (phi = alpha/f, MORPH_F_RESCALE_HANDOFF.md), bruno review, not yet on Confluence\n",
              "f (centroid-recovery peak-alpha): POLR1B=2.45, MTOR=1.38, TIM23=2.25.\n",
              "phi columns with no measured/snappable alpha (POLR1B phi=1.5,3; TIM23 phi=3 -- true k*f exceeds the generated range or isn't measured yet) are left blank, labeled '(no data)', not substituted with another phi's data.\n",
-             "Paper-style image panels (actual traversal images, not this violin's cellgrid): see bruno_fscore_panels.py output, {group}_cellpanel_fscore.svg.\n",
+             "Paper-style image panels (actual traversal images, not this violin's cellgrid): see fscore_panels.py output, {group}_cellpanel_fscore.svg.\n",
              "\n| Group | Feature | Raw | Normalized |", "|---|---|---|---|"]
     for group, disp, feat in rows:
         lines.append(f"| {group} | {disp} | [{feat}_raw.svg]({group}_{feat}_raw.svg) | [{feat}_normalized.svg]({group}_{feat}_normalized.svg) |")

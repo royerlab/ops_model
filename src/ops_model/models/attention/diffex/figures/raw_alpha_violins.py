@@ -7,7 +7,7 @@ real NTC for these exact (group, feature) pairs — so one shared ruler is meani
 
 Reads already-computed stats.npz/panel.npz from _native/<dir>/ — no SLURM, no re-measurement, pure rendering.
 
-Run: python bruno_final.py
+Run: python raw_alpha_violins.py
 """
 import os
 

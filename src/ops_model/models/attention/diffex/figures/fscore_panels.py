@@ -1,4 +1,4 @@
-"""F-rescaled variant of bruno_real_panels.py -- the SAME mechanism (scratch asset tree -> unmodified
+"""F-rescaled variant of raw_alpha_panels.py -- the SAME mechanism (scratch asset tree -> unmodified
 figure4_morpho_traversal.image_panels/render_images -> qualitative per-object palette), but showing
 phi=0,0.5,1,1.5,2,3 (= alpha/f at each perturbation's own centroid-recovery f) instead of raw alpha=0,1,2.
 
@@ -6,7 +6,7 @@ phi columns with no measured/snappable alpha (POLR1B phi=1.5,3; TIM23 phi=3 -- t
 generated range or isn't measured yet) are rendered as a BLANK placeholder, labeled "(no data)" -- never
 substituted with another phi's image.
 
-Run: python bruno_fscore_panels.py
+Run: python fscore_panels.py
 """
 import json
 import os
@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 from skimage.transform import resize
 
-import bruno_real_panels as brp
+import raw_alpha_panels as brp
 import figure4_morpho_traversal as T
 import morpho_native as mn
 from ops_model.models.attention.diffex.viewer.morpho_pipeline import _clip_border
@@ -141,7 +141,7 @@ def render(group, cfg, scratch_cell, local_cell, op=0.75, suffix=""):
     print(f"saved {stem}.png/svg")
 
 
-NATIVE_DIR_OVERRIDE = {"POLR1B": "polr1b_vsnpm3_stringentcpu"}   # stringent (mo_local_adjust 1.35) gen seg -- bruno_real_panels.GROUPS still points at the lenient one for the main paper panel
+NATIVE_DIR_OVERRIDE = {"POLR1B": "polr1b_vsnpm3_stringentcpu"}   # stringent (mo_local_adjust 1.35) gen seg -- raw_alpha_panels.GROUPS still points at the lenient one for the main paper panel
 
 
 def _cfg_for(group):

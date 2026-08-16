@@ -7,7 +7,7 @@ files image_panels expects (full_features.json, cell{c}/a{i:02d}_labels.png, a{i
 from panel.npz (already-computed label arrays from our validated pipeline) — then monkeypatch the `VA`
 module constant so image_panels/render_images run completely unmodified against this scratch tree.
 
-Run: python bruno_real_panels.py
+Run: python raw_alpha_panels.py
 """
 import json
 import os
