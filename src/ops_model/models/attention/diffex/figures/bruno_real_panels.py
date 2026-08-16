@@ -35,6 +35,11 @@ GROUPS = {
     "POLR1B": dict(native_dir="polr1b_vsnpm3_100cpu", cell=211, local_cell=11, marker_dir="phase", grain="geneKO", target="POLR1B"),  # picked from candidates 0-20
     "TIM23": dict(native_dir="tim23_100", cell=0, local_cell=0, marker_dir="mitochondria_ChromaLIVE_561_excitation",
                   grain="complex", target="TIM23_mitochondrial_inner_membrane_pre_sequence_translocase_complex__TIM17A_variant"),
+    "TAF1B": dict(native_dir="taf1b_vsnpm3_stringent", cell=200, local_cell=0, marker_dir="phase", grain="geneKO", target="TAF1B"),
+    "SAMM50": dict(native_dir="samm50_chromalive", cell=1, local_cell=1, marker_dir="mitochondria_ChromaLIVE_561_excitation",
+                   grain="geneKO", target="SAMM50"),   # swapped primary candidate 0 -> 1; old candidate 0 now lives in the backups as "_candidate1"
+    "MICOS13": dict(native_dir="micos13_chromalive", cell=0, local_cell=0, marker_dir="mitochondria_ChromaLIVE_561_excitation",
+                    grain="geneKO", target="MICOS13"),
 }
 
 
