@@ -682,7 +682,7 @@ def _build_parser():
         "so downstream mean-aggregation produces a weighted mean. Cells "
         "missing from the parquet get weight=1 (uniform fallback). "
         "Fails loudly if the flag is set but no experiment matches. "
-        "See ops_model.models.attention.weighted_aggregation for the "
+        "See ops_model.models.interpretability.weighted_aggregation for the "
         "original monkey-patch flow that this flag replaces.",
     )
     parser.add_argument(
