@@ -147,6 +147,11 @@ const PALETTE = ["#26c6ff", "#ff5252", "#f0a020", "#7ee787", "#c586ff", "#ff9edb
 // traversal frames/scores/anchor can switch NTC anchor pool (v5 only): accuracy = 25 hand-picked (_v5acc/), attention = v5 build (BASE). __to__ alt-anchors have no accpool → stay on BASE.
 function travBase(dir) { return BASE; }   // v5 attention+accuracy cells are consolidated into one dir under BASE
 const SET_MODES = ["ptarget", "rank"];   // v5 SetTransformer per-traversal (bag) score modes → row-header chip
+function scoreCaption(mode, bag) {   // plain-language hover captions for the classifier score chips (no internal jargon)
+  if (mode === "rank") return "Distinctiveness rank: when the model ranks every perturbation class for a group of this perturbation's cells, where the correct one lands (1 = the model's top pick, most distinctive).";
+  if (mode === "linear") return "Removal score: each generated cell is added to a group of real cells the model classifies among all perturbation classes; removing it measures how much it helps get this perturbation right. That contribution is ranked as a percentile against all the real cells (90% = it helps more than 90% of real cells). Higher = a stronger, more recognizable phenotype.";
+  return `Set accuracy${bag ? ` (group of ${bag} cells)` : ""}: given a random group of cells all from this perturbation, how often the model correctly identifies it out of all perturbation classes. Higher % = a more distinctive, more recognizable phenotype.`;   // ptarget / set-acc
+}
 // adaptive score-overlay legend caption per mode (see #scoremode); shown only on Traversal when scoreMode != none
 const SCORE_LEGEND = {
   linear: "per-cell removal percentile vs real cells (Metric B) · ≤50th = white, high percentiles → blue",
@@ -335,7 +340,7 @@ async function boot() {
     if (view === "pc") loadPC();
     if (view === "top") loadTop();
     if (view === "methods") renderMethods();
-    if (view === "traversal") updateTravClip();   // re-apply the clip on tab entry (toggling it in Top Cells runs updateTravClip while view!=traversal → clip left off; resync here)
+    if (view === "traversal") rebuild();   // rebuild the grid on entry so pin order/edits from other tabs sync here (rebuild() re-applies the clip too)
   });
   fillCellDropdown();      // per-modality cell count (phase 45, markers 20); refilled on marker change
   fillOverlayMarkers();    // load the 42 VS marker names into the Overlay dropdown
@@ -1259,11 +1264,7 @@ function activeSet() {
   if (cur && !set.some(p => p.key === cur.key)) set.unshift(cur);   // prepend current ONLY if not already pinned → grid order == pin-list order
   return set;
 }
-function firstFreeColor(pins) {   // lowest palette slot not used by these pins → new pins take a free color, existing pins keep theirs (stable)
-  const used = new Set(pins.map(p => p.colorIdx).filter(x => x != null));
-  for (let i = 0; i < PALETTE.length; i++) if (!used.has(i)) return i;
-  return pins.length % PALETTE.length;
-}
+function firstFreeColor(pins) { return PinOrder.firstFreeColor(pins, PALETTE.length); }   // stable per-pin color — logic in pin_order.js
 function canonColorIndex(target, markerName) {   // STABLE per-pin color (assigned at pin time), identical across all tabs; current/unpinned selection uses the next free slot
   const p = state.pinned.find(q => q.target === target && q.markerName === markerName);
   return (p && p.colorIdx != null ? p.colorIdx : firstFreeColor(state.pinned)) % PALETTE.length;
@@ -1278,7 +1279,8 @@ function pinShared(target, anchor = "NTC") {   // one marker-sticky pin, shared 
   if (p && !state.pinned.some(q => q.key === p.key)) { p.colorIdx = firstFreeColor(state.pinned); state.pinned.unshift(p); }   // newest pin at TOP but takes a FREE color slot → existing pin colors stay put
   redrawPins();
 }
-function unpinShared(target) {   // remove every shared pin for this perturbation (all markers)
+function unpinShared(target) {   // remove every shared pin for this perturbation (all markers); re-anchor NTC if its anchor is removed
+  tc.ntcBefore = PinOrder.reanchorOnUnpin(state.pinned, tc.ntcBefore, target);
   state.pinned = state.pinned.filter(p => p.target !== target);
   redrawPins();
 }
@@ -1405,7 +1407,7 @@ function renderPinned() {
     li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
     li.ondragleave = () => { li.style.opacity = ""; };
     li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
-      if (from !== i) { const [m] = state.pinned.splice(from, 1); state.pinned.splice(i, 0, m); renderPinned(); rebuild(); } };
+      if (from !== i) { const [m] = state.pinned.splice(from, 1); state.pinned.splice(i, 0, m); redrawPins(); } };   // sync order to every tab
     li.appendChild(b); ul.appendChild(li);
   });
 }
@@ -1537,6 +1539,7 @@ function showIdx(i) {
       const rl = sch.showReal && state.realAcc20 ? state.realAcc20[gp.dir] : null;   // real-cell ceiling (P(target) only)
       gp.sa.textContent = `${sch.txt}${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""}`;
       gp.sa.style.background = sch.bg; gp.sa.style.color = sch.fg;
+      gp.sa.dataset.tip = scoreCaption(state.scoreMode); gp.sa.title = gp.sa.dataset.tip;   // fast hover for the set-acc / rank chip
       gp.sa.style.display = "inline-block";
     } else gp.sa.style.display = "none";
     const scL = state.scores[gp.dir];   // per-group Removal Score chip — ONLY when the per-cell removal overlay is selected (scoreMode "linear")
@@ -1545,8 +1548,7 @@ function showIdx(i) {
       for (const cell of scL.scores) { const v = cell[Math.min(i, cell.length - 1)]; if (v != null) { s += v; c++; } }
       if (c) { const m = s / c, hv = pctHeatVal(m);
         gp.saLoo.textContent = `Removal Score ${Math.round(m * 100)}%`;
-        gp.saLoo.dataset.tip = "Removal Score (Metric B): mean over this group's cells of the per-cell removal-based distinctiveness vs real cells at this α. Higher = a stronger, more distinctive phenotype.";
-        gp.saLoo.title = gp.saLoo.dataset.tip;
+        gp.saLoo.dataset.tip = scoreCaption("linear"); gp.saLoo.title = gp.saLoo.dataset.tip;
         gp.saLoo.style.background = heat(hv); gp.saLoo.style.color = hv > 0.55 ? "#fff" : "#111";
         gp.saLoo.style.visibility = "visible"; gp.saLoo.style.display = "inline-block";
       } else gp.saLoo.style.display = "none";
@@ -1641,7 +1643,15 @@ function toggleNarr(btn) {   // expand/collapse the affinage narrative
 // clickable α tick marks under the slider; click toggles an autoplay pause there.
 const _tip = () => $("ticktip");
 function showTip(e, txt) { const tp = _tip(); tp.textContent = txt; tp.style.display = "block"; moveTip(e); }
-function moveTip(e) { const tp = _tip(); tp.style.left = `${e.clientX + 10}px`; tp.style.top = `${e.clientY - 28}px`; }
+function moveTip(e) {   // anchor top-right of the cursor → text flows LEFT; clamp to the viewport so it never runs off-page
+  const tp = _tip(), w = tp.offsetWidth, h = tp.offsetHeight;
+  let left = e.clientX - w - 12;                 // flow left from the cursor
+  if (left < 8) left = e.clientX + 14;           // near the left edge → flow right instead
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  let top = e.clientY - h - 10;                  // above the cursor
+  if (top < 8) top = e.clientY + 16;             // near the top → drop below
+  tp.style.left = `${left}px`; tp.style.top = `${top}px`;
+}
 function hideTip() { _tip().style.display = "none"; }
 // instant hover tooltip for [data-tip] elements (native title is ~1s-delayed; this is immediate)
 document.addEventListener("mouseover", e => { const t = e.target.closest && e.target.closest("[data-tip]"); if (t) showTip(e, t.getAttribute("data-tip")); });
@@ -1723,7 +1733,6 @@ function montPhi(gene) {   // montage hover: φ = (selected α)/f at the current
   return f ? ` · φ=${(+$("m-alpha").value / f).toFixed(1)}` : "";
 }
 const attnBase = (ref) => `${BASE}attention_heads/${ref.modality}/${ref.grain}/${ref.key}`;
-const sameRef = (a, b) => a.modality === b.modality && a.grain === b.grain && a.key === b.key;
 const pinModality = (p) => (!p.markerName || /^phase$/i.test(p.markerName)) ? "phase" : jsSlug(p.markerName);   // a shared pin's attention/setacc modality
 function attnRefFromPin(p) {   // build an attention ref from a shared pin (marker-sticky), or null if it has no attention assets
   const mod = pinModality(p), key = p.grain === "geneKO" ? p.target : p.slug;
@@ -1811,18 +1820,22 @@ async function drawAttnCell(cv, cropUrl, maskUrl, headUrl, geneMax) {
   cv.getContext("2d").putImageData(out, 0, 0);
 }
 const attnHeadLabel = (heads, i) => { const hd = heads.heads[i]; return `#${i + 1} L${hd.layer}·H${hd.head}`; };
-function renderAttnPinned() {   // shared pins, colored to MATCH the attention grid group colors
+function renderAttnPinned() {   // shared pins, colored to MATCH the grid + drag-reorderable (synced to every tab)
   const ul = $("a-panellist"); if (!ul) return; ul.innerHTML = "";
-  const cur = attnCurrentRef();
-  const gridRefs = [cur, ...state.pinned.map(attnRefFromPin).filter(r => r && !(cur && sameRef(r, cur)))].filter(Boolean);   // exact grid group order (cur first, then pins that have attention)
-  state.pinned.forEach((p) => {
+  state.pinned.forEach((p, i) => {
     const r = attnRefFromPin(p);
     const li = document.createElement("li");
     li.style.color = PALETTE[canonColorIndex(p.target, p.markerName)];   // canonical color → matches the grid + the other tabs
     const ctx = /^phase$/i.test(p.markerName) ? "" : ` · ${mkDisp(p.markerName)}`;
-    li.innerHTML = `<span data-tip="${p.target}${ctx}">${p.target}${ctx}${r ? "" : ' <span class="hint">(no attn)</span>'}</span>`;
+    li.innerHTML = `<span data-tip="${p.target}${ctx}">⠿ ${p.target}${ctx}${r ? "" : ' <span class="hint">(no attn)</span>'}</span>`;
+    li.draggable = true; li.style.cursor = "move";
     const b = document.createElement("button"); b.textContent = "✕";
     b.onclick = () => unpinShared(p.target);
+    li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
+    li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
+    li.ondragleave = () => { li.style.opacity = ""; };
+    li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
+      if (from !== i) { const [m] = state.pinned.splice(from, 1); state.pinned.splice(i, 0, m); redrawPins(); } };   // sync order to every tab
     li.appendChild(b); ul.appendChild(li);
   });
 }
@@ -1836,7 +1849,7 @@ async function renderAttn() {
       : "No attention-head data for this marker × perturbation."}</div>`;
     return;
   }
-  const refs = [cur, ...state.pinned.map(attnRefFromPin).filter(r => r && !(cur && sameRef(r, cur)))].filter(Boolean);   // current first, then shared pins (that have attention assets)
+  const refs = activeSet().map(attnRefFromPin).filter(Boolean);   // SAME canonical order as Traversal/Top Cells (current in its pin slot if pinned), filtered to those with attention assets
   const heads0 = await loadAttnHeads(cur);
   if (!heads0) { grid.innerHTML = '<div class="empty">failed to load attention data</div>'; return; }
   populateAttnHeadSelect(heads0, attnBase(cur));
@@ -2090,24 +2103,9 @@ function pcCloseOverlay() { const o = $("pc-overlay"); if (o) o.remove(); }
 
 // ---- Top Cells tab: per-gene top phenotype cells by attention or accuracy (phase), masked like the PC tab ----
 const TC_CROP_V = "?m=3";
-const tc = { byMarker: {}, mask: true, inorm: true, showAcc: true, accBin: 100, order: null };   // byMarker: base -> loaded index.json; order: Top-Cells-LOCAL row order = array of pin keys + NTC_KEY sentinel
+const tc = { byMarker: {}, mask: true, inorm: true, showAcc: true, accBin: 100, ntcBefore: null };   // byMarker: base -> loaded index.json; ntcBefore: Top-Cells-LOCAL — key of the pin NTC sits directly ABOVE (null = bottom, the default)
 const NTC_GRAY = "#9aa0a6";
-const NTC_KEY = "__NTC__";
-function tcReconcile() {   // keep tc.order in sync with state.pinned: drop removed pins, add NEW pins at TOP, NTC + the rest hold their relative slots (nothing jumps)
-  const pinKeys = state.pinned.map(p => p.key);
-  if (!Array.isArray(tc.order)) tc.order = [...pinKeys, NTC_KEY];   // init: pins (newest-first) then NTC at bottom
-  const alive = new Set(pinKeys);
-  let order = tc.order.filter(k => k === NTC_KEY || alive.has(k));  // drop unpinned; keep relative order + NTC
-  if (!order.includes(NTC_KEY)) order.push(NTC_KEY);
-  const have = new Set(order);
-  const fresh = pinKeys.filter(k => !have.has(k));                  // new pins (state.pinned is newest-first)
-  tc.order = [...fresh, ...order];                                  // new pins go to the TOP
-}
-function tcPinTokens() {   // Top-Cells row tokens (shared pins + NTC) in tc.order, stable across add/remove
-  tcReconcile();
-  const byKey = new Map(state.pinned.map(p => [p.key, p]));
-  return tc.order.map(k => k === NTC_KEY ? { ntc: true } : { pin: byKey.get(k) }).filter(t => t.ntc || t.pin);
-}
+function tcPinTokens() { return PinOrder.tokens(state.pinned, tc.ntcBefore); }   // shared pin order + NTC anchor — logic in pin_order.js (spec-tested)
 function tcRowColors() {   // rows with colors: current first, then the pin tokens; NTC gray (no palette slot), others cycle PALETTE
   return tcRows().map(r => ({ ...r, color: r.ntc ? NTC_GRAY : PALETTE[canonColorIndex(r.gene, r.markerName)] }));   // stable per-pin color, consistent across tabs
 }
@@ -2158,7 +2156,8 @@ function renderTop() {
     const rowMod = /^phase$/i.test(e.markerName) ? "phase" : jsSlug(e.markerName);
     const color = e.color;   // NTC gray, others cycle PALETTE (shared with the pin list)
     const av = tc.showAcc ? saAcc(rowMod, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size (this row's marker)
-    const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
+    const accCap = scoreCaption("ptarget", tc.accBin);
+    const accChip = tc.showAcc ? `<span class="tc-acc" data-tip="${accCap}" title="${accCap}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
     h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene} · ${mkDisp(e.markerName)}">${e.gene} · ${mkDisp(e.markerName)}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
     if (!cells.length) h += `<div class="hint">no cells${e.gene === "NTC" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
@@ -2198,7 +2197,7 @@ function renderTopPins() {
     li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
       if (from === i) return;
       const arr = tcPinTokens(); const [m] = arr.splice(from, 1); arr.splice(i, 0, m);   // reorder within the combined pin+NTC list
-      tc.order = arr.map(t => t.ntc ? NTC_KEY : t.pin.key);                              // persist the new order (NTC holds its slot)
+      tc.ntcBefore = PinOrder.ntcBeforeFromTokens(arr);                                  // NTC's new anchor (the pin below it) — pin_order.js
       state.pinned = arr.filter(t => t.pin).map(t => t.pin);                             // shared pins' new order (mirrors to the other tabs; NTC excluded)
       redrawPins(); };
     li.appendChild(b); ul.appendChild(li);

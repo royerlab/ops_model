@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=222"/>
+<link rel="stylesheet" href="style.css?v=223"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -123,12 +123,12 @@
       <div class="hint feat-internal">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
       <label>Image scale <input type="range" id="tile-scale" min="80" max="300" step="10" value="160"/></label>
       <div class="grp">
-        <label class="feat-internal">Classifier score overlay
+        <label class="feat-internal">Score overlay
           <select id="scoremode" data-seg>
             <option value="none">none</option>
-            <option value="linear">per-cell removal percentile (Metric B)</option>
-            <option value="ptarget" selected>Set ACC — set (bag)</option>
-            <option value="rank">classification rank — set (bag)</option>
+            <option value="linear">Removal score (per cell)</option>
+            <option value="ptarget" selected>Set accuracy (per group)</option>
+            <option value="rank">Distinctiveness rank (per group)</option>
           </select>
         </label>
         <label class="chk feat-public"><input type="checkbox" id="pub-scoreoverlay" data-on="classification rank"/> classification rank overlay</label>
@@ -369,7 +369,8 @@
 <script src="gif.js"></script>
 <script src="config.js"></script>
 <script src="af_scores.js?v=6"></script>
-<script src="app.js?v=283"></script>
+<script src="pin_order.js?v=1"></script>
+<script src="app.js?v=290"></script>
 <script src="methods.js?v=76"></script>
 </body>
 </html>

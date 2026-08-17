@@ -164,8 +164,8 @@ button:hover{border-color:var(--accent)}
 #score-legend{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--mut);align-self:flex-end}
 #score-legend .bar{width:130px;height:12px;border-radius:6px;border:1px solid var(--line);
        background:linear-gradient(90deg,#fff,#0d0099)}
-#ticktip{position:fixed;pointer-events:none;z-index:100;display:none;white-space:nowrap;
-       background:rgba(0,0,0,.88);color:#fff;font-size:11px;padding:3px 7px;border-radius:4px}
+#ticktip{position:fixed;pointer-events:none;z-index:100;display:none;white-space:normal;max-width:300px;line-height:1.45;
+       background:rgba(0,0,0,.9);color:#fff;font-size:12px;padding:6px 9px;border-radius:5px;box-shadow:0 2px 10px rgba(0,0,0,.45)}
 .panel .cap{font-size:11px;color:var(--mut);font-family:ui-monospace,monospace;text-align:center;
             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #meta{color:var(--mut);font-size:12px;font-family:ui-monospace,monospace;text-align:center}
