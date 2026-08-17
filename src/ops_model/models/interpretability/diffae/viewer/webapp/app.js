@@ -69,7 +69,7 @@ function updateTravClip() {
 function placeImgClim() {
   const el = $("imgclim-field"); if (!el) return;
   const view = state.view || "traversal";
-  if (view === "methods") { el.style.display = "none"; return; }
+  if (view === "methods" || view === "montage") { el.style.display = "none"; return; }   // montage/latent-lens canvas force-disables the #img-levels filter (geometry distortion) → contrast is a no-op there, so hide it
   el.style.display = "";
   const pane = $("tab-" + view); if (!pane) return;
   const scale = pane.querySelector('input[type="range"][id$="-scale"]');   // #tile-scale / #tc-scale
@@ -137,7 +137,6 @@ const state = {
   attnHead: "all", attnNorm: "map",     // default: show ALL heads per cell; per-cell (per-tile max) normalization
   attnClimLo: 0, attnClimHi: 1, attnAlpha: 0.6, attnImgOpacity: 1,   // clim [vmin,vmax] + constant overlay alpha (Ritvik uses 0.6) + cell-image dimming
   imgClimLo: 0, imgClimHi: 1,   // universal display-time levels stretch on all page images/canvases (0–1 = no-op)
-  attnPinned: [],   // extra perturbations (geneKO) pinned for side-by-side comparison, like traversal
 };
 
 // inferno colormap (256 RGB triples, flat) — applied client-side so the attention overlay's
@@ -201,7 +200,7 @@ function saveState() {
       cols: $("colslayout").checked, tcCols: $("tc-cols").checked, speed: $("speed").value, alphaLimit: $("alphalimit").value, posOnly: state.posOnly, view: state.view,
       bag: $("m-bag") ? $("m-bag").value : null,
       alpha: (state.alphas && state.idx != null && state.idx < state.alphas.length) ? state.alphas[state.idx] : null,   // hold α (by value) across reloads
-      pinned: state.pinned.map(p => ({ target: p.target, anchor: p.anchor })),
+      pinned: state.pinned,   // full marker-sticky pin objects (self-contained → restore keeps the pin's marker)
     }));
   } catch (e) { /* private mode / quota — non-fatal */ }
 }
@@ -228,11 +227,10 @@ function restoreState() {   // returns true if a saved snapshot was applied (ski
   if (mi < 0) mi = 0;
   selectMarker(mi); $("markerfilter").value = markerLabel(mi);   // refreshTargets → selects first target by default
   if (s.target) { const t = state.targets.find(x => x.target === s.target); if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); } }
-  if (Array.isArray(s.pinned) && s.pinned.length) {   // re-pin same-marker comparisons
-    const mc = state.marker.marker_channel || "Phase";
-    state.pinned = s.pinned.map(pp => { const e = resolveEntry(pp.target, pp.anchor || "NTC"); return e ? pertOf(mc, e, e.control || "NTC") : null; }).filter(Boolean);
-    state.pinned.forEach(p => { if (!tc.pinned.some(q => q.gene === p.target)) tc.pinned.push({ gene: p.target, mode: tc.mode }); });   // keep shared pins in sync on reload
-    renderPinned(); rebuild();
+  if (Array.isArray(s.pinned) && s.pinned.length) {   // restore marker-sticky shared pins directly (self-contained pertOf objects)
+    state.pinned = s.pinned.filter(p => p && p.target && p.key && p.asset_dir);   // drop any legacy {target,anchor}-only entries
+    state.pinned.forEach(p => { if (p.colorIdx == null) p.colorIdx = firstFreeColor(state.pinned); });   // assign stable colors to any pre-colorIdx pins
+    renderPinned(); renderTopPins(); renderAttnPinned(); rebuild();
   }
   if (s.page) { state.page = s.page; rebuild(); }   // restore the cell page (selectTarget reset it to 0)
   if (s.view && s.view !== "traversal") { const b = document.querySelector(`.tab[data-tab="${s.view}"]`); if (b) b.click(); }
@@ -265,7 +263,7 @@ async function boot() {
   };
   $("anchor").onchange = () => { state.anchor = $("anchor").value; rebuild(); };
   $("addpanel").onclick = () => { const set = activeSet(); if (set.length) pinShared(set[0].target, set[0].anchor); };
-  $("clearpanels").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
+  $("clearpanels").onclick = () => { state.pinned = []; redrawPins(); };
   $("alpha").oninput = () => showIdx(+$("alpha").value);
   $("alpha").onchange = saveState;   // persist α on release so reloads / v4↔v5 hold the current traversal position
   $("tile-scale").oninput = () => setScale($("tile-scale").value);   // image scale — shared across tabs (mirrors tc-scale)
@@ -308,11 +306,8 @@ async function boot() {
     $("a-norm")._segSync?.();
     renderAttn();
   };
-  $("a-pin").onclick = () => {   // pin the current perturbation for comparison (mirrors traversal pin)
-    const r = attnCurrentRef();
-    if (r && !state.attnPinned.some(p => sameRef(p, r))) { state.attnPinned.push(r); renderAttnPinned(); renderAttn(); }
-  };
-  $("a-pinclear").onclick = () => { state.attnPinned = []; renderAttnPinned(); renderAttn(); };
+  $("a-pin").onclick = () => { if (state.target) pinShared(state.target.target, state.anchor || "NTC"); };   // shared pin (Traversal / Top Cells / Attention)
+  $("a-pinclear").onclick = () => { state.pinned = []; redrawPins(); };
   $("i-climlo").oninput = () => {   // universal image clim (dual-handle; keep lo ≤ hi)
     let lo = +$("i-climlo").value; if (lo > state.imgClimHi) { lo = state.imgClimHi; $("i-climlo").value = lo; }
     state.imgClimLo = lo; updateImgLevels();
@@ -389,11 +384,11 @@ async function boot() {
   $("pc-norm").onchange = () => { pc.norm = $("pc-norm").checked; buildPCList(); if (pc.cur) showPC(pc.cur); };
   $("pc-sort").onchange = () => { pc.sort = $("pc-sort").value; buildPCList(); };
   $("tc-pin").onclick = () => { if (state.target) pinShared(state.target.target); };   // shared with Traversal
-  $("tc-pinclear").onclick = () => { state.pinned = []; tc.pinned = [{ gene: "NTC", mode: "accuracy" }]; redrawPins(); };
+  $("tc-pinclear").onclick = () => { state.pinned = []; redrawPins(); };
   $("tc-cols").onchange = () => $("tc-view").classList.toggle("cols-layout", $("tc-cols").checked);   // top cells rows ↔ columns
   $("tc-mask").onchange = () => { tc.mask = $("tc-mask").checked; $("tc-view").classList.toggle("masked", tc.mask); saveState(); };   // blue seg overlay on/off
   $("tc-inorm").onchange = () => { tc.inorm = $("tc-inorm").checked; updateTravClip(); renderTop(); syncTcPopouts(); saveState(); };   // marker-global vs per-cell intensity (fluor)
-  $("tr-inorm").onchange = () => { tc.inorm = $("tr-inorm").checked; updateTravClip(); if (tc.data) renderTop(); syncTcPopouts(); saveState(); };   // same shared toggle, driven from the Traversal tab
+  $("tr-inorm").onchange = () => { tc.inorm = $("tr-inorm").checked; updateTravClip(); renderTop(); syncTcPopouts(); saveState(); };   // same shared toggle, driven from the Traversal tab (renderTop self-guards)
   $("tc-acc").onchange = () => { tc.showAcc = $("tc-acc").checked; ensureSetacc(renderTop); saveState(); };   // per-group classification-accuracy chip on/off
   $("tc-accbin").onchange = () => { tc.accBin = +$("tc-accbin").value; renderTop(); saveState(); };   // classifier bag size the accuracy is measured at
   $("m-labels").onchange = () => { mont.showLabels = $("m-labels").checked; drawOverlay(); };
@@ -409,8 +404,11 @@ async function boot() {
         else drawOverlay();
       }
     };
-    const need = mont.setaccMode === "geneKO" && mont.setaccMetric === "ptarget" && !mont.setacc ? ["setacc.json", j => mont.setacc = j]
+    const need = mont.setaccMetric === "coral" ? null   // CORAL is derived client-side from the baked af_scores — no fetch
+      : mont.setaccMode === "geneKO" && mont.setaccMetric === "ptarget" && !mont.setacc ? ["setacc.json", j => mont.setacc = j]
       : mont.setaccMode === "geneKO" && mont.setaccMetric === "rank" && !mont.setaccRank ? ["setacc_rank.json", j => mont.setaccRank = j]
+      : mont.setaccMode === "geneKO" && mont.setaccMetric === "loo" && !mont.looBM ? ["loo_bymarker.json", j => mont.looBM = j]
+      : mont.setaccMode === "complex" && mont.setaccMetric === "loo" && !mont.looBMCx ? ["loo_bymarker_complex.json", j => mont.looBMCx = j]
       : mont.setaccMode === "complex" && mont.setaccMetric === "ptarget" && !mont.setaccCx ? ["setacc_complex.json", j => mont.setaccCx = j]
       : mont.setaccMode === "complex" && mont.setaccMetric === "rank" && !mont.setaccCxRank ? ["setacc_complex_rank.json", j => mont.setaccCxRank = j] : null;
     if (need) fetch(`${BASE}_montage/${need[0]}${NOCACHE}`).then(r => r.ok ? r.json() : null).then(j => { need[1](j); done(); }).catch(done);
@@ -479,10 +477,38 @@ const wrapLabel = (s, n = 20) => {   // word-wrap long category labels (ontology
 };
 // display presets set the two opacity sliders; both layers are always drawn (faded, not hidden)
 const MODES = { both: { img: 1, pt: 0.8 }, images: { img: 1, pt: 0.15 }, points: { img: 0.15, pt: 1 } };
-const mont = { osd: null, labels: [], W: 0, mode: "images", imgAlpha: 1, ovlAlpha: 0.55, ptAlpha: 0.15, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "ptarget", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
+const mont = { osd: null, labels: [], W: 0, mode: "images", imgAlpha: 1, ovlAlpha: 0.55, ptAlpha: 0.15, detail: 0.3, field: "none", cmap: {}, centroids: {}, showLabels: false, setaccMode: "off", setaccMetric: "rank", setacc: null, setaccCx: null, setaccRank: null, setaccCxRank: null, looBM: null, looBMCx: null, cxAnchors: null, prevField: null, renderMode: "tiles", tileSize: 0.02, cmapName: "viridis", feat: null, colorFields: [] };
 // montage set-score value → {v:0..1 for heat, txt}: P(target) as %, or target rank on the same white→red heat (rank1→red, ≥100→white)
-function saVal(raw) { return mont.setaccMetric === "rank" ? { v: Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, raw)) / 2)), txt: `rank ${raw}` } : { v: raw, txt: `${Math.round(raw * 100)}%` }; }
-const saData = () => mont.setaccMode === "complex" ? (mont.setaccMetric === "rank" ? mont.setaccCxRank : mont.setaccCx) : (mont.setaccMetric === "rank" ? mont.setaccRank : mont.setacc);
+function saVal(raw) {
+  if (mont.setaccMetric === "rank") return { v: Math.max(0, Math.min(1, 1 - Math.log10(Math.max(1, raw)) / 2)), txt: `rank ${raw}` };
+  if (mont.setaccMetric === "loo") return { v: Math.max(0, Math.min(1, raw)), txt: `LOO ${Math.round(raw * 100)}%` };   // mean per-cell removal LOO (0–1)
+  if (mont.setaccMetric === "coral") return { v: Math.max(0, Math.min(1, raw)), txt: `φ=${(+raw).toFixed(1)}` };          // raw = φ = α/f; color capped at φ=1 (phenotype reached)
+  return { v: raw, txt: `${Math.round(raw * 100)}%` };   // ptarget
+}
+function coralSaData() {   // {name: {aK: φ=α/f}} derived from the baked af_scores at the current marker (geneKO or complex)
+  const grain = mont.setaccMode === "complex" ? "complex" : "geneKO", chan = attnModality(), out = {};
+  for (const L of mont.labels) {
+    const name = grain === "complex" ? L.ebi_complex : L.g; if (!name || out[name]) continue;
+    const f = afPeak(name, grain, chan);
+    if (f) { const row = {}; for (const a of [1, 2, 3, 4, 5]) row[a] = a / f; out[name] = row; }
+  }
+  return out;
+}
+const saData = () => mont.setaccMetric === "coral" ? coralSaData()
+  : mont.setaccMetric === "loo" ? (mont.setaccMode === "complex" ? (mont.looBMCx && mont.looBMCx[attnModality()]) : (mont.looBM && mont.looBM[attnModality()]))   // per-marker LOO
+  : mont.setaccMode === "complex" ? (mont.setaccMetric === "rank" ? mont.setaccCxRank : mont.setaccCx)
+  : (mont.setaccMetric === "rank" ? mont.setaccRank : mont.setacc);
+const PHI_DARK = [13, 107, 47];   // φ=1 (phenotype reached) = darkest; fades to white as |φ−1| grows either way
+function phiColor(phi) {   // single-hue: darkest at φ=1, lighter symmetrically as φ moves above OR below 1
+  const d = Math.min(1, Math.abs(phi - 1) / 2);
+  return `rgb(${PHI_DARK.map(x => Math.round(x + (255 - x) * d)).join(",")})`;
+}
+function saColor(raw) {   // per-metric fill color for the montage overlay chips
+  if (mont.setaccMetric === "loo") return heat(pctHeatVal(raw));   // LOO: ≤50th pct white, darkens to blue 50→100%
+  if (mont.setaccMetric === "coral") return phiColor(raw);         // φ: 3-color diverging around φ=1
+  return heat(saVal(raw).v);                                       // rank/ptarget: existing white→blue
+}
+function txtOn(rgb) { const m = String(rgb).match(/\d+/g); if (!m) return "#111"; const [r, g, b] = m.map(Number); return (0.299 * r + 0.587 * g + 0.114 * b) < 150 ? "#fff" : "#111"; }
 // continuous colormaps (10 anchors each, matplotlib) for OP/CP feature coloring
 const CMAPS = {
   viridis: ["#440154", "#482878", "#3e4a89", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"],
@@ -775,7 +801,7 @@ function liveNearestXY(mx, my) { let b = null, bd = 1e9; for (const g of live.la
 function liveNearest(e) { const r = live.cv.getBoundingClientRect(), n = liveNearestXY(e.clientX - r.left, e.clientY - r.top); return n.g && n.d < 900 ? n.g.g : null; }
 function liveHover(e) {
   const tip = $("m-tip"), r = live.cv.getBoundingClientRect(), n = liveNearestXY(e.clientX - r.left, e.clientY - r.top);
-  if (n.g && n.d < 400) { const ex = mont.field !== "none" && n.g[mont.field] ? ` · ${n.g[mont.field]}` : ""; tip.textContent = n.g.g + ex; tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`; }
+  if (n.g && n.d < 400) { const ex = mont.field !== "none" && n.g[mont.field] ? ` · ${n.g[mont.field]}` : ""; tip.textContent = n.g.g + ex + montPhi(n.g.g); tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`; }
   else tip.style.display = "none";
 }
 function setRenderMode() {   // toggle between precomputed tile montage and live cache-frame placement
@@ -798,9 +824,9 @@ function focusMontageOnSelection() {
 // color-by is a searchable combo over categorical anndata fields + OP/CP morphometric features
 function populateColorFields(cf) {
   mont.colorFields = cf || [];
-  if (!mont.colorInit) {   // first load: default color-by = leiden_r2 (fallback to none)
+  if (!mont.colorInit) {   // first load: default color-by = top_ontology_r4 (fallback leiden_r2 → none)
     mont.colorInit = true;
-    mont.field = mont.colorFields.includes("leiden_r2") ? "leiden_r2" : "none";
+    mont.field = mont.colorFields.includes("top_ontology_r4") ? "top_ontology_r4" : mont.colorFields.includes("leiden_r2") ? "leiden_r2" : "none";
   } else if (mont.field !== "none" && !isFeatField() && !mont.colorFields.includes(mont.field)) {
     mont.field = "none";   // field vanished for this montage
   }
@@ -928,12 +954,12 @@ function drawOverlay() {
       const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(L.nx * mont.W, L.ny * mont.W), true);
       if (p.x < -30 || p.y < -30 || p.x > cv.width + 30 || p.y > cv.height + 30) continue;
       const { v, txt: base } = saVal(raw);
-      const rl = mont.setaccMetric !== "rank" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + L.g] : null;
-      const txt = mont.setaccMetric === "rank" ? base : `${Math.round(raw * 100)}${rl != null ? "/" + Math.round(rl * 100) : ""}`;
-      const pad = 3, bw = ctx.measureText(txt).width + pad * 2;
-      ctx.fillStyle = heat(v);
+      const rl = mont.setaccMetric === "ptarget" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + L.g] : null;
+      const txt = mont.setaccMetric === "ptarget" ? `${Math.round(raw * 100)}${rl != null ? "/" + Math.round(rl * 100) : ""}` : base;
+      const pad = 3, bw = ctx.measureText(txt).width + pad * 2, col = saColor(raw);
+      ctx.fillStyle = col;
       if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(p.x + 5, p.y - 7, bw, 14, 3); ctx.fill(); } else ctx.fillRect(p.x + 5, p.y - 7, bw, 14);
-      ctx.fillStyle = v > 0.55 ? "#fff" : "#111"; ctx.fillText(txt, p.x + 5 + pad, p.y - 5);
+      ctx.fillStyle = txtOn(col); ctx.fillText(txt, p.x + 5 + pad, p.y - 5);
     }
   }
   if (mont.setaccMode === "complex" && saData() && mont.cxAnchors) {   // one chip per complex on its nearest-member dot
@@ -944,10 +970,10 @@ function drawOverlay() {
       const A = mont.cxAnchors[c];
       const p = mont.osd.viewport.pixelFromPoint(mont.osd.viewport.imageToViewportCoordinates(A.nx * mont.W, A.ny * mont.W), true);
       if (p.x < -40 || p.y < -40 || p.x > cv.width + 40 || p.y > cv.height + 40) continue;
-      const { v, txt } = saVal(raw), pad = 4, bw = ctx.measureText(txt).width + pad * 2;
-      ctx.fillStyle = heat(v);
+      const { txt } = saVal(raw), pad = 4, bw = ctx.measureText(txt).width + pad * 2, col = saColor(raw);
+      ctx.fillStyle = col;
       if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(p.x + 5, p.y - 9, bw, 18, 4); ctx.fill(); } else ctx.fillRect(p.x + 5, p.y - 9, bw, 18);
-      ctx.fillStyle = v > 0.55 ? "#fff" : "#111"; ctx.fillText(txt, p.x + 5 + pad, p.y - 6);
+      ctx.fillStyle = txtOn(col); ctx.fillText(txt, p.x + 5 + pad, p.y - 6);
     }
   }
   if (mont.showLabels && mont.field !== "none") {   // category name at each group centroid (outlined for legibility)
@@ -1011,13 +1037,13 @@ function wireHover() {
       const aK = String(+$("m-alpha").value); let scoreStr = ""; const data = saData();
       if (mont.setaccMode === "geneKO" && data && data[best.g]) {
         const raw = data[best.g][aK];
-        if (raw != null) { const rl = mont.setaccMetric !== "rank" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + best.g] : null;
-          scoreStr = mont.setaccMetric === "rank" ? ` | ${saVal(raw).txt}` : ` | set-acc ${Math.round(raw * 100)}%${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""}`; }
+        if (raw != null) { const rl = mont.setaccMetric === "ptarget" && state.realAcc20 ? state.realAcc20["phase/geneKO/" + best.g] : null;
+          scoreStr = mont.setaccMetric === "ptarget" ? ` | set-acc ${Math.round(raw * 100)}%${rl != null ? ` / real ${Math.round(rl * 100)}%` : ""}` : ` | ${saVal(raw).txt}`; }
       } else if (mont.setaccMode === "complex" && data && best.ebi_complex && data[best.ebi_complex]) {
         const raw = data[best.ebi_complex][aK];
-        if (raw != null) scoreStr = mont.setaccMetric === "rank" ? ` | ${best.ebi_complex} ${saVal(raw).txt}` : ` | ${best.ebi_complex} set-acc ${Math.round(raw * 100)}%`;
+        if (raw != null) scoreStr = mont.setaccMetric === "ptarget" ? ` | ${best.ebi_complex} set-acc ${Math.round(raw * 100)}%` : ` | ${best.ebi_complex} ${saVal(raw).txt}`;
       }
-      tip.textContent = best.g + scoreStr + extra + (best.crop ? "" : " (no crop)");
+      tip.textContent = best.g + scoreStr + extra + montPhi(best.g) + (best.crop ? "" : " (no crop)");
       tip.style.display = "block"; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY - 8}px`;
     }
   });
@@ -1043,7 +1069,6 @@ function wireCombo(inputId, listId, renderList, currentLabel) {
 
 const markerLabel = (i) => i == null ? "" : (state.manifest.markers[i].label || state.manifest.markers[i].marker_channel || "Phase");
 const mkDisp = (s) => (s || "").replace(/_/g, " ");   // marker_channel for header display: underscores -> spaces
-const curMarkerDisp = () => mkDisp((state.marker && state.marker.marker_channel) || "Phase");   // current marker, readable
 function selectMarker(i) {
   state.markerIdx = i; state.marker = state.manifest.markers[i];
   $("markerfilter").title = markerLabel(i);   // hover shows the full marker name when truncated in the input
@@ -1234,26 +1259,32 @@ function activeSet() {
   if (cur && !set.some(p => p.key === cur.key)) set.unshift(cur);   // prepend current ONLY if not already pinned → grid order == pin-list order
   return set;
 }
+function firstFreeColor(pins) {   // lowest palette slot not used by these pins → new pins take a free color, existing pins keep theirs (stable)
+  const used = new Set(pins.map(p => p.colorIdx).filter(x => x != null));
+  for (let i = 0; i < PALETTE.length; i++) if (!used.has(i)) return i;
+  return pins.length % PALETTE.length;
+}
+function canonColorIndex(target, markerName) {   // STABLE per-pin color (assigned at pin time), identical across all tabs; current/unpinned selection uses the next free slot
+  const p = state.pinned.find(q => q.target === target && q.markerName === markerName);
+  return (p && p.colorIdx != null ? p.colorIdx : firstFreeColor(state.pinned)) % PALETTE.length;
+}
 
 // pins are SHARED across Top Cells + Traversal (same perturbation set). NTC stays top-cells-only (an NTC traversal is degenerate).
-function pinShared(target, anchor = "NTC") {
-  if (!target) return;
-  if (target !== "NTC" && state.marker) {
-    const e = resolveEntry(target, anchor) || resolveEntry(target, "NTC");
-    if (e) { const p = pertOf(state.marker.marker_channel || "Phase", e, e.control || "NTC");
-      if (p && !state.pinned.some(q => q.key === p.key)) state.pinned.unshift(p); }   // newest pin rests at TOP
-  }
-  if (!tc.pinned.some(p => p.gene === target)) tc.pinned.unshift({ gene: target, mode: tc.mode });   // above NTC (NTC drifts to bottom)
+function pinShared(target, anchor = "NTC") {   // one marker-sticky pin, shared across Traversal / Top Cells / Attention
+  if (!target || target === "NTC" || !state.marker) return;   // NTC is always shown in Top Cells; never a shared pin
+  const e = resolveEntry(target, anchor) || resolveEntry(target, "NTC");
+  if (!e) return;
+  const p = pertOf(state.marker.marker_channel || "Phase", e, e.control || "NTC");
+  if (p && !state.pinned.some(q => q.key === p.key)) { p.colorIdx = firstFreeColor(state.pinned); state.pinned.unshift(p); }   // newest pin at TOP but takes a FREE color slot → existing pin colors stay put
   redrawPins();
 }
-function unpinShared(target) {
+function unpinShared(target) {   // remove every shared pin for this perturbation (all markers)
   state.pinned = state.pinned.filter(p => p.target !== target);
-  tc.pinned = tc.pinned.filter(p => p.gene !== target);
   redrawPins();
 }
-function redrawPins() {   // refresh both pin lists + the active grid, and persist
-  renderPinned(); renderTopPins();
-  if (state.view === "top") renderTop(); else rebuild();
+function redrawPins() {   // refresh all three tabs' pin lists + the active grid, and persist
+  renderPinned(); renderTopPins(); renderAttnPinned();
+  if (state.view === "top") loadTop(); else if (state.view === "attn") renderAttn(); else rebuild();
   if (typeof saveState === "function") saveState();
 }
 
@@ -1362,11 +1393,9 @@ async function exportGif() {   // client-side GIF of the current traversal grid 
 }
 function renderPinned() {
   const ul = $("panellist"); ul.innerHTML = "";
-  const aset = activeSet();
   state.pinned.forEach((p, i) => {
     const li = document.createElement("li");
-    const gi = aset.findIndex(q => q.key === p.key);
-    li.style.color = PALETTE[((gi < 0 ? i : gi)) % PALETTE.length];   // exact color of its grid row
+    li.style.color = PALETTE[canonColorIndex(p.target, p.markerName)];   // stable per-pin color (matches its grid row + the other tabs)
     li.draggable = true; li.style.cursor = "move";        // drag to reorder
     const a = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     li.innerHTML = `<span data-tip="${a}${p.target} · ${p.markerName}">⠿ ${a}${p.target} · ${p.markerName}</span>`;
@@ -1391,14 +1420,15 @@ function rebuild() {
   const g = $("grid"); g.innerHTML = "";
   state.panels = []; state.groups = []; let k = 0;
   set.forEach((p, gi) => {                          // one group (row) per perturbation
-    const color = PALETTE[gi % PALETTE.length];
+    const color = PALETTE[canonColorIndex(p.target, p.markerName)];   // stable per-pin color, consistent across tabs
     const apfx = p.anchor && p.anchor !== "NTC" ? `${p.anchor}→` : "";
     const group = document.createElement("div"); group.className = "group"; group.style.setProperty("--cols", Math.min(N, 5));   // cap header/box to the actual cell columns
     const hd = document.createElement("div"); hd.className = "group-hd"; hd.style.color = color;
     const tt = document.createElement("span"); tt.className = "gh-title"; tt.textContent = `${apfx}${p.target} · ${mkDisp(p.markerName)}`;
     hd.appendChild(tt); tt.dataset.tip = tt.textContent;   // instant hover tooltip (data-tip) with the full name
     const sa = document.createElement("span"); sa.className = "setacc"; sa.style.display = "none"; hd.appendChild(sa);
-    state.groups.push({ dir: p.asset_dir, hd, sa, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
+    const saLoo = document.createElement("span"); saLoo.className = "setacc"; saLoo.style.display = "none"; hd.appendChild(saLoo);   // per-group LOO (mean over cells at current α), right of the set-acc chip
+    state.groups.push({ dir: p.asset_dir, hd, sa, saLoo, nCells: p.n_cells, label: hd.title });   // v5 set-accuracy chip (bag, per-α)
     const cells = document.createElement("div"); cells.className = "group-cells";
     cells.style.borderLeft = `4px solid ${color}`;   // colored bar; box styling in CSS (matches Top Cells strip)
     cells.style.setProperty("--cols", Math.min(N, 5));   // max 5 per row; wrap instead of stretching
@@ -1509,6 +1539,18 @@ function showIdx(i) {
       gp.sa.style.background = sch.bg; gp.sa.style.color = sch.fg;
       gp.sa.style.display = "inline-block";
     } else gp.sa.style.display = "none";
+    const scL = state.scores[gp.dir];   // per-group Removal Score chip — ONLY when the per-cell removal overlay is selected (scoreMode "linear")
+    if (gp.saLoo && state.scoreMode === "linear" && scL && scL.scores && scL.scores.length) {
+      let s = 0, c = 0;
+      for (const cell of scL.scores) { const v = cell[Math.min(i, cell.length - 1)]; if (v != null) { s += v; c++; } }
+      if (c) { const m = s / c, hv = pctHeatVal(m);
+        gp.saLoo.textContent = `Removal Score ${Math.round(m * 100)}%`;
+        gp.saLoo.dataset.tip = "Removal Score (Metric B): mean over this group's cells of the per-cell removal-based distinctiveness vs real cells at this α. Higher = a stronger, more distinctive phenotype.";
+        gp.saLoo.title = gp.saLoo.dataset.tip;
+        gp.saLoo.style.background = heat(hv); gp.saLoo.style.color = hv > 0.55 ? "#fff" : "#111";
+        gp.saLoo.style.visibility = "visible"; gp.saLoo.style.display = "inline-block";
+      } else gp.saLoo.style.display = "none";
+    } else if (gp.saLoo) gp.saLoo.style.display = "none";
   });
   const n = state.alphas.length, a = state.alphas[i];
   const ent = afEntry(state.target && state.target.target, state.target && state.target.grain, attnModality());   // [f, confidence]
@@ -1676,8 +1718,17 @@ function afEntry(name, grain, chan) {   // [f, confidence] for a perturbation, k
 function afPeak(name, grain, chan) {   // centroid-recovery peak-α (f); φ = α/f (φ=1 → phenotype reached)
   const e = afEntry(name, grain, chan); return e ? e[0] : null;
 }
+function montPhi(gene) {   // montage hover: φ = (selected α)/f at the current marker for a geneKO perturbation
+  const f = afPeak(gene, "geneKO", attnModality());
+  return f ? ` · φ=${(+$("m-alpha").value / f).toFixed(1)}` : "";
+}
 const attnBase = (ref) => `${BASE}attention_heads/${ref.modality}/${ref.grain}/${ref.key}`;
 const sameRef = (a, b) => a.modality === b.modality && a.grain === b.grain && a.key === b.key;
+const pinModality = (p) => (!p.markerName || /^phase$/i.test(p.markerName)) ? "phase" : jsSlug(p.markerName);   // a shared pin's attention/setacc modality
+function attnRefFromPin(p) {   // build an attention ref from a shared pin (marker-sticky), or null if it has no attention assets
+  const mod = pinModality(p), key = p.grain === "geneKO" ? p.target : p.slug;
+  return haveAttn(mod, p.grain, key) ? { modality: mod, grain: p.grain, key, label: p.target, markerName: p.markerName } : null;
+}
 function haveAttn(modality, grain, key) {
   const a = state.attnIndex && state.attnIndex.assets && state.attnIndex.assets[modality];
   return !!(a && a[grain] && a[grain].includes(key));
@@ -1687,7 +1738,7 @@ function attnRefOf(t, modality) {   // manifest target → ref if its attention 
   const key = t.grain === "geneKO" ? t.target : t.slug;
   return haveAttn(modality, t.grain, key) ? { modality, grain: t.grain, key, label: t.target } : null;
 }
-const attnCurrentRef = () => attnRefOf(state.target, attnModality());
+const attnCurrentRef = () => { const r = attnRefOf(state.target, attnModality()); if (r) r.markerName = (state.marker && state.marker.marker_channel) || "Phase"; return r; };
 function loadAttnHeads(ref) {
   const base = attnBase(ref);
   if (state.attnHeadsCache[base] !== undefined) return Promise.resolve(state.attnHeadsCache[base]);
@@ -1760,15 +1811,18 @@ async function drawAttnCell(cv, cropUrl, maskUrl, headUrl, geneMax) {
   cv.getContext("2d").putImageData(out, 0, 0);
 }
 const attnHeadLabel = (heads, i) => { const hd = heads.heads[i]; return `#${i + 1} L${hd.layer}·H${hd.head}`; };
-function renderAttnPinned() {   // pinned-perturbation list (mirrors the traversal pin list), color-coded
-  const ul = $("a-panellist"); ul.innerHTML = "";
-  state.attnPinned.forEach((r, i) => {
+function renderAttnPinned() {   // shared pins, colored to MATCH the attention grid group colors
+  const ul = $("a-panellist"); if (!ul) return; ul.innerHTML = "";
+  const cur = attnCurrentRef();
+  const gridRefs = [cur, ...state.pinned.map(attnRefFromPin).filter(r => r && !(cur && sameRef(r, cur)))].filter(Boolean);   // exact grid group order (cur first, then pins that have attention)
+  state.pinned.forEach((p) => {
+    const r = attnRefFromPin(p);
     const li = document.createElement("li");
-    li.style.color = PALETTE[(i + 1) % PALETTE.length];   // +1: current selection owns PALETTE[0]
-    const ctx = r.modality === "phase" ? "" : ` · ${r.modality}`;
-    li.innerHTML = `<span data-tip="${r.label}${ctx}">${r.label}${ctx}</span>`;
+    li.style.color = PALETTE[canonColorIndex(p.target, p.markerName)];   // canonical color → matches the grid + the other tabs
+    const ctx = /^phase$/i.test(p.markerName) ? "" : ` · ${mkDisp(p.markerName)}`;
+    li.innerHTML = `<span data-tip="${p.target}${ctx}">${p.target}${ctx}${r ? "" : ' <span class="hint">(no attn)</span>'}</span>`;
     const b = document.createElement("button"); b.textContent = "✕";
-    b.onclick = () => { state.attnPinned.splice(i, 1); renderAttnPinned(); renderAttn(); };
+    b.onclick = () => unpinShared(p.target);
     li.appendChild(b); ul.appendChild(li);
   });
 }
@@ -1782,7 +1836,7 @@ async function renderAttn() {
       : "No attention-head data for this marker × perturbation."}</div>`;
     return;
   }
-  const refs = [cur, ...state.attnPinned.filter(r => !sameRef(r, cur))];   // current first, then pins
+  const refs = [cur, ...state.pinned.map(attnRefFromPin).filter(r => r && !(cur && sameRef(r, cur)))].filter(Boolean);   // current first, then shared pins (that have attention assets)
   const heads0 = await loadAttnHeads(cur);
   if (!heads0) { grid.innerHTML = '<div class="empty">failed to load attention data</div>'; return; }
   populateAttnHeadSelect(heads0, attnBase(cur));
@@ -1794,7 +1848,7 @@ async function renderAttn() {
   grid.innerHTML = "";
   for (let gi = 0; gi < refs.length; gi++) {
     const heads = gi === 0 ? heads0 : await loadAttnHeads(refs[gi]);
-    if (heads) buildAttnGroup(grid, refs[gi], PALETTE[gi % PALETTE.length], heads);
+    if (heads) buildAttnGroup(grid, refs[gi], PALETTE[canonColorIndex(refs[gi].label, refs[gi].markerName)], heads);   // canonical color → matches the other tabs
   }
 }
 function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: colored header + head rows
@@ -1804,7 +1858,7 @@ function buildAttnGroup(grid, ref, color, heads) {   // one perturbation block: 
   const headIdxs = state.attnHead === "all" ? heads.heads.map((_, i) => i) : [Math.min(state.attnHead, heads.heads.length - 1)];
   const group = document.createElement("div"); group.className = "agroup";
   const hd = document.createElement("div"); hd.className = "agroup-hd"; hd.style.color = color;
-  hd.textContent = `${ref.label} · ${curMarkerDisp()}`;   // perturbation · full marker name (cell range is on the top bar)
+  hd.textContent = `${ref.label} · ${mkDisp(ref.markerName || "")}`;   // perturbation · this ref's marker (cell range is on the top bar)
   group.appendChild(hd);
   for (const h of headIdxs) {
     const row = document.createElement("div"); row.className = "arow";
@@ -2036,37 +2090,56 @@ function pcCloseOverlay() { const o = $("pc-overlay"); if (o) o.remove(); }
 
 // ---- Top Cells tab: per-gene top phenotype cells by attention or accuracy (phase), masked like the PC tab ----
 const TC_CROP_V = "?m=3";
-const tc = { data: null, marker: undefined, mode: "accuracy", mask: true, inorm: true, showAcc: true, accBin: 100, pinned: [{ gene: "NTC", mode: "accuracy" }] };   // inorm: marker-global intensity (fluor only); showAcc: per-group set-acc chip (default on) @accBin
-function tcBase() {   // per-marker top-cells for fluor (marker channel crops), shared phase otherwise
-  const m = state.marker && state.marker.marker_channel;
-  return (!m || /^phase/i.test(m)) ? "top_cells/" : `top_cells/markers/${jsSlug(m)}/`;
+const tc = { byMarker: {}, mask: true, inorm: true, showAcc: true, accBin: 100, order: null };   // byMarker: base -> loaded index.json; order: Top-Cells-LOCAL row order = array of pin keys + NTC_KEY sentinel
+const NTC_GRAY = "#9aa0a6";
+const NTC_KEY = "__NTC__";
+function tcReconcile() {   // keep tc.order in sync with state.pinned: drop removed pins, add NEW pins at TOP, NTC + the rest hold their relative slots (nothing jumps)
+  const pinKeys = state.pinned.map(p => p.key);
+  if (!Array.isArray(tc.order)) tc.order = [...pinKeys, NTC_KEY];   // init: pins (newest-first) then NTC at bottom
+  const alive = new Set(pinKeys);
+  let order = tc.order.filter(k => k === NTC_KEY || alive.has(k));  // drop unpinned; keep relative order + NTC
+  if (!order.includes(NTC_KEY)) order.push(NTC_KEY);
+  const have = new Set(order);
+  const fresh = pinKeys.filter(k => !have.has(k));                  // new pins (state.pinned is newest-first)
+  tc.order = [...fresh, ...order];                                  // new pins go to the TOP
+}
+function tcPinTokens() {   // Top-Cells row tokens (shared pins + NTC) in tc.order, stable across add/remove
+  tcReconcile();
+  const byKey = new Map(state.pinned.map(p => [p.key, p]));
+  return tc.order.map(k => k === NTC_KEY ? { ntc: true } : { pin: byKey.get(k) }).filter(t => t.ntc || t.pin);
+}
+function tcRowColors() {   // rows with colors: current first, then the pin tokens; NTC gray (no palette slot), others cycle PALETTE
+  return tcRows().map(r => ({ ...r, color: r.ntc ? NTC_GRAY : PALETTE[canonColorIndex(r.gene, r.markerName)] }));   // stable per-pin color, consistent across tabs
+}
+const tcBaseFor = (markerName) => (!markerName || /^phase/i.test(markerName)) ? "top_cells/" : `top_cells/markers/${jsSlug(markerName)}/`;
+function tcBase() { return tcBaseFor((state.marker && state.marker.marker_channel) || "Phase"); }   // current marker's crops base
+function tcRows() {   // current selection (only if not already pinned on this marker) then the pin tokens (shared pins + NTC)
+  const rows = [], seen = new Set();
+  const curMk = (state.marker && state.marker.marker_channel) || "Phase";
+  const add = (gene, markerName, ntc) => { const k = gene + "|" + markerName; if (seen.has(k)) return; seen.add(k); rows.push({ gene, markerName, base: tcBaseFor(markerName), ntc: !!ntc }); };
+  const curName = state.target ? state.target.target : null;
+  const curPinned = curName && state.pinned.some(p => p.target === curName && p.markerName === curMk);
+  if (curName && !curPinned) add(curName, curMk);   // transient current row ONLY if not pinned here → pinned current sits at its token slot so NTC can reorder around it
+  for (const t of tcPinTokens()) t.ntc ? add("NTC", curMk, true) : add(t.pin.target, t.pin.markerName);   // shared pins keep their marker; NTC at its local slot
+  return rows;
 }
 async function loadTop() {
-  const slug = tcBase();
-  if (tc.data === null || tc.marker !== slug) {   // marker changed → load that marker's top-cells
-    tc.marker = slug;
-    tc.data = await fetch(`${BASE}${slug}index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null);
-  }
-  if (!tc.data) { $("tc-view").innerHTML = '<div class="empty">No top-cell assets for this marker yet.</div>'; return; }
+  const bases = [...new Set(tcRows().map(r => r.base))];   // current marker + every distinct pinned marker
+  await Promise.all(bases.map(async b => { if (tc.byMarker[b] === undefined)
+    tc.byMarker[b] = await fetch(`${BASE}${b}index.json${NOCACHE}`).then(r => r.ok ? r.json() : null).catch(() => null); }));
+  if (!tc.byMarker[tcBase()]) { $("tc-view").innerHTML = '<div class="empty">No top-cell assets for this marker yet.</div>'; return; }
   ensureSetacc(() => { renderTopPins(); renderTop(); });   // load set-accuracy (bins) for the accuracy chip + adaptive bin dropdown
 }
-function tcData(name) {   // resolve a perturbation name → its ranking entry (genes, or complexes by base name)
-  if (!tc.data) return null;
-  if (tc.data.genes && tc.data.genes[name]) return tc.data.genes[name];
-  const cx = tc.data.complexes;
+function tcDataFrom(data, name) {   // resolve a perturbation name → ranking entry within a specific marker's index (genes, or complexes by base name)
+  if (!data) return null;
+  if (data.genes && data.genes[name]) return data.genes[name];
+  const cx = data.complexes;
   if (cx) { if (cx[name]) return cx[name]; const base = name.split(",")[0].trim(); for (const k in cx) if (k === base || name.startsWith(k)) return cx[k]; }
   return null;
 }
-function tcEntries() {   // pinned rows in their order; current prepended ONLY if not already pinned → pin-list order == grid order
-  const cur = state.target ? state.target.target : null, out = [];
-  const curPinned = cur && tc.pinned.some(p => p.gene === cur && p.mode === tc.mode);
-  if (cur && !curPinned) out.push({ gene: cur, mode: tc.mode, current: true });
-  for (const p of tc.pinned) out.push({ gene: p.gene, mode: p.mode, current: cur === p.gene && tc.mode === p.mode });
-  return out;
-}
 function renderTop() {
-  const v = $("tc-view"); if (!tc.data) return;
-  const cap = tc.data.top_n || 20;
+  const v = $("tc-view"); const curData = tc.byMarker[tcBase()]; if (!curData) return;
+  const cap = curData.top_n || 20;
   const n = Math.max(1, Math.min(cap, state.cellCount || 10));   // count = header "Cells per page"
   const pg = Math.min(state.page, Math.max(0, Math.ceil(cap / n) - 1)), lo = pg * n;   // ◀ ▶ paginate the ranking
   const mk = attnModality(), bins = saBins(mk), sel = $("tc-accbin");   // adaptive bag-size dropdown (bins depend on marker: phase vs fluor)
@@ -2079,47 +2152,55 @@ function renderTop() {
     sel.value = tc.accBin;
     const wrap = $("tc-accbin-wrap"); if (wrap) wrap.style.display = (tc.showAcc && bins.length > 1) ? "" : "none";   // public hidden via feat-internal (applyFeatureGate)
   }
-  let h = "", ci = 0;
-  for (const e of tcEntries()) {
-    const gd = tcData(e.gene), cells = gd ? (gd[e.mode] || []).slice(lo, lo + n) : [];
-    const sk = e.mode === "attention" ? "attn" : "conf";
-    const color = PALETTE[ci++ % PALETTE.length];   // per-group color, matching the traversal groups
-    const av = tc.showAcc ? saAcc(mk, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size
+  let h = "";
+  for (const e of tcRowColors()) {
+    const gd = tcDataFrom(tc.byMarker[e.base], e.gene), cells = gd ? (gd.accuracy || []).slice(lo, lo + n) : [];   // always the accuracy ranking
+    const rowMod = /^phase$/i.test(e.markerName) ? "phase" : jsSlug(e.markerName);
+    const color = e.color;   // NTC gray, others cycle PALETTE (shared with the pin list)
+    const av = tc.showAcc ? saAcc(rowMod, e.gene, tc.accBin) : null;   // per-group SetTransformer set-accuracy at the selected bag size (this row's marker)
     const accChip = tc.showAcc ? `<span class="tc-acc" title="SetTransformer real-cell set-accuracy · bag ${tc.accBin}" style="background:${av != null ? heat(av) : "rgba(255,255,255,.06)"};color:${av != null ? (av > 0.55 ? "#fff" : "#111") : "var(--fg)"}">${av != null ? Math.round(av * 100) + "%" : "—"}</span>` : "";
-    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene} · ${curMarkerDisp()}">${e.gene} · ${curMarkerDisp()}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
-    if (!cells.length) h += `<div class="hint">no ${e.mode} cells${e.gene === "NTC" && e.mode === "accuracy" ? " (NTC has no accuracy ranking)" : ""}</div>`;
+    h += `<div class="tc-row"><div class="tc-hd" style="color:${color}"><span class="gh-title" data-tip="${e.gene} · ${mkDisp(e.markerName)}">${e.gene} · ${mkDisp(e.markerName)}</span>${accChip}</div><div class="pc-strip-row tc-strip" style="border-left:4px solid ${color}">`;
+    if (!cells.length) h += `<div class="hint">no cells${e.gene === "NTC" ? " (NTC has no accuracy ranking)" : ""}</div>`;
     for (const c of cells) {
-      const cropDir = (tc.inorm && tcBase().includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
-      const url = `${BASE}${tcBase()}${cropDir}/${c.img}${TC_CROP_V}`;
-      const ovUrl = c.ov ? `${BASE}${tcBase()}overlays/${c.ov}${TC_CROP_V}` : null;
+      const cropDir = (tc.inorm && e.base.includes("markers/")) ? "crops_norm" : "crops";   // marker-global intensity (fluor only)
+      const url = `${BASE}${e.base}${cropDir}/${c.img}${TC_CROP_V}`;
+      const ovUrl = c.ov ? `${BASE}${e.base}overlays/${c.ov}${TC_CROP_V}` : null;
       const ov = ovUrl ? `<img class="tc-ov" src="${ovUrl}">` : "";
-      const cv = sk === "conf" && c[sk] != null && !isNaN(+c[sk]) ? +(+c[sk]).toPrecision(2) : c[sk];   // round accuracy/confidence to 2 sig figs
-      const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>${e.mode} ${sk}=${cv} · rank ${c.rank}</div>`;
-      const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)},${ovUrl ? JSON.stringify(ovUrl) : "null"},false,${tcBase().includes("markers/")}`;   // last arg: fluor crops have crops_norm → pop-out can follow the marker-norm toggle
-      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${sk} ${cv}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
+      const cv = c.conf != null && !isNaN(+c.conf) ? +(+c.conf).toPrecision(2) : c.conf;   // accuracy confidence, 2 sig figs
+      const meta = `<div>${c.exp} · well ${c.well} · (${c.x}, ${c.y})</div><div>accuracy conf=${cv} · rank ${c.rank}</div>`;
+      const poArgs = `${JSON.stringify(url)},${JSON.stringify(e.gene + " · rank " + c.rank)},${JSON.stringify(meta)},${ovUrl ? JSON.stringify(ovUrl) : "null"},false,${e.base.includes("markers/")}`;   // last arg: fluor crops have crops_norm → pop-out can follow the marker-norm toggle
+      h += `<div class="tc-cell"><img class="pc-cell" src="${url}" title="${e.gene} · rank ${c.rank} · ${cv}" onclick='popOut(${poArgs})'>${ov}<span class="tc-rank">${c.rank}</span></div>`;
     }
     h += "</div></div>";
   }
   v.innerHTML = (state.unavail ? unavailMsg() : "") + (h || '<div class="empty">select a perturbation</div>');   // message above the NTC/pinned groups
   v.classList.toggle("masked", tc.mask !== false);   // show/hide the blue seg overlay layer
-  $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcEntries().length} row(s)`;
+  $("tc-status").textContent = `ranks ${lo + 1}–${Math.min(cap, lo + n)} of ${cap} · ${tcRows().length} row(s)`;
   $("pagenum").textContent = `${lo + 1}-${Math.min(cap, lo + n)} / ${cap}`;   // single indicator between the arrows: cells shown / total
 }
 function renderTopPins() {
   const ul = $("tc-panellist"); if (!ul) return; ul.innerHTML = "";
-  const ents = tcEntries();   // color each pin to match its group color in the grid (same as the traversal pins)
-  tc.pinned.forEach((p, i) => {
-    const li = document.createElement("li"); li.innerHTML = `<span data-tip="${p.gene} · ${p.mode}">⠿ ${p.gene} <span class="hint">· ${p.mode}</span></span>`;
-    const gi = ents.findIndex(e => e.gene === p.gene && e.mode === p.mode);
-    li.style.color = PALETTE[(gi < 0 ? i : gi) % PALETTE.length];
-    li.draggable = true; li.style.cursor = "move";        // drag to reorder (like the traversal pins)
+  const colored = tcRowColors(), curMk = (state.marker && state.marker.marker_channel) || "Phase";   // shared color mapping (matches the grid)
+  const colorOf = (gene, marker) => { const c = colored.find(e => e.gene === gene && e.markerName === marker); return c ? c.color : "#555"; };
+  tcPinTokens().forEach((t, i) => {
+    const isNtc = !!t.ntc, target = isNtc ? "NTC" : t.pin.target, marker = isNtc ? curMk : t.pin.markerName;
+    const li = document.createElement("li");
+    li.innerHTML = isNtc ? `<span data-tip="NTC reference · ${mkDisp(marker)}">⠿ NTC <span class="hint">· reference</span></span>`
+                         : `<span data-tip="${target} · ${mkDisp(marker)}">⠿ ${target} <span class="hint">· ${mkDisp(marker)}</span></span>`;
+    li.style.color = colorOf(target, marker);
+    li.draggable = true; li.style.cursor = "move";        // drag to reorder (NTC too, but it stays Top-Cells-local)
     const b = document.createElement("button"); b.textContent = "×";
-    b.onclick = () => unpinShared(p.gene);
+    if (isNtc) b.style.visibility = "hidden";             // NTC is always shown → reorder only, no unpin
+    else b.onclick = () => unpinShared(t.pin.target);
     li.ondragstart = e => { e.dataTransfer.setData("text/plain", i); e.dataTransfer.effectAllowed = "move"; };
     li.ondragover = e => { e.preventDefault(); li.style.opacity = ".5"; };
     li.ondragleave = () => { li.style.opacity = ""; };
     li.ondrop = e => { e.preventDefault(); li.style.opacity = ""; const from = +e.dataTransfer.getData("text/plain");
-      if (from !== i) { const [m] = tc.pinned.splice(from, 1); tc.pinned.splice(i, 0, m); renderTopPins(); renderTop(); } };
+      if (from === i) return;
+      const arr = tcPinTokens(); const [m] = arr.splice(from, 1); arr.splice(i, 0, m);   // reorder within the combined pin+NTC list
+      tc.order = arr.map(t => t.ntc ? NTC_KEY : t.pin.key);                              // persist the new order (NTC holds its slot)
+      state.pinned = arr.filter(t => t.pin).map(t => t.pin);                             // shared pins' new order (mirrors to the other tabs; NTC excluded)
+      redrawPins(); };
     li.appendChild(b); ul.appendChild(li);
   });
 }

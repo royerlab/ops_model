@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=221"/>
+<link rel="stylesheet" href="style.css?v=222"/>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -277,8 +277,10 @@
       </label>
       <label>metric
         <select id="m-setacc-metric" data-seg>
-          <option value="ptarget" selected>P(target) — gen%/real%</option>
-          <option value="rank">target rank</option>
+          <option value="ptarget">P(target) — gen%/real%</option>
+          <option value="rank" selected>target rank</option>
+          <option value="loo">per-α LOO (removal %)</option>
+          <option value="coral">CORAL φ = α/f</option>
         </select>
       </label>
       <div class="hint" id="m-embed"></div>
@@ -367,7 +369,7 @@
 <script src="gif.js"></script>
 <script src="config.js"></script>
 <script src="af_scores.js?v=6"></script>
-<script src="app.js?v=271"></script>
+<script src="app.js?v=283"></script>
 <script src="methods.js?v=76"></script>
 </body>
 </html>
