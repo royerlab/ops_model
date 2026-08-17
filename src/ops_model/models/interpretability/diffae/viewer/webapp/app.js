@@ -102,6 +102,7 @@ function applyFeatureGate() {
     el.classList.toggle("feat-hidden", !pub);
     const cb = el.querySelector("input[type=checkbox]"); if (cb && cb._tog) cb._tog.classList.toggle("feat-hidden", !pub);
   });
+  { const a = $("tc-acc"); if (a) { tc.showAcc = !pub; a.checked = !pub; a._togSync?.(); if (state.view === "top") renderTop(); } }   // classification-accuracy chip: ON internally, OFF in public (incl. Preview-public toggle)
   if (pub) {   // public: traversals anchor on NTC only — drop the alt-anchor filter + reset any non-NTC anchor
     let changed = false;
     if (state.altAnchorsOnly) { state.altAnchorsOnly = false; $("altanchor").checked = false; $("altanchor")._togSync?.(); changed = true; }

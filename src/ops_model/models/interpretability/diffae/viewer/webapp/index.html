@@ -131,10 +131,10 @@
             <option value="rank">Distinctiveness rank (per group)</option>
           </select>
         </label>
+        <label class="chk" id="tr-inorm-wrap"><input type="checkbox" id="tr-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
         <label class="chk feat-public"><input type="checkbox" id="pub-scoreoverlay" data-on="classification rank"/> classification rank overlay</label>
         <label class="chk"><input type="checkbox" id="showreal" data-on="reference cells"/> show reference cells (NTC)</label>
         <label class="chk feat-internal"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
-        <label class="chk" id="tr-inorm-wrap"><input type="checkbox" id="tr-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
         <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
       </div>
       <div class="grp">
@@ -193,7 +193,7 @@
       <label>Image scale <input type="range" id="tc-scale" min="80" max="300" step="10" value="160"/></label>
       <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="cell mask"/> cell mask</label>
       <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
-      <label class="chk feat-internal"><input type="checkbox" id="tc-acc" checked data-on="classification accuracy"/> classification accuracy</label>
+      <label class="chk"><input type="checkbox" id="tc-acc" checked data-on="classification accuracy"/> classification accuracy</label>
       <label id="tc-accbin-wrap" class="feat-internal">Accuracy bag size
         <select id="tc-accbin"></select>
       </label>
@@ -370,7 +370,7 @@
 <script src="config.js"></script>
 <script src="af_scores.js?v=6"></script>
 <script src="pin_order.js?v=1"></script>
-<script src="app.js?v=290"></script>
+<script src="app.js?v=293"></script>
 <script src="methods.js?v=76"></script>
 </body>
 </html>
