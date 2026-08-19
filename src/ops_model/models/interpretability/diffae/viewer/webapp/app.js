@@ -88,6 +88,9 @@ function applyFeatureGate() {
   const grain = $("grain");   // hide minibinder + PC from the Type selector in public
   if (grain && grain._seg) grain._seg.querySelectorAll("button").forEach(b =>
     b.classList.toggle("feat-hidden", pub && PUBLIC_HIDDEN_GRAINS.has(b.dataset.value)));
+  if (grain && grain._seg) {   // Type: native dropdown internally (4 options → pills eat too much width); segmented 2-pill toggle in public
+    grain.style.display = pub ? "none" : ""; grain._seg.style.display = pub ? "" : "none"; grain._segSync?.();
+  }
   const ts = $("target-sort");   // public: perturbation list always sorted by SET ACC, no selector
   if (ts && ts._seg) ts._seg.classList.toggle("feat-hidden", pub);
   if (grain && pub && PUBLIC_HIDDEN_GRAINS.has(grain.value)) {   // currently on a hidden type → fall back to geneKO
@@ -1109,10 +1112,8 @@ function refreshTargets(preservePert = true) {   // marker or grain changed → 
   updateBagUI();              // correct the anchor bag for this grain BEFORE building the grid (minibinder/PC → single_bag; never blank)
   const g = $("grain").value;
   const altSet = new Set(state.marker.targets.filter(e => e.control).map(e => e.target));   // names with a non-NTC anchor
-  state.targets = state.marker.targets.filter(t => !t.control && (g === "all" || t.grain === g)
+  state.targets = state.marker.targets.filter(t => !t.control && t.target !== "NTC" && (g === "all" || t.grain === g)
     && (!state.altAnchorsOnly || altSet.has(t.target)));
-  if (g !== "complex" && !state.altAnchorsOnly && !state.targets.some(t => t.target === "NTC"))   // NTC selectable (Top Cells / embedding / PC); no traversal assets
-    state.targets.push({ grain: "geneKO", target: "NTC", slug: "NTC", dist_map: null, n_cells: 0, alphas: [], desc: "non-targeting control" });
   const curName = preservePert ? ((state.target && state.target.target) || (state.unavail && state.unavail.name)) : null;   // perturbation identity to carry across the channel switch
   let t = curName ? state.targets.find(x => x.target === curName) : null;
   if (t) { $("filter").value = targetLabel(t); selectTarget(t.slug); return; }

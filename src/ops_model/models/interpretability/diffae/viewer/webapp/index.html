@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
 <link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
-<link rel="stylesheet" href="style.css?v=223"/>
+<link rel="stylesheet" href="style.css?v=229"/>
+<!-- Privacy-friendly analytics by Plausible -->
+<script async src="https://plausible.io/js/pa-ZbwB7BcCHt7n6YhgUB13O.js"></script>
+<script>
+  window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+  plausible.init()
+</script>
 </head>
 <body>
 <div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
@@ -13,7 +19,7 @@
   <div class="brand"><img class="opsin-eyes" src="opsin-eyes.svg" alt=""/><h1>OPSin<span style="color:var(--mut);font-weight:400">: <b style="color:var(--fg)">O</b>ptical <b style="color:var(--fg)">P</b>ooled <b style="color:var(--fg)">S</b>creening <b style="color:var(--fg)">In</b>terpretability Viewer</span></h1>
   </div>
   <div class="hdr-right">
-    <button id="envtoggle" class="verbtn envtoggle" title="Staging only — preview the public demo subset (Top cells + Traversal + How-it-works steps 1–6; hides Montage/PCs/Attention). Not shown on the public deployment.">🔒 Preview public</button>
+    <button id="envtoggle" class="verbtn envtoggle" title="Staging only — preview the public demo subset (Top-Predictive Cells + Image Generation + How-it-works steps 1–6; hides Montage/PCs/Attention). Not shown on the public deployment.">🔒 Preview public</button>
     <a class="biohub-logo" href="https://biohub.org" target="_blank" rel="noopener" title="Biohub"><img src="biohub-mark.png?v=1" alt="Biohub"/></a>
   </div>
 </header>
@@ -40,7 +46,7 @@
   <div class="tb-field">
     <label>Marker</label>
     <div class="combo">
-      <input id="markerfilter" type="text" placeholder="search markers…" autocomplete="off"/>
+      <input id="markerfilter" type="text" placeholder="Search markers…" autocomplete="off"/>
       <div class="combo-list hidden" id="marker-list"></div>
     </div>
   </div>
@@ -63,7 +69,7 @@
     </label>
     <div class="row">
       <div class="combo">
-        <input id="filter" type="text" placeholder="search perturbations…" autocomplete="off"/>
+        <input id="filter" type="text" placeholder="Search perturbations…" autocomplete="off"/>
         <div class="combo-list hidden" id="target-list"></div>
       </div>
       <button id="tprev" title="previous perturbation">◀</button>
@@ -93,8 +99,8 @@
 </div>
 
 <nav class="tabs" id="tabbar">
-  <button class="tab" data-tab="top">Top cells</button>
-  <button class="tab active" data-tab="traversal">Traversal</button>
+  <button class="tab" data-tab="top">Top-Predictive Cells</button>
+  <button class="tab active" data-tab="traversal">Image Generation</button>
   <button class="tab" data-tab="montage">Montage</button>
   <button class="tab" data-tab="pc">PCs</button>
   <button class="tab" data-tab="attn">Attention</button>
@@ -116,11 +122,11 @@
     <div class="tabpane hidden" id="tab-methods"></div>
 
     <div class="tabpane" id="tab-traversal">
-      <div class="hint">Move the <b>α</b> slider to morph a control cell toward the selected perturbation — α=0 is the real cell, higher accentuates the phenotype.</div>
-      <label class="feat-internal">Anchor <span class="hint">(the α=0 center)</span>
+      <div class="hint">Move the <b>φ</b> slider to morph a control cell toward the selected perturbation — φ=0 is the real anchor, φ=1 reaches the phenotype (higher exaggerates it), negative φ shows the opposite phenotype.</div>
+      <label class="feat-internal">Anchor <span class="hint">(the φ=0 center)</span>
         <select id="anchor"></select>
       </label>
-      <div class="hint feat-internal">The α=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
+      <div class="hint feat-internal">The φ=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
       <label>Image scale <input type="range" id="tile-scale" min="80" max="300" step="10" value="160"/></label>
       <div class="grp">
         <label class="feat-internal">Score overlay
@@ -323,7 +329,7 @@
         <option value="2">play ±2</option>
         <option value="1">play ±1</option>
       </select>
-      <label class="chk"><input type="checkbox" id="playpos"/> play α ≥ 0</label>
+      <label class="chk"><input type="checkbox" id="playpos"/> play φ ≥ 0</label>
     </div>
     <div id="score-legend" style="display:none"><span id="score-legend-txt"></span> &nbsp; <span class="bar"></span></div>
     <div id="grid"></div>
@@ -352,8 +358,8 @@
       <div class="about-sec">
         <div class="about-cap">The tabs</div>
         <ul class="about-tabs">
-          <li><b>Top cells</b> — the real cells that show each phenotype most clearly.</li>
-          <li><b>Traversal</b> — watch a control cell morph into the selected phenotype; a slider dials the effect along its phenotypic trajectory.</li>
+          <li><b>Top-Predictive Cells</b> — the real cells that show each phenotype most clearly.</li>
+          <li><b>Image Generation</b> — watch a control cell morph into the selected phenotype; a slider dials the effect along its phenotypic trajectory.</li>
           <li class="about-tabdesc" data-tab="montage"><b>Montage</b> — every perturbation's rendered cell on a map, so similar effects sit together.</li>
           <li class="about-tabdesc" data-tab="pc"><b>PCs</b> — real cells sorted along the model's main axes of variation.</li>
           <li class="about-tabdesc" data-tab="attn"><b>Attention</b> — where the model looked (brighter = more informative).</li>
@@ -370,7 +376,7 @@
 <script src="config.js"></script>
 <script src="af_scores.js?v=6"></script>
 <script src="pin_order.js?v=1"></script>
-<script src="app.js?v=293"></script>
-<script src="methods.js?v=76"></script>
+<script src="app.js?v=299"></script>
+<script src="methods.js?v=77"></script>
 </body>
 </html>

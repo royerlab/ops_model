@@ -45,10 +45,11 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar{display:flex;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);
         background:var(--panel);align-items:flex-start;flex-wrap:wrap;flex:none}
 .tb-field{display:flex;flex-direction:column;gap:6px;min-width:160px}
-.tb-field:has(#markerfilter){min-width:240px;max-width:320px}   /* Marker search: ~50% wider than default, capped so it doesn't squish the rest */
+.tb-field:has(#markerfilter){flex:1.6 1 300px;min-width:280px;max-width:392px}   /* Marker search input == Perturbation input: marker is 88px narrower to offset Perturbation's ◀/▶ buttons */
 .tb-field:has(#grain){min-width:0}          /* Type: sizes to its pills — adapts to count (2 public / 4 internal) + label length */
+#topbar #grain{width:auto;min-width:120px}  /* internal Type = native dropdown (compact) instead of 4 wide pills */
 .tb-field:has(#grain) .seg{flex:0 0 auto;padding:4px 15px;font-size:13px}   /* pills hug their (variable-length) labels with roomy padding */
-.tb-field.tb-grow{flex:1.6 1 300px;min-width:280px;max-width:480px}   /* Perturbation gets priority + a comfortable width so long complex names aren't squished */
+.tb-field.tb-grow{flex:1.6 1 388px;min-width:368px;max-width:480px}   /* Perturbation field = marker + 88px (the ◀/▶ cluster) so the input matches marker's */
 .tb-field>label{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .tb-field .hint{text-transform:none;letter-spacing:0;font-size:12px;opacity:.7}
 #topbar select,#topbar input{width:100%;font-size:14.5px}
@@ -60,6 +61,13 @@ header .sub{color:var(--mut);font-size:12px}
 #topbar .row .combo{flex:1;min-width:0}
 /* combobox: input shows the selection; focus reveals a scrollable (~10-row) filtered list */
 .combo{position:relative}
+/* Marker + Perturbation: the two PRIMARY search bars — elevated above the secondary topbar controls */
+.combo:has(#markerfilter)::before,.combo:has(#filter)::before{content:"🔍";position:absolute;left:12px;top:50%;
+   transform:translateY(-50%);font-size:15px;opacity:.75;pointer-events:none;z-index:1}
+#markerfilter,#filter{padding:11px 12px 11px 38px;font-size:17.6px;background:#1a2029;
+   border:2px solid #3aa0c8;box-shadow:0 0 14px rgba(38,198,255,.18);transition:border-color .12s,box-shadow .12s}
+#markerfilter:focus,#filter:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(38,198,255,.30)}
+.tb-field:has(#markerfilter)>label,.tb-field.tb-grow>label{color:var(--fg);font-weight:700}
 .combo-list{position:absolute;top:100%;left:0;min-width:100%;width:max-content;max-width:min(440px,80vw);z-index:60;margin-top:2px;
    background:var(--panel);border:1px solid var(--accent);border-radius:6px;
    max-height:264px;overflow:auto;box-shadow:0 10px 24px rgba(0,0,0,.55)}
@@ -326,6 +334,7 @@ button:hover{border-color:var(--accent)}
 .seg-group.mini .seg{flex:none;padding:2px 12px;font-size:11px}
 /* checkboxes → [off | feature] segmented switches (see toggleize); off-active is neutral, on-active is accent */
 .seg-group.tog{margin:8px 0 2px}
+.seg-group.tog .seg{font-size:14px}   /* on/off toggles: match the Top-Predictive Cells tab size across all tabs (was base 12px) */
 .seg-group.tog .seg:first-child.active{background:var(--line);color:var(--fg);border-color:var(--line)}
 .pc-comp{grid-column:1/-1;margin-top:18px}
 .comp-block{margin-top:10px}
