@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
+from scipy.optimize import linear_sum_assignment
 
 
 class FlowNet(nn.Module):
@@ -32,9 +33,21 @@ class FlowNet(nn.Module):
         return self.net(torch.cat([x, t[:, None]], dim=1))
 
 
-def train_flow(embs, labels, dev, steps=2000, bs=256, lr=1e-3, hidden=512, seed=0):
-    """Conditional flow matching, control(label 0) → KD(label 1). Independent coupling:
-    x_t = (1-t)·x0 + t·x1, regress v_θ(x_t,t) to the straight-line velocity (x1 − x0)."""
+def train_flow(embs, labels, dev, steps=2000, bs=256, lr=1e-3, hidden=512, seed=0,
+               coupling="independent"):
+    """Conditional flow matching, control(label 0) → KD(label 1).
+    x_t = (1-t)·x0 + t·x1, regress v_θ(x_t,t) to the straight-line velocity (x1 − x0).
+
+    coupling:
+      - 'independent' (default, unchanged): x0/x1 minibatches paired at random. Straight
+        lines from unrelated pairs cross in embedding space, so the field the network
+        fits is the (smoothed, high-variance) average of conflicting targets.
+      - 'ot': pair x0/x1 within each minibatch via EXACT optimal transport (Hungarian
+        assignment on squared-Euclidean cost, `scipy.optimize.linear_sum_assignment`)
+        before building the interpolant — the OT-CFM fix (Tong et al. 2023 / CellFlow)
+        for crossing-path noise. Deterministic given the minibatch draw (no entropic-OT
+        epsilon to tune), no new dependency beyond scipy.
+    """
     torch.manual_seed(seed); np.random.seed(seed)
     x0 = torch.as_tensor(embs[labels == 0], dtype=torch.float32, device=dev)
     x1 = torch.as_tensor(embs[labels == 1], dtype=torch.float32, device=dev)
@@ -45,6 +58,10 @@ def train_flow(embs, labels, dev, steps=2000, bs=256, lr=1e-3, hidden=512, seed=
     for _ in range(steps):
         a = x0[torch.randint(0, n0, (bs,), generator=g, device=dev)]
         b = x1[torch.randint(0, n1, (bs,), generator=g, device=dev)]
+        if coupling == "ot":
+            cost = torch.cdist(a, b).pow(2).detach().cpu().numpy()
+            _, col = linear_sum_assignment(cost)
+            b = b[col]
         t = torch.rand(bs, generator=g, device=dev)
         xt = (1 - t)[:, None] * a + t[:, None] * b
         loss = ((net(xt, t) - (b - a)) ** 2).mean()
