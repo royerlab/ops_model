@@ -36,6 +36,10 @@ class EmbeddingDecisions:
     zscore_per_experiment: bool = True
     agg_method: str = "mean"            # cells->guides / guides->genes reduction: mean | median
     umap_type: str = "max"
+    # Leiden clustering resolutions for the overlays + GO enrichment. The full
+    # multi-exp default is ~13 resolutions; per-exp we only need a few (GO
+    # enrichment is the long pole and scales with resolution count).
+    leiden_resolutions: list = field(default_factory=lambda: [4.0, 10.0, 30.0])
     random_seed: int = 42
     # populated per marker at runtime
     marker: str | None = None
@@ -157,6 +161,7 @@ def run_marker(
         random_seed=decisions.random_seed,
         agg_method=decisions.agg_method,
         umap_type=decisions.umap_type,
+        leiden_resolutions=tuple(decisions.leiden_resolutions),
     )
 
     # Correlation heatmap on the gene-level embedding (mean-centered), PCA-reduced

@@ -84,6 +84,7 @@ def aggregate_channels(
     agg_method: str = "mean",
     chromosome_csv: Optional[str] = None,
     umap_type: str = "max",
+    leiden_resolutions: Optional[Tuple[float, ...]] = None,
 ) -> str:
     """Load per-channel (or per-signal) h5ads, concatenate, normalize, score, save.
 
@@ -367,6 +368,9 @@ def aggregate_channels(
             chad_map=chad_map,
             chad_path_override=CHAD_ANNOTATION_PATH,
             _logger=_logger,
+            # None -> save_extra_overlays keeps its full DEFAULT_LEIDEN_RESOLUTIONS
+            **({"leiden_resolutions": leiden_resolutions}
+               if leiden_resolutions is not None else {}),
         )
         # Re-save h5ads now that leiden_r* columns + neighbors graph have been
         # added to the in-memory adata objects by save_extra_overlays
