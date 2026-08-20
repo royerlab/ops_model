@@ -134,6 +134,9 @@ def _organize_plots(plots_dir: Path) -> None:
     groups = [
         ("umap", lambda n: "umap" in n),
         ("phate", lambda n: "phate" in n),
+        # These overlays are checked before map_metrics (they contain "ebi").
+        ("ebi_complex_overlay", lambda n: "ebi_complex_overlay" in n),
+        ("binary_overlay", lambda n: "binary_overlay" in n),
         ("map_metrics", lambda n: n.startswith("map_") or "violin" in n or "consistency" in n
                                    or "distinctiveness" in n or "activity" in n or "ebi" in n),
         ("sweep", lambda n: "sweep" in n),
@@ -203,6 +206,11 @@ def run_marker(
 
     # Group the flat aggregate_channels plots into category subdirs (de-sprawl).
     _organize_plots(out_dir / "plots")
+    # The guide-level canonical clustering is not needed as its own subdir
+    # (the gene-level canonical clustering is kept).
+    _cg_guide = out_dir / "plots" / "canonical_leiden" / "guide"
+    if _cg_guide.is_dir():
+        shutil.rmtree(_cg_guide)
 
     # Correlation heatmap on the gene-level embedding (mean-centered), PCA-reduced
     # to the configured variance fraction.
