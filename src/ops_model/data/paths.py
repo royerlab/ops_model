@@ -18,10 +18,26 @@ class OpsPaths:
             )
         )
 
+    @staticmethod
+    def _resolve_model_base() -> Path:
+        """Base dir for read-only model assets (checkpoints).
+
+        Anchored to the canonical data root (OPS_BASE_PATH), NOT the output dir:
+        models are inputs and must not follow OPS_OUTPUT_BASE_DIR, which
+        redirects to rerun/research trees where the checkpoints don't exist.
+        Override with OPS_MODELS_BASE_DIR if models live elsewhere.
+        """
+        return Path(
+            os.environ.get(
+                "OPS_MODELS_BASE_DIR",
+                os.environ.get("OPS_BASE_PATH", "/hpc/projects/icd.fast.ops"),
+            )
+        )
+
     @classmethod
     def model_checkpoints_dir(cls) -> Path:
-        """Root directory holding all model checkpoints."""
-        return cls._resolve_base() / "models" / "model_checkpoints"
+        """Root directory holding all model checkpoints (read-only inputs)."""
+        return cls._resolve_model_base() / "models" / "model_checkpoints"
 
     @classmethod
     def checkpoint(cls, *parts: str) -> Path:
