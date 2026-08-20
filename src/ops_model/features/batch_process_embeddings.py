@@ -112,8 +112,12 @@ def process_experiment(
         experiment, feature_type, channel, config=config
     )
     if not csv_exists:
-        print(f"✗ CSV not found for {experiment}" + (f"/{channel}" if channel else ""))
-        return False
+        target = f"{experiment}/{channel}" if channel else experiment
+        raise FileNotFoundError(
+            f"Feature CSV not found for {target} ({feature_type}). Run feature "
+            f"extraction before the AnnData combine — the combine step does not "
+            f"generate features."
+        )
 
     print(f"✓ Found CSV: {csv_path}")
 
@@ -150,7 +154,7 @@ def process_experiment(
             import traceback
 
             traceback.print_exc()
-            return False
+            raise
 
     return True
 
@@ -388,8 +392,12 @@ def batch_process_slurm(
 
     if result.get("all_completed"):
         print("\nAll jobs processed successfully!")
-    elif result.get("failed"):
-        print(f"\n{len(result['failed'])} job(s) failed. Check logs.")
+    else:
+        failed = result.get("failed") or []
+        raise RuntimeError(
+            f"{len(failed)} AnnData-combine job(s) failed. Check logs. "
+            f"Failed: {failed}"
+        )
 
     return result
 
