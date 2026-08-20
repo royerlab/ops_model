@@ -213,6 +213,94 @@ at `bs=256` the Hungarian algorithm is negligible next to the DDIM decode cost.
   classifier-embedding-space evidence only, and DiffEx's actual deliverable is a *visual*
   counterfactual.
 
+- **2026-08-18 — visual montage + pooled/multimodal test: the fairer test flips the verdict.**
+  Two follow-ups, per user request: (1) actual decoded images (not just logit curves) for
+  mean_diff/flow-independent/flow-OT side by side (`ot_cfm_test.py::render_montage`,
+  `sweep_v2/{HSPA5,TIMM23}/montage/`); (2) the multi-metric sweep on a genuinely pooled/
+  multimodal target instead of one clean gene.
+    - **Montage fixes (user feedback):** dropped the Δ-pixel heatmap overlay (raw images only —
+      easier to actually judge), zero-gap gridspec (`wspace=0`) for a seamless filmstrip, alpha/t
+      value labeled on every column (was unlabeled before), and **switched the default guidance
+      from w=5 to w=1** — the sweep already showed w=5 is where monotonicity/overshoot are WORST
+      for every method, so judging visual plausibility at the noisiest setting was the wrong
+      choice. At w=1 all three methods produce clean, coherent morphs with no dominant
+      border/background artifacting.
+    - **Visual confirmation of the overshoot metric:** on "Core mediator complex" cell 0, flow-
+      independent's row visibly **grows a bright nucleolar structure through the middle of the KO
+      arm, then shrinks it back down at the extreme** — the overshoot_ratio number made literally
+      visible, not an artifact of the metric definition. mean_diff and flow-OT both keep building
+      toward the real KD reference instead.
+    - **Pooled target:** "Core mediator complex" (grain='complex', 3 member genes MED18:220/
+      MED21:168/MED6:112 top cells — the most gene-balanced EBI complex available, so genuinely
+      multimodal, not one gene dominating). Required a fix: the complex ranking parquet
+      (`pma_shap_phase_complex.parquet`) carries **no NTC rows at all** (a different SHAP-based
+      ranking source than the geneKO attention parquet) — `gather()`'s single-parquet assumption
+      doesn't hold for grain='complex'. Added `_gather_pooled_complex`/`_gather_any` (own module,
+      production `data.py` untouched) to pull the target from the complex parquet and NTC from
+      the geneKO parquet — both share the same `_BASE_COLS` schema, a safe cross-source join.
+    - **Result: flow-OT closes MOST of the way to mean_diff here, closer than on any single gene
+      tested.** KO-arm score-Δ recovers 91–95% of mean_diff's magnitude (vs. 80–92% on HSPA5/
+      TIMM23). At w=1, flow-OT's KO-arm overshoot is **exactly 0.0 for both seeds** — matching
+      mean_diff's near-zero overshoot, not just "less bad than independent coupling." Frac-
+      nondecreasing at w=1 averages 0.94 across flow-OT's 2 seeds vs. mean_diff's 1.0 — the
+      closest flow-OT has come to matching mean_diff's cleanliness on any metric so far.
+      **Faithfulness reverses direction:** flow-OT's re-encoded KO endpoint (34.7) is actually
+      CLOSER to the real KD centroid than mean_diff's (36.1) — the first target where flow beats
+      mean_diff outright on a metric, not just closes the gap. Reproducibility holds the same
+      pattern as before (flow-OT corr 0.995–0.996 vs. flow-independent 0.983–0.993).
+    - **Verdict, updated:** the single-gene tests (HSPA5, TIMM23) showed mean_diff winning
+      outright because that's the regime a linear direction should already be near-optimal for
+      (one unimodal KO cluster). The pooled/multimodal test was designed to be the fairer trial
+      of flow's actual value proposition — and it's fairer in fact, not just in theory: flow-OT
+      is now essentially competitive with mean_diff on structure (monotonicity, overshoot) and
+      slightly ahead on faithfulness, while still trailing a little on raw magnitude.
+      **Recommendation: promote OT-coupled flow matching from shelved-experiment to a real
+      second `direction_method` option, used specifically for pooled/pathway-level targets
+      (Workstream D) where mean_diff's linear assumption is weakest — keep mean_diff as the
+      default for individual clean single-gene targets, where it remains deterministic and at
+      least as good.** Still open: held-out generalization check, real segmentation-mask pixel
+      localization, and testing beyond this one pooled complex before generalizing further.
+
+- **2026-08-19 — direct test: does flow-OT beat mean_diff on individual low-mAP genes?**
+  Independent, more targeted version of the pooled-complex hypothesis: instead of pooling
+  multiple genes into one target, pick INDIVIDUAL genes whose top-attention cells are already
+  known to be weakly distinguishable from control (low phase mAP/distinctiveness), the
+  signature of an incomplete-penetrance or mixture phenotype rather than a clean single shift.
+    - **Cheap first check, no new compute:** joined phase-channel distinctiveness
+      (`gene_reporter_distinctiveness_raw.csv`'s `Phase` column) against the
+      `flow_advantage_ko_delta_ratio` already computed for all 1000 genes
+      (`geneKO_flow_advantage_ranking.csv`). Correlation is **−0.18 (Pearson), −0.17
+      (Spearman)** — lower mAP → higher flow advantage — and monotonic across mAP quartiles
+      (mean ratio 0.906 in the highest-mAP quartile → 0.977 in the lowest, 250 genes/bucket).
+      Confirmed candidates aren't a data-scarcity artifact: all have 56k–65k attention-ranked
+      cells available (above the 25th-percentile of 50.8k across all 1000 genes), so the usual
+      top-1000-cell selection has plenty to draw from.
+    - **Full multi-metric sweep + visual montage on two clean low-mAP candidates** (ATXN10,
+      phase mAP 0.023; S100B, mAP 0.011), same rigor as HSPA5/TIMM23/Core-mediator-complex:
+      - **ATXN10 at w=1 (cleanest setting): flow-OT ko-arm delta 32.3 vs. mean_diff 21.7 (49%
+        higher)**, while matching mean_diff's monotonicity closely (0.75 vs. 0.875) — flow-OT
+        wins on magnitude without giving up structure. Visually, mean_diff barely changes the
+        cell (subtle speckling at most) while flow-OT produces a dramatic, distinct bright
+        globular/droplet phenotype closer in character to the real KD reference than either
+        other method.
+      - **S100B at w=1: flow-OT 32.6 vs. mean_diff 24.2 (35% higher)**, monotonicity tied
+        (0.625 both). Visually the sharpest case yet: **mean_diff's montage shows essentially
+        no visible change across the entire α range**, while flow-OT produces a real punctate/
+        speckled texture resembling the real KD reference — a case where a picture, not just a
+        metric, shows mean_diff failing outright. (mean_diff catches up numerically at higher
+        w=3/5 even though its own images stay visually flat — a real, unresolved discrepancy
+        between classifier-score movement and visible pixel change worth flagging, not
+        explaining away.)
+      - flow-independent remains the weakest and least reproducible on both genes (e.g. S100B
+        w=5: one seed's full-axis delta is 7.1, the other is **−3.5** — sign-flipping noise,
+        not signal), reconfirming OT-coupling is necessary, not just nice-to-have, for flow
+        matching to be usable at all here.
+    - **Verdict: two independent lines of evidence (pooled multi-gene complexes, and
+      individually low-mAP single genes) now agree** — mean_diff is the better default for
+      clean, well-separated single-gene phenotypes; OT-coupled flow matching should be the
+      go-to for targets flagged as weak/diffuse by mAP or known to be multi-gene pools, where
+      it can reveal real morphological change mean_diff visibly misses.
+
 ### B — real trajectories from video (the highest-novelty, highest-risk piece)
 - **Goal:** stop synthesizing NTC→KO interpolations from static populations; use `segment_timelapse.py`
   to track individual cells through LiveScreen timelapses, embed every frame with CellDINO, and get
