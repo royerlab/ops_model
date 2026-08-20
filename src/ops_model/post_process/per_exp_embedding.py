@@ -5,7 +5,8 @@ marker (reporter) at a time, reusing ``aggregate_channels`` so all of its rich
 outputs are produced (UMAP / PHATE overlays + interactive HTMLs, mAP
 consistency / distinctiveness bars, sweep plots, coord CSVs, gene/guide h5ads).
 On top of that it adds a gene x gene correlation heatmap (PNG / SVG / interactive
-HTML) and records every post-processing decision in ``decisions.yaml``.
+HTML + a downloadable CSV of the correlation values) and records every
+post-processing decision in ``decisions.yaml``.
 
 There is no cross-experiment correction and no second-pass PCA — those only
 matter when combining multiple experiments / markers; here each marker of the
@@ -82,6 +83,11 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
 
     X_ops_c = X_ops - X_ops.mean(axis=0, keepdims=True)
     corr_ops = np.corrcoef(X_ops_c)
+
+    # Downloadable values: gene x gene correlation matrix as CSV (labelled).
+    import pandas as pd
+
+    pd.DataFrame(corr_ops, index=labels, columns=labels).to_csv(f"{out_stem}.csv")
 
     # static PNG + SVG
     n = corr_ops.shape[0]
