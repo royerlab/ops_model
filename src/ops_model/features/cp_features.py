@@ -359,8 +359,12 @@ def cp_features_main(
     # Step 2: Submit as a single SLURM array job with submitit
     cpus = config.get("slurm_cpus_per_task", 32)
     mem = config.get("slurm_mem_gb", 64)
+    # Short experiment tag so jobs show as "<exp>_cp_*" in squeue instead of
+    # the generic "submitit" default.
+    exp_short = str(next(iter(config["data_manager"]["experiments"]))).split("_")[0]
     executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     executor.update_parameters(
+        name=f"{exp_short}_cp_extract",
         timeout_min=config.get("slurm_timeout_min", 120),
         slurm_partition=config.get("slurm_partition", "cpu"),
         slurm_array_parallelism=100,
@@ -410,7 +414,8 @@ def cp_features_main(
     # Step 3: Submit concatenation job with dependency on array job completion
     concat_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     concat_executor.update_parameters(
-        timeout_min=120,
+        name=f"{exp_short}_cp_concat",
+        timeout_min=360,  # 1.3M-cell Cell-Painting CSVs concat >120min
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=1,
         mem_gb=128,
@@ -431,10 +436,11 @@ def cp_features_main(
     # Step 4: Submit AnnData conversion job with dependency on concatenation success
     anndata_executor = submitit.AutoExecutor(folder=output_dir / "submitit_logs")
     anndata_executor.update_parameters(
-        timeout_min=120,  # 2 hours for processing
+        name=f"{exp_short}_cp_anndata",
+        timeout_min=240,  # 1.3M-cell CP conversion + per-reporter split
         slurm_partition=config.get("slurm_partition", "cpu"),
         cpus_per_task=8,
-        mem_gb=128,
+        mem_gb=384,  # 1.3M cells x ~5000 feats + per-reporter split OOMs at 128
         slurm_additional_parameters={"dependency": f"afterok:{concat_job.job_id}"},
         slurm_setup=_build_slurm_setup(num_threads=8),
     )
@@ -453,8 +459,20 @@ def cp_features_main(
     )
 
     if config["wait_for_completion"]:
-        # Wait for all jobs to complete
-        print("Waiting for all jobs to complete...")
+        # Live-watch the array -> concat -> anndata chain by job ID so the
+        # user sees progress instead of a silent block (or silent exit).
+        from ops_utils.hpc.slurm_batch_utils import monitor_slurm_arrays
+
+        monitor_slurm_arrays(
+            arrays=[
+                {"label": "cp_features", "base_job_id": array_job_id, "total": len(array_jobs)},
+                {"label": "concatenate", "base_job_id": str(concat_job.job_id), "total": 1},
+                {"label": "anndata", "base_job_id": str(anndata_job.job_id), "total": 1},
+            ],
+        )
+
+        # Jobs are now terminal; .result() returns immediately (or raises if
+        # the job failed) and gives us the pickled return value.
         final_df = concat_job.result()
         print(f"Concatenation completed. Final dataframe shape: {final_df.shape}")
 
@@ -530,6 +548,13 @@ def parse_args():
         type=str,
         help="Path to .txt file with one absolute config path per line",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="After submitting, watch the array -> concat -> anndata job chain "
+        "with live progress (overrides wait_for_completion in the config). "
+        "Single-config mode only.",
+    )
     return parser.parse_args()
 
 
@@ -544,4 +569,7 @@ if __name__ == "__main__":
             ]
         cp_features_bulk_main(config_paths)
     else:
-        cp_features_main(args.config_path)
+        cp_features_main(
+            args.config_path,
+            wait_for_completion=True if args.watch else None,
+        )

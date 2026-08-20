@@ -54,6 +54,8 @@ def pca_sweep_pooled_signal(
     agg_method: str = "mean",
     apply_iss_sidecar: bool = False,
     cell_paths: Optional[Dict[Tuple[str, str], str]] = None,
+    weight_parquet: Optional[str] = None,
+    weight_column: Optional[str] = None,
 ) -> str:
     """PCA variance sweep on pooled & downsampled cells for a biological signal.
 
@@ -104,6 +106,32 @@ def pca_sweep_pooled_signal(
         "feature_dir", "dino_features"
     )
     maps_path = get_channel_maps_path()
+
+    # --- Per-cell weighting (optional) ---
+    # When ``weight_parquet`` + ``weight_column`` are set, we pre-multiply each
+    # cell's feature vector by a per-cell scalar (looked up from the parquet by
+    # (experiment, well, segmentation_id)) so downstream mean-aggregation
+    # produces a weighted mean. Weights are normalized to mean=1 per
+    # (sgRNA, experiment) group so total energy per guide is preserved.
+    # Cells missing from the parquet get weight = 1 (uniform fallback).
+    weights_by_exp: Dict[str, pd.DataFrame] = {}
+    if weight_parquet is not None and weight_column is not None:
+        _logger.info(
+            f"[weighting] loading {weight_parquet} (col={weight_column})"
+        )
+        wt = pd.read_parquet(
+            weight_parquet,
+            columns=["experiment", "well", "segmentation_id", weight_column],
+        )
+        wt["well"] = wt["well"].astype(str)
+        for _exp, _g in wt.groupby("experiment"):
+            _agg = _g.groupby(["well", "segmentation_id"])[weight_column].max()
+            weights_by_exp[str(_exp)] = _agg
+        _logger.info(
+            f"[weighting] loaded weights for {len(weights_by_exp)} experiments "
+            f"({len(wt):,} rows total)"
+        )
+    n_weight_applied = 0
     preserve_batch = preserve_batch or attr_config.get("preserve_batch", False)
 
     n_exps = len(exp_channel_pairs)
@@ -319,7 +347,44 @@ def pca_sweep_pooled_signal(
         obs = adata.obs[keep_cols].copy()
         obs["experiment"] = exp.split("_")[0]
 
-        X_blocks.append(np.asarray(adata.X, dtype=np.float32))
+        X_block = np.asarray(adata.X, dtype=np.float32)
+
+        # --- Apply per-cell weighting when a weight parquet is configured ---
+        # Look up each cell's weight from the parquet by (well, segmentation_id);
+        # normalize to mean=1 per (sgRNA, experiment) so downstream mean-agg
+        # produces the weighted mean. Cells not in the parquet get w=1.
+        if weight_parquet is not None and weight_column is not None:
+            if exp not in weights_by_exp:
+                _logger.warning(
+                    f"  [weighting] {exp}: no rows in parquet — uniform w=1"
+                )
+            else:
+                idx = pd.MultiIndex.from_arrays(
+                    [adata.obs["well"].astype(str).values,
+                     adata.obs["segmentation_id"].values]
+                )
+                w = weights_by_exp[exp].reindex(idx).to_numpy(dtype=np.float32)
+                w = np.where(np.isnan(w), 1.0, w)
+                if "sgRNA" in adata.obs.columns:
+                    grp = pd.DataFrame({
+                        "sgRNA": adata.obs["sgRNA"].astype(str).values,
+                        "w": w,
+                    })
+                    group_mean = grp.groupby("sgRNA", observed=True)["w"].transform("mean")
+                    group_mean = np.where(group_mean.values > 0, group_mean.values, 1.0)
+                    w_norm = (w / group_mean).astype(np.float32)
+                else:
+                    m = w.mean()
+                    w_norm = (w / (m if m > 0 else 1.0)).astype(np.float32)
+                X_block = X_block * w_norm[:, None]
+                n_weight_applied += 1
+                _logger.info(
+                    f"  [weighting] {exp}: applied — coverage="
+                    f"{int(np.isfinite(w).sum())}/{len(w)}, "
+                    f"w_norm∈[{w_norm.min():.3g}, {w_norm.max():.3g}]"
+                )
+
+        X_blocks.append(X_block)
         obs_blocks.append(obs)
         loaded_exps.append(exp)
         _logger.info(
@@ -330,6 +395,21 @@ def pca_sweep_pooled_signal(
     _logger.info(
         f"  Loading complete: {len(loaded_exps)} experiments in {time.time() - t_load:.0f}s"
     )
+
+    # Tripwire: if the caller asked for weighting but no experiments ever had
+    # weights applied, something is wrong (wrong parquet, wrong column, empty
+    # sidecar) — fail loudly rather than silently producing unweighted output.
+    if weight_parquet is not None and weight_column is not None and n_weight_applied == 0:
+        raise RuntimeError(
+            f"[weighting] --weight-parquet={weight_parquet} "
+            f"--weight-column={weight_column} was set but NO experiment had "
+            f"weights applied. Check the parquet has (experiment, well, "
+            f"segmentation_id, {weight_column}) rows covering these experiments."
+        )
+    if weight_parquet is not None:
+        _logger.info(
+            f"[weighting] applied to {n_weight_applied}/{len(loaded_exps)} experiments"
+        )
 
     if not X_blocks:
         return f"FAILED: {signal} — no cell data found for any experiment"

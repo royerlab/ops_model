@@ -49,10 +49,23 @@ log = logging.getLogger("compare_model_embedding_mAP")
 # Set by main() from --font-scale; multiplied into every inline fontsize call.
 _FONT_SCALE: float = 1.0
 
+# Set by main() from --transparent. When True, the violin figure is saved with
+# a transparent background and all foreground (text, spines, ticks, median/IQR
+# lines) is drawn white so it reads on a dark slide/poster.
+_TRANSPARENT: bool = False
+
+# Set by main() from --no-title. When True, the violin panels omit their titles.
+_NO_TITLE: bool = False
+
 
 def _fs(size: float) -> float:
     """fontsize helper: returns `size * _FONT_SCALE`."""
     return size * _FONT_SCALE
+
+
+def _fg() -> str:
+    """Foreground color: white when --transparent, else black."""
+    return "white" if _TRANSPARENT else "black"
 
 ROOT = Path(
     "/home/gav.sturm/linked_folders/icd.fast.ops/organelle_attribution/pca_optimized_v0.3"
@@ -165,30 +178,38 @@ def _collect():
 
 
 def _violin(ax, labels, data, ylabel, title, face_colors, edge_colors):
+    fg = _fg()
     parts = ax.violinplot(data, showmeans=False, showmedians=False,
                           showextrema=False, widths=0.85)
     for body, fc, ec in zip(parts["bodies"], face_colors, edge_colors):
         body.set_facecolor(fc)
-        body.set_edgecolor(ec)
-        body.set_alpha(0.85)
-        body.set_linewidth(1.5)
+        body.set_edgecolor(fg if _TRANSPARENT else ec)
+        body.set_alpha(1.0)
+        body.set_linewidth(3.0)
 
     xs = np.arange(1, len(data) + 1)
     qs = np.array([np.percentile(d, [25, 50, 75]) for d in data])
     means = np.array([float(np.mean(d)) for d in data])
     for x, q25, q50, q75 in zip(xs, qs[:, 0], qs[:, 1], qs[:, 2]):
-        ax.plot([x - 0.18, x + 0.18], [q50, q50], color="black", linewidth=2.5, zorder=10)
-        ax.plot([x, x], [q25, q75], color="black", linewidth=4, alpha=0.45,
+        ax.plot([x - 0.18, x + 0.18], [q50, q50], color=fg, linewidth=4, zorder=10)
+        ax.plot([x, x], [q25, q75], color=fg, linewidth=6, alpha=0.45,
                 zorder=9, solid_capstyle="butt")
     ax.scatter(xs, means, marker="D", s=70, color="firebrick",
                edgecolor="white", linewidth=1.2, zorder=11)
 
     ax.set_xticks(xs)
-    ax.set_xticklabels(labels, fontsize=_fs(14), rotation=45, ha="right")
-    ax.set_ylabel(ylabel, fontsize=_fs(22))
-    ax.set_title(title, fontsize=_fs(22), pad=20)
-    ax.tick_params(axis="y", labelsize=_fs(16))
+    ax.set_xticklabels(labels, fontsize=_fs(14), rotation=45, ha="right", color=fg)
+    ax.set_ylabel(ylabel, fontsize=_fs(22), color=fg)
+    if not _NO_TITLE:
+        ax.set_title(title, fontsize=_fs(22), pad=20, color=fg)
+    ax.tick_params(axis="y", labelsize=_fs(16), colors=fg)
     ax.grid(axis="y", linestyle=":", alpha=0.4)
+    for spine in ax.spines.values():
+        spine.set_linewidth(3.0)
+    if _TRANSPARENT:
+        ax.set_facecolor("none")
+        for spine in ax.spines.values():
+            spine.set_color(fg)
 
 
 def _palette_per_subset(rows):
@@ -199,9 +220,10 @@ def _palette_per_subset(rows):
     for r in rows:
         if r["subset"] not in unique_subsets:
             unique_subsets.append(r["subset"])
-    # Sample viridis evenly across the N unique subsets.
+    # Sample the brighter end of viridis evenly across the N unique subsets
+    # (start above the dark-purple low end so fills read vivid).
     n = max(len(unique_subsets), 1)
-    cmap_pts = np.linspace(0.05, 0.95, n)
+    cmap_pts = np.linspace(0.30, 0.95, n)
     hue_for_subset = {
         s: plt.cm.viridis(cmap_pts[i]) for i, s in enumerate(unique_subsets)
     }
@@ -218,7 +240,7 @@ def _palette_per_subset(rows):
     return face_colors, edge_colors
 
 
-def _plot(rows, out_path: Path, sort_by: str = "ebi"):
+def _plot(rows, out_path: Path, sort_by: str = "ebi", metric: str = "both"):
     if sort_by == "ebi":
         rows = sorted(rows, key=lambda r: r["mean_ebi"])
     elif sort_by == "dist":
@@ -232,49 +254,65 @@ def _plot(rows, out_path: Path, sort_by: str = "ebi"):
     ebi_vals = [r["ebi_vals"] for r in rows]
     face_colors, edge_colors = _palette_per_subset(rows)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(32, len(rows) * 1.2), 18))
     n_dist = max(len(v) for v in dist_vals) if dist_vals else 0
     n_ebi = max(len(v) for v in ebi_vals) if ebi_vals else 0
     single_pass = len({r["pass_type"] for r in rows}) <= 1
     pass_blurb = "" if single_pass else "  ·  light = 1st-pass, dark = 2nd-pass"
-    _violin(ax1, labels, dist_vals, "geneKO mAP",
-            f"geneKO distinctiveness mAP (n={n_dist:,}){pass_blurb}",
-            face_colors, edge_colors)
-    _violin(ax2, labels, ebi_vals, "EBI mAP",
-            f"EBI protein complex consistency mAP (n={n_ebi:,}){pass_blurb}",
-            face_colors, edge_colors)
 
-    # Legend — pass-type swatches dropped when only one pass is shown.
+    # One subplot per requested metric (dist / ebi / both).
+    panels = []
+    if metric in ("dist", "both"):
+        panels.append(("dist", dist_vals, "geneKO mAP",
+                       f"geneKO distinctiveness mAP (n={n_dist:,}){pass_blurb}"))
+    if metric in ("ebi", "both"):
+        panels.append(("ebi", ebi_vals, "EBI mAP",
+                       f"EBI protein complex consistency mAP (n={n_ebi:,}){pass_blurb}"))
+    ncol = len(panels)
+    fig_w = max(14, len(rows) * 2.2) if ncol == 1 else max(32, len(rows) * 1.2)
+    fig_h = 15 if ncol == 1 else 18
+    fig, axes = plt.subplots(1, ncol, figsize=(fig_w, fig_h), squeeze=False)
+    for ax, (_key, vals, ylabel, title) in zip(axes[0], panels):
+        _violin(ax, labels, vals, ylabel, title, face_colors, edge_colors)
+
+    # Legend — one colored swatch per model/entry (color→label map), then
+    # pass-type swatches (dropped when only one pass is shown), then markers.
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
-    legend_handles = []
+    fg = _fg()
+    legend_handles = [
+        Patch(facecolor=fc, edgecolor=fg, label=r["label"])
+        for r, fc in zip(rows, face_colors)
+    ]
     if not single_pass:
         legend_handles.extend([
-            Patch(facecolor=(0.5, 0.5, 0.5, 0.45), edgecolor="black",
+            Patch(facecolor=(0.5, 0.5, 0.5, 0.45), edgecolor=fg,
                   label="1st-pass (no 2nd PCA)"),
-            Patch(facecolor=(0.5, 0.5, 0.5, 0.95), edgecolor="black",
+            Patch(facecolor=(0.5, 0.5, 0.5, 0.95), edgecolor=fg,
                   label="2nd-pass PCA"),
         ])
     legend_handles.extend([
-        Line2D([0], [0], color="black", linewidth=4, label="median"),
+        Line2D([0], [0], color=fg, linewidth=4, label="median"),
         Line2D([0], [0], marker="D", color="white", markerfacecolor="firebrick",
                markeredgecolor="white", markeredgewidth=1.2,
                markersize=_fs(14), linestyle="None", label="mean"),
     ])
     fig.tight_layout(rect=[0, 0, 0.88, 1])
-    fig.legend(handles=legend_handles, loc="center left",
-               bbox_to_anchor=(0.89, 0.5), frameon=True, fontsize=_fs(20),
-               handlelength=2.5, borderpad=1.0, labelspacing=1.2)
+    leg = fig.legend(handles=legend_handles, loc="center left",
+                     bbox_to_anchor=(0.89, 0.5), frameon=not _TRANSPARENT,
+                     fontsize=_fs(20), handlelength=2.5, borderpad=0.5,
+                     labelspacing=0.4, labelcolor=fg)
+    if _TRANSPARENT and leg is not None:
+        leg.get_frame().set_alpha(0.0)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight", transparent=_TRANSPARENT)
     log.info(f"saved {out_path}")
     if out_path.suffix.lower() == ".png":
         pdf = out_path.with_suffix(".pdf")
-        fig.savefig(pdf, bbox_inches="tight")
+        fig.savefig(pdf, bbox_inches="tight", transparent=_TRANSPARENT)
         log.info(f"saved {pdf}")
         svg = out_path.with_suffix(".svg")
-        fig.savefig(svg, bbox_inches="tight")
+        fig.savefig(svg, bbox_inches="tight", transparent=_TRANSPARENT)
         log.info(f"saved {svg}")
     plt.close(fig)
 
@@ -692,10 +730,23 @@ def main() -> None:
                    help="Multiplier applied to every inline fontsize in the "
                         "figures (default 1.0). Pass 2.0 to make all text 2× "
                         "bigger.")
+    p.add_argument("--metric", type=str, default="both",
+                   choices=["dist", "ebi", "both"],
+                   help="Which metric panel(s) the violin figure shows: "
+                        "'dist' (geneKO distinctiveness only), 'ebi' (EBI "
+                        "consistency only), or 'both' (default, 2-panel).")
+    p.add_argument("--transparent", action="store_true",
+                   help="Save the violin figure with a transparent background "
+                        "and white foreground (text, spines, median/IQR lines) "
+                        "for placement on a dark slide/poster.")
+    p.add_argument("--no-title", action="store_true",
+                   help="Omit the per-panel titles from the violin figure.")
     args = p.parse_args()
 
-    global _FONT_SCALE
+    global _FONT_SCALE, _TRANSPARENT, _NO_TITLE
     _FONT_SCALE = args.font_scale
+    _TRANSPARENT = args.transparent
+    _NO_TITLE = args.no_title
 
     rows = _collect()
     if not rows:
@@ -753,7 +804,7 @@ def main() -> None:
 
     _write_summary_csv(rows, csv_out)
     _write_manifest(rows, yaml_out)
-    _plot(rows, out, sort_by=args.sort_by)
+    _plot(rows, out, sort_by=args.sort_by, metric=args.metric)
     _plot_bar(rows, bar_out, sort_by=args.sort_by)
     if not args.filter:
         _plot_subset_comparisons(rows, args.subset_comparisons_out)

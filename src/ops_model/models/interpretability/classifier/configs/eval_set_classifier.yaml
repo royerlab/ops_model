@@ -1,0 +1,100 @@
+# Eval: accuracy vs. N cells with bootstrap-style error bars (Hydra → eval_set_classifier.py)
+#
+# Usage (mixed-channel checkpoint + val dump from train_set_classifier dump_val_dir):
+#   python katamari/evals/image_verifier/eval_set_classifier.py \\
+#     checkpoint_path=/path/to/best_set_classifier.pt \\
+#     val_dump_dir=/path/to/val_ops \\
+#     output_plot_path=/path/to/n_cells_accuracy.png \\
+#     n_cells_list=[100,250,500,1000] \\
+#     n_repetitions=30 \\
+#     device=cuda
+#
+# Per-channel checkpoint (PerturbationDataset + parquet): set mixed_channels_mode=false
+# and fill data.* to match training (same parquet, val_fraction, seed).
+
+seed: 42
+device: cuda
+
+# Path to the trained checkpoint to evaluate.
+checkpoint_path: null
+
+# Required when mixed_channels_mode=true: directory with metadata.pt + one .pt per gene
+# val_dump_dir: /path/to/val_ops_zstdcontrol_reprocess_update_fluorescent_no_auto2
+# val_dump_dir: /path/to/val_ops_zstdcontrol_cdino
+val_dump_dir: null  # set to your val dump dir (user-specific path removed)
+
+# Output figure path (.png / .pdf). A sidecar JSON (same basename) stores per-rep accuracies.
+output_plot_path: null  # set output figure path (user-specific path removed)
+
+plot_title: "Validation accuracy vs. N cells per set"
+
+# Log-scaled x-axis (N cells); set false for linear
+plot_x_log: true
+
+# List of N_CELLS values (x-axis).
+n_cells_list:
+# - 1
+# - 2
+# - 5
+# - 10
+# - 20
+# - 50
+- 10
+- 20
+- 50
+- 100
+- 200
+- 500
+- 1000
+- 2000
+- 5000
+  # - 100
+  # - 200
+  # - 500
+  # - 1000
+
+# Number of independent full-val passes per N (different RNG seeds). Error bars = SEM across these.
+n_repetitions: 50
+
+batch_size: 64
+num_workers: 4
+
+# tqdm: outer bar over n_cells_list, middle bar over repetitions, inner bar over val batches
+show_progress: true
+
+# Must match the checkpoint (mixed: MixedChannelClassifier + val dump; per-channel: SetClassifier + parquet).
+mixed_channels_mode: true
+
+# Restrict validation to these channel names only (null = use all channels).
+# only_channels: ["Phase2D"]
+
+# split_channels (mixed_channels_mode=true only):
+#   false (default): all channels in the allowset are fed to the model together per set.
+#   true: each channel in the allowset is evaluated independently — the model sees a
+#         single-channel set with `n_cells` cells of just that one channel. The per-class
+#         CSV gains a `channel_name` column with one row per (channel, n_cells, gene).
+# The allowset is `only_channels` if set, else all checkpoint channels present in the val export.
+split_channels: false
+
+# Label map: CSV mapping genes to class labels (e.g. pathway categories).
+# If the checkpoint was trained with a label map, it is auto-detected from the checkpoint.
+# Set label_map_path to override or supply a label map for a gene-level checkpoint.
+# label_map_path:  /path/to/label_map.csv
+# label_map_gene_col: gene_name
+# label_map_label_col: pathway
+
+# Per-channel mode only (ignored when val_dump_dir is used — val cells are fixed in the dump).
+val_fraction: 0.2
+n_cells_per_set_overrides: {}
+
+per_class_output_file: null  # set per-class output path (user-specific path removed)
+
+data:
+  parquet_entries: null  # list of {path, exclude_experiments?, exclude_fluorescent_experiments?}
+  max_row_groups: null
+  max_cells_per_group: null
+  max_genes: null
+  max_channels: null
+  exclude_channel_names: null
+  min_cells_per_group: null
+  min_cells_drop_val: false

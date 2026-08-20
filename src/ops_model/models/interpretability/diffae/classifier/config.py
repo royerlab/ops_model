@@ -1,0 +1,66 @@
+"""Config for the DiffEx single-cell classifier PoC (options B and C).
+
+One classifier that scores top-attention cells, giving DiffEx its differentiable
+image->class-k signal. PoC = binary {gene}-vs-rest on phase crops.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+_V4 = "/hpc/projects/icd.fast.ops/models/alex_lin_attention/v4"
+
+# Phase per-cell ranking exports. v4 = pma_attention-ranked (masked SetTransformer). v5 (paper-v2) =
+# set-accuracy-`score`-ranked, no-mask/160px, and now includes an NTC group (so NTC anchors come from the
+# same ranking — no attention fallback). The slim v5 viewer-parquet (top-1000/class) is normalized to the
+# v4 schema (segmentation_id→segmentation, score→pma_attention, rank_type="top"). Toggle via OPS_DIFFEX_V5=1.
+# Built + served side-by-side under viewer_assets_v5 so the live v4 viewer is untouched until the final swap.
+_USE_V5 = os.environ.get("OPS_DIFFEX_V5", "0") == "1"
+_V5_RANK = "/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/_rankings"
+# geneKO: class is `gene`. complex (EBI): class is `predicted_class` (complex name).
+# Multibag SHAP rankings are the ONLY ranking now (single-bag pma_v5 / v4 retired).
+PMA_PHASE_GENEKO = f"{_V5_RANK}/pma_shap_phase_geneKO.parquet"
+PMA_PHASE_EBI = f"{_V5_RANK}/pma_shap_phase_complex.parquet"
+
+GRAINS = {
+    "geneKO": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},
+    "complex": {"parquet": PMA_PHASE_EBI, "class_col": "predicted_class"},   # v5 complex parquet is complex-labeled (member cells pooled), like v4
+    "minibinder": {"parquet": PMA_PHASE_GENEKO, "class_col": "gene"},   # NTC anchor from phase geneKO; targets supplied via accuracy_parquet
+}
+
+# Default output root; per-run results land under <root>/<grain>/<class-slug>/.
+DEFAULT_OUT_ROOT = "/hpc/projects/icd.fast.ops/models/diffex"
+
+
+def slugify(name: str) -> str:
+    """Filesystem-safe tag for a class name (complex names have spaces/slashes)."""
+    return "".join(c if c.isalnum() else "_" for c in str(name)).strip("_")
+
+
+@dataclass
+class Config:
+    # ---- task / data (locked with Gav 2026-06-16) ----
+    gene: str = "HSPA5"          # positive class VALUE (a gene or a complex name)
+    class_col: str = "gene"      # parquet column to match `gene` against ("gene" | "predicted_class")
+    n_per_class: int = 1000      # top-N attention cells per class
+    neg_rank_max: int = 5        # negatives = top-`neg_rank_max` cells of OTHER genes (distinct)
+    crop_size: int = 160         # single-cell crop (px)
+    channel: str = "Phase2D"     # phase-only PoC
+    mask_cell: bool = False      # no seg mask — usually better (keeps full crop context)
+
+    # ---- train/val/test split (grouped by experiment by default) ----
+    split_mode: str = "experiment"  # "experiment" (grouped, confound guard) | "random"
+    val_fraction: float = 0.15      # model selection (best epoch)
+    test_fraction: float = 0.15     # clean held-out number (never used for selection)
+    seed: int = 0
+
+    # ---- training ----
+    epochs: int = 30
+    batch_size: int = 64
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    device: str = "cuda"
+    num_workers: int = 0  # crop materialization is a one-time zarr read; 0 = fork-safe
+
+    # ---- paths ----
+    pma_parquet: str = PMA_PHASE_GENEKO

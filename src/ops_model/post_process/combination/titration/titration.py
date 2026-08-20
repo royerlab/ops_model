@@ -1131,7 +1131,8 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
             ax.tick_params(axis="y", labelsize=18)
             _apply_x_scale(ax, x, scale, tick_fontsize=18)
 
-            # Single legend below the plots
+            # Single legend below the plots. Reserve bottom margin via tight_layout
+            # and anchor the legend further down so it clears the x-axis labels.
             handles, labels_list = axes[0].get_legend_handles_labels()
             fig.legend(
                 handles,
@@ -1139,7 +1140,7 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 loc="lower center",
                 ncol=4,
                 fontsize=19,
-                bbox_to_anchor=(0.5, -0.02),
+                bbox_to_anchor=(0.5, -0.12),
             )
 
             fig.suptitle(
@@ -1147,7 +1148,7 @@ def _plot_titration(df, signal, reporter_dir: Path, sig_safe, plt, metrics=None)
                 fontsize=31,
                 fontweight="bold",
             )
-            fig.tight_layout(rect=[0, 0.06, 1, 0.97])
+            fig.tight_layout(rect=[0, 0.13, 1, 0.97])
 
             stem = reporter_dir / f"{sig_safe}_titration_{x_suffix}_{scale}"
             fig.savefig(f"{stem}.png", dpi=150, bbox_inches="tight")
@@ -1707,6 +1708,13 @@ def _build_parser():
         help="Look under paper_v1/ (same as pca_optimization --paper-v1).",
     )
     parser.add_argument(
+        "--paper-v2", type=str, nargs="?",
+        const="/hpc/projects/icd.fast.ops/configs/good_experiment_list_v2.yml",
+        default=None,
+        help="Look under paper_v2/ (same as pca_optimization --paper-v2). "
+             "Mutually exclusive with --paper-v1.",
+    )
+    parser.add_argument(
         "--run-tag", type=str, default=None,
         help="Match pca_optimization --run-tag: inserts an extra subfolder "
              "after paper_v1/ and before the channel-set subdir (e.g. "
@@ -1761,13 +1769,20 @@ def _build_parser():
                              "cells/guide — large guides keep gaining, small guides cap out. "
                              "Output → titration_per_guide/")
     parser.add_argument("--per-guide-median-titration", action="store_true",
-                        help="Titrate by cells-per-sgRNA. Schedule starts at MAX (p90 non-NTC) "
+                        help="[DEFAULT mode] Titrate by cells-per-sgRNA. Schedule starts at MAX (p90 non-NTC) "
                              "and STOPS once the median non-NTC cells/guide is reached "
                              "(upper-half of guide cell-count range only). "
                              "Output → titration_guide_median/")
     parser.add_argument("--no-cache", dest="cache", action="store_false", default=True,
                         help="Disable row-level caching (recompute every titration point even "
                              "if an existing <reporter>_titration.csv already has it).")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Delete existing per-reporter titration CSVs + per-target shards "
+                             "(<reporter>_titration*.csv) before running, so bins regenerate "
+                             "fresh from the current schedule. Use when the cell pool changed "
+                             "(e.g. an experiment was added) and the per-guide-median bins "
+                             "shifted — otherwise stale-bin points from the prior run get "
+                             "merged in and appear as near-duplicate points on the curve.")
     parser.add_argument(
         "--per-target-slurm", dest="per_target_slurm",
         action="store_true", default=True,
@@ -1817,8 +1832,12 @@ def _resolve_output_dir(args) -> Path:
     if getattr(args, "zscore_per_experiment", False):
         output_dir = output_dir / "zscore_per_exp"
 
+    if getattr(args, "paper_v1", None) and getattr(args, "paper_v2", None):
+        raise ValueError("--paper-v1 and --paper-v2 are mutually exclusive.")
     if getattr(args, "paper_v1", None):
         output_dir = output_dir / "paper_v1"
+    elif getattr(args, "paper_v2", None):
+        output_dir = output_dir / "paper_v2"
 
     if getattr(args, "run_tag", None):
         output_dir = output_dir / args.run_tag
@@ -2342,6 +2361,17 @@ def main():
     args = parser.parse_args()
     _logger = _init_logger()
 
+    # Default titration mode is per-guide-median: if the caller didn't pick any
+    # explicit mode flag, use per-guide-median sampling.
+    _mode_flags = (
+        args.per_guide_median_titration, args.per_guide_max_titration,
+        args.per_guide_min_titration, args.per_ko_max_titration,
+        args.per_ko_min_titration, args.min_exp_titration,
+    )
+    if not any(_mode_flags):
+        args.per_guide_median_titration = True
+        print("No titration mode flag given; defaulting to --per-guide-median-titration.")
+
     # Auto-scale SLURM time when the user kept the default and is bootstrapping.
     # Explicit --slurm-time overrides are respected as-is (treated as total).
     if args.bootstrap > 1 and args.slurm_time == parser.get_default("slurm_time"):
@@ -2411,6 +2441,23 @@ def main():
 
     print(f"Found {len(cells_files)} reporters in {per_signal_dir}")
     print(f"Titration output: {titration_dir}")
+
+    if args.clear_cache:
+        # Purge prior per-reporter titration CSVs + per-target shards so bins
+        # regenerate fresh from the current schedule. Without this, a shifted
+        # schedule (e.g. after adding an experiment) leaves stale bins that
+        # dedupe-on-bin-value can't collapse, showing as near-duplicate points.
+        n_purged = 0
+        for cf in cells_files:
+            sig_safe = cf.name[: -len("_cells.h5ad")]
+            rdir = titration_dir / sig_safe
+            if not rdir.is_dir():
+                continue
+            for old in rdir.glob(f"{sig_safe}_titration*.csv"):
+                old.unlink()
+                n_purged += 1
+        print(f"[clear-cache] removed {n_purged} stale titration CSV(s)/shard(s) "
+              f"across {len(cells_files)} reporters — bins will regenerate fresh.")
 
     # --per-target-slurm is the default; silently fall back to
     # one-job-per-reporter for the two cases where it isn't compatible.

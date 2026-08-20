@@ -20,6 +20,8 @@ def _nonfeature_columns(guide_col: str = DEFAULT_GUIDE_COL) -> list[str]:
         "experiment",
         "x_position",
         "y_position",
+        "segmentation_id",
+        "tile_pheno",
     ]
 
 
@@ -155,6 +157,14 @@ def create_adata_object(
             y_pos = np.full(len(features), np.nan)
             has_positions = False
 
+        # Optional pheno-frame cell identity (present only in CSVs written by
+        # the seg-id-aware CP extraction). Enables a deterministic (well, tile,
+        # seg) join in the portal consolidator instead of cross-frame spatial NN.
+        seg_ids = (np.asarray(features["segmentation_id"].values)
+                   if "segmentation_id" in features.columns else None)
+        tile_phenos = (np.asarray(features["tile_pheno"].values)
+                       if "tile_pheno" in features.columns else None)
+
         # Drop non-feature columns
         cols_to_drop = [col for col in nonfeature_cols if col in features.columns]
         features = features.drop(columns=cols_to_drop)
@@ -191,6 +201,10 @@ def create_adata_object(
         experiment_ids = experiment_ids[good_rows_mask]
         x_pos = x_pos[good_rows_mask]
         y_pos = y_pos[good_rows_mask]
+        if seg_ids is not None:
+            seg_ids = seg_ids[good_rows_mask]
+        if tile_phenos is not None:
+            tile_phenos = tile_phenos[good_rows_mask]
 
         print(f"Kept {features.shape[0]} rows after filtering NaN rows")
 
@@ -248,6 +262,10 @@ def create_adata_object(
         adata.obs["experiment"] = experiment_ids
         adata.obs["x_position"] = x_pos  # Always add (may be NaN)
         adata.obs["y_position"] = y_pos  # Always add (may be NaN)
+        if seg_ids is not None:
+            adata.obs["segmentation_id"] = seg_ids
+        if tile_phenos is not None:
+            adata.obs["tile_pheno"] = tile_phenos
 
         if not has_positions:
             print("WARNING: Position data is NaN - validator may flag this")

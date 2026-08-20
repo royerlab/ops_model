@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>OPSin — Optical Pooled Screening Interpretability Viewer</title>
+<link rel="icon" type="image/svg+xml" href="opsin-eyes.svg"/>
+<link rel="stylesheet" href="style.css?v=229"/>
+<!-- Privacy-friendly analytics by Plausible -->
+<script async src="https://plausible.io/js/pa-ZbwB7BcCHt7n6YhgUB13O.js"></script>
+<script>
+  window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+  plausible.init()
+</script>
+</head>
+<body>
+<div id="loading"><div class="load-box"><img src="opsin-eyes.svg" alt=""/><div class="load-t">OPSin</div><div class="load-s">loading…</div></div></div>
+<header>
+  <div class="brand"><img class="opsin-eyes" src="opsin-eyes.svg" alt=""/><h1>OPSin<span style="color:var(--mut);font-weight:400">: <b style="color:var(--fg)">O</b>ptical <b style="color:var(--fg)">P</b>ooled <b style="color:var(--fg)">S</b>creening <b style="color:var(--fg)">In</b>terpretability Viewer</span></h1>
+  </div>
+  <div class="hdr-right">
+    <button id="envtoggle" class="verbtn envtoggle" title="Staging only — preview the public demo subset (Top-Predictive Cells + Image Generation + How-it-works steps 1–6; hides Montage/PCs/Attention). Not shown on the public deployment.">🔒 Preview public</button>
+    <a class="biohub-logo" href="https://biohub.org" target="_blank" rel="noopener" title="Biohub"><img src="biohub-mark.png?v=1" alt="Biohub"/></a>
+  </div>
+</header>
+
+<!-- top crossbar: the core selection (drives every view). The left panel below is reserved for view tabs. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <filter id="img-levels" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+    <feComponentTransfer>
+      <feFuncR id="lvlR" type="linear" slope="1" intercept="0"/>
+      <feFuncG id="lvlG" type="linear" slope="1" intercept="0"/>
+      <feFuncB id="lvlB" type="linear" slope="1" intercept="0"/>
+    </feComponentTransfer>
+  </filter>
+  <filter id="trav-clip" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+    <feComponentTransfer>
+      <feFuncR id="tclipR" type="linear" slope="1" intercept="0"/>
+      <feFuncG id="tclipG" type="linear" slope="1" intercept="0"/>
+      <feFuncB id="tclipB" type="linear" slope="1" intercept="0"/>
+    </feComponentTransfer>
+  </filter>
+</defs></svg>
+
+<div id="topbar">
+  <div class="tb-field">
+    <label>Marker</label>
+    <div class="combo">
+      <input id="markerfilter" type="text" placeholder="Search markers…" autocomplete="off"/>
+      <div class="combo-list hidden" id="marker-list"></div>
+    </div>
+  </div>
+  <div class="tb-field">
+    <label>Type</label>
+    <select id="grain" data-seg>
+      <option value="geneKO">geneKO</option>
+      <option value="complex">protein complex</option>
+      <option value="minibinder">minibinder</option>
+      <option value="pc">PC</option>
+    </select>
+  </div>
+  <div class="tb-field tb-grow">
+    <label>Perturbation
+      <select id="target-sort" data-seg class="mini" title="list order">
+        <option value="setacc" selected title="Selected marker's SetTransformer set-accuracy (top1 @ 100 cells; phase for Phase) — higher = more distinctive">by SET ACC</option>
+        <option value="map" title="mAP (geneKO or EBI, by Type), highest first">by mAP</option>
+        <option value="alpha">A–Z</option>
+      </select>
+    </label>
+    <div class="row">
+      <div class="combo">
+        <input id="filter" type="text" placeholder="Search perturbations…" autocomplete="off"/>
+        <div class="combo-list hidden" id="target-list"></div>
+      </div>
+      <button id="tprev" title="previous perturbation">◀</button>
+      <button id="tnext" title="next perturbation">▶</button>
+    </div>
+  </div>
+  <div class="tb-field">
+    <label>Cells per page</label>
+    <div class="row">
+      <input id="cellcount" type="number" min="1" max="20" value="10"/>
+      <button id="cprev" title="previous page">◀</button>
+      <span id="pagenum" class="hint">Page 1</span>
+      <button id="cnext" title="next page">▶</button>
+    </div>
+  </div>
+  <div class="tb-field" id="reset-field" style="min-width:0">
+    <label>&nbsp;</label>
+    <button id="viewer-reset" data-tip="Reset the viewer to its default view (clears your saved selection)" title="Reset the viewer to its default view (clears your saved selection)">↺ Reset</button>
+  </div>
+  <div class="tb-field" id="bag-field" style="display:none">
+    <label>Anchor bag</label>
+    <select id="m-bag" title="single_bag = attention/accuracy anchors (disk cells 0-199); multi_bag = multirank anchors (disk cells 200-399). Phase only."></select>
+  </div>
+  <div class="tb-field" id="pertinfo-field" style="margin-left:auto;min-width:0;justify-content:center">
+    <button id="side-info" class="verbtn active" onclick="setSidePanel('info')" data-tip="Show the selected perturbation's info / annotation" title="Show the selected perturbation's info / annotation">ⓘ Perturbation Info</button>
+  </div>
+</div>
+
+<nav class="tabs" id="tabbar">
+  <button class="tab" data-tab="top">Top-Predictive Cells</button>
+  <button class="tab active" data-tab="traversal">Image Generation</button>
+  <button class="tab" data-tab="montage">Montage</button>
+  <button class="tab" data-tab="pc">PCs</button>
+  <button class="tab" data-tab="attn">Attention</button>
+  <button class="tab" data-tab="methods">About</button>
+</nav>
+
+<div id="app">
+  <aside id="controls">
+    <div id="imgclim-field">
+      <span class="ic-lbl">Image contrast</span>
+      <div class="row">
+        <div class="dual" style="flex:1;min-width:88px">
+          <input id="i-climlo" type="range" min="0" max="1" step="0.02" value="0" title="black point"/>
+          <input id="i-climhi" type="range" min="0" max="1" step="0.02" value="1" title="white point"/>
+        </div>
+        <button id="i-climreset" title="reset image contrast">↺</button>
+      </div>
+    </div>
+    <div class="tabpane hidden" id="tab-methods"></div>
+
+    <div class="tabpane" id="tab-traversal">
+      <div class="hint">Move the <b>φ</b> slider to morph a control cell toward the selected perturbation — φ=0 is the real anchor, φ=1 reaches the phenotype (higher exaggerates it), negative φ shows the opposite phenotype.</div>
+      <label class="feat-internal">Anchor <span class="hint">(the φ=0 center)</span>
+        <select id="anchor"></select>
+      </label>
+      <div class="hint feat-internal">The φ=0 starting class (default <b>NTC</b>). Pick another geneKO/complex to morph <i>from</i> that class toward the selected perturbation — needs a precomputed A→B pair.</div>
+      <label>Image scale <input type="range" id="tile-scale" min="80" max="300" step="10" value="160"/></label>
+      <div class="grp">
+        <label class="feat-internal">Score overlay
+          <select id="scoremode" data-seg>
+            <option value="none">none</option>
+            <option value="linear">Removal score (per cell)</option>
+            <option value="ptarget" selected>Set accuracy (per group)</option>
+            <option value="rank">Distinctiveness rank (per group)</option>
+          </select>
+        </label>
+        <label class="chk" id="tr-inorm-wrap"><input type="checkbox" id="tr-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
+        <label class="chk feat-public"><input type="checkbox" id="pub-scoreoverlay" data-on="classification rank"/> classification rank overlay</label>
+        <label class="chk"><input type="checkbox" id="showreal" data-on="reference cells"/> show reference cells (NTC)</label>
+        <label class="chk feat-internal"><input type="checkbox" id="altanchor" data-on="filter to anchors"/> only perturbations with alt anchors</label>
+        <label class="chk"><input type="checkbox" id="colslayout" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
+      </div>
+      <div class="grp">
+        <span class="lbl">Pin perturbations</span>
+        <div class="row"><button id="addpanel" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="clearpanels" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
+        <ul id="panellist"></ul>
+      </div>
+      <div class="row"><button id="exportgif" data-tip="Download the current traversal grid (all α) as an animated GIF" title="download the current traversal grid (all α) as an animated GIF">⬇ Export traversal GIF</button></div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-attn">
+      <div class="hint">Real phenotype cells (the same top-attention cells the traversal targets) overlaid with each attention head's <b>pixel weights</b> in inferno. Follows the marker × perturbation selection (phase &amp; fluorescence · geneKO &amp; complex).</div>
+      <label>Attention head <span class="hint">(ranked by NTC-distinctiveness)</span>
+        <select id="a-head"></select>
+      </label>
+      <label>Normalization
+        <select id="a-norm" data-seg>
+          <option value="map" title="brightest per tile" selected>per-cell</option>
+          <option value="gene" title="compare cells/heads">per-perturbation</option>
+          <option value="fixed" title="compare across perturbations">fixed</option>
+        </select>
+      </label>
+      <label>Heatmap clim <span class="hint">(min–max window; narrower = brighter)</span></label>
+      <div class="dual">
+        <input id="a-climlo" type="range" min="0" max="1" step="0.02" value="0"/>
+        <input id="a-climhi" type="range" min="0" max="1" step="0.02" value="1"/>
+      </div>
+      <label>Heatmap opacity <input id="a-alpha" type="range" min="0" max="1" step="0.05" value="0.6"/></label>
+      <label>Cell image opacity <input id="a-img" type="range" min="0" max="1" step="0.05" value="1"/></label>
+      <div class="row"><button id="a-reset" title="reset all display settings">↺ reset controls</button></div>
+      <div class="grp">
+        <span class="lbl">Pin perturbations <span class="hint">(compare geneKOs; current always shown)</span></span>
+        <div class="row"><button id="a-pin" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="a-pinclear" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
+        <ul id="a-panellist"></ul>
+      </div>
+      <div class="hint" id="a-status"></div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-pc">
+      <div class="hint">Cells binned <b>low→high</b> along each CellDINO PC. Click a cell to <b>pop out</b>, a perturbation chip for its top PCs, or use the <b>search</b> to jump to a perturbation.</div>
+      <label class="chk"><input type="checkbox" id="pc-tfidf" data-on="tf-idf"/> tf-idf (downweight perturbations shared across PCs)</label>
+      <div class="pc-mode"><button id="pc-mode-onto" class="seg active" title="gene-set ontology enrichment">Ontology</button><button id="pc-mode-feat" class="seg" title="classical morphological feature enrichment (phase)">Features</button></div>
+      <div id="pc-feat-opts" style="display:none">
+        <label class="chk"><input type="checkbox" id="pc-dedup" data-on="dedup features" checked/> deduplicate features (collapse variants to one mean, e.g. all AngularSecondMoment)</label>
+        <label class="chk"><input type="checkbox" id="pc-norm" data-on="norm by size"/> normalize composition by group size (correct for how many features each class has)</label>
+      </div>
+      <div class="grp">
+        <span class="lbl">Principal components</span>
+        <label class="pc-sort-row">Sort by <select id="pc-sort"></select></label>
+        <ul class="pc-list" id="pc-list"></ul>
+      </div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-top">
+      <div class="hint">Top real phenotype cells for the selected perturbation, ranked by how well the classifier can distinguish them from other perturbations.</div>
+      <label>Image scale <input type="range" id="tc-scale" min="80" max="300" step="10" value="160"/></label>
+      <label class="chk"><input type="checkbox" id="tc-mask" checked data-on="cell mask"/> cell mask</label>
+      <label class="chk"><input type="checkbox" id="tc-inorm" checked data-on="marker-normalized"/> normalize to marker intensity</label>
+      <label class="chk"><input type="checkbox" id="tc-acc" checked data-on="classification accuracy"/> classification accuracy</label>
+      <label id="tc-accbin-wrap" class="feat-internal">Accuracy bag size
+        <select id="tc-accbin"></select>
+      </label>
+      <label class="chk"><input type="checkbox" id="tc-cols" data-on="columns"/> perturbations as columns (side-by-side, title above)</label>
+      <div class="grp">
+        <span class="lbl">Pin perturbations</span>
+        <div class="row"><button id="tc-pin" data-tip="Pin the current perturbation to compare it alongside others" title="Pin the current perturbation to compare it alongside others">+ pin current</button><button id="tc-pinclear" data-tip="Remove all pinned perturbations" title="Remove all pinned perturbations">clear</button></div>
+        <ul id="tc-panellist"></ul>
+      </div>
+      <div class="hint" id="tc-status"></div>
+    </div>
+
+    <div class="tabpane hidden" id="tab-montage">
+      <div class="hint">One NTC cell morphed toward <b>every perturbation</b>, each tile placed at that perturbation's embedding position — for the <b>selected marker</b> (phase by default). Scroll to zoom, drag to pan; hover a cell to see its perturbation.</div>
+      <label>Renderer
+        <select id="m-render" data-seg>
+          <option value="tiles" title="precomputed, multiscale" selected>Montage</option>
+          <option value="live" title="cache frames, no build">Live</option>
+        </select>
+      </label>
+      <label class="tiles-only">Zoom detail <span class="hint">(left = finer/refined · right = coarser)</span> <input id="m-detail" type="range" min="0.1" max="1.5" step="0.2" value="0.3"/></label>
+      <button id="m-vs" class="verbtn" title="Virtually stain the phase-traversal cells into the selected marker (VS model, cell 1 · α scrubbable). Pick markers in the top tab to switch channel.">Virtual staining</button>
+      <div id="vs-opts">
+      <label>Overlay
+        <div class="combo">
+          <input id="m-ovsel" type="text" placeholder="off" autocomplete="off" title="Overlay a virtually-stained marker (or all 42 merged) on top of phase. Type to search markers."/>
+          <div class="combo-list hidden" id="m-ovsel-list"></div>
+        </div>
+      </label>
+      <button id="m-phaseoff" class="verbtn" title="Hide the phase base layer — show only the stained overlay">Hide phase</button>
+      <label>Overlay opacity <input id="m-ovlalpha" type="range" min="0" max="1" step="0.05" value="0.55" title="Opacity of the stained overlay over phase (low = phase shows through)"/></label>
+      </div>
+      <label>Embedding
+        <select id="m-emb" data-seg>
+          <option value="umap">UMAP</option>
+          <option value="phate" selected>PHATE</option>
+        </select>
+      </label>
+      <label>α (morph strength) <span id="m-alpha-read" class="hint">α = 3</span>
+        <input id="m-alpha" type="range" min="1" max="5" step="1" value="3" list="m-alpha-ticks" style="width:180px"/>
+        <datalist id="m-alpha-ticks" style="display:flex;justify-content:space-between;writing-mode:horizontal-tb">
+          <option value="1" label="centroid"></option>
+          <option value="2" label="2"></option>
+          <option value="3" label="3"></option>
+          <option value="4" label="4"></option>
+          <option value="5" label="exaggerated"></option>
+        </datalist>
+      </label>
+      <label>NTC cell <select id="m-cell"></select></label>
+      <label>Display <span class="hint">(preset — tune with sliders below)</span></label>
+      <label>
+        <select id="m-mode" data-seg>
+          <option value="both">images + points</option>
+          <option value="images" selected>cell images</option>
+          <option value="points">points</option>
+        </select>
+      </label>
+      <label>Image opacity <input id="m-imgalpha" type="range" min="0" max="1" step="0.05" value="1"/></label>
+      <label>Point opacity <input id="m-ptalpha" type="range" min="0" max="1" step="0.05" value="0.15"/></label>
+      <label class="live-only">Tile size <input id="m-tilesize" type="range" min="0.004" max="0.1" step="0.002" value="0.02"/></label>
+      <label>Color by <span class="hint">(fields or classical morphological features)</span></label>
+      <div class="combo">
+        <input id="m-color-search" type="text" placeholder="none · search…" autocomplete="off"/>
+        <div class="combo-list hidden" id="m-color-list"></div>
+      </div>
+      <label class="rng" id="m-cmap-row" style="display:none">Colormap
+        <select id="m-cmap">
+          <option value="viridis" selected>viridis</option>
+          <option value="inferno">inferno</option>
+          <option value="magma">magma</option>
+          <option value="plasma">plasma</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="m-labels" data-on="label groups"/> label groups (text at group centroids)</label>
+      <label>set-score overlay <span class="hint">(per tile, at this α; v5 only)</span>
+        <select id="m-setacc" data-seg>
+          <option value="off" selected>off</option>
+          <option value="geneKO">geneKO (per tile)</option>
+          <option value="complex">complex (color by EBI, nearest member)</option>
+        </select>
+      </label>
+      <label>metric
+        <select id="m-setacc-metric" data-seg>
+          <option value="ptarget">P(target) — gen%/real%</option>
+          <option value="rank" selected>target rank</option>
+          <option value="loo">per-α LOO (removal %)</option>
+          <option value="coral">CORAL φ = α/f</option>
+        </select>
+      </label>
+      <div class="hint" id="m-embed"></div>
+      <div class="hint" id="m-status"></div>
+      <div id="m-legend"></div>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <div id="heatbar">
+      <div id="heat-track">
+        <div id="heat-grad"></div>
+        <div id="heat-tick"></div>
+        <div class="heat-lbls"><span class="neg">anti-phenotype</span><span class="mid">Anchor (φ=0)</span><span class="pos">phenotype</span></div>
+      </div>
+    </div>
+    <div id="scrub">
+      <button id="play">▶</button>
+      <div class="slider-col">
+        <input id="alpha" type="range" min="0" max="16" value="8" step="1"/>
+        <div id="ticks" title="click a tick to toggle an autoplay pause there"></div>
+      </div>
+      <span id="alpha-read">φ = —</span>
+    </div>
+    <div class="playctl">
+      <select id="speed" title="playback speed">
+        <option value="720">0.25×</option>
+        <option value="360">0.5×</option>
+        <option value="240">0.75×</option>
+        <option value="180" selected>1×</option>
+        <option value="120">1.5×</option>
+        <option value="90">2×</option>
+        <option value="60">3×</option>
+        <option value="45">4×</option>
+      </select>
+      <select id="alphalimit" title="limit autoplay to ±α (scrub slider stays full range)">
+        <option value="5" selected>play ±5</option>
+        <option value="4">play ±4</option>
+        <option value="3">play ±3</option>
+        <option value="2">play ±2</option>
+        <option value="1">play ±1</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="playpos"/> play φ ≥ 0</label>
+    </div>
+    <div id="score-legend" style="display:none"><span id="score-legend-txt"></span> &nbsp; <span class="bar"></span></div>
+    <div id="grid"></div>
+    <div id="meta"></div>
+    <div id="montage-view"><div id="osd"></div><canvas id="m-overlay"></canvas><canvas id="m-live"></canvas></div>
+    <div id="attn-view"><div id="attn-head-lbl"></div><div id="attn-grid"></div></div>
+    <div id="pc-view"></div>
+    <div id="tc-view"></div>
+    <div id="methods-view"></div>
+  </main>
+
+  <aside id="sidebar" class="hidden">
+    <div id="side-info-view">
+      <div class="side-hd">Perturbation info<button class="side-x" onclick="setSidePanel('info')" title="Close">✕</button></div>
+      <div id="info-title"></div>
+      <div id="info-sub"></div>
+      <div id="info-body"></div>
+    </div>
+    <div id="side-about-view" style="display:none">
+      <div class="about-hero">
+        <img class="about-eyes" src="opsin-eyes.svg" alt=""/>
+        <div class="about-name">OPSin</div>
+        <div class="about-tag">Optical Pooled Screening<br>Interpretability Viewer</div>
+      </div>
+      <div class="about-lead">An <b>opsin</b> is the light-sensing protein in your eye's rods and cones — it's what turns light into vision. <b>OPSin</b> does the same for a microscopy screen, turning raw images into a phenotype you can actually see. In a pooled optical CRISPR screen, thousands of perturbations are imaged together in one dish, and each nudges cell morphology so slightly — and so far beneath the noise of everyday cell-to-cell variation — that the effect is nearly invisible to the eye. OPSin finds the cells that carry a real signal, and uses a <b>generative model</b> to reveal the phenotype each perturbation produces.</div>
+      <div class="about-sec">
+        <div class="about-cap">The tabs</div>
+        <ul class="about-tabs">
+          <li><b>Top-Predictive Cells</b> — the real cells that show each phenotype most clearly.</li>
+          <li><b>Image Generation</b> — watch a control cell morph into the selected phenotype; a slider dials the effect along its phenotypic trajectory.</li>
+          <li class="about-tabdesc" data-tab="montage"><b>Montage</b> — every perturbation's rendered cell on a map, so similar effects sit together.</li>
+          <li class="about-tabdesc" data-tab="pc"><b>PCs</b> — real cells sorted along the model's main axes of variation.</li>
+          <li class="about-tabdesc" data-tab="attn"><b>Attention</b> — where the model looked (brighter = more informative).</li>
+        </ul>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div id="ticktip"></div>
+<div id="m-tip"></div>
+<script src="openseadragon.min.js"></script>
+<script src="gif.js"></script>
+<script src="config.js"></script>
+<script src="af_scores.js?v=6"></script>
+<script src="pin_order.js?v=1"></script>
+<script src="app.js?v=299"></script>
+<script src="methods.js?v=77"></script>
+</body>
+</html>

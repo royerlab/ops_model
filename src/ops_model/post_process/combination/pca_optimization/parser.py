@@ -524,6 +524,18 @@ def _build_parser():
              "Output → paper_v1/ subdir.",
     )
     parser.add_argument(
+        "--paper-v2",
+        type=str,
+        nargs="?",
+        const="/hpc/projects/icd.fast.ops/configs/good_experiment_list_v2.yml",
+        default=None,
+        help="Restrict discovery to the exact experiment list in the paper-v2 YAML "
+             "(default path: /hpc/projects/icd.fast.ops/configs/good_experiment_list_v2.yml). "
+             "With --cell-dino, reads features from cell_dino_features_v2/ (the v2 run). "
+             "Errors out if any expected experiment is missing from discovery. "
+             "Output → paper_v2/ subdir. Mutually exclusive with --paper-v1.",
+    )
+    parser.add_argument(
         "--run-tag",
         type=str,
         default=None,
@@ -659,5 +671,25 @@ def _build_parser():
         "dropped (their seg_id is gone from the current ISS calls). "
         "Recommended for new analyses; pair with a dedicated output_path "
         "(e.g. paper_v1/phase_only_corrected/) to keep stale baselines intact.",
+    )
+    parser.add_argument(
+        "--weight-parquet",
+        default=None,
+        help="Path to a per-cell weight parquet with columns "
+        "(experiment, well, segmentation_id, <weight_column>). When set "
+        "together with --weight-column, phase1 pre-multiplies each cell's "
+        "feature vector by the (per-(sgRNA, experiment)-normalized) weight, "
+        "so downstream mean-aggregation produces a weighted mean. Cells "
+        "missing from the parquet get weight=1 (uniform fallback). "
+        "Fails loudly if the flag is set but no experiment matches. "
+        "See ops_model.models.interpretability.weighted_aggregation for the "
+        "original monkey-patch flow that this flag replaces.",
+    )
+    parser.add_argument(
+        "--weight-column",
+        default=None,
+        help="Column name in --weight-parquet to use as the per-cell weight "
+        "(e.g. 'v5_gko', 'v5_ebionly', 'set_accuracy'). Only meaningful when "
+        "--weight-parquet is also set.",
     )
     return parser

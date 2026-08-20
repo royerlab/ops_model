@@ -41,18 +41,26 @@ from ops_utils.analysis.embedding_plots import clean_X_for_embedding
 # Defaults — wide search; CLI flags can shrink/extend any of these
 # ---------------------------------------------------------------------------
 
-DEFAULT_UMAP_N_NEIGHBORS = (2, 5, 10, 15, 25, 50, 100, 200, 500)
+DEFAULT_UMAP_N_NEIGHBORS = (2, 5, 8, 10, 15, 25, 50, 100, 200, 500)
 DEFAULT_UMAP_MIN_DIST = (0.0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.99)
 DEFAULT_UMAP_METRIC = ("euclidean", "cosine", "correlation", "manhattan", "chebyshev")
 DEFAULT_UMAP_SPREAD = (0.5, 1.0, 1.5, 2.0, 3.0)
 
-DEFAULT_PHATE_KNN = (3, 5, 10, 15, 25, 50, 100)
-DEFAULT_PHATE_DECAY = (2, 5, 10, 20, 40, 80)
+DEFAULT_PHATE_KNN = (3, 5, 8, 10, 15, 25, 50, 100)
+DEFAULT_PHATE_DECAY = (2, 5, 10, 15, 20, 40, 80)
 DEFAULT_PHATE_T = ("auto", 5, 10, 20, 40, 80)
 DEFAULT_PHATE_GAMMA = (0.0, 0.5, 1.0)
 
-CANONICAL_UMAP = {"n_neighbors": 15, "min_dist": 0.1, "metric": "euclidean", "spread": 1.0}
-CANONICAL_PHATE = {"knn": 15, "decay": 15, "t": "auto", "gamma": 1.0}
+# Pipeline defaults (highlighted with red border in sweeps).
+# UMAP: matches pca_optimization's "max" umap_type default —
+#   sc.pp.neighbors(n_neighbors=8, use_rep='X_pca') + sc.tl.umap(min_dist=0.25)
+CANONICAL_UMAP = {"n_neighbors": 8, "min_dist": 0.25, "metric": "euclidean", "spread": 1.0}
+
+# PHATE: GRASSP-canonical from pca_optimization/embeddings.py:178 —
+#   knn = min(8, n_obs - 1); decay = 10; t = "auto"
+# Same for guide and gene (both have n_obs >> 8). Verified against stored
+# adata.uns["phate"]["params"] in production h5ads.
+CANONICAL_PHATE = {"knn": 8, "decay": 10, "t": "auto", "gamma": 1.0}
 
 DEFAULT_RUN_DIR = (
     "/hpc/projects/icd.fast.ops/organelle_attribution/pca_optimized_v0.3/"
@@ -197,6 +205,11 @@ def _fit_umap(
     X: np.ndarray, seed: int, *, n_neighbors: int, min_dist: float,
     metric: str = "euclidean", spread: float = 1.0,
 ) -> Optional[np.ndarray]:
+    """Fit UMAP for one sweep tile. NOTE: this does NOT need to reproduce the
+    production layout — the default tile is substituted from
+    ``adata.obsm['X_umap']`` in ``_process_level`` so it always shows what
+    phase2 actually wrote. The sweep neighbors just need to be *comparable* to
+    each other, so we use umap-learn directly (fast, deterministic per seed)."""
     from umap import UMAP
 
     nn = max(2, min(n_neighbors, X.shape[0] - 1))
@@ -444,6 +457,33 @@ def _process_level(
     canvases: Dict[str, Dict] = {}
     for spec, coords in zip(specs, results):
         canvases.setdefault(spec["canvas"], {})[spec["key"]] = coords
+
+    # The whole point of the "current setting" tile is to show the user what
+    # production actually produces. Re-fitting with the "same" recipe is not
+    # reliable — subtle differences in library version, intermediate refit
+    # paths, or stale uns["umap"]["params"] can make a bit-for-bit reproduction
+    # impossible from the h5ad alone. So instead: substitute the stored coords
+    # directly for the default-position tile. Sweep neighbors compare against
+    # what phase2 actually wrote.
+    if sub_idx is None:
+        stored_umap = adata.obsm.get("X_umap")
+        stored_phate = adata.obsm.get("X_phate")
+        if stored_umap is not None and "umap_primary" in canvases:
+            key = (CANONICAL_UMAP["n_neighbors"], CANONICAL_UMAP["min_dist"])
+            canvases["umap_primary"][key] = np.asarray(stored_umap)
+        if stored_umap is not None and "umap_secondary" in canvases:
+            key = (CANONICAL_UMAP["metric"], CANONICAL_UMAP["spread"])
+            canvases["umap_secondary"][key] = np.asarray(stored_umap)
+        if stored_phate is not None and "phate_primary" in canvases:
+            key = (CANONICAL_PHATE["knn"], CANONICAL_PHATE["decay"])
+            canvases["phate_primary"][key] = np.asarray(stored_phate)
+        if stored_phate is not None and "phate_secondary" in canvases:
+            key = (CANONICAL_PHATE["t"], CANONICAL_PHATE["gamma"])
+            canvases["phate_secondary"][key] = np.asarray(stored_phate)
+        _logger.info(
+            "  %s: substituted stored obsm[X_umap]/obsm[X_phate] for default tile "
+            "(guarantees visual match to production plots)", level,
+        )
 
     n_drawn = X.shape[0]
 

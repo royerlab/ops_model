@@ -111,3 +111,4 @@ scripts/compare_dino_cp_map.py
 # Deprecated, kept locally only (see models/CLEANUP.md)
 src/ops_model/deprecated/
 slurm_logs/
+/analysis/figures/
