@@ -134,9 +134,9 @@ def _organize_plots(plots_dir: Path) -> None:
     groups = [
         ("umap", lambda n: "umap" in n),
         ("phate", lambda n: "phate" in n),
-        # These overlays are checked before map_metrics (they contain "ebi").
-        ("ebi_complex_overlay", lambda n: "ebi_complex_overlay" in n),
-        ("binary_overlay", lambda n: "binary_overlay" in n),
+        # EBI complex + binary overlays share one subdir; checked before
+        # map_metrics (they contain "ebi").
+        ("ebi_overlay", lambda n: "ebi_complex_overlay" in n or "ebi_binary_overlay" in n),
         ("map_metrics", lambda n: n.startswith("map_") or "violin" in n or "consistency" in n
                                    or "distinctiveness" in n or "activity" in n or "ebi" in n),
         ("sweep", lambda n: "sweep" in n),
@@ -206,11 +206,15 @@ def run_marker(
 
     # Group the flat aggregate_channels plots into category subdirs (de-sprawl).
     _organize_plots(out_dir / "plots")
-    # The guide-level canonical clustering is not needed as its own subdir
-    # (the gene-level canonical clustering is kept).
-    _cg_guide = out_dir / "plots" / "canonical_leiden" / "guide"
-    if _cg_guide.is_dir():
-        shutil.rmtree(_cg_guide)
+    # canonical_leiden (gene + guide) belongs under leiden/, not as its own subdir.
+    _plots = out_dir / "plots"
+    _cl = _plots / "canonical_leiden"
+    if _cl.is_dir():
+        (_plots / "leiden").mkdir(exist_ok=True)
+        _dest = _plots / "leiden" / "canonical"
+        if _dest.exists():
+            shutil.rmtree(_dest)
+        shutil.move(str(_cl), str(_dest))
 
     # Correlation heatmap on the gene-level embedding (mean-centered), PCA-reduced
     # to the configured variance fraction.
