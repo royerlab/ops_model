@@ -81,6 +81,8 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
 
     plt.rcParams["pdf.fonttype"] = 42  # editable text in vector output
 
+    Path(out_stem).parent.mkdir(parents=True, exist_ok=True)
+
     X_ops_c = X_ops - X_ops.mean(axis=0, keepdims=True)
     corr_ops = np.corrcoef(X_ops_c)
 
@@ -118,6 +120,35 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
     fig.write_html(f"{out_stem}.html", include_plotlyjs="cdn")
 
     return corr_ops
+
+
+def _organize_plots(plots_dir: Path) -> None:
+    """Group the flat aggregate_channels plot files into category subdirs so the
+    output isn't a sprawling list of PNGs. Files are matched by name; anything
+    unmatched and any existing subdir (leiden/, canonical_leiden/,
+    marker_overlay/, ...) is left in place.
+    """
+    if not plots_dir.is_dir():
+        return
+    # (subdir, predicate) in priority order — first match wins.
+    groups = [
+        ("umap", lambda n: "umap" in n),
+        ("phate", lambda n: "phate" in n),
+        ("map_metrics", lambda n: n.startswith("map_") or "violin" in n or "consistency" in n
+                                   or "distinctiveness" in n or "activity" in n or "ebi" in n),
+        ("sweep", lambda n: "sweep" in n),
+        ("channel_qc", lambda n: "peak" in n or "per_channel" in n),
+    ]
+    for f in list(plots_dir.iterdir()):
+        if not f.is_file():
+            continue  # leave existing subdirs untouched
+        n = f.name.lower()
+        for sub, match in groups:
+            if match(n):
+                dest = plots_dir / sub
+                dest.mkdir(exist_ok=True)
+                f.rename(dest / f.name)
+                break
 
 
 def run_marker(
@@ -170,6 +201,9 @@ def run_marker(
         leiden_resolutions=tuple(decisions.leiden_resolutions),
     )
 
+    # Group the flat aggregate_channels plots into category subdirs (de-sprawl).
+    _organize_plots(out_dir / "plots")
+
     # Correlation heatmap on the gene-level embedding (mean-centered), PCA-reduced
     # to the configured variance fraction.
     gene = ad.read_h5ad(gene_h5ad)
@@ -184,7 +218,7 @@ def run_marker(
     decisions.n_pcs = n_pcs
     decisions.source_gene_h5ad = str(gene_h5ad)
 
-    _correlation_heatmap(X_ops, labels, out_dir / "corr_heatmap", marker)
+    _correlation_heatmap(X_ops, labels, out_dir / "correlation_heatmap" / "corr_heatmap", marker)
 
     (out_dir / "decisions.yaml").write_text(
         yaml.safe_dump(asdict(decisions), sort_keys=False)
