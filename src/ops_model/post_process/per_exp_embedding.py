@@ -186,12 +186,17 @@ def run_per_exp_embeddings(
     feature_dir: str | Path | None = None,
     embeddings_dir: str | Path | None = None,
     decisions_yaml: str | Path | None = None,
+    slurm: bool = True,
+    slurm_params: dict | None = None,
     **decision_overrides,
 ) -> list[dict]:
     """Post-process every marker of one experiment's CellDINO embeddings.
 
     Discovers gene_bulked_<marker>.h5ad in the CellDINO anndata_objects dir and
-    runs :func:`run_marker` for each, writing to <embeddings_dir>/<marker>/.
+    fans one :func:`run_marker` job per marker out to SLURM (each marker is
+    independent), writing to <embeddings_dir>/<marker>/. Only discovery and job
+    submission run locally; all compute (aggregate_channels + heatmap) runs on
+    SLURM. Pass ``slurm=False`` to run in-process instead.
     """
     from ops_utils.data.experiment import OpsDataset
 
@@ -217,12 +222,46 @@ def run_per_exp_embeddings(
             f"(extraction + combine) before embedding post-processing."
         )
 
-    results = []
+    # Build one independent job per marker (each marker's aggregate_channels +
+    # heatmap is self-contained), then fan out to SLURM — matches cell_dino_main.
+    jobs = []
     for gf in gene_files:
         marker = Path(gf).stem.replace("gene_bulked_", "")
         guide = feature_dir / f"guide_bulked_{marker}.h5ad"
         if not guide.exists():
             raise FileNotFoundError(f"Missing guide_bulked for {marker}: {guide}")
         dec = EmbeddingDecisions(**{**asdict(base), "marker": marker})
-        results.append(run_marker(Path(gf), guide, embeddings_dir / marker, dec))
-    return results
+        jobs.append({
+            "name": f"embed_{experiment}_{marker}",
+            "func": run_marker,
+            "kwargs": {
+                "gene_h5ad": Path(gf),
+                "guide_h5ad": guide,
+                "out_dir": embeddings_dir / marker,
+                "decisions": dec,
+            },
+            "metadata": {"experiment": experiment, "marker": marker},
+        })
+
+    if not slurm:
+        return [run_marker(**j["kwargs"]) for j in jobs]
+
+    from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
+
+    params = {
+        "timeout_min": 720,
+        "mem": "64G",
+        "cpus_per_task": 8,
+        "slurm_partition": "cpu",
+    }
+    if slurm_params:
+        params.update(slurm_params)
+    return submit_parallel_jobs(
+        jobs_to_submit=jobs,
+        experiment=f"{experiment}_embeddings",
+        slurm_params=params,
+        log_dir=f"slurm_embeddings_postprocess/{experiment}",
+        manifest_prefix="embedding_postprocess",
+        wait_for_completion=True,
+        verbose=True,
+    )
