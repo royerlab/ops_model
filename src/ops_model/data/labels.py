@@ -10,8 +10,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from ops_model.paths import BASE_PATH
 
-_DEFAULT_BASE_PATH = "/hpc/projects/intracellular_dashboard/fast_ops"
+_DEFAULT_BASE_PATH = f"{BASE_PATH}"
 
 # Backward-compatible filename templates for legacy csv_source values
 SOURCE_FILENAME_TEMPLATES = {
@@ -71,7 +72,7 @@ def load_immunostaining_labels(
         filename_template: Filename pattern with {well} placeholder,
             e.g. "cell_painting_linked_{well}.csv" or "four_i_linked_{well}.csv"
         base_path: Base directory containing per-experiment subdirectories.
-            Defaults to /hpc/projects/intracellular_dashboard/fast_ops.
+            Defaults to /hpc/projects/icd.fast.ops.
 
     Returns:
         labels_df ready to pass to OpsDataManager.construct_dataloaders()

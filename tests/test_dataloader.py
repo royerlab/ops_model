@@ -107,9 +107,9 @@ def test_ops_data_manager_stores_guide_col():
     """OpsDataManager records the configured guide_col on the instance."""
     dm = data_loader.OpsDataManager(
         experiments={"ops0031_20250424": ["A/1/0"]},
-        guide_col="minibinder_perturbation",
+        guide_col="custom_perturbation",
     )
-    assert dm.guide_col == "minibinder_perturbation"
+    assert dm.guide_col == "custom_perturbation"
 
 
 def test_ops_data_manager_default_guide_col():
@@ -122,24 +122,24 @@ def test_base_dataset_stores_guide_col():
     """BaseDataset captures guide_col on the instance for feature extractors to read."""
     df = pd.DataFrame(
         {
-            "minibinder_perturbation": ["mb_001"],
+            "custom_perturbation": ["cp_001"],
             "gene_name": ["EGFR"],
             "bbox": ["[0,0,10,10]"],
         }
     )
     ds = data_loader.BaseDataset(
-        stores={}, labels_df=df, guide_col="minibinder_perturbation"
+        stores={}, labels_df=df, guide_col="custom_perturbation"
     )
-    assert ds.guide_col == "minibinder_perturbation"
+    assert ds.guide_col == "custom_perturbation"
 
 
-def test_get_labels_minibinder_fallback(tmp_path):
-    """When the link CSV is minibinder-style (no gene_name column), get_labels
-    copies minibinder_perturbation into gene_name so the downstream gene_name
+def test_get_labels_custom_guide_fallback(tmp_path):
+    """When the link CSV is custom-guide-style (no gene_name column), get_labels
+    copies custom_perturbation into gene_name so the downstream gene_name
     flow keeps working."""
     df = pd.DataFrame(
         {
-            "minibinder_perturbation": ["mb_001", "mb_002"],
+            "custom_perturbation": ["cp_001", "cp_002"],
             "AA_sequence": ["MASTK...", "ABCDE..."],
             "gene_target": ["EGFR", "BRCA1"],
             "segmentation_id": [1, 2],
@@ -151,15 +151,15 @@ def test_get_labels_minibinder_fallback(tmp_path):
     dm = data_loader.OpsDataManager(
         experiments={"ops_test": ["A/1/0"]},
         link_csv_dir=str(tmp_path),
-        guide_col="minibinder_perturbation",
+        guide_col="custom_perturbation",
     )
     labels = dm.get_labels()
     # The guide column is preserved with its original name (not aliased).
-    assert "minibinder_perturbation" in labels.columns
+    assert "custom_perturbation" in labels.columns
     assert "sgRNA" not in labels.columns
-    # gene_name has been copied from minibinder_perturbation.
+    # gene_name has been copied from custom_perturbation.
     assert "gene_name" in labels.columns
-    assert list(labels["gene_name"]) == ["mb_001", "mb_002"]
+    assert list(labels["gene_name"]) == ["cp_001", "cp_002"]
 
 
 def test_get_labels_fails_loudly_when_guide_col_missing(tmp_path):
@@ -167,7 +167,7 @@ def test_get_labels_fails_loudly_when_guide_col_missing(tmp_path):
     immediately rather than letting NaNs propagate downstream."""
     df = pd.DataFrame(
         {
-            "minibinder_perturbation": ["mb_001"],
+            "custom_perturbation": ["cp_001"],
             "segmentation_id": [1],
             "bbox": ["[0,0,10,10]"],
         }

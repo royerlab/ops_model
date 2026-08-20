@@ -1,0 +1,112 @@
+# Generative single-cell counterfactual traversals and the embedding montage
+
+## Generative model
+
+A diffusion autoencoder was trained on single-cell images (label-free phase, or a fluorescence marker).
+Each cell is represented by two disentangled latents: a 1,024-dimensional semantic embedding obtained from
+Cell-DINO, and a stochastic (noise) latent that captures the residual identity of
+the individual cell — its size, texture, and local context. The decoder is a conditional diffusion model
+that reconstructs the cell image from the semantic embedding using classifier-free guidance (guidance scale
+w = 2.0, with a learned null embedding). Because phenotype and identity are encoded separately, a given
+cell can be re-synthesized while its phenotype is smoothly and independently varied.
+
+This generative approach adapts DiffEx (arXiv:2502.09663), a diffusion-autoencoder method for
+counterfactual explanations of image classifiers, with two main modifications. First, DiffEx uses
+unsupervised directions discovered from classifier gradients; we instead use a supervised direction —
+the NTC→knockout axis, fit as a linear classifier in the 1,024-dimensional Cell-DINO embedding space
+(below) — and translate the cell's semantic latent along it. Second, the base cells and the cells that
+define each direction are selected by the set classifier's per-cell accuracy ranking rather than sampled at
+random.
+
+## Selecting representative cells
+
+For each perturbation, single cells were ranked by their contribution to the set classifier's predictive
+accuracy. Each cell was scored by its marginal effect on classification accuracy when included in randomly
+sampled sets of n = 50 cells of the same perturbation; cells that most improve the set-level prediction rank
+highest. The top-ranked non-targeting control (NTC) cells (20 per condition) were used as the shared base cells for all traversals, so that every perturbation of a given imaging channel is shown as a morph of the same reference control cells.
+
+## Perturbation direction and counterfactual traversal
+
+For each gene knockout we take the top ~1,000 knockout cells and the top ~1,000 control (NTC) cells — by the
+per-cell accuracy ranking above — in the 1,024-dimensional Cell-DINO space. Two quantities are then derived
+separately:
+
+- **Direction** (which way to move): a logistic classifier is fit to separate the two populations, and its
+  decision-boundary normal (a unit vector), oriented from control toward knockout, is the traversal axis.
+- **Step size** (how far): the gap between the class means — the distance from the control-cell mean to the
+  knockout-cell mean — so that α = 1 advances a control embedding by one full control→knockout mean-shift
+  (landing it on the knockout mean).
+
+A counterfactual traversal was then generated for each base cell by displacing its semantic embedding along
+this direction, z(α) = z₀ + α · gap · d, while holding its stochastic latent fixed, and decoding each α with
+the diffusion model. Seventeen steps were sampled across α ∈ [−5, +5]: α = 0 reconstructs the control cell,
+positive α interpolates toward the knockout phenotype and reaches the knockout mean at α = 1, and |α| > 1
+extrapolates beyond the class means, exaggerating the phenotypic difference in either direction. Because the
+stochastic latent is held fixed across the series, cell identity is anchored and only the phenotype changes,
+yielding a smooth traversal. Each traversal was quantified by three complementary metrics computed as a
+function of α (described in *Quantifying the accuracy of generated phenotypes*, below). In parallel, classical
+CellProfiler / OrganelleProfiler morphometric features were measured on both the real and the generated
+images to confirm that the traversal produces the expected phenotypic effect in interpretable feature space
+(e.g. object area, circularity, or marker intensity changing monotonically with α).
+
+The same framework was used to morph between two perturbation classes — for example, the 40S and 60S
+cytosolic ribosomal-subunit complexes. In this case the direction is the difference between the two class
+means (A → B), and the base cells of class A are morphed toward the mean of class B, again with α
+extrapolating beyond either mean to exaggerate the transition.
+
+## Quantifying the accuracy of generated phenotypes
+
+To test whether the synthesized cells reproduce the intended perturbation phenotype — rather than merely a
+plausible-looking cell — each traversal was scored by three complementary metrics, all computed as a function
+of α and interpreted relative to the value attainable on real cells of the same class.
+
+**Set-classifier recognition (supervised).** The generated images at each α were embedded with Cell-DINO and
+passed as a set (a bag of n cells) through a SetTransformer classifier trained on real single cells to predict
+the perturbation class from a bag of same-class cells. Crucially, generated images sit at a systematic Cell-DINO
+domain offset from the real images the classifier was trained on, so raw features fail; because that offset is
+shared across a traversal, standardizing every α's embeddings against the α = 0 *generated* NTC control cancels it,
+leaving the classifier to read the phenotype rather than the real-vs-generated gap. Two readouts summarize the
+prediction:
+
+- *P(target)* — the softmax probability the classifier assigns to the true perturbation class: a continuous
+  measure of how confidently the generated bag is recognized as the target.
+- *Target rank* — the 1-indexed position of the true class in the classifier's ranking of all classes
+  (rank 1 = the top prediction), reported as top-1 and top-5 recovery (whether the target falls within the
+  classifier's top-1 / top-5 predictions). Rank is more forgiving than P(target) and localizes where the true
+  class sits among competing phenotypes.
+
+Both are compared to the same classifier's accuracy on real cells of the class (the real-cell ceiling): a
+phenotype is considered recovered when, near α ≈ 1, the generated bag reaches the recognition level the real
+cells achieve.
+
+**Retrieval mAP (unsupervised).** As an independent check that does not rely on the trained classifier, we
+measure whether generated cells fall in the correct region of the embedding relative to real cells. Real and
+generated single-cell Cell-DINO embeddings are pooled, and for each generated class-X cell we compute the
+average precision of retrieving real class-X cells (cross-domain, real ↔ generated) ahead of cells of every
+other class; averaging over cells gives a per-class mean average precision (mAP; computed with copairs, the
+same metric used for real-cell perturbation distinctiveness). The ceiling is obtained by splitting the real
+cells of each class into two halves and running the identical retrieval — the real self-consistency mAP — and
+the generated-to-real ratio reports how much of the real phenotypic distinctiveness the synthesized cells
+recover. Because it is purely a neighborhood-retrieval statistic in embedding space, this metric is orthogonal
+to the set classifier and guards against classifier-specific artifacts.
+
+Across all three metrics a legitimate phenotype rises from control levels as α increases, peaks near α ≈ 1 (the
+knockout / class mean), and approaches the corresponding real-cell reference; extrapolation to |α| > 1
+exaggerates the phenotype and, past the class mean, can overshoot and degrade recognition.
+
+## Gene embedding and montage
+
+A gene-level phenotypic embedding was constructed by aggregating the single-cell Cell-DINO features of each
+perturbation, and a two-dimensional layout was computed with PHATE. To build the montage, each gene's
+generated cell (at a chosen α) was placed at that gene's coordinate in this embedding. Because many genes
+occupy dense regions, the embedding plane was tiled with a regular grid and a single representative gene was
+retained per grid cell — chosen by local density — so that adjacent cells do not overlap; coarser grids show
+fewer, larger cells and finer grids fill in more. Each tile was outlined by the color of its gene's Leiden
+cluster to convey the local phenotypic neighborhood, with individual complex members highlighted (e.g.
+ribo40S, ribo60S). The result is a single view in which each region of the phenotypic embedding is
+illustrated by a representative generated cell.
+
+The montage was assembled by grid-based, density-prioritized decimation and
+multiscale tiling of the image crops laid out by an embedding,
+which performs the grid-based, density-prioritized decimation and the multiscale tiling.
+

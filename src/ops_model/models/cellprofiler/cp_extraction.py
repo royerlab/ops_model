@@ -243,8 +243,8 @@ def create_subset(
         bounds: [start, end] index range
         out_channels: List of channel names (default: ["Phase2D", "mCherry"])
         guide_col: Name of the per-construct identifier column in the link CSV
-            (default: "sgRNA"; e.g. "minibinder_perturbation" for minibinder
-            experiments)
+            (default: "sgRNA"; e.g. a custom perturbation column for
+            non-CRISPR libraries)
 
     Returns:
         Tuple of (Subset dataset, label lookup table)

@@ -1,7 +1,7 @@
 """Tests for configurable guide_col in AnndataValidator.
 
 Covers the PR2 refactor that lets the per-construct identifier column be
-named anything (e.g. "minibinder_perturbation") instead of hardcoded "sgRNA".
+named anything (e.g. "custom_perturbation") instead of hardcoded "sgRNA".
 """
 
 import warnings
@@ -61,15 +61,15 @@ def test_anndataspec_defaults_to_sgrna():
 
 
 def test_anndataspec_uses_custom_guide_col():
-    spec = AnndataSpec(guide_col="minibinder_perturbation")
+    spec = AnndataSpec(guide_col="custom_perturbation")
     cell_fields = spec.get_schema("cell")["required_fields"]
     names = [f.name for f in cell_fields]
-    assert "minibinder_perturbation" in names
+    assert "custom_perturbation" in names
     assert "sgRNA" not in names
 
     guide_fields = spec.get_schema("guide")["required_fields"]
     g_names = [f.name for f in guide_fields]
-    assert "minibinder_perturbation" in g_names
+    assert "custom_perturbation" in g_names
     assert "sgRNA" not in g_names
 
 
@@ -80,10 +80,10 @@ def test_legacy_crispr_anndata_validates_with_default():
     assert report.is_valid, [(e.field, e.message) for e in report.errors]
 
 
-def test_minibinder_anndata_validates_when_uns_guide_col_set():
-    """AnnData with obs['minibinder_perturbation'] + uns['guide_col'] passes."""
+def test_custom_guide_anndata_validates_when_uns_guide_col_set():
+    """AnnData with obs['custom_perturbation'] + uns['guide_col'] passes."""
     adata = _make_cell_adata(
-        "minibinder_perturbation",
+        "custom_perturbation",
         ["2_1921", "2_1010", "no-peptide"],
         set_uns_guide_col=True,
     )
@@ -91,10 +91,10 @@ def test_minibinder_anndata_validates_when_uns_guide_col_set():
     assert report.is_valid, [(e.field, e.message) for e in report.errors]
 
 
-def test_minibinder_data_without_uns_key_fails_on_default_column():
+def test_custom_guide_data_without_uns_key_fails_on_default_column():
     """If uns['guide_col'] is absent, validator falls back to 'sgRNA' and fails."""
     adata = _make_cell_adata(
-        "minibinder_perturbation",
+        "custom_perturbation",
         ["2_1921", "2_1010", "no-peptide"],
         set_uns_guide_col=False,
     )
@@ -106,11 +106,11 @@ def test_minibinder_data_without_uns_key_fails_on_default_column():
 def test_validator_can_be_initialized_with_explicit_guide_col():
     """Explicit guide_col on the validator overrides the default fallback."""
     adata = _make_cell_adata(
-        "minibinder_perturbation",
+        "custom_perturbation",
         ["2_1921", "2_1010", "no-peptide"],
         set_uns_guide_col=False,
     )
-    v = AnndataValidator(strict=False, guide_col="minibinder_perturbation")
+    v = AnndataValidator(strict=False, guide_col="custom_perturbation")
     report = v.validate(adata, level="cell")
     assert report.is_valid, [(e.field, e.message) for e in report.errors]
 
@@ -120,7 +120,7 @@ def test_guide_level_uses_dynamic_column():
     n = 6
     obs = pd.DataFrame(
         {
-            "minibinder_perturbation": [f"p{i}" for i in range(n)],
+            "custom_perturbation": [f"p{i}" for i in range(n)],
             "perturbation": ["G"] * n,
             "reporter": ["GFP"] * n,
             "n_cells": [10] * n,
@@ -129,7 +129,7 @@ def test_guide_level_uses_dynamic_column():
     adata = ad.AnnData(X=np.random.rand(n, 4).astype(np.float32), obs=obs)
     adata.uns["cell_type"] = "A549"
     adata.uns["embedding_type"] = "dinov3"
-    adata.uns["guide_col"] = "minibinder_perturbation"
+    adata.uns["guide_col"] = "custom_perturbation"
     adata.uns["aggregation_method"] = "mean"
 
     report = AnndataValidator(strict=False).validate(adata, level="guide")
@@ -141,14 +141,14 @@ def test_infer_schema_level_uses_guide_col():
     n = 10
     obs = pd.DataFrame(
         {
-            "minibinder_perturbation": [f"p{i}" for i in range(n)],
+            "custom_perturbation": [f"p{i}" for i in range(n)],
             "perturbation": ["G"] * n,
             "reporter": ["GFP"] * n,
             "n_cells": [10] * n,
         }
     )
     adata = ad.AnnData(X=np.random.rand(n, 4).astype(np.float32), obs=obs)
-    adata.uns["guide_col"] = "minibinder_perturbation"
+    adata.uns["guide_col"] = "custom_perturbation"
 
     level = AnndataValidator(strict=False).infer_schema_level(adata)
     assert level == "guide"
