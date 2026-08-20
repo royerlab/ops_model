@@ -206,12 +206,14 @@ def run_marker(
 
     # Group the flat aggregate_channels plots into category subdirs (de-sprawl).
     _organize_plots(out_dir / "plots")
-    # canonical_leiden (gene + guide) belongs under leiden/, not as its own subdir.
+    # canonical_leiden holds the GO-term-annotated cluster embeddings (top GO
+    # term labelled at each cluster centroid). Move it under leiden/ as
+    # go_annotated/ (clearer than the upstream "canonical" name).
     _plots = out_dir / "plots"
     _cl = _plots / "canonical_leiden"
     if _cl.is_dir():
         (_plots / "leiden").mkdir(exist_ok=True)
-        _dest = _plots / "leiden" / "canonical"
+        _dest = _plots / "leiden" / "go_annotated"
         if _dest.exists():
             shutil.rmtree(_dest)
         shutil.move(str(_cl), str(_dest))
