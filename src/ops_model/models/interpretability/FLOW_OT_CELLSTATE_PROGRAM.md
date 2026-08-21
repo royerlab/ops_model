@@ -301,6 +301,184 @@ at `bs=256` the Hungarian algorithm is negligible next to the DDIM decode cost.
       go-to for targets flagged as weak/diffuse by mAP or known to be multi-gene pools, where
       it can reveal real morphological change mean_diff visibly misses.
 
+- **2026-08-20 — "does OT recover real bimodal structure that mean_diff can't?" — per-cell
+  routing was the wrong test; distribution-shape recovery is the right one.**
+  Follow-up to the mAP-based finding above: instead of weak/diffuse phenotypes, tested genes with
+  a genuinely **multimodal** real KD population — scanned all 1000 genes' real embeddings
+  (KMeans k=2 separation on KD minus the same stat on NTC as a null baseline, `sep_excess`) and
+  picked 4 candidates with real bimodal splits: TUBGCP6, KIF11 (balance 0.46 — biologically
+  plausible cell-cycle-dependent mitotic arrest), SEC61A1 (balance 0.98 — near-perfect 50/50),
+  S100B (balance 0.36, weakest of the four).
+    - **First attempt (rejected):** push 40 real NTC probe cells through each method, check which
+      real KD cluster (A/B) each endpoint lands nearest to, compare the routed fraction to the
+      true cluster balance. Numerically and visually (per-gene PCA plots, `bimodal_{gene}.png`)
+      this was mixed/inconclusive — no clean "mean_diff collapses, OT splits" pattern in 2 of 4
+      genes. Root cause: NTC probes have no ground-truth fate label, so there's nothing to check
+      per-cell routing *against* — mean_diff doesn't literally collapse spatially either, since
+      it's a per-cell translation and different probes start at different points.
+    - **Reframed as a distribution-shape test (the actual mathematical claim):** mean_diff is a
+      pure translation (`x + c`, same `c` for every cell) — translating a distribution cannot
+      change its shape, so the KMeans separation stat on mean_diff's *output* population must be
+      identical to the stat on the input NTC population, by construction, regardless of what the
+      real KD looks like. Flow-OT is a nonlinear map and has no such constraint. Tested this
+      directly: pushed **all** real NTC cells (not 40 probes) through both methods and measured
+      output-population `sep` (`bimodal_shape_test.py`, CPU-only, reuses the already-trained
+      `flow_ot.pt` checkpoints, no GPU/decode needed):
+
+      | gene | real KD truth (sep / balance) | NTC null | mean_diff output | flow-OT output |
+      |---|---|---|---|---|
+      | KIF11 | 27.6 / 0.46 | 18.6 / 0.66 | 18.6 / 0.66 (= null) | 29.6 / 0.48 |
+      | SEC61A1 | 27.5 / 0.98 | 18.6 / 0.66 | 18.6 / 0.66 (= null) | 33.2 / 0.73 |
+      | TUBGCP6 | 32.3 / 0.46 | 18.6 / 0.66 | 18.6 / 0.66 (= null) | 40.0 / 0.50 |
+      | S100B | 26.0 / 0.36 | 18.6 / 0.66 | 18.6 / 0.66 (= null) | 27.5 / 0.53 |
+
+      mean_diff's output `sep`/`balance` matches the NTC null to the decimal in all 4 genes —
+      the translation-invariance proof confirmed numerically, not just asserted: it gains **zero**
+      bimodality over the unperturbed control population no matter how bimodal the real KD is.
+      flow-OT's output matches or slightly *exceeds* the real KD's true separation in all 4 genes,
+      and its balance tracks the true cluster proportion much more closely than mean_diff's (which
+      is pinned at the NTC's own 0.66 every time) in 3/4 genes.
+    - **Verdict: this is the clean, decisive demonstration** — not "does OT route individual cells
+      correctly" (no ground truth exists to check that against), but "can the method manufacture
+      distributional structure a linear shift provably cannot." mean_diff structurally cannot turn
+      a unimodal control population into a bimodal one; flow-OT does, recovering real bimodal
+      separation from the control distribution alone, across every multimodal candidate tested.
+
+- **2026-08-20 (cont.) — does the shape-recovery finding survive actual DiffAE decode +
+  re-embedding, on a real population (not 2 hand-picked cells)?** The result above was raw
+  pre-decode embedding-space math only. Two visual follow-ups were tried first and were weaker:
+  a 2-probe decoded-image montage (pick the 2 real NTC cells whose flow-OT endpoints land
+  nearest each real KD sub-cluster, decode both methods' trajectories) showed a real but
+  partial/gene-dependent pattern — informative but noisy at n=2 (`bimodal_probe_montage.py`,
+  KIF11 then TUBGCP6, KO-arm-only alphas for bigger panels). The decisive follow-up, per the
+  user's own proposed design: **push a real POPULATION (n=100 real NTC cells, not 2 extremes)
+  through both methods to α=+3×gap, decode every endpoint through the frozen DiffAE, re-embed
+  via CellDINO, and re-run the exact same KMeans-separation stat on the re-embedded population**
+  (`pool_shape_recovery.py`). One bug caught before it produced silently-wrong output:
+  `flow.integrate_flow` concatenates trajectory steps along `dim=0`, which only gives the
+  documented `(n_record+1, dim)` shape for a batch-size-1 call — feeding it the whole 100-cell
+  pool at once silently flattened batch and time together, and `[-1]` grabbed one stray row
+  instead of 100 endpoints (caught via a shape-mismatch crash inside DiffAE's cond projection,
+  not a silent bad result — fixed by integrating per-cell, the same convention used everywhere
+  else in this codebase). Result on TUBGCP6 (n=100, α=+3):
+
+  | | sep | balance |
+  |---|---|---|
+  | real KD (truth) | 32.3 | 0.46 |
+  | decoded NTC (α=0 null — decode-pipeline's own noise floor) | 22.1 | 0.92 |
+  | decoded mean_diff | 24.8 | 0.92 |
+  | decoded flow-OT | 33.3 | 0.37 |
+
+  **Initial (WRONG) read:** decoded flow-OT's sep/balance (33.3/0.37) looked like it matched
+  real truth (32.3/0.46) while decoded mean_diff's (24.8/0.92) looked stuck at the decode-only
+  null (22.1/0.92) — read at the time as "the finding survives contact with real image
+  generation." **This was wrong, caught by the user visually inspecting the PCA scatter**
+  ("mean_diff captures real cluster B somewhat, flow-OT is closer to NTC and doesn't cover
+  either cluster well" — exactly right). The bug: `_split_score` re-clusters each method's
+  OWN output against itself (is this population internally bimodal at all?) — it never checks
+  whether the two sub-groups it finds actually sit where the REAL clusters are. A population
+  that's half stuck-at-NTC and half moved-toward-one-real-cluster is ALSO internally bimodal, so
+  it passes that stat without meaning what the sep/balance numbers implied.
+  **Corrected test: 3-way nearest-real-centroid classification** (real NTC centroid vs. real
+  cluster-A centroid vs. real cluster-B centroid, in the same embedding space) instead of blind
+  self-reclustering. Sanity-checked first (real cluster-A members self-classify as A 86.5% of
+  the time, cluster-B as B 99.4%, real NTC pool as NTC 88.8% — the centroids are discriminative).
+  Actual result on the same 100 decoded cells:
+
+  | | classifies as NTC | classifies as A | classifies as B |
+  |---|---|---|---|
+  | decoded mean_diff | 0% | 28% | **72%** |
+  | decoded flow-OT | **18%** | **56%** | 26% |
+
+  **Reversed conclusion:** mean_diff actually captures real cluster B fairly well post-decode
+  (72%) and never stalls at NTC. flow-OT does worse two ways: 18% of its cells never really left
+  NTC (a real stall/failure mode the self-clustering stat couldn't see at all), and among the
+  ones that moved, it's skewed toward A (56%) over B (26%) — the opposite of an even, truth-
+  matching split. **The decode-validated population test does NOT support the hypothesis once
+  measured correctly.** This does not touch the separate, provable raw-embedding-space result
+  above (mean_diff's PRE-decode output is mathematically identical to the NTC null via
+  translation-invariance, independent of any clustering-metric choice) — only this decode+re-
+  embed extension, and the visual 2-probe montages before it, are affected. **Open question,
+  not yet resolved:** whether flow-OT's 18% NTC-stall + A/B skew is itself informative (e.g. an
+  artifact of α=+3 overshoot, or a real asymmetry in the trained field) or just noise from the
+  documented generated-vs-real domain gap — untested at this point.
+
+- **2026-08-20 (cont.) — resolving that open question: audit the ORIGINAL raw-embedding bar
+  chart (all 4 genes) with the same nearest-real-centroid test, since it has the identical
+  self-clustering blind spot and was never checked this way either.** Same 3-way classification
+  (nearest of: real NTC centroid / real cluster-A centroid / real cluster-B centroid), same
+  parameters as the original bar chart (ALL real NTC cells, t_max=1.0, no decode):
+
+  | gene | true balance | mean_diff (NTC / A / B, %) | flow-OT (NTC / A / B, %) |
+  |---|---|---|---|
+  | KIF11 | 0.46 | 5.3 / 24.0 / 70.7 | 2.9 / 21.3 / 75.8 |
+  | SEC61A1 | 0.98 | 0.1 / 46.9 / 53.0 | 0.1 / 38.2 / 61.7 |
+  | TUBGCP6 | 0.46 | 13.6 / 67.9 / 18.5 | 3.3 / 65.2 / 31.5 |
+  | S100B | 0.36 | 21.2 / 20.3 / 58.5 | 15.4 / 25.8 / 58.8 |
+
+  **Not a clean win either direction.** KIF11 is a near-tie. SEC61A1: mean_diff's split
+  (46.9/53.0) tracks the true near-50/50 balance better than flow-OT's (38.2/61.7) — mean_diff
+  wins. TUBGCP6 and S100B: flow-OT stalls at NTC less (3.3% vs 13.6%; 15.4% vs 21.2%) and reaches
+  the minority cluster more — flow-OT wins. So the raw pre-decode field itself does NOT
+  universally recover true bimodal structure better than mean_diff; it's gene-dependent, roughly
+  a wash across these 4.
+  **This also answers the open question above:** on TUBGCP6, the raw/t_max=1 field stalls at
+  NTC only 3.3% of the time, vs. 18% for the decoded/α=+3 pool test, while the A:B ratio among
+  non-stalled cells stays similar between the two. The NTC-stall failure mode is small in the
+  field itself and gets substantially worse specifically after decode + the larger α — points at
+  decode/overshoot as the amplifier of that failure mode, not the trained field's core behavior.
+  **Where this leaves Workstream A's headline claim:** the only fully intact result is mean_diff's
+  translation-invariance (mathematically forced, gene- and metric-independent — it cannot create
+  bimodal structure it doesn't already have). Whether OT-coupled flow matching actually recovers
+  real multimodal structure *better* than mean_diff is NOT settled — gene-dependent at the raw
+  level, and worse under decode+large-α. Not yet tested: whether this pattern holds at smaller α
+  (e.g. α=1, the canonical KD-gap point) instead of the α=+3 overshoot regime used in the pool
+  decode test, on more than one gene.
+
+- **2026-08-20 (cont.) — tested that directly: (gene x alpha) sweep, TUBGCP6 and KIF11 at
+  α=1 and α=3, using the corrected nearest-real-centroid classification** (now wired into
+  `pool_shape_recovery.py` itself — `_classify_nearest` replaces `_split_score` as the trusted
+  metric; the old stat is kept in the JSON for continuity only, docstring flags it as unreliable).
+  Surfaced a bigger confound first: **`decoded_ntc_null` (α=0, literally re-decoding the SAME
+  real NTC cell with zero shift) only classifies as NTC 52-53% of the time in both genes** — the
+  rest drifts to a real KD sub-cluster from decode noise ALONE, and the drift direction is
+  gene-specific (TUBGCP6 drifts toward cluster B: 36%; KIF11 drifts toward cluster A: 44%). Any
+  decode-level percentage below has to be read against this noisy null, not against zero — this
+  is itself a new, previously-uncharacterized weakness of the generation pipeline (consistent
+  with the documented generated-vs-real domain gap, now precisely quantified at the population
+  level for the first time).
+
+  | | TUBGCP6 α=1 | TUBGCP6 α=3 | KIF11 α=1 | KIF11 α=3 |
+  |---|---|---|---|---|
+  | decoded_ntc_null (NTC/A/B) | 53/11/36 | 53/11/36 | 52/44/4 | 52/44/4 |
+  | decoded mean_diff (NTC/A/B) | 10/39/51 | 0/28/72 | 4/59/37 | 0/17/83 |
+  | decoded flow-OT (NTC/A/B) | 2/47/51 | **18/56/26** | 0/39/61 | **5/27/68** |
+
+  **Two things are now clear and reproduce across both genes:**
+  1. mean_diff's NTC-fraction only ever drops or holds at 0 as α increases (10%→0%; 4%→0%) —
+     expected, a straight-line extrapolation moves monotonically further from NTC by construction.
+  2. **flow-OT's NTC-fraction goes UP with larger α, not down** (2%→18%; 0%→5%) — a real,
+     gene-general overshoot/fold-back-toward-NTC behavior mean_diff cannot exhibit by
+     construction (it's linear; there's no mechanism for a larger shift to look MORE like the
+     starting point). This confirms and generalizes the single-gene overshoot observation from
+     the previous entry: it's α-dependent and specific to the learned flow field, not a decode
+     fluke on one gene.
+  The A-vs-B balance question (does either method's split better match true cluster
+  proportions) does NOT show a consistent winner across the two genes — TUBGCP6 α=1 has flow-OT
+  reaching slightly more A while matching mean_diff's B; KIF11 α=1 has flow-OT reaching notably
+  more B than mean_diff. No stable pattern.
+  **Overall verdict for Workstream A, stated plainly:** the one fully robust, gene-general
+  finding across this entire investigation is mean_diff's translation-invariance (provable) and,
+  now, flow-OT's α-dependent NTC-overshoot (empirical, 2/2 genes). Whether flow-OT recovers real
+  multimodal structure better than mean_diff is NOT a settled win for either method — it's
+  gene-dependent, entangled with a large decode-pipeline domain-gap bias that exists even with
+  zero intended perturbation, and gets worse (more NTC fold-back) at larger α for flow-OT
+  specifically. This is a materially weaker conclusion than where this workstream started the
+  day; recommend NOT promoting flow-OT over mean_diff for the bimodal/multimodal use case on the
+  strength of anything found today — the pooled-complex result (2026-08-18 entry above, which
+  used the classifier score directly rather than this centroid-classification approach) remains
+  the strongest actual evidence for flow-OT's value and hasn't been revisited with this scrutiny.
+
 ### B — real trajectories from video (the highest-novelty, highest-risk piece)
 - **Goal:** stop synthesizing NTC→KO interpolations from static populations; use `segment_timelapse.py`
   to track individual cells through LiveScreen timelapses, embed every frame with CellDINO, and get

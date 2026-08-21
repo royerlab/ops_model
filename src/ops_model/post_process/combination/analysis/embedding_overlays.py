@@ -2817,7 +2817,7 @@ def save_canonical_leiden_panels(
 # =============================================================================
 
 
-_LEIDEN_CACHE_VERSION = 2  # bump: caches built at n_neighbors=15 must be invalidated for the knn=8 default
+_LEIDEN_CACHE_VERSION = 3  # bump: entries must now carry an embedding fingerprint
 
 
 def _leiden_cache_path(plots_dir: Path) -> Path:
@@ -2854,16 +2854,35 @@ def _save_leiden_cache(plots_dir: Path, cache: Dict, _logger) -> None:
         _logger.warning("  Failed to write leiden cache (%s)", exc)
 
 
+def _embedding_fingerprint(adata) -> str:
+    """Content hash of the embedding Leiden clusters on.
+
+    n_obs alone doesn't identify the data: re-running a marker on a different
+    well / experiment selection keeps the same gene + guide set, so a cache keyed
+    only on counts would be reused for a different embedding.
+    """
+    import hashlib
+
+    X = np.ascontiguousarray(np.asarray(adata.obsm["X_pca"], dtype=np.float32))
+    h = hashlib.sha1(X.tobytes())
+    h.update(str(X.shape).encode())
+    return h.hexdigest()
+
+
 def _cache_is_valid_for_level(
     cache_level: Optional[Dict],
     expected_n_obs: int,
     expected_resolutions: Tuple[float, ...],
+    expected_fingerprint: str,
 ) -> bool:
-    """Cached level data must (a) match observation count and (b) cover every
-    resolution requested. Extra cached resolutions are fine."""
+    """Cached level data must (a) match observation count, (b) come from the same
+    embedding, and (c) cover every resolution requested. Extra cached resolutions
+    are fine; an entry without a fingerprint (pre-v3 cache) is not reused."""
     if not cache_level:
         return False
     if cache_level.get("n_obs") != int(expected_n_obs):
+        return False
+    if cache_level.get("fingerprint") != expected_fingerprint:
         return False
     cached_cols = set((cache_level.get("leiden") or {}).keys())
     needed_cols = {f"leiden_r{r:g}" for r in expected_resolutions}
@@ -2967,8 +2986,10 @@ def save_extra_overlays(
 
     Leiden labels and Enrichr GO results are cached to ``<run_dir>/leiden_cache.pkl``
     after the first compute so re-runs (e.g. ``--overlays-only``) skip both
-    steps. The cache is keyed by ``(level, n_obs)`` and validated against the
-    requested resolutions; pass ``use_cache=False`` to force recomputation.
+    steps. The cache is keyed by ``(level, n_obs, X_pca fingerprint)`` and
+    validated against the requested resolutions, so a re-run whose embedding
+    changed (different wells / experiments) recomputes instead of reusing stale
+    clusters; pass ``use_cache=False`` to force recomputation.
     """
     overlay_maps = load_overlay_maps(
         supercategory_config_path, chad_path_override=chad_path_override,
@@ -2990,7 +3011,10 @@ def save_extra_overlays(
     enrichment_per_res: Dict[str, Dict[str, Dict]] = {}
     if adata_gene_embed is not None and "X_pca" in adata_gene_embed.obsm:
         cache_gene = cache.get("gene") or {}
-        if _cache_is_valid_for_level(cache_gene, adata_gene_embed.n_obs, leiden_resolutions):
+        fingerprint_gene = _embedding_fingerprint(adata_gene_embed)
+        if _cache_is_valid_for_level(
+            cache_gene, adata_gene_embed.n_obs, leiden_resolutions, fingerprint_gene
+        ):
             _logger.info(
                 "  Using cached gene Leiden + enrichment (%d resolutions)",
                 len(cache_gene.get("leiden", {})),
@@ -3006,6 +3030,7 @@ def save_extra_overlays(
             )
             cache["gene"] = {
                 "n_obs": int(adata_gene_embed.n_obs),
+                "fingerprint": fingerprint_gene,
                 "leiden": leiden_results,
                 "enrichment": enrichment_per_res,
             }
@@ -3021,7 +3046,10 @@ def save_extra_overlays(
     enrichment_guide_per_res: Dict[str, Dict[str, Dict]] = {}
     if adata_guide is not None and "X_pca" in adata_guide.obsm:
         cache_guide = cache.get("guide") or {}
-        if _cache_is_valid_for_level(cache_guide, adata_guide.n_obs, leiden_resolutions):
+        fingerprint_guide = _embedding_fingerprint(adata_guide)
+        if _cache_is_valid_for_level(
+            cache_guide, adata_guide.n_obs, leiden_resolutions, fingerprint_guide
+        ):
             _logger.info(
                 "  Using cached guide Leiden + enrichment (%d resolutions)",
                 len(cache_guide.get("leiden", {})),
@@ -3037,6 +3065,7 @@ def save_extra_overlays(
             )
             cache["guide"] = {
                 "n_obs": int(adata_guide.n_obs),
+                "fingerprint": fingerprint_guide,
                 "leiden": leiden_guide_results,
                 "enrichment": enrichment_guide_per_res,
             }

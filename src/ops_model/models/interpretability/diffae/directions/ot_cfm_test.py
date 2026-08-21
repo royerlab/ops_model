@@ -451,6 +451,49 @@ def run_v5_score(cfg: DirConfig, out_dir: str, w: float = 1.0, flow_steps: int =
     return summary
 
 
+def run_real_cell_diagnostic(cfg: DirConfig, out_dir: str, n_cells: int = 100) -> dict:
+    """Isolates "is it generation quality, or our scoring pipeline?" using ONLY real cells —
+    no DiffAE, no direction method, nothing this test has been validating. If OUR pipeline
+    scores real cells about as well as Alex's own validation embeddings, the near-zero
+    scores we see on GENERATED cells are a generation/domain-gap issue, not a bug in how we
+    assemble/standardize bags. If OUR real-cell score is ALSO much lower than Alex's, the
+    bag-assembly/standardization step itself needs fixing before generation quality is even
+    the right thing to be debugging. Mirrors diffae/viewer/score_generated.py::diagnose(),
+    but writes to the caller's out_dir instead of that function's hardcoded shared path."""
+    from ..viewer.precompute import _gather_class
+    from ..viewer.set_classifier import V5_CKPT_ROOT, V5_RUNS, load_set_classifier, score_bags
+
+    dev = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+    run = V5_RUNS[("phase", "geneKO")]
+    model, g2i, c2i = load_set_classifier(run=run, device=dev, root=V5_CKPT_ROOT)
+    ci = c2i.get("Phase2D", 0)
+    if cfg.target not in g2i:
+        raise ValueError(f"{cfg.target!r} not in the v5 SetTransformer's class map")
+    gi = g2i[cfg.target]
+
+    # Alex's own real validation embeddings — the positive-control ceiling
+    av = torch.load(f"/hpc/projects/icd.fast.ops/models/alex_lin_attention/v5/paper_v2_phase/val/{cfg.target}.pt",
+                    map_location="cpu")["embeddings"].numpy()
+    p_alex = float(score_bags(model, av[:n_cells][None], channel_idx=ci, device=dev)[0][gi])
+
+    # OUR pipeline, on the SAME kind of real cells (top-attention, our materialize+embed_crops)
+    _, real_kd = _gather_class(cfg, cfg.target, n_cells)
+    p_raw = float(score_bags(model, real_kd[None], channel_idx=ci, device=dev)[0][gi])
+
+    z = np.load("/hpc/projects/icd.fast.ops/models/diffex/viewer_assets_v5/phase/_anchors/NTC/ctrl.npz")
+    mu, sd = z["ctrl_embs"].mean(0), z["ctrl_embs"].std(0) + 1e-6
+    p_zstd = float(score_bags(model, ((real_kd - mu) / sd)[None], channel_idx=ci, device=dev)[0][gi])
+
+    result = {"target": cfg.target, "n_cells": n_cells, "p_alex": p_alex, "p_our_raw": p_raw,
+             "p_our_zstd_on_real_ntc": p_zstd,
+             "our_emb_mean": float(real_kd.mean()), "our_emb_std": float(real_kd.std()),
+             "alex_emb_mean": float(av.mean()), "alex_emb_std": float(av.std())}
+    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    (out / "real_cell_diagnostic.json").write_text(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2))
+    return result
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="OT-CFM vs independent-CFM vs mean_diff, multi-metric sweep")
     ap.add_argument("--grain", choices=["geneKO", "complex"], default="geneKO")
