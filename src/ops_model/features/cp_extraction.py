@@ -463,11 +463,18 @@ def extract_cp_features(
 
 def _read_well_labels(args):
     """Read and filter labels CSV for a single well. Used with ThreadPoolExecutor."""
-    exp_name, well = args
+    exp_name, well, channels = args
     # See note in ops_model.data.data_loader.OpsDataManager.get_labels: the
     # frozen "training" snapshot under models/link_csvs/ goes stale when ISS
-    # is re-run, so default to the live 3-assembly CSV ("original").
-    labels_tmp = pd.read_csv(OpsPaths(exp_name, well=well).links["original"])
+    # is re-run, so default to the live 3-assembly CSV ("original"). An all-fixed
+    # channel set instead reads the reimage pass's own CSV, so patches are cut with
+    # cell_seg_fixed rather than the live mask.
+    from ops_model.data.paths import link_csv_for_channels, select_pass_columns
+
+    labels_tmp = pd.read_csv(link_csv_for_channels(exp_name, well, channels))
+    # Point bbox / segmentation_id / mask_label at this job's pass before filtering,
+    # so a fixed-channel job drops on ITS seg ids, not the live ones.
+    labels_tmp = select_pass_columns(labels_tmp, channels)
     labels_tmp = labels_tmp.dropna(subset=["segmentation_id"])
     from ops_model.data.qc.qc_labels import filter_small_bboxes
 
@@ -477,10 +484,14 @@ def _read_well_labels(args):
     return labels_tmp
 
 
-def load_labels_parallel(experiment_dict: dict) -> pd.DataFrame:
-    """Read label CSVs for all wells in parallel via ThreadPoolExecutor."""
+def load_labels_parallel(experiment_dict: dict, out_channels=None) -> pd.DataFrame:
+    """Read label CSVs for all wells in parallel via ThreadPoolExecutor.
+
+    out_channels selects which imaging pass's link CSV to read (see
+    ops_model.data.paths.link_csv_for_channels).
+    """
     well_args = [
-        (exp_name, well)
+        (exp_name, well, out_channels)
         for exp_name, wells in experiment_dict.items()
         for well in wells
     ]
@@ -1004,7 +1015,7 @@ def extract_cp_features_bulk_read(
     t0 = time.perf_counter()
 
     if labels_df is None:
-        labels_df = load_labels_parallel(experiment_dict)
+        labels_df = load_labels_parallel(experiment_dict, out_channels=out_channels)
     gene_labels = sorted(labels_df["gene_name"].unique())
     label_int_lut = {gene: i for i, gene in enumerate(gene_labels)}
     int_label_lut = {i: gene for i, gene in enumerate(gene_labels)}

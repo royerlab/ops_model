@@ -26,7 +26,7 @@ from viscy.transforms import (
     RandScaleIntensityd,
 )
 
-from .paths import OpsPaths
+from .paths import OpsPaths, link_csv_for_channels, select_pass_columns
 from .qc.qc_labels import filter_small_bboxes
 from .collate_utils import (
     collate_basic_dataset,
@@ -582,8 +582,8 @@ class OpsDataManager:
                 if self.verbose:
                     print("reading labels for", exp_name, f"links_{w[0]}{w[2]}")
                 if self.link_csv_dir is not None:
-                    well_prefix = w[0] + w[2]
-                    csv_path = self.link_csv_dir / f"{well_prefix}_linked_pheno_iss.csv"
+                    csv_path = link_csv_for_channels(
+                        exp_name, w, self.out_channels, link_csv_dir=self.link_csv_dir)
                 else:
                     # Default to the live 3-assembly CSV ("original") so feature
                     # extractions automatically pick up ISS-pipeline re-runs.
@@ -592,9 +592,12 @@ class OpsDataManager:
                     # observed across 81/84 experiments). Pass explicit
                     # link_csv_dir=models/link_csvs/<exp>/ if a frozen snapshot
                     # is required for reproducible training.
-                    csv_path = OpsPaths(exp_name, well=w).links["original"]
+                    csv_path = link_csv_for_channels(exp_name, w, self.out_channels)
                 print(f"Reading link CSV from {csv_path}")
                 labels_tmp = pd.read_csv(csv_path)
+                # Point bbox / segmentation_id / mask_label at this job's pass. The
+                # fixed CSV is a superset, so both passes read the same file.
+                labels_tmp = select_pass_columns(labels_tmp, self.out_channels)
 
                 # Minibinder back-compat: link CSVs from minibinder experiments
                 # don't have a "gene_name" column. Copy minibinder_perturbation
