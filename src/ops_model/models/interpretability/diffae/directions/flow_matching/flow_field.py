@@ -29,11 +29,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .config import DirConfig
+from ..config import DirConfig
 from .flow import integrate_flow_bidir, train_flow
-from .ot_cfm_test import _faithfulness, _gather_any, _half_axis_metrics, _mean_diff_trajectory, _score_trajectory
-from .rank import supervised_direction
-from .traverse import load_diffae
+from ..ot_validation.ot_cfm_test import _faithfulness, _gather_any, _half_axis_metrics, _mean_diff_trajectory, _score_trajectory
+from ..rank import supervised_direction
+from ..traverse import load_diffae
 
 
 def build_flow_field(cfg: DirConfig, out_dir: str, seed: int = 0, w: float = 1.0,

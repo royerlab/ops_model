@@ -16,8 +16,8 @@ from pathlib import Path
 import pandas as pd
 from ops_utils.hpc.slurm_batch_utils import submit_parallel_jobs
 
-from ..classifier.config import DEFAULT_OUT_ROOT, GRAINS, slugify
-from .config import DirConfig
+from ...classifier.config import DEFAULT_OUT_ROOT, GRAINS, slugify
+from ..config import DirConfig
 from .flow_field import build_flow_field
 
 
