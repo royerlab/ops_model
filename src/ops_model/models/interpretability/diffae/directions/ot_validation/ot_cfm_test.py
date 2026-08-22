@@ -53,15 +53,15 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..classifier.celldino_features import embed_crops
-from ..classifier.config import GRAINS
-from ..classifier.data import make_labels_df, materialize_crops
-from ..generator.data import normalize
-from .config import DirConfig
-from .data import _top_cells, gather
-from .flow import integrate_flow_bidir, train_flow
-from .rank import supervised_direction
-from .traverse import _sample_guided, load_diffae
+from ...classifier.celldino_features import embed_crops
+from ...classifier.config import GRAINS
+from ...classifier.data import make_labels_df, materialize_crops
+from ...generator.data import normalize
+from ..config import DirConfig
+from ..data import _top_cells, gather
+from ..flow_matching.flow import integrate_flow_bidir, train_flow
+from ..rank import supervised_direction
+from ..traverse import _sample_guided, load_diffae
 
 METHODS = ("mean_diff", "flow_independent", "flow_ot")
 

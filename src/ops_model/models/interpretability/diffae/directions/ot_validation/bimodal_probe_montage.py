@@ -19,12 +19,12 @@ import numpy as np
 import torch
 from sklearn.cluster import KMeans
 
-from ..generator.data import normalize
-from .config import DirConfig
-from .flow import integrate_flow
-from .flow_field_compute import integrate_path, load_net
+from ...generator.data import normalize
+from ..config import DirConfig
+from ..flow_matching.flow import integrate_flow
+from ..flow_matching.flow_field_compute import integrate_path, load_net
 from .ot_cfm_test import _mean_diff_trajectory, _score_trajectory
-from .traverse import load_diffae
+from ..traverse import load_diffae
 
 
 def _pick_divergent_probes(feats, labels, net, n_sub: int = 30, t_max: float = 1.0, seed: int = 0):

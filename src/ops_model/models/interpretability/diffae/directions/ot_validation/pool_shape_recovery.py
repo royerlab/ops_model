@@ -22,11 +22,11 @@ import torch
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
-from ..classifier.celldino_features import embed_crops
-from .config import DirConfig
-from .flow import integrate_flow
-from .flow_field_compute import load_net
-from .traverse import _sample_guided, load_diffae
+from ...classifier.celldino_features import embed_crops
+from ..config import DirConfig
+from ..flow_matching.flow import integrate_flow
+from ..flow_matching.flow_field_compute import load_net
+from ..traverse import _sample_guided, load_diffae
 
 
 def _split_score(X: np.ndarray, seed: int = 0) -> dict | None:
