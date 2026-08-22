@@ -89,12 +89,284 @@ def _pca_to_variance(X: np.ndarray, variance: float, seed: int) -> tuple[np.ndar
     return X_pca, int(pca.n_components_)
 
 
-def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, marker: str):
+def _split_terms(raw):
+    """Annotation cells hold Python-list strings ("['A', 'B']"), plain text, or empty.
+
+    Parsing them as ';'-delimited text yielded terms like "[]" and one long list as a
+    single term, which made every enrichment meaningless.
+    """
+    import ast as _ast
+
+    if raw is None or not isinstance(raw, str) or not raw.strip():
+        return set()
+    t = raw.strip()
+    if t.startswith("[") and t.endswith("]"):
+        try:
+            vals = _ast.literal_eval(t)
+            return {str(v).strip() for v in vals if str(v).strip()}
+        except Exception:
+            t = t.strip("[]")
+    return {x.strip().strip("'\"") for x in t.replace("|", ";").split(";") if x.strip().strip("'\"")}
+
+
+def cross_pass_retention_report(
+    X_a: np.ndarray, X_b: np.ndarray, labels: list, out_stem,
+    names: tuple = ("live", "fixed"), low_quantile: float = 0.10,
+    panel_csv: str = "/hpc/projects/icd.fast.ops/configs/annotated_gene_panel_July2025.csv",
+    n_label: int = 25, active_genes=None, strength=None,
+):
+    """Which genes lose their phenotype between two passes, and what biology that is.
+
+    A heatmap shows THAT structure degrades; this answers WHAT degrades. Per gene we
+    score "retention" = correlation between its row of the pass-A gene x gene matrix
+    and the same row in pass B. A gene whose relational context survives scores high;
+    one whose neighbours change scores low. Then the low-retention tail is tested for
+    enrichment against the annotated gene panel (CORUM complexes, GO / REACTOME
+    pathways, curated category) so the answer is named biology rather than a picture.
+
+    Outputs: ranked retention CSV, enrichment CSV, and a two-panel figure
+    (retention distribution with the tail marked + labelled worst genes; enriched
+    terms among them).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from scipy.stats import fisher_exact
+
+    Path(out_stem).parent.mkdir(parents=True, exist_ok=True)
+
+    def _corr(X):
+        return np.corrcoef(X - X.mean(axis=0, keepdims=True))
+
+    Ca, Cb = _corr(X_a), _corr(X_b)
+    n = len(labels)
+    off = ~np.eye(n, dtype=bool)
+    ret = np.array([np.corrcoef(Ca[i][off[i]], Cb[i][off[i]])[0, 1] for i in range(n)])
+
+    df = pd.DataFrame({"gene": [str(l) for l in labels], "retention": ret})
+    if active_genes is not None:
+        # Only genes with a real phenotype in pass A can meaningfully "lose" it.
+        # Without this the low-retention tail is dominated by negative controls,
+        # whose correlation profile is noise and so never reproduces.
+        keep = {str(g) for g in active_genes}
+        df["phenotype_in_a"] = df["gene"].isin(keep)
+    else:
+        df["phenotype_in_a"] = True
+    df = df.sort_values("retention")
+    scored = df[df["phenotype_in_a"]]
+    cut = float(np.nanquantile(scored["retention"], low_quantile))
+    df["low_retention"] = df["phenotype_in_a"] & (df["retention"] <= cut)
+    df.to_csv(f"{out_stem}_retention.csv", index=False)
+
+    # ---- enrichment of the low-retention tail against the annotated panel ----
+    term_cols = {
+        "CORUM complex": "In_corum_complexes",
+        "same-complex partner": "In_same_complex_with",
+        "REACTOME pathway": "In_REACT_pathways",
+        "GO pathway": "In_go_pathways",
+        "category": "Gene_Category",
+    }
+    enr = []
+    try:
+        panel = pd.read_csv(panel_csv, low_memory=False)
+        panel = panel[panel["Gene.name"].notna()]
+        low = set(df.loc[df.low_retention, "gene"])
+        rest = set(df.loc[df["phenotype_in_a"] & ~df["low_retention"], "gene"])
+        for kind, col in term_cols.items():
+            if col not in panel.columns:
+                continue
+            gene_terms = {}
+            for g, raw in zip(panel["Gene.name"], panel[col]):
+                for t in _split_terms(raw):
+                    gene_terms.setdefault(t, set()).add(str(g))
+            for term, genes in gene_terms.items():
+                a = len(genes & low)
+                if a < 3:                      # too small to be interesting
+                    continue
+                b = len(low) - a
+                c = len(genes & rest)
+                d = len(rest) - c
+                if min(a + c, b + d) == 0:
+                    continue
+                odds, p = fisher_exact([[a, b], [c, d]], alternative="greater")
+                enr.append({"kind": kind, "term": term, "n_low": a,
+                            "n_other": c, "odds_ratio": float(odds), "p": float(p)})
+    except Exception as exc:
+        print(f"  [enrichment skipped] {exc}")
+
+    edf = pd.DataFrame(enr)
+    if len(edf):
+        edf = edf.sort_values("p")
+        m = len(edf)
+        edf["q_bh"] = (edf["p"] * m / np.arange(1, m + 1)).cummin().clip(upper=1.0)
+        edf.to_csv(f"{out_stem}_enrichment.csv", index=False)
+
+    # ---- figure ----
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
+                             gridspec_kw={"width_ratios": [1.0, 1.25]})
+    ax = axes[0]
+    ax.hist(ret[~np.isnan(ret)], bins=60, color="#4C72B0", alpha=0.85, edgecolor="black", lw=0.4)
+    ax.axvline(cut, color="#C44E52", lw=2.5, ls="--",
+               label=f"low-retention cut (q={low_quantile:g}) = {cut:.3f}")
+    ax.set_xlabel(f"phenotype retention  ({names[0]} vs {names[1]} correlation profile)", fontsize=15)
+    ax.set_ylabel("genes", fontsize=15)
+    ax.set_title(f"Per-gene retention (n={n})\nmedian={np.nanmedian(ret):.3f}", fontsize=17)
+    ax.legend(fontsize=12); ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(labelsize=13)
+
+    # Gene-level view: a strong live phenotype that is NOT retained is the
+    # interesting case. Annotation-space enrichment is kept as a CSV but is
+    # underpowered at this n, so the plot names individual genes instead.
+    ax = axes[1]
+    if strength is not None:
+        sdf = df.merge(pd.DataFrame({"gene": [str(k) for k in strength],
+                                     "strength": list(strength.values())}), on="gene", how="inner")
+        sdf = sdf.dropna(subset=["strength", "retention"])
+        ax.scatter(sdf["strength"], sdf["retention"], s=18, c="#9aa4b1",
+                   alpha=0.55, linewidths=0, label="gene")
+        hi = sdf["strength"] >= sdf["strength"].quantile(0.75)
+        lo = sdf["retention"] <= cut
+        pick = sdf[hi & lo].sort_values("retention")
+        ax.scatter(pick["strength"], pick["retention"], s=52, c="#C44E52",
+                   edgecolors="black", linewidths=0.6, zorder=4,
+                   label=f"strong phenotype, poor retention (n={len(pick)})")
+        ax.axhline(cut, color="#C44E52", ls="--", lw=1.8, alpha=0.8)
+        ax.axvline(float(sdf["strength"].quantile(0.75)), color="grey", ls=":", lw=1.5)
+        for _, r in pick.head(n_label).iterrows():
+            ax.annotate(r["gene"], (r["strength"], r["retention"]), fontsize=11,
+                        xytext=(4, 3), textcoords="offset points")
+        ax.set_xlabel(f"phenotype strength in {names[0]}  (activity mAP)", fontsize=15)
+        ax.set_ylabel("phenotype retention", fontsize=15)
+        ax.set_title("Genes whose real phenotype did not survive", fontsize=17)
+        ax.legend(fontsize=11, loc="lower right")
+        ax.tick_params(labelsize=13)
+        pick.to_csv(f"{out_stem}_strong_but_lost.csv", index=False)
+    else:
+        worst = df[df["phenotype_in_a"]].head(n_label).iloc[::-1]
+        y = np.arange(len(worst))
+        ax.barh(y, worst["retention"], color="#C44E52", alpha=0.85, edgecolor="black", lw=0.5)
+        ax.set_yticks(y); ax.set_yticklabels(worst["gene"], fontsize=11)
+        ax.set_xlabel("phenotype retention", fontsize=15)
+        ax.set_title("Lowest-retention genes", fontsize=17)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    fig.suptitle(f"{names[0]} vs {names[1]}: phenotype retention and its biology", fontsize=20)
+    fig.tight_layout()
+    fig.savefig(f"{out_stem}.png", dpi=180, bbox_inches="tight")
+    fig.savefig(f"{out_stem}.svg", bbox_inches="tight")
+    plt.close(fig)
+    return df, edf
+
+
+def cross_pass_correlation_heatmap(
+    X_a: np.ndarray, X_b: np.ndarray, labels: list, out_stem,
+    names: tuple = ("live", "fixed"), n_clusters: int = 12, **kwargs
+):
+    """Compare gene x gene correlation structure between two imaging passes.
+
+    Three panels sharing ONE gene ordering (hierarchical clustering of pass A), so the
+    same block appears in the same place in all three:
+
+        A            gene x gene correlation in pass A
+        B            the same genes in pass B
+        A - B        where the passes agree (~0) and disagree (signed)
+
+    Ordering matters more than it sounds: unordered, both matrices look like noise
+    because related genes are scattered. Clustering on A and reusing that order is
+    what makes a block that survives in B visible as agreement, and one that
+    dissolves visible as disagreement.
+
+    Correlation is computed in the raw shared feature space -- both passes are
+    embedded by the same model, so the axes correspond. (PCA fitted per pass gives
+    arbitrarily rotated axes and makes the comparison meaningless.)
+
+    Returns (corr_a, corr_b, order, cluster_ids) in the clustered order.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
+    from scipy.spatial.distance import squareform
+
+    plt.rcParams["pdf.fonttype"] = 42
+    Path(out_stem).parent.mkdir(parents=True, exist_ok=True)
+
+    def _corr(X):
+        return np.corrcoef(X - X.mean(axis=0, keepdims=True))
+
+    Ca, Cb = _corr(X_a), _corr(X_b)
+
+    # Cluster on pass A; 1-r as distance, averaged to enforce exact symmetry.
+    d = 1.0 - Ca
+    np.fill_diagonal(d, 0.0)
+    Z = linkage(squareform((d + d.T) / 2.0, checks=False), method="average")
+    order = leaves_list(Z)
+    clusters = fcluster(Z, t=n_clusters, criterion="maxclust")
+
+    Ca_o, Cb_o = Ca[np.ix_(order, order)], Cb[np.ix_(order, order)]
+    diff = Ca_o - Cb_o
+    lab_o = [str(labels[i]) for i in order]
+
+    pd.DataFrame(Ca_o, index=lab_o, columns=lab_o).to_csv(f"{out_stem}_{names[0]}.csv")
+    pd.DataFrame(Cb_o, index=lab_o, columns=lab_o).to_csv(f"{out_stem}_{names[1]}.csv")
+    pd.DataFrame(diff, index=lab_o, columns=lab_o).to_csv(f"{out_stem}_difference.csv")
+    pd.DataFrame({"gene": lab_o, "cluster": clusters[order]}).to_csv(
+        f"{out_stem}_clusters.csv", index=False)
+
+    # Symmetric limits from the data so faint structure is visible rather than
+    # swamped by a hard -1..1 scale.
+    lim = float(np.percentile(np.abs(np.concatenate([Ca_o.ravel(), Cb_o.ravel()])), 99))
+    dlim = float(np.percentile(np.abs(diff.ravel()), 99))
+    n = len(lab_o)
+
+    fig, axes = plt.subplots(1, 3, figsize=(26, 9))
+    # optional mAP strips above each panel, in the same clustered order, so a block of
+    # structure can be read against how much signal those genes actually carry
+    strips = kwargs.get("map_scores") or {}
+    for ax, (M, title, v) in zip(axes, (
+        (Ca_o, f"{names[0]}", lim), (Cb_o, f"{names[1]}", lim),
+        (diff, f"{names[0]} - {names[1]}", dlim),
+    )):
+        im = ax.imshow(M, cmap="RdBu_r", vmin=-v, vmax=v, interpolation="nearest")
+        ax.set_title(f"{title}\n(n={n} genes, clustered on {names[0]})", fontsize=18)
+        ax.set_xticks([]); ax.set_yticks([])
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Pearson r")
+    # Cluster boundaries, so blocks are readable as blocks
+    bounds = np.where(np.diff(clusters[order]) != 0)[0] + 0.5
+    for ax in axes:
+        for b in bounds:
+            ax.axhline(b, color="k", lw=0.6, alpha=0.5)
+            ax.axvline(b, color="k", lw=0.6, alpha=0.5)
+    if strips:
+        for ax in axes:
+            div = ax.inset_axes([0, 1.015, 1, 0.045])
+            vals = np.array([[strips.get(g, np.nan) for g in lab_o]], dtype=float)
+            div.imshow(vals, aspect="auto", cmap="viridis")
+            div.set_xticks([]); div.set_yticks([])
+            div.set_ylabel("mAP", rotation=0, ha="right", va="center", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(f"{out_stem}.png", dpi=180, bbox_inches="tight")
+    fig.savefig(f"{out_stem}.svg", bbox_inches="tight")
+    plt.close(fig)
+    return Ca_o, Cb_o, order, clusters[order]
+
+
+def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, marker: str,
+                         X_other: "np.ndarray | None" = None,
+                         axis_labels: "tuple[str, str] | None" = None,
+                         zlim: "float | None" = None):
     """gene x gene correlation of mean-centered embeddings -> PNG + SVG + HTML.
 
     This is the "image half" of the paper joint heatmap:
         X_ops_c  = X_ops - X_ops.mean(axis=0, keepdims=True)
         corr_ops = np.corrcoef(X_ops_c)
+
+    With ``X_other`` the result is instead the CROSS-correlation between two embeddings
+    of the same genes (rows = X_ops, columns = X_other) -- e.g. a live pass against a
+    joined reimage pass. That matrix is not symmetric, and its diagonal is the
+    same-gene agreement between the two. ``axis_labels`` names the two axes.
     """
     import matplotlib
 
@@ -106,7 +378,14 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
     Path(out_stem).parent.mkdir(parents=True, exist_ok=True)
 
     X_ops_c = X_ops - X_ops.mean(axis=0, keepdims=True)
-    corr_ops = np.corrcoef(X_ops_c)
+    if X_other is None:
+        corr_ops = np.corrcoef(X_ops_c)
+    else:
+        # Cross-correlation: stack both, correlate, keep the off-diagonal block so
+        # rows stay X_ops and columns X_other.
+        other_c = X_other - X_other.mean(axis=0, keepdims=True)
+        n_a = X_ops_c.shape[0]
+        corr_ops = np.corrcoef(np.vstack([X_ops_c, other_c]))[:n_a, n_a:]
 
     # Downloadable values: gene x gene correlation matrix as CSV (labelled).
     import pandas as pd
@@ -115,9 +394,14 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
 
     # static PNG + SVG
     n = corr_ops.shape[0]
+    lim = float(zlim) if zlim else max(
+        float(np.nanpercentile(np.abs(corr_ops[~np.eye(*corr_ops.shape, dtype=bool)]), 99)),
+        1e-3)
     fig, ax = plt.subplots(figsize=(10, 10))
-    im = ax.imshow(corr_ops, cmap="RdBu_r", vmin=-1, vmax=1, interpolation="nearest")
+    im = ax.imshow(corr_ops, cmap="RdBu_r", vmin=-lim, vmax=lim, interpolation="nearest")
     ax.set_title(f"{marker}: gene x gene embedding correlation (n={n})")
+    if axis_labels:
+        ax.set_ylabel(axis_labels[0]); ax.set_xlabel(axis_labels[1])
     ax.set_xticks([])
     ax.set_yticks([])
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Pearson r")
@@ -129,15 +413,37 @@ def _correlation_heatmap(X_ops: np.ndarray, labels: list[str], out_stem: Path, m
     # interactive HTML (hover shows the gene pair + r)
     import plotly.graph_objects as go
 
+    ylab, xlab = axis_labels if axis_labels else ("gene", "gene")
+    # A 1001x1001 matrix embeds ~1e6 floats and yields a ~13MB page. Block-average to
+    # a viewable resolution and round: the structure is what is being read, not
+    # individual cells, and the full matrix is already written as CSV alongside.
+    z_html, x_html, y_html = corr_ops, labels, labels
+    _MAXPX = 420
+    if corr_ops.shape[0] > _MAXPX:
+        k = int(np.ceil(corr_ops.shape[0] / _MAXPX))
+        m = (corr_ops.shape[0] // k) * k
+        z_html = corr_ops[:m, :m].reshape(m // k, k, m // k, k).mean(axis=(1, 3))
+        x_html = [labels[i] for i in range(0, m, k)]
+        y_html = x_html
+    z_html = np.round(z_html, 3)
     fig = go.Figure(
         go.Heatmap(
-            z=corr_ops, x=labels, y=labels, zmin=-1, zmax=1, colorscale="RdBu_r",
+            z=z_html, x=x_html, y=y_html, zmin=-lim, zmax=lim, colorscale="RdBu_r",
             colorbar=dict(title="Pearson r"),
+            hovertemplate=(f"{ylab}: %{{y}}<br>{xlab}: %{{x}}"
+                           "<br>r: %{z:.3f}<extra></extra>"),
         )
     )
     fig.update_layout(
-        title=f"{marker}: gene x gene embedding correlation (n={n})",
-        width=900, height=900, xaxis_showticklabels=False, yaxis_showticklabels=False,
+        title=dict(text=(f"{marker}: gene x gene embedding correlation "
+                         f"(n={n}, scale +-{lim:.2f}"
+                         + (f", binned to {z_html.shape[0]}px" if z_html.shape[0] < n else "")
+                         + ")"), font=dict(size=19)),
+        width=760, height=720, font=dict(size=15),
+        margin=dict(l=90, r=20, t=80, b=80),
+        xaxis=dict(title=dict(text=xlab, font=dict(size=17)), showticklabels=False),
+        yaxis=dict(title=dict(text=ylab, font=dict(size=17)), showticklabels=False,
+                   autorange="reversed"),
     )
     fig.write_html(f"{out_stem}.html", include_plotlyjs="cdn")
 
