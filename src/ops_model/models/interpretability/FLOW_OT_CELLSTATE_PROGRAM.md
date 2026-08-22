@@ -479,6 +479,279 @@ at `bs=256` the Hungarian algorithm is negligible next to the DDIM decode cost.
   used the classifier score directly rather than this centroid-classification approach) remains
   the strongest actual evidence for flow-OT's value and hasn't been revisited with this scrutiny.
 
+- **2026-08-21 — literature review, then testing its top-priority fix directly.** Ran a
+  literature review (Tong et al. 2302.00482, CellFlow bioRxiv 2025.04.11.648220, Rectified Flow
+  2209.03003, Flow Matching Guide 2412.06264, Cheng & Schwing 2503.10636, Boïté/Delon/Nadjahi
+  2605.12174, CellOT/Bunne et al., moscot/Klein et al. — PDFs in `Optical_Flow/papers/`) against
+  the two open problems above. Findings, condensed: (1) the α>1 extrapolation dial has NO basis
+  in this literature at all — Rectified Flow's marginal-preserving guarantee only holds for
+  t∈[0,1], and CellFlow's actual mechanism for "stronger effect" is a conditioning covariate
+  baked into training, never longer integration; our `FlowNet` makes this worse than the generic
+  case since raw scalar `t` has no positional encoding and training only samples t~Uniform(0,1),
+  so t=3 is doubly out-of-distribution. (2) our batch=256 exact-Hungarian coupling diverges from
+  CellFlow's own recipe (entropic/Sinkhorn, batch≈512+, OT-pairing batch decoupled from the SGD
+  batch per Cheng & Schwing's "oversampling" fix) on every axis; Tong et al.'s own ablation shows
+  batch=1 is IDENTICAL to independent coupling and harder multimodal cases need larger batches.
+  **Implemented fix #2 directly** (`flow.py::train_flow(coupling="ot_sinkhorn")` +
+  `_sinkhorn_col_sample`): every 50 steps, resample an OT-pairing batch as large as the dataset
+  allows (both genes only have 1000 cells/class, so this is close to population-level OT, not
+  just "a bit bigger than 256"), solve an entropic Sinkhorn plan, cache it, and have SGD
+  re-subsample 256-sized minibatches from that cached pairing in between. Two real bugs caught
+  before getting a result: an absolute `eps=0.05` overflowed the log-domain updates (CellDINO
+  squared-distances run into the hundreds/thousands — fixed by scaling eps relative to the cost
+  matrix's own mean, standard Sinkhorn stability practice), then a wrong update rule (additive
+  `f = ... + f` instead of the correct closed-form replacement each iteration, since f/h only
+  enter the marginal conditions as outer multiplicative factors) that made both potentials grow
+  unboundedly until they overflowed.
+  **Controlled A/B result (same run, same device, t_max=1 only, all real NTC, nearest-real-
+  centroid classification), against the true real-KD cluster-A/B proportions:**
+
+  | gene | true A/B | ot (NTC/A/B) | ot_sinkhorn (NTC/A/B) |
+  |---|---|---|---|
+  | KIF11 | 31.4% / 68.6% | 1.8/40.9/57.3 | 3.2/21.9/74.9 |
+  | TUBGCP6 | 68.4% / 31.6% | 6.9/67.3/25.8 | 5.7/55.1/39.2 |
+
+  Normalizing out NTC-stall and comparing the A-fraction to true A: KIF11 error drops slightly
+  (ot 10.2pp → ot_sinkhorn 8.8pp) but TUBGCP6 error nearly triples (ot 3.9pp → ot_sinkhorn
+  10.0pp) — Sinkhorn overcorrects PAST the true ratio on TUBGCP6. NTC-stall moves in opposite
+  directions too (KIF11 worse: 1.8%→3.2%; TUBGCP6 better: 6.9%→5.7%).
+  **Verdict: this specific, literature-grounded fix does NOT decisively resolve the multimodal-
+  recovery problem** — small, mixed, gene-dependent effects in both directions, not a closed
+  gap. This actually matches the literature review's own caveat, stated before this test ran:
+  "I could not find any paper that guarantees minibatch OT-CFM recovers an a-priori-unknown
+  multimodal split correctly... it should reduce the bias, not provably close the gap." Fix #1
+  (the α>1 extrapolation dial having no theoretical basis) remains untested/unimplemented — it
+  requires a real graded strength covariate in the data (partial knockdown, sgRNA efficacy
+  tiers, timepoints), which hasn't been confirmed to exist yet, and is a separate, likely more
+  consequential problem from the batch/solver axis tested here.
+
+- **2026-08-21 (cont.) — does restricting the OT pairing to only the highest-rank (purest-
+  phenotype) KD cells help?** User's hypothesis: the existing pipeline already selects only
+  `rank_type=="top"` cells per class (`data.py::_top_cells`, `n_per_class=1000`), but within
+  that top-1000 there's still a range of confidence — pairing against only the very top of that
+  range should give a cleaner, less ambiguous target distribution.
+  **Checked the premise before testing it:** does rank-restriction disproportionately exclude
+  whichever mode is subtler/less confidently different from NTC? Computed self-clustering
+  balance directly on kd[:100]/kd[:200]/kd[:500]/kd[:1000] (rank-ordered, row 0 = best rank) for
+  both genes — the minority-mode proportion stayed close to constant across every cutoff (KIF11
+  ~29-31%, TUBGCP6 ~29-32%), so purification isn't quietly cutting into the subtler mode. Safe
+  to test.
+  **Result** (`sinkhorn_ablation.py::run_sinkhorn_ablation(kd_top_k=...)` — restricts only the
+  KD side used for training/pairing; evaluation centroids always come from the FULL population,
+  so the ground truth being tested against never changes), reported as %-points off the true
+  A-fraction (KIF11 true A=31.4%, TUBGCP6 true A=68.4%), excluding NTC-stalled cells:
+
+  | gene | coupling | k=100 | k=200 | k=500 | k=1000 (baseline) |
+  |---|---|---|---|---|---|
+  | KIF11 | ot | 0.7pp | 5.3pp | 5.0pp | 10.2pp |
+  | KIF11 | ot_sinkhorn | 8.0pp | 8.3pp | 7.5pp | 8.8pp |
+  | TUBGCP6 | ot | 7.9pp | 3.8pp | 5.2pp | 3.9pp |
+  | TUBGCP6 | ot_sinkhorn | 11.8pp | 4.3pp | 10.7pp | 10.0pp |
+
+  **A real effect, but not a general rule.** KIF11 + exact-Hungarian ('ot') improves sharply and
+  close to monotonically as k shrinks — 10.2pp error at k=1000 down to 0.7pp at k=100,
+  essentially nailing the true split. That doesn't generalize: TUBGCP6 does NOT improve
+  monotonically with purity (best around k=200, worse again at the most extreme k=100 for BOTH
+  couplings), and `ot_sinkhorn` barely benefits from purification on either gene. One consistent
+  side benefit regardless of the balance result: NTC-stall drops as TUBGCP6's target purifies
+  (6.9%→2.8%→1.8%→2.5% from k=1000→100) — purification does reduce that specific failure mode
+  even where it doesn't fix balance.
+  **Verdict:** purity helps, but there's a per-gene/per-coupling sweet spot rather than "more
+  purity is always better" — a real, usable lever (especially for exact-Hungarian coupling),
+  not a universal fix. Combined with the batch/solver result above, three semi-independent
+  levers (coupling solver, batch size, target purity) each move the outcome a little, in
+  gene-dependent and sometimes opposite directions, with no single lever closing the gap to
+  mean_diff's simplicity/determinism on its own.
+
+- **2026-08-21 (cont.) — two more ideas, one clean null (with a provable reason) and one clean
+  win.** User asked for other directions beyond levers 1-3 above; picked rectified-flow reflow
+  and a mixture-of-flows design (real single-cell trajectory tracking, the third idea, stays
+  out of scope — a separate workstream, not a pipeline tweak).
+    - **Reflow (`flow.py::reflow_train`, Liu et al. 2209.03003): retrain a fresh FlowNet on an
+      already-trained field's own (x0, endpoint) pairs — exact, non-crossing by construction,
+      which provably straightens the ODE.** Tested before-vs-after on t=1 balance recovery,
+      same nearest-centroid methodology, both genes/couplings: **essentially no change**
+      (TUBGCP6/ot: 67.3/25.8 → 67.3/25.8, bit-for-bit identical; every other cell ≤1.1pp).
+      Not a bug — reflow is *marginal-preserving by design* (that's the point: straighten the
+      path, keep the same t=1 distribution), so testing it at exactly t=1 balance was always
+      going to show zero effect. The place reflow could actually matter is the α>1
+      overshoot/NTC-stall problem (a straighter path should extrapolate more predictably past
+      its training range than a curved one) — untested here, and the correctly-targeted retest
+      if this is worth revisiting.
+    - **Mixture of flows: split the real KD population into its two discovered sub-clusters
+      FIRST, train ONE separate flow per sub-cluster** (`mixture_flow_test.py` — NTC→cluster-A-
+      only and NTC→cluster-B-only, each a clean unimodal sub-problem by construction) **— a
+      clean win.** Each sub-flow reliably routes the full real NTC population toward its OWN
+      designated mode:
+
+      | gene | coupling | net_A → A | net_B → B |
+      |---|---|---|---|
+      | KIF11 | ot | 96.0% | 99.7% |
+      | KIF11 | ot_sinkhorn | 98.4% | 96.6% |
+      | TUBGCP6 | ot | 90.6% | 99.6% |
+      | TUBGCP6 | ot_sinkhorn | 92.4% | 98.4% |
+
+      90-99.7% purity across every combination — far more reliable than any unified-flow result
+      today. Confirms the premise from every result above: OT-CFM is already good at clean,
+      unimodal targets (matches mean_diff tying/winning there too); the problem all day was
+      always the multimodal *routing* decision, never the transport itself. **Design implication
+      for the actual interpretability deliverable:** don't ask one field to guess which mode an
+      NTC cell belongs to (shown twice today — nearest-centroid audit + this — not reliably
+      answerable from static data). Instead, for a flagged bimodal target, decode BOTH
+      "traverse toward mode A" and "toward mode B" as two explicit, separately-trained,
+      high-purity counterfactuals, and let the two decoded outcomes speak for themselves rather
+      than forcing a single predicted route.
+
+- **2026-08-21 (cont.) — user's hypothesis: does OT do better on genuinely MORE complex
+  phenotypes, not just the clean-bimodal cases tested so far?** Correct instinct, and it
+  surfaced a real problem with every gene tested today: `bimodality_scan.py`'s original
+  selection (fixed KMeans k=2 separation) can only ever find genes that already fit a clean
+  2-cluster model — exactly the easy regime a 2-vector piecewise mean_diff already handles, and
+  the WRONG regime to look for OT's advantage in.
+  **Built `complexity_scan.py`: proper model selection (PCA→20 dims, Gaussian-mixture BIC,
+  k=1..5) across all 1000 genes** (caches already existed for all of them from the original
+  buildout), replacing the fixed-k=2 assumption. Result: only 83/1000 genes are genuinely
+  clean-bimodal (best_k=2) by BIC; 616 are unimodal; **301 (30%) are best fit by 3-5 real
+  modes.** Bigger finding: **TUBGCP6 and KIF11 — today's own test genes — are themselves
+  best_k=5 and best_k=3, not 2.** Every mixture-of-flows/per-cluster-mean_diff result earlier
+  today forced an artificial 2-way split onto genes with more real structure than that, which
+  may explain some of the day's noisiness in both methods (cells belonging to an unmodeled 3rd
+  mode had to be arbitrarily absorbed into whichever of the 2 forced clusters was nearest).
+  **Reran mixture-of-flows vs. per-cluster mean_diff at each gene's TRUE best_k**
+  (`mixture_flow_multik.py`; clusters assigned via the same GMM used for best_k, not KMeans),
+  on TUBGCP6 (k=5), KIF11 (k=3), and SSX2IP (k=3, sizes 197/434/369 — picked fresh and
+  unbiased directly from the complexity scan, never touched before today). Own-cluster routing
+  accuracy (does each method's push for cluster i actually land nearest cluster i, not a
+  neighboring mode or NTC):
+
+  | gene | cluster (size) | mean_diff | OT | OT margin |
+  |---|---|---|---|---|
+  | KIF11 | 0 (n=90) | 100.0% | 100.0% | tie |
+  | KIF11 | 1 (n=539) | 84.4% | 86.2% | +1.8pp |
+  | KIF11 | 2 (n=371) | 89.5% | 99.3% | +9.8pp |
+  | SSX2IP | 0 (n=197) | 100.0% | 99.9% | tie |
+  | SSX2IP | 1 (n=434) | 78.1% | 96.1% | +18.0pp |
+  | SSX2IP | 2 (n=369) | 70.7% | 85.7% | +15.0pp |
+  | TUBGCP6 | 0 (n=270) | 57.5% | 91.7% | +34.2pp |
+  | TUBGCP6 | 1 (n=99) | 100.0% | 100.0% | tie |
+  | TUBGCP6 | 2 (n=206) | 81.1% | 93.8% | +12.7pp |
+  | TUBGCP6 | 3 (n=158) | 98.5% | 95.4% | -3.1pp |
+  | TUBGCP6 | 4 (n=267) | 73.5% | 92.0% | +18.5pp |
+
+  **The clearest, most decisive result of the day: OT wins clearly in 6/11 clusters (average
+  +13.4pp margin among non-tie clusters, up to +34.2pp), ties in 3 (the smallest/most-distinct
+  clusters — both methods trivially hit ~100%), and mean_diff wins exactly once, by 3.1pp.**
+  SSX2IP — the one gene selected with zero prior bias, straight from this scan — shows OT ahead
+  on every non-trivial cluster. **Verdict: the hypothesis was right, and the mechanism makes
+  sense** — mean_diff's per-cluster vector is a rigid straight-line push from the NTC centroid,
+  fine when a target cluster is small/distinct/easy (where both methods already tie at ~100%),
+  but once there are several real, less-separated sub-populations pulling in different
+  directions, a fixed linear push increasingly can't discriminate "close enough to my target"
+  from "actually closer to a neighboring mode." A learned nonlinear field handles that
+  non-convex geometry better. This is the opposite regime from every earlier test today (few,
+  cleanly-separated modes) — which is exactly where mean_diff was shown to already excel, so
+  the two results aren't in tension, they're describing different regimes. **Net updated
+  picture for Workstream A: mean_diff remains the right default for unimodal and cleanly
+  bimodal targets (861/1000 genes by this scan); OT-CFM (via mixture-of-flows on GMM-discovered
+  sub-clusters) is the better choice specifically for the 301 genuinely-multi-modal (k>=3)
+  targets, with a real, sizeable, reproducible-across-3-genes advantage there.** Not yet tested:
+  whether this holds up through actual DiffAE decode (everything in this entry is raw
+  pre-decode embedding space, and today's earlier decode-validation work showed that step can
+  reverse conclusions — see the pool_shape_recovery correction above), and only 3 of the 301
+  candidate genes have been checked.
+
+- **2026-08-21 (cont.) — decode-validated on 10 more genes: the multi-K result survives real
+  image generation.** Ran the full pipeline (mean_diff vector + trained OT flow per GMM-
+  discovered cluster, decode every pushed cell through the frozen DiffAE, re-embed via
+  CellDINO, classify against the real (K+1)-way centroids — `mixture_decode_validation.py`,
+  n_pool=20/cluster) on the next 10 highest-bic_gain candidates from the complexity scan (an
+  unbiased continuation of the same ranked list, not hand-picked): HAUS6(k=4), EFR3A(k=4),
+  RNF11(k=5), ZNF131(k=4), CYP4V2(k=5), B4GALT3(k=5), CENPH(k=3), SACM1L(k=5), ASCC3(k=5),
+  FLII(k=5) — 45 clusters total.
+
+  **OT wins 31/45 clusters, mean_diff wins 10/45, ties 4/45. Mean margin (OT − mean_diff) =
+  +7.3pp, median +10pp.** Combined with the earlier 3-gene raw-embedding result (TUBGCP6/
+  KIF11/SSX2IP: 6 OT wins, 1 mean_diff win, 3 ties, avg +13.4pp), that's 13 genes / 56 clusters
+  total, same direction, now confirmed through actual generation — not a raw-embedding
+  artifact (the exact failure mode the pool_shape_recovery correction earlier today warned
+  about). Two caveats on the absolute percentages (not on the comparison itself, which stays
+  fair since both methods hit the same confound equally): (1) decode noise ALONE (zero
+  intended shift) already lands 45-55% of untouched control cells nearest a gene's largest
+  cluster in a few cases (CYP4V2 cluster_1: 55%; CENPH cluster_2: 50%; ASCC3 cluster_3: 45%) —
+  those clusters' raw purity numbers are inflated by proximity to the decode-noise floor, not
+  real signal, for BOTH methods equally; (2) n_pool=20/cluster gives only 5%-point resolution,
+  so any single cluster's margin carries real sampling noise — the trustworthy signal is the
+  aggregate over all 45, not any one comparison.
+  Checked whether mean_diff's wins cluster on the largest sub-population within a gene (a
+  plausible mechanism: OT's nonlinear advantage might matter less where there's already dense
+  natural support for a straight-line shift) — weak effect only (corr(cluster size, OT margin)
+  = −0.20), not strong enough to call a rule.
+  **This closes the loop the corrected pool_shape_recovery entry left open. Updated,
+  decode-validated verdict for Workstream A: mean_diff remains the right default for unimodal
+  and cleanly-bimodal targets (699/1000 genes by the complexity scan); OT-CFM via mixture-of-
+  flows on GMM-discovered sub-clusters is the better choice for genuinely multi-modal (k>=3)
+  targets (301/1000 genes), with a real, moderate, now decode-confirmed advantage (~13 of 56
+  tested clusters go the other way, so not universal within that regime either — but the
+  aggregate direction is clear and reproduced across 13 genes).** Remaining gaps: only 13/301
+  candidate genes checked at this point; complexes (98) never scanned for multi-modality at
+  all; the α>1 extrapolation/dose problem (literature-review finding #1) is completely separate
+  and still unaddressed.
+
+- **2026-08-21 (cont.) — user: "no point being stingy," so scaled both remaining gaps: full
+  decode-validated run on all 301 geneKO candidates (launched, running), and the complexity
+  scan extended to all 98 EBI complexes (`complexity_scan.py`/`mixture_decode_validation.py`
+  generalized to take a `grain` parameter instead of a hardcoded geneKO path — trivial change,
+  every complex already had a full flow-field cache from the original buildout).
+  **Complex-grain complexity scan result (all 98, complete): 92/98 (94%) are unimodal, 4 are
+  clean bimodal (k=2), and only 2 — Kinetochore_CCAN_complex (k=3, sizes 305/28/167) and
+  Signal_peptidase_complex__SEC11A_variant (k=3, sizes 279/112/109) — show genuine multi-modal
+  structure.** A real, informative result on its own, not just a smaller version of the geneKO
+  scan: pooling cells across a complex's member genes apparently washes multimodality OUT
+  rather than revealing it (94% unimodal vs. 61.6% for individual geneKOs), consistent with
+  Workstream D's earlier finding that complex-level phenotypes tend to read as a coherent
+  consensus signature rather than a mixture of member-gene-specific outcomes.
+
+- **2026-08-21 (cont.) — FINAL, full-scale, decode-validated result, and it overturns the
+  "OT wins specifically on complex multimodal targets" framing from earlier in the day.** Ran
+  three complete decode-validated batches (all `mixture_decode_validation.py`, n_pool=20/
+  cluster, generalized to take a `grain` param — trivial change, every target already had a
+  cached embedding from the original buildout):
+  1. All 301 genuinely multi-modal (best_k>=3) genes — 1107 clusters. 301/301 jobs completed
+     clean, ~110 min wall-clock on 8 concurrent GPU nodes.
+  2. The 2 multi-modal (best_k>=3) EBI complexes — 6 clusters.
+  3. **The missing control, per the user's own prompt ("why not test bimodal as well?"): all
+     87 genuinely CLEAN bimodal (best_k==2) genes+complexes** — 174 clusters. This is the
+     rigorous version of the bimodal test; the earlier same-day bimodal work (KIF11/TUBGCP6/
+     SEC61A1/S100B) is superseded by this, since KIF11 and TUBGCP6 turned out to be best_k=3/5
+     all along, contaminating that earlier "bimodal" sample.
+
+  **Combined: 390 targets, 1287 clusters. OT wins 76.4% (983), mean_diff wins 11.0% (141),
+  ties 12.7% (163).** The bimodal control result (77.0% OT win rate, +10.55pp mean margin) is
+  statistically indistinguishable from the k=3/4/5 result (76.3%, +11.30pp) — k=2: +10.55pp,
+  k=3: +10.85pp, k=4: +12.19pp, k=5: +10.86pp. **The win rate does not depend on how many real
+  modes a target has, at all.**
+  **Corrected mechanism:** the driver isn't "multimodality" — it's decomposition itself. Once
+  a target is split into per-cluster sub-problems (whether 2 pieces or 5), each sub-target is
+  a narrower, tighter-covariance sub-population than the full undifferentiated KD population.
+  mean_diff's per-cluster vector is still just a rigid TRANSLATION (same shift applied to
+  every cell) — it can recenter a population but can never reshape/contract it to match a
+  tighter target's own covariance. A learned flow can. That also resolves the apparent tension
+  with earlier same-day results: the ORIGINAL (non-decomposed) comparisons — one mean_diff
+  vector vs. one unified OT field, both targeting the FULL undifferentiated KD population —
+  were much closer to a tie (SEC61A1 favoring mean_diff, KIF11 near-even), because there the
+  target's spread roughly matches the source's. The decomposed, per-cluster comparison is a
+  fundamentally different, and apparently much more favorable, regime for OT — not because of
+  mode count, but because decomposition itself creates narrow targets translation can't fit.
+  **Final verdict for Workstream A, empirically settled at scale (390 targets, 1287 clusters,
+  decode-validated, not raw-embedding-only):** OT-CFM via mixture-of-flows on GMM-discovered
+  sub-clusters beats per-cluster mean_diff by a consistent, real, moderate margin (~+11pp,
+  ~76% cluster win rate) whenever a target is DECOMPOSED into 2 or more sub-populations —
+  independent of how many real modes exist. mean_diff remains the right, simpler,
+  training-free choice only when a target is treated as ONE undifferentiated population
+  (unimodal genes, or any target where decomposition isn't done at all). Still open: the α>1
+  extrapolation/dose problem (literature review finding #1, completely separate, unaddressed);
+  whether this generalizes beyond the phase-channel geneKO/complex screens tested here.
+
 ### B — real trajectories from video (the highest-novelty, highest-risk piece)
 - **Goal:** stop synthesizing NTC→KO interpolations from static populations; use `segment_timelapse.py`
   to track individual cells through LiveScreen timelapses, embed every frame with CellDINO, and get
