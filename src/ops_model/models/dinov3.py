@@ -135,7 +135,11 @@ def dinov3_main(config_paths: list, run_anndata: bool = True):
                 }
             )
 
-    log_dir = str(OpsPaths.slurm_log_dir("dinov3"))
+    # Relative, so submit_parallel_jobs nests it under the usual slurm_logs/
+    # parent like every other step. An absolute path here got string-joined
+    # as "slurm_logs/" + "/hpc/..." and built a literal copy of the absolute
+    # tree inside the repo, where nobody thinks to look for the logs.
+    log_dir = "dinov3_slurm_logs"
 
     print(f"\nSubmitting {len(jobs_to_submit)} DinoV3 job(s) via submit_parallel_jobs")
     result = submit_parallel_jobs(

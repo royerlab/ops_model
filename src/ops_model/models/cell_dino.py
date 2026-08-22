@@ -137,7 +137,11 @@ def cell_dino_main(config_paths: list[str], run_anndata: bool = True):
                 }
             )
 
-    log_dir = str(OpsPaths.slurm_log_dir("cell_dino"))
+    # Relative, so submit_parallel_jobs nests it under the usual slurm_logs/
+    # parent like every other step. An absolute path here got string-joined
+    # as "slurm_logs/" + "/hpc/..." and built a literal copy of the absolute
+    # tree inside the repo, where nobody thinks to look for the logs.
+    log_dir = "celldino_slurm_logs"
 
     print(
         f"\nSubmitting {len(jobs_to_submit)} Cell-DINO job(s) via submit_parallel_jobs"
