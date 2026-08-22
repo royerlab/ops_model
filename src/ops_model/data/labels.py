@@ -17,13 +17,16 @@ SOURCE_FILENAME_TEMPLATES = {
     "four_i": "four_i_linked_{well}.csv",
 }
 
-_BBOX_CANDIDATES = ["cp_bbox", "4i_bbox"]
-_SEG_ID_CANDIDATES = ["cp_cell_seg_id", "4i_segmentation_id"]
-_X_CANDIDATES = ["x_cp1", "x_4i", "4i_x"]
-_Y_CANDIDATES = ["y_cp1", "y_4i", "4i_y"]
+_BBOX_CANDIDATES = ["cp_bbox", "4i_bbox", "fixed_bbox"]
+_SEG_ID_CANDIDATES = ["cp_cell_seg_id", "4i_segmentation_id", "fixed_cell_seg_id"]
+_X_CANDIDATES = ["x_cp1", "x_4i", "4i_x", "x_fixed"]
+_Y_CANDIDATES = ["y_cp1", "y_4i", "4i_y", "y_fixed"]
 _MASK_LABEL_BY_BBOX = {
     "cp_bbox": "cp_cell_seg",
     "4i_bbox": "4i_cell_seg",
+    # A joined reimage pass: cells move and shrink on fixation, so its patches
+    # must be cut with its own mask, not the live one.
+    "fixed_bbox": "cell_seg_fixed",
 }
 
 
