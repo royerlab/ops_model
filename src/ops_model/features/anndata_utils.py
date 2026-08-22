@@ -960,12 +960,21 @@ def aggregate_to_level(
 
     # Add gene-specific columns (validator requirements)
     if level == "gene":
-        if guides_per_gene is not None:
+        if guides_per_gene:
             # Convert list of guides to pipe-delimited strings (h5py can't store nested lists)
             adata_agg.obs["guides"] = ["|".join(guides) for guides in guides_per_gene]
             n_guides_per_gene = [len(g) for g in guides_per_gene]
             print(
                 f"  Added guides column (guides per gene: {min(n_guides_per_gene)}-{max(n_guides_per_gene)})"
+            )
+        elif guides_per_gene is not None:
+            # Empty rather than None means guide_col was absent from every group, so
+            # the per-group append above never ran. Assigning it would raise an
+            # opaque "Length of values (0) does not match length of index (N)".
+            print(
+                f"  WARNING: no 'guides' column — guide_col {guide_col!r} is not in "
+                f"obs ({list(adata.obs.columns)[:6]}...). Check uns['guide_col'] "
+                f"survived any concatenation."
             )
 
         if n_experiments_per_gene is not None:
@@ -4476,6 +4485,11 @@ def hconcat_by_perturbation(
         var=pd.DataFrame(index=var_names),
     )
     result.var_names_make_unique()
+    # Carry the guide_col convention onto the result. A fresh AnnData() starts with
+    # an empty .uns, so without this the downstream _guide_col() falls back to
+    # "sgRNA" — silently wrong for any screen that names the column otherwise, and
+    # the failure surfaces far away as a length mismatch in aggregate_to_level.
+    result.uns["guide_col"] = guide_col_name
     return result
 
 
