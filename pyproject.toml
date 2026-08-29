@@ -37,7 +37,7 @@ dependencies = [
     "pytorch-metric-learning",
     "cp-measure",
     "iohub>=0.3.0a7",
-    "viscy",
+    "viscy<=0.4.1",
     "monai",
     "diffusers[torch]",
     "phate>=1.0.7",
