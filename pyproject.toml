@@ -50,6 +50,10 @@ dependencies = [
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]
 models = ["transformers<4.40"]
+# Multiscale UMAP montages for the diffae interpretability figures. A git
+# dependency, so it is kept out of the default install; only
+# models/interpretability/diffae/viewer/ imports it.
+diffae = ["latent-lens @ git+https://github.com/czi-ai/latent-lens"]
 test = ["pytest>=6.0", "pytest-cov"]
 dev = [
     "ipykernel",

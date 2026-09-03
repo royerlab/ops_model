@@ -15,7 +15,6 @@ import numpy as np
 import anndata as ad
 from PIL import Image
 
-from latent_lens import MontageConfig, build_montage
 
 from ..classifier.config import slugify
 from .precompute import VIEWER_ALPHAS
@@ -79,6 +78,10 @@ def montage_from_cache(h5ad, out_zarr, cell=0, alpha=2.0, modality="phase", grai
     placed at the gene's position in `embedding` (obsm X_<embedding>, e.g. umap or phate).
     Crops kept GRAYSCALE (white category tint). crop_size=256 sharp; px_per_umap≈22×crop fills canvas.
     `border_field` (an obs column, e.g. 'leiden_r4') draws a per-cell colored border keyed on that group."""
+    # Lazy: latent-lens is the `diffae` extra, not a default install
+    # (`uv sync --extra diffae`, or `pip install ops_model[diffae]`).
+    from latent_lens import MontageConfig, build_montage
+
     al = list(VIEWER_ALPHAS)
     ai = int(np.argmin([abs(a - alpha) for a in al]))     # frame index for the requested α
     a0 = int(np.argmin([abs(a) for a in al]))             # α=0 frame index (shared anchor recon)
